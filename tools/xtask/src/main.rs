@@ -18,10 +18,13 @@
 //!   committed m1a.6 plans, every difference with an allowed reason (see replay.rs).
 //! - `bench-launch`: the launch bench of the WinUI shell against the bare-WinUI control (not part of `ci`; see
 //!   bench_launch.rs).
+//! - `gen-dto`: JSON Schemas of the engine API's types and the C# source-generation glue, under
+//!   `ui/Purge.Client/` (see gen_dto.rs). `--check` fails on a difference.
 //! - `ci`: fmt check, clippy, tests, a standalone clippy of `purge-mcp`, clippy and the feature-gated
 //!   tests of the rig-exec build (engine CLI), every purge-exec test target with its `fault-inject` and
 //!   `test-support` features (crash matrix, object ops), check-deps, no-new-walks, ui-strings,
-//!   scanner-coverage.
+//!   scanner-coverage, `gen-dto --check`, and the UI (`dotnet build` and `dotnet test`; skipped when no
+//!   .NET SDK is installed unless `--require-ui` is given).
 
 mod baseline_sites;
 mod bench_launch;
@@ -40,7 +43,8 @@ use std::process::{Command, ExitCode};
 use anyhow::{Context, Result, bail};
 
 const USAGE: &str = "usage: cargo xtask <ui-strings | check-deps | no-new-walks | baseline-sites | \
-                     scanner-coverage | replay | replay-all | replay-diff | bench-launch | ci>";
+                     scanner-coverage | replay | replay-all | replay-diff | bench-launch | gen-dto | \
+                     ci>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -54,7 +58,8 @@ fn main() -> ExitCode {
         Some("replay-all") => replay::run_all(&workspace_root(), &args[1..]),
         Some("replay-diff") => replay_diff::run(&workspace_root(), &args[1..]),
         Some("bench-launch") => bench_launch::run(&workspace_root(), &args[1..]),
-        Some("ci") => ci(&workspace_root()),
+        Some("gen-dto") => gen_dto::run(&workspace_root(), &args[1..]),
+        Some("ci") => ci(&workspace_root(), &args[1..]),
         Some("-h" | "--help") => {
             println!("{USAGE}");
             Ok(true)
@@ -105,7 +110,14 @@ const RIG_FEATURES: &str = "purge-engine/rig-exec,purge-exec/test-support";
 /// build unifies in (`rig-exec` enables `fault-inject`), named on purge-exec alone.
 const EXEC_TEST_FEATURES: &str = "purge-exec/fault-inject,purge-exec/test-support";
 
-fn ci(root: &Path) -> Result<bool> {
+fn ci(root: &Path, args: &[String]) -> Result<bool> {
+    let mut require_ui = false;
+    for arg in args {
+        match arg.as_str() {
+            "--require-ui" => require_ui = true,
+            other => bail!("ci: unknown argument {other}"),
+        }
+    }
     let cargo_steps: [&[&str]; 7] = [
         &["fmt", "--all", "--", "--check"],
         &[
@@ -186,6 +198,73 @@ fn ci(root: &Path) -> Result<bool> {
     if !scanner_coverage::run()? {
         bail!("step failed: scanner-coverage");
     }
+    println!("xtask ci: gen-dto --check");
+    if !gen_dto::run(root, &["--check".to_owned()])? {
+        bail!("step failed: gen-dto --check");
+    }
+    println!("xtask ci: ui");
+    if !ui_step(root, require_ui)? {
+        bail!("step failed: ui");
+    }
     println!("xtask ci: all steps passed");
     Ok(true)
+}
+
+/// The .NET SDK: `dotnet` on PATH first, then the SDK's default directory. `None` when neither runs.
+fn dotnet() -> Option<PathBuf> {
+    for candidate in [
+        PathBuf::from("dotnet"),
+        PathBuf::from(r"C:\Program Files\dotnet\dotnet.exe"),
+    ] {
+        let runs = Command::new(&candidate)
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        if runs.is_ok_and(|s| s.success()) {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+/// `dotnet build` of the solution, then `dotnet test` of the client tests. Without an SDK the step is
+/// skipped, unless `--require-ui` asks for it (M3_DESIGN.md §6.5, package M3-GEN-DTO).
+fn ui_step(root: &Path, require: bool) -> Result<bool> {
+    let Some(dotnet) = dotnet() else {
+        if require {
+            bail!("no .NET SDK found (looked on PATH and in C:\\Program Files\\dotnet)");
+        }
+        println!("xtask ci: no .NET SDK; ui skipped (pass --require-ui to require it)");
+        return Ok(true);
+    };
+    let solution = root.join("ui").join("Purge.slnx");
+    println!(
+        "xtask ci: {} build {}",
+        dotnet.display(),
+        solution.display()
+    );
+    let status = Command::new(&dotnet)
+        .arg("build")
+        .arg(&solution)
+        .arg("--nologo")
+        .current_dir(root)
+        .status()
+        .with_context(|| format!("running {} build", dotnet.display()))?;
+    if !status.success() {
+        return Ok(false);
+    }
+    let tests = root
+        .join("ui")
+        .join("Purge.Client.Tests")
+        .join("Purge.Client.Tests.csproj");
+    println!("xtask ci: {} test {}", dotnet.display(), tests.display());
+    let status = Command::new(&dotnet)
+        .arg("test")
+        .arg(&tests)
+        .args(["--no-build", "--nologo"])
+        .current_dir(root)
+        .status()
+        .with_context(|| format!("running {} test", dotnet.display()))?;
+    Ok(status.success())
 }

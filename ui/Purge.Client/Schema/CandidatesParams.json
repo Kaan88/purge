@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CandidatesParams",
+  "description": "`scan.candidates {scan_id, offset, limit}`.",
+  "type": "object",
+  "properties": {
+    "limit": {
+      "description": "Items in the page, at most 500.",
+      "type": "integer",
+      "maximum": 500,
+      "minimum": 1
+    },
+    "offset": {
+      "description": "Index of the first item.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "scan_id": {
+      "description": "The scan.",
+      "$ref": "#/$defs/ScanId"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "scan_id",
+    "offset",
+    "limit"
+  ],
+  "$defs": {
+    "ScanId": {
+      "type": "string",
+      "pattern": "^s-[0-9a-f]{16}$"
+    }
+  }
+}

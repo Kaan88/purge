@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RunUserResult",
+  "description": "`uninstall.run_user`.",
+  "type": "object",
+  "properties": {
+    "exit_code": {
+      "description": "The exit code, when the process ended.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "default": null,
+      "minimum": 0
+    },
+    "outcome": {
+      "description": "What the run came to.",
+      "$ref": "#/$defs/RunOutcome"
+    }
+  },
+  "required": [
+    "outcome"
+  ],
+  "$defs": {
+    "RunOutcome": {
+      "description": "How the uninstaller ended (§4.4 \"Exit codes\").",
+      "oneOf": [
+        {
+          "description": "Exit code 0. A success *candidate*: [`VerifyGone`] decides whether the app is really gone.",
+          "type": "string",
+          "const": "Success"
+        },
+        {
+          "description": "Exit code 1605: the product was not installed any more.",
+          "type": "string",
+          "const": "AlreadyGone"
+        },
+        {
+          "description": "Exit code 1641 or 3010: success, a restart is needed.",
+          "type": "string",
+          "const": "SuccessReboot"
+        },
+        {
+          "description": "Exit code 1602: the user cancelled.",
+          "type": "string",
+          "const": "Cancelled"
+        },
+        {
+          "description": "Any other exit code, or the command could not be started.",
+          "type": "string",
+          "const": "Failed"
+        },
+        {
+          "description": "The wait for the process tree gave up.",
+          "type": "string",
+          "const": "TimedOut"
+        }
+      ]
+    }
+  }
+}

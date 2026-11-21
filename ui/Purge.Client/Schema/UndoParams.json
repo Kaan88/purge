@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "UndoParams",
+  "description": "`undo.run {session, item_ids?}`.",
+  "type": "object",
+  "properties": {
+    "item_ids": {
+      "description": "The ops to undo; absent for all of them.",
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "$ref": "#/$defs/OpId"
+      },
+      "minItems": 1
+    },
+    "session": {
+      "description": "The executor session.",
+      "$ref": "#/$defs/SessionId"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "session"
+  ],
+  "$defs": {
+    "OpId": {
+      "description": "The number of one op within a session, counted from 1 in plan order.\n\nEvery selected plan item gets an op id, whether or not it ends up acted on. The id also names the op's\ndirectory and backup files, through [`OpId::file_stem`]. Reading `0` fails: no op has that id. That\nan id is at most the header's item count is checked where the journal is read.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 1
+    },
+    "SessionId": {
+      "description": "UTC start time and 64 random bits, e.g. 20261115T101502Z-9f3a6c1d2b7e4a50",
+      "type": "string",
+      "pattern": "^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{16}$"
+    }
+  }
+}

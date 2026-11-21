@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PurgeParams",
+  "description": "`quarantine.purge {expiry_ids[]}`.",
+  "type": "object",
+  "properties": {
+    "expiry_ids": {
+      "description": "The expired entries from `quarantine.expiring`, at least one.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ExpiryId"
+      },
+      "minItems": 1
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "expiry_ids"
+  ],
+  "$defs": {
+    "ExpiryId": {
+      "type": "string",
+      "pattern": "^e-[0-9a-f]{16}$"
+    }
+  }
+}

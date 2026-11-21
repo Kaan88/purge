@@ -1,0 +1,260 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ExecResult",
+  "description": "`plan.execute`.",
+  "type": "object",
+  "properties": {
+    "counts": {
+      "description": "Items per outcome.",
+      "$ref": "#/$defs/OutcomeCounts"
+    },
+    "held": {
+      "description": "Items held by a lock.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/HeldItem"
+      }
+    },
+    "outcome": {
+      "description": "What the run did.",
+      "$ref": "#/$defs/Outcome"
+    },
+    "restore_point": {
+      "description": "What became of the restore point.",
+      "$ref": "#/$defs/RestorePointOutcome"
+    },
+    "session": {
+      "description": "The executor session.",
+      "$ref": "#/$defs/SessionId"
+    }
+  },
+  "required": [
+    "outcome",
+    "session",
+    "counts",
+    "held",
+    "restore_point"
+  ],
+  "$defs": {
+    "HeldItem": {
+      "description": "An item left in place because it is locked.",
+      "type": "object",
+      "properties": {
+        "display_name": {
+          "description": "The name shown.",
+          "type": "string"
+        },
+        "lockers": {
+          "description": "The processes that hold it.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Locker"
+          }
+        },
+        "op": {
+          "description": "Its op.",
+          "$ref": "#/$defs/OpId"
+        }
+      },
+      "required": [
+        "op",
+        "display_name",
+        "lockers"
+      ]
+    },
+    "Locker": {
+      "description": "A process that holds a file open, as Restart Manager reports it.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "Application name.",
+          "type": "string"
+        },
+        "pid": {
+          "description": "Process id.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "service": {
+          "description": "Short name of the service, when the process is one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "pid",
+        "name"
+      ]
+    },
+    "OpId": {
+      "description": "The number of one op within a session, counted from 1 in plan order.\n\nEvery selected plan item gets an op id, whether or not it ends up acted on. The id also names the op's\ndirectory and backup files, through [`OpId::file_stem`]. Reading `0` fails: no op has that id. That\nan id is at most the header's item count is checked where the journal is read.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 1
+    },
+    "Outcome": {
+      "description": "What a run did. Carried by results; not an error.",
+      "oneOf": [
+        {
+          "description": "Everything was done.",
+          "type": "string",
+          "const": "complete"
+        },
+        {
+          "description": "Some items are held or failed; the result names them and what holds them.",
+          "type": "string",
+          "const": "partial"
+        },
+        {
+          "description": "An undo restored what it could and lists conflicts.",
+          "type": "string",
+          "const": "undo_conflicts"
+        },
+        {
+          "description": "The session was not recorded completely; History offers recovery. Wins over the two above.",
+          "type": "string",
+          "const": "not_closed"
+        }
+      ]
+    },
+    "OutcomeCounts": {
+      "description": "How many items ended in each [`ItemOutcome`]. Every field reads as 0 when missing.",
+      "type": "object",
+      "properties": {
+        "done": {
+          "description": "Items with [`ItemOutcome::Done`].",
+          "type": "integer",
+          "format": "uint32",
+          "default": 0,
+          "minimum": 0
+        },
+        "failed": {
+          "description": "Items with [`ItemOutcome::Failed`].",
+          "type": "integer",
+          "format": "uint32",
+          "default": 0,
+          "minimum": 0
+        },
+        "held_retry": {
+          "description": "Items with [`ItemOutcome::HeldRetry`].",
+          "type": "integer",
+          "format": "uint32",
+          "default": 0,
+          "minimum": 0
+        },
+        "pending_reboot": {
+          "description": "Items with [`ItemOutcome::PendingReboot`] or [`ItemOutcome::PendingDelete`].",
+          "type": "integer",
+          "format": "uint32",
+          "default": 0,
+          "minimum": 0
+        },
+        "skipped": {
+          "description": "Items with [`ItemOutcome::Skipped`].",
+          "type": "integer",
+          "format": "uint32",
+          "default": 0,
+          "minimum": 0
+        },
+        "vanished": {
+          "description": "Items with [`ItemOutcome::Vanished`].",
+          "type": "integer",
+          "format": "uint32",
+          "default": 0,
+          "minimum": 0
+        }
+      }
+    },
+    "RestorePointOutcome": {
+      "description": "What became of the restore point (§7.7). Serialised as an object tagged by `\"kind\"`.",
+      "oneOf": [
+        {
+          "description": "The policy did not ask for one.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "NotRequested"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "A restore point was created.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "Created"
+            },
+            "sequence": {
+              "description": "Its sequence number.",
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          "required": [
+            "kind",
+            "sequence"
+          ]
+        },
+        {
+          "description": "Windows skipped it because another one was created within the last 24 hours.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "Throttled"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "System Restore is turned off.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "Disabled"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Creating it failed. The run went on: restore points supplement quarantine, never replace it.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "Failed"
+            },
+            "os_error": {
+              "description": "The Win32 error code.",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "kind",
+            "os_error"
+          ]
+        }
+      ]
+    },
+    "SessionId": {
+      "description": "UTC start time and 64 random bits, e.g. 20261115T101502Z-9f3a6c1d2b7e4a50",
+      "type": "string",
+      "pattern": "^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{16}$"
+    }
+  }
+}

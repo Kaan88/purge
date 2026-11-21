@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PlanExecuteParams",
+  "description": "`plan.execute {plan_id, restore_point}`.",
+  "type": "object",
+  "properties": {
+    "plan_id": {
+      "description": "The plan from `plan.create`.",
+      "$ref": "#/$defs/PlanId"
+    },
+    "restore_point": {
+      "description": "When to ask for a restore point.",
+      "$ref": "#/$defs/RestorePoint"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "plan_id",
+    "restore_point"
+  ],
+  "$defs": {
+    "PlanId": {
+      "type": "string",
+      "pattern": "^p-[0-9a-f]{16}$"
+    },
+    "RestorePoint": {
+      "description": "When `plan.execute` asks for a restore point.",
+      "oneOf": [
+        {
+          "description": "Never.",
+          "type": "string",
+          "const": "off"
+        },
+        {
+          "description": "Only for a high-risk run.",
+          "type": "string",
+          "const": "high_risk"
+        },
+        {
+          "description": "For every run.",
+          "type": "string",
+          "const": "always"
+        }
+      ]
+    }
+  }
+}

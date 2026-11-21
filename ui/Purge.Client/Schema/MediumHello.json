@@ -1,0 +1,265 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MediumHello",
+  "description": "`engine.hello` of the medium engine: [`EngineHello`] and the token facts of design 3.5.",
+  "type": "object",
+  "properties": {
+    "baseline_available": {
+      "description": "A shipped baseline of exactly this Windows is in use: `baseline_trust` is `Exact`.",
+      "type": "boolean"
+    },
+    "baseline_build": {
+      "description": "The local baseline's background build in this engine process.",
+      "$ref": "#/$defs/BaselineBuild"
+    },
+    "baseline_trust": {
+      "description": "How far an absence answer of the view is trusted. Below `Exact` nothing is ever offered on\nabsence; the view only blocks what Windows owns.",
+      "$ref": "#/$defs/BaselineTrust"
+    },
+    "baseline_view": {
+      "description": "The view in use: its name, trust and the id of the local baseline it holds. `None` when no\nbaseline directory is configured.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/BaselineViewRef"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "build": {
+      "description": "Windows build number.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "edition": {
+      "description": "Windows `EditionID`.",
+      "type": "string"
+    },
+    "elevated": {
+      "description": "Whether the engine process is elevated.",
+      "type": "boolean"
+    },
+    "elevation_type": {
+      "description": "The engine token's elevation type.",
+      "$ref": "#/$defs/ElevationType"
+    },
+    "policy_version": {
+      "description": "The policy rule set (`purge_policy::POLICY_VERSION`).",
+      "type": "string"
+    },
+    "shell_matches": {
+      "description": "Whether the engine's token has the user and the elevation of the shell's token, so it may run a\nmedium-route uninstaller.",
+      "type": "boolean"
+    },
+    "shell_sid": {
+      "description": "The SID of the interactive shell's account, when it is another one.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
+    "ubr": {
+      "description": "Windows update build revision.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "user_sid": {
+      "description": "The SID of the account the engine runs as.",
+      "type": "string"
+    },
+    "version": {
+      "description": "The engine's version.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "version",
+    "elevated",
+    "user_sid",
+    "edition",
+    "build",
+    "ubr",
+    "policy_version",
+    "baseline_available",
+    "baseline_trust",
+    "baseline_build",
+    "elevation_type",
+    "shell_matches"
+  ],
+  "$defs": {
+    "BaselineBuild": {
+      "description": "The state of the local baseline's background build (BASELINE_LOCAL_DESIGN.md §5, W4): it starts\nwith the engine, never blocks a scan, and a scan made before it ended can be made again after.",
+      "oneOf": [
+        {
+          "description": "No build runs in this process: an exact shipped baseline, a complete cache, an engine that is\nnot elevated, or no cache directory. `reason` says which.",
+          "type": "object",
+          "properties": {
+            "reason": {
+              "description": "Why nothing is built.",
+              "type": "string"
+            },
+            "state": {
+              "type": "string",
+              "const": "none"
+            }
+          },
+          "required": [
+            "state",
+            "reason"
+          ]
+        },
+        {
+          "description": "Deciding whether a build is needed.",
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "checking"
+            }
+          },
+          "required": [
+            "state"
+          ]
+        },
+        {
+          "description": "Building. A scan made now does not use what is still being built.",
+          "type": "object",
+          "properties": {
+            "parts": {
+              "description": "The sources being built (`S1`, `S2`, `S4`).",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "scan_waiting": {
+              "description": "A scan has asked for the view since the build started, so the build runs at normal\npriority and that scan is worth making again when the build is done.",
+              "type": "boolean"
+            },
+            "state": {
+              "type": "string",
+              "const": "building"
+            }
+          },
+          "required": [
+            "state",
+            "parts",
+            "scan_waiting"
+          ]
+        },
+        {
+          "description": "Built in this process.",
+          "type": "object",
+          "properties": {
+            "rescan": {
+              "description": "A scan ran before the build ended: making it again uses the new local baseline.",
+              "type": "boolean"
+            },
+            "state": {
+              "type": "string",
+              "const": "done"
+            }
+          },
+          "required": [
+            "state",
+            "rescan"
+          ]
+        },
+        {
+          "description": "The build did not produce a usable cache.",
+          "type": "object",
+          "properties": {
+            "reason": {
+              "description": "Why.",
+              "type": "string"
+            },
+            "state": {
+              "type": "string",
+              "const": "failed"
+            }
+          },
+          "required": [
+            "state",
+            "reason"
+          ]
+        }
+      ]
+    },
+    "BaselineTrust": {
+      "description": "How far a baseline view can be trusted when it says \"this key is not Windows' own\"\n(BASELINE_LOCAL_DESIGN.md §4.1). Serialised by its variant name.\n\nPresence (\"Windows has it\") blocks at every level. Absence is *proof* only at [`BaselineTrust::Exact`];\nat `Merged` and `Local` it is *inferred* and under the trust cap (invariant L4: it never makes an item\nSafe or preselected); at `None` it is never answered.",
+      "oneOf": [
+        {
+          "description": "A shipped baseline matches the host's (edition, build, ubr): absence is proof, as at the M1b gate.",
+          "type": "string",
+          "const": "Exact"
+        },
+        {
+          "description": "No exact match; a complete local baseline merged with at least one shipped neighbour.",
+          "type": "string",
+          "const": "Merged"
+        },
+        {
+          "description": "No exact match and no neighbour; a complete local baseline alone.",
+          "type": "string",
+          "const": "Local"
+        },
+        {
+          "description": "Anything else: absence is never answered, the scan works values-only.",
+          "type": "string",
+          "const": "None"
+        }
+      ]
+    },
+    "BaselineViewRef": {
+      "description": "The baseline view a fingerprint was harvested with (design §4.5): the trust beside the absence facts\nthe fingerprint stores (`ext_journal`, the subtree records).",
+      "type": "object",
+      "properties": {
+        "local_id": {
+          "description": "The source id of the local baseline the view held; `None` for an exact view or one without a\nlocal baseline.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "name": {
+          "description": "The view's name: `Professional-26340.9882` for an exact baseline, `local-…+2` for a merged one.",
+          "type": "string"
+        },
+        "trust": {
+          "description": "Its trust at harvest.",
+          "$ref": "#/$defs/BaselineTrust"
+        }
+      },
+      "required": [
+        "name",
+        "trust"
+      ]
+    },
+    "ElevationType": {
+      "description": "The engine token's `TokenElevationType`.",
+      "oneOf": [
+        {
+          "description": "No split token (UAC off, or not an administrator).",
+          "type": "string",
+          "const": "default"
+        },
+        {
+          "description": "The elevated half of an administrator token.",
+          "type": "string",
+          "const": "full"
+        },
+        {
+          "description": "The limited half of an administrator token.",
+          "type": "string",
+          "const": "limited"
+        }
+      ]
+    }
+  }
+}

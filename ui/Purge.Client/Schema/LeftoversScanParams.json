@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LeftoversScanParams",
+  "description": "`leftovers.scan`: one of two forms.",
+  "anyOf": [
+    {
+      "description": "After an uninstall in this broker.",
+      "$ref": "#/$defs/ScanSessionParams"
+    },
+    {
+      "description": "From a stored fingerprint.",
+      "$ref": "#/$defs/ScanStoredParams"
+    }
+  ],
+  "$defs": {
+    "ProgramId": {
+      "description": "<hive tag>|<view>|<key name>, e.g. HKLM|64|Git_is1 or HKU:<sid>|64|{guid}",
+      "type": "string",
+      "pattern": "^(HKLM|HKU:[^|\\\\:]+)\\|(64|32)\\|[^\\\\]+$"
+    },
+    "ScanSessionParams": {
+      "description": "`leftovers.scan` after an uninstall of this broker: `{session_id, forced?}`.",
+      "type": "object",
+      "properties": {
+        "forced": {
+          "description": "Ask for the forced mode. The client can lower the mode this way; it can never raise it.",
+          "type": "boolean",
+          "default": false
+        },
+        "session_id": {
+          "description": "The uninstall session.",
+          "$ref": "#/$defs/UninstallSessionId"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "session_id"
+      ]
+    },
+    "ScanStoredParams": {
+      "description": "`leftovers.scan` of a program removed outside Purge, from its stored fingerprint: `{program_id}`.",
+      "type": "object",
+      "properties": {
+        "program_id": {
+          "description": "The program whose stored fingerprint is scanned.",
+          "$ref": "#/$defs/ProgramId"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "program_id"
+      ]
+    },
+    "UninstallSessionId": {
+      "type": "string",
+      "pattern": "^u-[0-9a-f]{16}$"
+    }
+  }
+}

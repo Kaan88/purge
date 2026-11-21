@@ -1,0 +1,178 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ProgramDetails",
+  "description": "`programs.get`: the details pane.",
+  "type": "object",
+  "properties": {
+    "install_location": {
+      "description": "`InstallLocation`, as written.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
+    "install_time": {
+      "description": "The install time the entry suggests.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/FileTime"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "installer": {
+      "description": "The installer technology.",
+      "$ref": "#/$defs/InstallerKind"
+    },
+    "name": {
+      "description": "`DisplayName`, or the key name.",
+      "type": "string"
+    },
+    "product_code": {
+      "description": "The MSI ProductCode.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
+    "program_id": {
+      "description": "The entry.",
+      "$ref": "#/$defs/ProgramId"
+    },
+    "publisher": {
+      "description": "`Publisher`.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
+    "quiet_uninstall_command": {
+      "description": "`QuietUninstallString`, as written.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
+    "scope": {
+      "description": "Machine-wide or per-user.",
+      "$ref": "#/$defs/InstallScope"
+    },
+    "size_bytes": {
+      "description": "`EstimatedSize` in bytes, when the entry states one.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint64",
+      "default": null,
+      "minimum": 0
+    },
+    "uninstall_command": {
+      "description": "`UninstallString`, as written.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
+    "version": {
+      "description": "`DisplayVersion`.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
+    "writable_by": {
+      "description": "Who can write the Uninstall key.",
+      "$ref": "#/$defs/WritableBy"
+    }
+  },
+  "required": [
+    "program_id",
+    "name",
+    "scope",
+    "installer",
+    "writable_by"
+  ],
+  "$defs": {
+    "FileTime": {
+      "description": "A point in time as a Windows `FILETIME`: 100-nanosecond intervals since 1601-01-01 UTC.\n\nThis is what registry key LastWriteTime, file times and process start times are in, so nothing is\nconverted on the way in. Serialised as a plain integer.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "InstallScope": {
+      "description": "Whether an app is installed for the machine or for one user.",
+      "oneOf": [
+        {
+          "description": "Machine-wide (an `HKLM` entry).",
+          "type": "string",
+          "const": "Machine"
+        },
+        {
+          "description": "For one user (an `HKU\\<sid>` entry).",
+          "type": "string",
+          "const": "User"
+        }
+      ]
+    },
+    "InstallerKind": {
+      "description": "The installer technology behind an entry.",
+      "oneOf": [
+        {
+          "description": "Windows Installer.",
+          "type": "string",
+          "const": "Msi"
+        },
+        {
+          "description": "Inno Setup.",
+          "type": "string",
+          "const": "Inno"
+        },
+        {
+          "description": "NSIS.",
+          "type": "string",
+          "const": "Nsis"
+        },
+        {
+          "description": "A WiX Burn bundle.",
+          "type": "string",
+          "const": "Burn"
+        },
+        {
+          "description": "Anything else, or not recognised.",
+          "type": "string",
+          "const": "Unknown"
+        }
+      ]
+    },
+    "ProgramId": {
+      "description": "<hive tag>|<view>|<key name>, e.g. HKLM|64|Git_is1 or HKU:<sid>|64|{guid}",
+      "type": "string",
+      "pattern": "^(HKLM|HKU:[^|\\\\:]+)\\|(64|32)\\|[^\\\\]+$"
+    },
+    "WritableBy": {
+      "description": "Who can write an entry's Uninstall key; decides where its uninstaller may run (§4.4) and how far its\nvalues are trusted (Rule T, §5.3).",
+      "oneOf": [
+        {
+          "description": "Administrators only.",
+          "type": "string",
+          "const": "admin"
+        },
+        {
+          "description": "The user.",
+          "type": "string",
+          "const": "user"
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Progress",
+  "description": "Progress of a long request (`*.progress`).",
+  "type": "object",
+  "properties": {
+    "done": {
+      "description": "Steps done.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "phase": {
+      "description": "What runs now, e.g. `harvest`, `wait`, `verify`.",
+      "type": "string"
+    },
+    "program_id": {
+      "description": "The program, when the request covers several.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ProgramId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "request": {
+      "description": "The request this belongs to.",
+      "$ref": "#/$defs/RequestId"
+    },
+    "total": {
+      "description": "Steps in all, when known.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint64",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "request",
+    "phase",
+    "done"
+  ],
+  "$defs": {
+    "ProgramId": {
+      "description": "<hive tag>|<view>|<key name>, e.g. HKLM|64|Git_is1 or HKU:<sid>|64|{guid}",
+      "type": "string",
+      "pattern": "^(HKLM|HKU:[^|\\\\:]+)\\|(64|32)\\|[^\\\\]+$"
+    },
+    "RequestId": {
+      "description": "The id of a request: an unsigned integer the client chooses. Progress notifications name the request\nthey belong to by it.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    }
+  }
+}

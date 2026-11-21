@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ExplainParams",
+  "description": "`candidate.explain {scan_id, candidate_id}`.",
+  "type": "object",
+  "properties": {
+    "candidate_id": {
+      "description": "The candidate.",
+      "$ref": "#/$defs/CandidateRef"
+    },
+    "scan_id": {
+      "description": "The scan.",
+      "$ref": "#/$defs/ScanId"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "scan_id",
+    "candidate_id"
+  ],
+  "$defs": {
+    "CandidateRef": {
+      "type": "string",
+      "pattern": "^c-[0-9a-f]{16}$"
+    },
+    "ScanId": {
+      "type": "string",
+      "pattern": "^s-[0-9a-f]{16}$"
+    }
+  }
+}

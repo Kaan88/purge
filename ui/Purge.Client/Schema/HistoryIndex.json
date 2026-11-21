@@ -1,0 +1,388 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "HistoryIndex",
+  "description": "`history.index`.",
+  "type": "object",
+  "properties": {
+    "sessions": {
+      "description": "The sessions of `sessions\\index.json`.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/SessionSummary"
+      }
+    },
+    "volumes": {
+      "description": "Usage and cap per volume.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/VolumeCap"
+      }
+    }
+  },
+  "required": [
+    "sessions",
+    "volumes"
+  ],
+  "$defs": {
+    "AppRef": {
+      "description": "The app something belongs to: its stable id plus the name to show.",
+      "type": "object",
+      "properties": {
+        "display_name": {
+          "description": "The ARP `DisplayName` at the time of the reference (the key name when the entry has none).",
+          "type": "string"
+        },
+        "program_id": {
+          "description": "The app's inventory id.",
+          "$ref": "#/$defs/ProgramId"
+        }
+      },
+      "required": [
+        "program_id",
+        "display_name"
+      ]
+    },
+    "Expiry": {
+      "description": "When each class of a session's data expires. Expiry only proposes; nothing is deleted on these dates\nwithout a prompt.",
+      "type": "object",
+      "properties": {
+        "backups": {
+          "description": "When the registry backups and definitions expire (start + 180 days).",
+          "$ref": "#/$defs/FileTime"
+        },
+        "journal": {
+          "description": "When the journal expires (start + 1 year).",
+          "$ref": "#/$defs/FileTime"
+        },
+        "quarantine": {
+          "description": "When the quarantined files expire (start + 30 days).",
+          "$ref": "#/$defs/FileTime"
+        }
+      },
+      "required": [
+        "quarantine",
+        "backups",
+        "journal"
+      ]
+    },
+    "FileTime": {
+      "description": "A point in time as a Windows `FILETIME`: 100-nanosecond intervals since 1601-01-01 UTC.\n\nThis is what registry key LastWriteTime, file times and process start times are in, so nothing is\nconverted on the way in. Serialised as a plain integer.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "JournalMark": {
+      "description": "How far a session's journal reached when the index entry was written: its number of lines (the header\nincluded) and the hash-chain value of the last of them.",
+      "type": "object",
+      "properties": {
+        "head": {
+          "description": "The `chain` value of the last of them.",
+          "$ref": "#/$defs/Sha256Hex"
+        },
+        "records": {
+          "description": "Complete lines in the journal, the header included.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "records",
+        "head"
+      ]
+    },
+    "OutcomeCounts": {
+      "description": "How many items ended in each [`ItemOutcome`]. Every field reads as 0 when missing.",
+      "type": "object",
+      "properties": {
+        "done": {
+          "description": "Items with [`ItemOutcome::Done`].",
+          "type": "integer",
+          "format": "uint32",
+          "default": 0,
+          "minimum": 0
+        },
+        "failed": {
+          "description": "Items with [`ItemOutcome::Failed`].",
+          "type": "integer",
+          "format": "uint32",
+          "default": 0,
+          "minimum": 0
+        },
+        "held_retry": {
+          "description": "Items with [`ItemOutcome::HeldRetry`].",
+          "type": "integer",
+          "format": "uint32",
+          "default": 0,
+          "minimum": 0
+        },
+        "pending_reboot": {
+          "description": "Items with [`ItemOutcome::PendingReboot`] or [`ItemOutcome::PendingDelete`].",
+          "type": "integer",
+          "format": "uint32",
+          "default": 0,
+          "minimum": 0
+        },
+        "skipped": {
+          "description": "Items with [`ItemOutcome::Skipped`].",
+          "type": "integer",
+          "format": "uint32",
+          "default": 0,
+          "minimum": 0
+        },
+        "vanished": {
+          "description": "Items with [`ItemOutcome::Vanished`].",
+          "type": "integer",
+          "format": "uint32",
+          "default": 0,
+          "minimum": 0
+        }
+      }
+    },
+    "ProgramId": {
+      "description": "<hive tag>|<view>|<key name>, e.g. HKLM|64|Git_is1 or HKU:<sid>|64|{guid}",
+      "type": "string",
+      "pattern": "^(HKLM|HKU:[^|\\\\:]+)\\|(64|32)\\|[^\\\\]+$"
+    },
+    "RetentionClass": {
+      "description": "What a retention period applies to (§7.8).",
+      "oneOf": [
+        {
+          "description": "Quarantined files and directories: [`RETAIN_QUARANTINE_DAYS`].",
+          "type": "string",
+          "const": "Quarantine"
+        },
+        {
+          "description": "Registry backups and typed definitions: [`RETAIN_BACKUP_DAYS`].",
+          "type": "string",
+          "const": "Backup"
+        },
+        {
+          "description": "The journal and the session's reports: [`RETAIN_JOURNAL_DAYS`].",
+          "type": "string",
+          "const": "Journal"
+        }
+      ]
+    },
+    "SessionId": {
+      "description": "UTC start time and 64 random bits, e.g. 20261115T101502Z-9f3a6c1d2b7e4a50",
+      "type": "string",
+      "pattern": "^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{16}$"
+    },
+    "SessionState": {
+      "description": "Where a session stands.",
+      "oneOf": [
+        {
+          "description": "The journal has neither a commit nor an aborted record: the run is in progress, or it crashed and\nwaits for recovery.",
+          "type": "string",
+          "const": "Open"
+        },
+        {
+          "description": "The run finished and was committed.",
+          "type": "string",
+          "const": "Committed"
+        },
+        {
+          "description": "The run stopped early (a backup or journal write failed); items after the stop are untouched.",
+          "type": "string",
+          "const": "Aborted"
+        },
+        {
+          "description": "Every op that changed the system was undone.",
+          "type": "string",
+          "const": "Undone"
+        },
+        {
+          "description": "Some ops were undone; others remain, or ended in a conflict.",
+          "type": "string",
+          "const": "PartiallyUndone"
+        }
+      ]
+    },
+    "SessionSummary": {
+      "description": "One session in the index: enough for the history list and the expiry notice, without reading the\njournal.",
+      "type": "object",
+      "properties": {
+        "app": {
+          "description": "The app id of the plan that was executed.",
+          "type": "string"
+        },
+        "backup_bytes": {
+          "description": "Bytes of quarantine and backup data the session still holds, over all volumes.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
+        },
+        "counts": {
+          "description": "How many items ended in each outcome.",
+          "$ref": "#/$defs/OutcomeCounts",
+          "default": {
+            "done": 0,
+            "failed": 0,
+            "held_retry": 0,
+            "pending_reboot": 0,
+            "skipped": 0,
+            "vanished": 0
+          }
+        },
+        "expires": {
+          "description": "When each class of the session's data expires.",
+          "$ref": "#/$defs/Expiry"
+        },
+        "finished": {
+          "description": "When the run was committed or aborted; `None` while the session is open.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FileTime"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "id": {
+          "description": "The session id.",
+          "$ref": "#/$defs/SessionId"
+        },
+        "journal": {
+          "description": "Where the session's journal stood when this entry was written: a reader of the journal checks\nthat it still holds that many lines with that chain value at the last of them, so a journal cut\nat a line boundary is detected (review M7). `None` in entries written before the field existed.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JournalMark"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "owner": {
+          "description": "The app the plan's items belong to, when the plan names one.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AppRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "pending_reboot": {
+          "description": "Whether a boot-time move of this session still waits for a restart.",
+          "type": "boolean",
+          "default": false
+        },
+        "plan_hash": {
+          "description": "The hash of the executed plan.",
+          "$ref": "#/$defs/Sha256Hex"
+        },
+        "purged": {
+          "description": "The classes whose data has already been deleted by a confirmed expiry.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/RetentionClass"
+          }
+        },
+        "started": {
+          "description": "When the run started.",
+          "$ref": "#/$defs/FileTime"
+        },
+        "state": {
+          "description": "Where the session stands.",
+          "$ref": "#/$defs/SessionState"
+        },
+        "undone": {
+          "description": "How many ops have been undone.",
+          "type": "integer",
+          "format": "uint32",
+          "default": 0,
+          "minimum": 0
+        },
+        "usage": {
+          "description": "The same bytes per volume.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/VolumeUsage"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "app",
+        "plan_hash",
+        "state",
+        "started",
+        "expires"
+      ]
+    },
+    "Sha256Hex": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "VolumeCap": {
+      "description": "Quarantine usage and cap of one volume.",
+      "type": "object",
+      "properties": {
+        "cap": {
+          "description": "The cap.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "root": {
+          "description": "Its root, for display.",
+          "type": "string"
+        },
+        "serial": {
+          "description": "The volume serial.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "used": {
+          "description": "Bytes the quarantine holds on it.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "serial",
+        "root",
+        "used",
+        "cap"
+      ]
+    },
+    "VolumeUsage": {
+      "description": "How many bytes a session holds on one volume. The size cap (§7.8) is per volume.",
+      "type": "object",
+      "properties": {
+        "bytes": {
+          "description": "Bytes of quarantine and backup data the session holds on the volume.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "root": {
+          "description": "Root of the volume as it was mounted during the run, e.g. `C:\\`. For display only.",
+          "type": "string"
+        },
+        "serial": {
+          "description": "Serial number of the volume.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "serial",
+        "root",
+        "bytes"
+      ]
+    }
+  }
+}

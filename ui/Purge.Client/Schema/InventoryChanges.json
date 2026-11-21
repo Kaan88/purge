@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "InventoryChanges",
+  "description": "`inventory.changes`, against the last list stored in `%LOCALAPPDATA%\\Purge` (display only).",
+  "type": "object",
+  "properties": {
+    "appeared": {
+      "description": "Programs that are new.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ProgramRef"
+      }
+    },
+    "disappeared": {
+      "description": "Programs in the stored list that are gone.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ProgramRef"
+      }
+    }
+  },
+  "required": [
+    "disappeared",
+    "appeared"
+  ],
+  "$defs": {
+    "ProgramId": {
+      "description": "<hive tag>|<view>|<key name>, e.g. HKLM|64|Git_is1 or HKU:<sid>|64|{guid}",
+      "type": "string",
+      "pattern": "^(HKLM|HKU:[^|\\\\:]+)\\|(64|32)\\|[^\\\\]+$"
+    },
+    "ProgramRef": {
+      "description": "A program by id, with its display name.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "Its display name.",
+          "type": "string"
+        },
+        "program_id": {
+          "description": "The program.",
+          "$ref": "#/$defs/ProgramId"
+        }
+      },
+      "required": [
+        "program_id",
+        "name"
+      ]
+    }
+  }
+}

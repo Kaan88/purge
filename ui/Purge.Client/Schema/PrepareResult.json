@@ -1,0 +1,216 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PrepareResult",
+  "description": "`uninstall.prepare`.",
+  "type": "object",
+  "properties": {
+    "programs": {
+      "description": "One entry per program, in request order.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Prepared"
+      }
+    }
+  },
+  "required": [
+    "programs"
+  ],
+  "$defs": {
+    "CoProduct": {
+      "description": "A product removed together with the program.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "Its display name.",
+          "type": "string"
+        },
+        "program_id": {
+          "description": "Its entry, when it has one.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProgramId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "FingerprintSummary": {
+      "description": "What a harvest found, in counts (display only).",
+      "type": "object",
+      "properties": {
+        "files": {
+          "description": "Files and folders recorded.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "objects": {
+          "description": "Services, tasks and firewall rules recorded.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "registry": {
+          "description": "Registry keys and values recorded.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "roots": {
+          "description": "Install roots.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "roots",
+        "files",
+        "registry",
+        "objects"
+      ]
+    },
+    "Prepared": {
+      "description": "One program of `uninstall.prepare`.",
+      "type": "object",
+      "properties": {
+        "co_products": {
+          "description": "Products removed with it.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CoProduct"
+          }
+        },
+        "command": {
+          "description": "The command that will run.",
+          "type": "string"
+        },
+        "fingerprint_summary": {
+          "description": "What the harvest found.",
+          "$ref": "#/$defs/FingerprintSummary"
+        },
+        "program_id": {
+          "description": "The program.",
+          "$ref": "#/$defs/ProgramId"
+        },
+        "quiet_command": {
+          "description": "The quiet command, when there is one.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "route": {
+          "description": "Where its uninstaller runs.",
+          "$ref": "#/$defs/Route"
+        },
+        "running": {
+          "description": "Processes of the program that run now.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RunningProcess"
+          }
+        },
+        "session_id": {
+          "description": "The uninstall session for the next steps.",
+          "$ref": "#/$defs/UninstallSessionId"
+        },
+        "signer": {
+          "description": "The uninstaller's signer, when it is signed.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "warnings": {
+          "description": "Warnings.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Warning"
+          }
+        }
+      },
+      "required": [
+        "program_id",
+        "session_id",
+        "route",
+        "command",
+        "co_products",
+        "running",
+        "fingerprint_summary",
+        "warnings"
+      ]
+    },
+    "ProgramId": {
+      "description": "<hive tag>|<view>|<key name>, e.g. HKLM|64|Git_is1 or HKU:<sid>|64|{guid}",
+      "type": "string",
+      "pattern": "^(HKLM|HKU:[^|\\\\:]+)\\|(64|32)\\|[^\\\\]+$"
+    },
+    "Route": {
+      "description": "Where a program's uninstaller runs (design 3.2).",
+      "oneOf": [
+        {
+          "description": "In the broker: a machine-scope entry whose uninstaller path has admin-only ancestors.",
+          "type": "string",
+          "const": "broker"
+        },
+        {
+          "description": "In the medium engine, at the user's level: a per-user entry, or a path a user can write.",
+          "type": "string",
+          "const": "medium"
+        }
+      ]
+    },
+    "RunningProcess": {
+      "description": "A running process that matters for an uninstall.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "Image name.",
+          "type": "string"
+        },
+        "pid": {
+          "description": "Process id.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "pid",
+        "name"
+      ]
+    },
+    "UninstallSessionId": {
+      "type": "string",
+      "pattern": "^u-[0-9a-f]{16}$"
+    },
+    "Warning": {
+      "description": "A warning for the user. `code` is stable for the client to switch on; `message` is shown.",
+      "type": "object",
+      "properties": {
+        "code": {
+          "description": "A stable machine code, e.g. `baseline_inferred`.",
+          "type": "string"
+        },
+        "message": {
+          "description": "The text shown.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ]
+    }
+  }
+}

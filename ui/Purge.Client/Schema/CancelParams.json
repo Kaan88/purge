@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CancelParams",
+  "description": "`$/cancel {request}`.",
+  "type": "object",
+  "properties": {
+    "request": {
+      "description": "The request to stop.",
+      "$ref": "#/$defs/RequestId"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "request"
+  ],
+  "$defs": {
+    "RequestId": {
+      "description": "The id of a request: an unsigned integer the client chooses. Progress notifications name the request\nthey belong to by it.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    }
+  }
+}

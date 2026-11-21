@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <!-- Engine client for Purge.App. Today only a stub (FakeEngineClient); the NDJSON JSON-RPC transport over
-       stdio / pipe (ENGINE_PLAN.md §3.3) and the NJsonSchema-generated DTOs replace Model/ in M3. -->
+       stdio / pipe (ENGINE_PLAN.md §3.3) replaces Model/ in M3. Rpc/ holds the engine API's DTOs (hand-written;
+       the design's NJsonSchema fallback) with a System.Text.Json source-generated context in Generated/. -->
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>

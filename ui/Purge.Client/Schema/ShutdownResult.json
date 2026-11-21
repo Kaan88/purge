@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ShutdownResult",
+  "description": "`broker.shutdown`.",
+  "type": "object",
+  "properties": {
+    "exiting": {
+      "description": "Whether the broker exits now; `false` while something runs.",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "exiting"
+  ]
+}

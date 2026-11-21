@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "IconsParams",
+  "description": "`programs.icons {program_ids[], px}`.",
+  "type": "object",
+  "properties": {
+    "program_ids": {
+      "description": "The programs, viewport first.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ProgramId"
+      },
+      "minItems": 1
+    },
+    "px": {
+      "description": "Edge length in pixels.",
+      "type": "integer",
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "program_ids",
+    "px"
+  ],
+  "$defs": {
+    "ProgramId": {
+      "description": "<hive tag>|<view>|<key name>, e.g. HKLM|64|Git_is1 or HKU:<sid>|64|{guid}",
+      "type": "string",
+      "pattern": "^(HKLM|HKU:[^|\\\\:]+)\\|(64|32)\\|[^\\\\]+$"
+    }
+  }
+}

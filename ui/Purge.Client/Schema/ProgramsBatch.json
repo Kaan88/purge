@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ProgramsBatch",
+  "description": "`programs.batch`.",
+  "type": "object",
+  "properties": {
+    "request": {
+      "description": "The `programs.list` request.",
+      "$ref": "#/$defs/RequestId"
+    },
+    "rows": {
+      "description": "The rows.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ProgramRow"
+      }
+    }
+  },
+  "required": [
+    "request",
+    "rows"
+  ],
+  "$defs": {
+    "FileTime": {
+      "description": "A point in time as a Windows `FILETIME`: 100-nanosecond intervals since 1601-01-01 UTC.\n\nThis is what registry key LastWriteTime, file times and process start times are in, so nothing is\nconverted on the way in. Serialised as a plain integer.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "InstallScope": {
+      "description": "Whether an app is installed for the machine or for one user.",
+      "oneOf": [
+        {
+          "description": "Machine-wide (an `HKLM` entry).",
+          "type": "string",
+          "const": "Machine"
+        },
+        {
+          "description": "For one user (an `HKU\\<sid>` entry).",
+          "type": "string",
+          "const": "User"
+        }
+      ]
+    },
+    "ProgramId": {
+      "description": "<hive tag>|<view>|<key name>, e.g. HKLM|64|Git_is1 or HKU:<sid>|64|{guid}",
+      "type": "string",
+      "pattern": "^(HKLM|HKU:[^|\\\\:]+)\\|(64|32)\\|[^\\\\]+$"
+    },
+    "ProgramRow": {
+      "description": "One raw ARP row.",
+      "type": "object",
+      "properties": {
+        "install_time": {
+          "description": "The install time the entry suggests.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FileTime"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "name": {
+          "description": "`DisplayName`, or the key name.",
+          "type": "string"
+        },
+        "program_id": {
+          "description": "The entry.",
+          "$ref": "#/$defs/ProgramId"
+        },
+        "publisher": {
+          "description": "`Publisher`.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "scope": {
+          "description": "Machine-wide or per-user.",
+          "$ref": "#/$defs/InstallScope"
+        },
+        "size_bytes": {
+          "description": "`EstimatedSize` in bytes, when the entry states one.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "default": null,
+          "minimum": 0
+        },
+        "version": {
+          "description": "`DisplayVersion`.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "program_id",
+        "name",
+        "scope"
+      ]
+    },
+    "RequestId": {
+      "description": "The id of a request: an unsigned integer the client chooses. Progress notifications name the request\nthey belong to by it.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    }
+  }
+}

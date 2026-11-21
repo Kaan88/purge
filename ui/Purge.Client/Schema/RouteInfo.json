@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RouteInfo",
+  "description": "`uninstall.route`.",
+  "type": "object",
+  "properties": {
+    "command": {
+      "description": "The command that will run.",
+      "type": "string"
+    },
+    "quiet_command": {
+      "description": "The quiet command, when there is one.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
+    "route": {
+      "description": "Where the uninstaller runs.",
+      "$ref": "#/$defs/Route"
+    },
+    "running": {
+      "description": "Processes of the program that run now.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/RunningProcess"
+      }
+    },
+    "signer": {
+      "description": "The uninstaller's signer, when it is signed.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    }
+  },
+  "required": [
+    "route",
+    "command",
+    "running"
+  ],
+  "$defs": {
+    "Route": {
+      "description": "Where a program's uninstaller runs (design 3.2).",
+      "oneOf": [
+        {
+          "description": "In the broker: a machine-scope entry whose uninstaller path has admin-only ancestors.",
+          "type": "string",
+          "const": "broker"
+        },
+        {
+          "description": "In the medium engine, at the user's level: a per-user entry, or a path a user can write.",
+          "type": "string",
+          "const": "medium"
+        }
+      ]
+    },
+    "RunningProcess": {
+      "description": "A running process that matters for an uninstall.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "Image name.",
+          "type": "string"
+        },
+        "pid": {
+          "description": "Process id.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "pid",
+        "name"
+      ]
+    }
+  }
+}

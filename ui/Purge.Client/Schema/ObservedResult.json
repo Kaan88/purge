@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ObservedResult",
+  "description": "`uninstall.observed`.",
+  "type": "object",
+  "properties": {
+    "verify_gone": {
+      "description": "The broker's own check that the program is gone.",
+      "$ref": "#/$defs/VerifyGone"
+    }
+  },
+  "required": [
+    "verify_gone"
+  ],
+  "$defs": {
+    "VerifyGone": {
+      "description": "The verify-gone check that gates the Safe band (§4.4, §5.8.3).\n\nEach part is `true` only when positively established; \"could not tell\" is `false`.\n\n`passed` is stored for readers of the document, but it is never trusted on its own: reading a document\nclears it unless all three parts hold, and consumers ask [`VerifyGone::is_passed`], which checks the\nparts again. An inconsistent `{\"arp_gone\": false, …, \"passed\": true}` therefore cannot unlock the Safe\nband.",
+      "type": "object",
+      "properties": {
+        "arp_gone": {
+          "description": "The ARP entry is gone.",
+          "type": "boolean"
+        },
+        "main_exes_gone": {
+          "description": "The main exes of the fingerprint are gone.",
+          "type": "boolean"
+        },
+        "msi_unknown_all_ctx": {
+          "description": "`MsiQueryProductState` is UNKNOWN in every context (`true` when the entry has no ProductCode).",
+          "type": "boolean"
+        },
+        "passed": {
+          "description": "All three hold. When `false` the scan runs under the forced-mode rules.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "arp_gone",
+        "msi_unknown_all_ctx",
+        "main_exes_gone",
+        "passed"
+      ]
+    }
+  }
+}
