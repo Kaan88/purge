@@ -2,7 +2,9 @@
 # canonical form, integrity verdict, rename-aside naming, the install loop over a fake file system) run in
 # memory, and the native layer is exercised only inside a fresh folder under %TEMP% (create with a
 # descriptor, CREATE_NEW refusal, reparse detection, handle-based rename of a junction, non-following
-# removal). Nothing outside that folder is written. Windows PowerShell 5.1:
+# removal). M3-INSTALL adds the payload copy (engine, broker, UI tree, kb), re-run/update/stale, the
+# broker's per-object protection rule and its repair, the shortcut, the executor-marker check and the
+# -WhatIf plan; nothing outside that folder is written. Windows PowerShell 5.1:
 #   powershell.exe -NoProfile -ExecutionPolicy Bypass -File install\tests\install-selftest.ps1
 # Exit 0 when every check passes. The real install checks (pre-created dir, planted junction, medium-IL
 # attacker via LaunchMedium) run in the VM gate G0; see install\README.md.
@@ -310,6 +312,99 @@ Check 'install.ps1 compiles as a script block' ($null -ne $sb)
     } else {
         Write-Host "skip native unreadable-descriptor check ($svi readable or absent here)"
     }
+}
+
+# ---------------------------------------------------------------------- payload, protection, markers (M3-INSTALL)
+& {
+    Set-StrictMode -Version 2.0
+    . $InstallPs1
+    $ErrorActionPreference = 'Stop'
+    function Write-InstallLog([string]$Message) { }     # keep the payload log lines out of the test output
+    $me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    # The ProgramFiles shape with the test user where Administrators would be: a non-elevated test cannot
+    # assign BUILTIN\Administrators as owner, so the user is added to the accepted owners for this block.
+    $sddl = New-PurgeSddl $me @(@('OICI', 'FA', 'SY'), @('OICI', 'FA', 'BA'), @('OICI', 'FA', $me), @('OICI', '0x1200a9', 'BU'))
+    $admins = @($me, $script:SidSystem, $script:SidAdmins)
+
+    $src = Join-Path $Work 'payload-src'
+    New-Item -ItemType Directory (Join-Path $src 'ui\Assets') -Force | Out-Null
+    New-Item -ItemType Directory (Join-Path $src 'kb\baselines') -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $src 'purge-engine.exe'), 'engine')
+    [IO.File]::WriteAllText((Join-Path $src 'purge-broker.exe'), 'broker')
+    [IO.File]::WriteAllText((Join-Path $src 'ui\Purge.exe'), 'ui')
+    [IO.File]::WriteAllText((Join-Path $src 'ui\Purge.Client.dll'), 'v1')
+    [IO.File]::WriteAllText((Join-Path $src 'ui\Assets\Purge.ico'), 'ico')
+    [IO.File]::WriteAllText((Join-Path $src 'kb\view.json'), '{}')
+    [IO.File]::WriteAllText((Join-Path $src 'kb\baselines\a.tsv.gz'), 'gz')
+    $dest = Join-Path $Work 'payload-install'
+    Check 'payload: create the test install root with a descriptor' ([PurgeInstall.Native]::CreateDirWithSddl($dest, $sddl) -eq 0)
+
+    $r = Copy-Payload $dest (Join-Path $src 'purge-engine.exe') (Join-Path $src 'purge-broker.exe') (Join-Path $src 'ui') (Join-Path $src 'kb') $sddl $admins
+    Check 'payload: fresh copy writes engine, broker, the UI tree and kb' ((Test-Path (Join-Path $dest 'Purge.exe')) -and (Test-Path (Join-Path $dest 'Assets\Purge.ico')) -and (Test-Path (Join-Path $dest 'kb\baselines\a.tsv.gz')))
+    Check 'payload: fresh copy is a change' ($r.changed -and @($r.files | Where-Object { $_.action -eq 'copied' }).Count -eq 7)
+    Check 'payload: an inherited descriptor needs no re-protection' (@($r.reprotected).Count -eq 0) (@($r.reprotected) -join ',')
+
+    $r2 = Copy-Payload $dest (Join-Path $src 'purge-engine.exe') (Join-Path $src 'purge-broker.exe') (Join-Path $src 'ui') (Join-Path $src 'kb') $sddl $admins
+    Check 'payload: re-run is a no-op' (-not $r2.changed -and @($r2.files | Where-Object { $_.action -ne 'unchanged' }).Count -eq 0 -and @($r2.reprotected).Count -eq 0)
+
+    [IO.File]::WriteAllText((Join-Path $src 'ui\Purge.Client.dll'), 'v2')
+    $r3 = Copy-Payload $dest (Join-Path $src 'purge-engine.exe') (Join-Path $src 'purge-broker.exe') (Join-Path $src 'ui') (Join-Path $src 'kb') $sddl $admins
+    Check 'payload: a changed source updates one file' ($r3.changed -and @($r3.files | Where-Object { $_.action -eq 'updated' }).Count -eq 1 -and [IO.File]::ReadAllText((Join-Path $dest 'Purge.Client.dll')) -eq 'v2')
+
+    [IO.File]::WriteAllText((Join-Path $dest 'old.dll'), 'old')
+    $r4 = Copy-Payload $dest (Join-Path $src 'purge-engine.exe') (Join-Path $src 'purge-broker.exe') (Join-Path $src 'ui') (Join-Path $src 'kb') $sddl $admins
+    Check 'payload: a stale file is reported and left in place' (@($r4.files | Where-Object { $_.action -eq 'stale (left in place)' }).Count -eq 1 -and (Test-Path (Join-Path $dest 'old.dll')) -and -not $r4.changed)
+
+    $lnk = Join-Path $Work 'Purge.lnk'
+    Check 'shortcut: created with the right target' ((Install-Shortcut $lnk (Join-Path $dest 'Purge.exe') $dest) -and (Get-ShortcutTarget $lnk) -eq (Join-Path $dest 'Purge.exe'))
+    Check 'shortcut: a second call is a no-op' (-not (Install-Shortcut $lnk (Join-Path $dest 'Purge.exe') $dest))
+    $c = Test-PayloadLayout $dest $lnk $admins
+    Check 'check: a complete payload passes' ($c.ok -and $c.files -eq 8) ($c.problems -join '; ')
+    Check 'check: -EngineOnly accepts the engine and kb alone' ((Test-PayloadLayout $dest $null $admins -EngineOnly).ok)
+
+    $bad = Join-Path $dest 'bad.dll'
+    [IO.File]::WriteAllText($bad, 'bad')
+    Check 'native: apply a descriptor with an Everyone write ACE' ([PurgeInstall.Native]::SetSddl($bad, (New-PurgeSddl $me @(@('', 'FA', $me), @('', 'FA', 'WD')))) -eq 0)
+    $c2 = Test-PayloadLayout $dest $lnk $admins
+    Check 'check: a user-writable file is named' (-not $c2.ok -and (($c2.problems -join ';') -match 'bad\.dll') -and (($c2.problems -join ';') -match 'S-1-1-0')) ($c2.problems -join '; ')
+    $r5 = Copy-Payload $dest (Join-Path $src 'purge-engine.exe') (Join-Path $src 'purge-broker.exe') (Join-Path $src 'ui') (Join-Path $src 'kb') $sddl $admins
+    Check 'payload: the next run re-protects only the failing file' (@($r5.reprotected).Count -eq 1 -and $r5.changed) (@($r5.reprotected) -join ',')
+    Check 'check: the repaired payload passes' ((Test-PayloadLayout $dest $lnk $admins).ok)
+
+    Check 'shortcut: removed' (Remove-Shortcut $lnk)
+    Remove-TreeNoFollow $dest
+    Check 'uninstall: the payload tree is gone' (-not (Test-Path $dest))
+
+    $good = Join-Path $Work 'clean.exe'
+    $badEngine = Join-Path $Work 'executor.exe'
+    [IO.File]::WriteAllText($good, 'nothing to see here')
+    [IO.File]::WriteAllText($badEngine, 'prefix purge-exec\src\execute.rs suffix')
+    Check 'engine marker: a clean binary has none' ((Get-ExecutorMarkers $good).Count -eq 0)
+    Check 'engine marker: an executor path is found' ((Get-ExecutorMarkers $badEngine) -contains 'purge-exec\src')
+    $threw = $null
+    try { Assert-EngineWithoutExecutor $badEngine } catch { $threw = $_.Exception.Message }
+    Check 'engine marker: the install refuses an executor build' ($threw -match 'rig-exec')
+}
+
+# ---------------------------------------------------------------------- the -WhatIf plan (no elevation)
+& {
+    $rep = Join-Path $Work 'whatif.json'
+    $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $InstallPs1 -WhatIf -ReportPath $rep 2>&1
+    $code = $LASTEXITCODE
+    $text = ($out | Out-String)
+    $j = if (Test-Path -LiteralPath $rep) { [IO.File]::ReadAllText($rep) | ConvertFrom-Json } else { $null }
+    Check 'what-if: install exits 0 and names every step' ($code -eq 0 -and $text -match 'cargo build --release -p purge-engine' -and $text -match 'cargo build --release -p purge-broker' -and $text -match 'dotnet publish' -and $text -match 'copy purge-engine\.exe, purge-broker\.exe' -and $text -match 'event-log source' -and $text -match 'Start-menu shortcut') "exit $code; $text"
+    Check 'what-if: the report says what_if and changed false' ($j -and $j.what_if -and $j.ok -and -not $j.changed -and $j.mode -eq 'install')
+    $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $InstallPs1 -Check -WhatIf 2>&1
+    $code = $LASTEXITCODE
+    Check 'what-if: check exits 0 and changes nothing' ($code -eq 0 -and (($out | Out-String) -match 'check ok')) "exit $code; $($out | Out-String)"
+    $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $InstallPs1 -Uninstall -WhatIf 2>&1
+    $code = $LASTEXITCODE
+    Check 'what-if: uninstall exits 0 and names the shortcut and source' ($code -eq 0 -and (($out | Out-String) -match 'remove the shortcut') -and (($out | Out-String) -match 'event-log source')) "exit $code; $($out | Out-String)"
+    $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $InstallPs1 -WhatIf -EngineOnly 2>&1
+    $code = $LASTEXITCODE
+    $text = ($out | Out-String)
+    Check 'what-if: -EngineOnly names the engine and kb, not the broker or UI' ($code -eq 0 -and $text -match 'engine-only mode' -and $text -match 'purge-engine\.exe and kb' -and $text -notmatch 'purge-broker\.exe') "exit $code; $text"
 }
 
 # ---------------------------------------------------------------------- the real entry point refuses without elevation

@@ -85,10 +85,10 @@ function Invoke-M2Medium([string]$CommandLine, [string]$WaitPath = '', [int]$Wai
 
 # install\install.ps1 fresh, again (must change nothing) and -Check (exit 0 = trees exactly as documented).
 function Step-Install {
-    $a = '-Engine ' + (Q $RigEngine) + ' -ReportPath '
+    $a = '-Engine ' + (Q $RigEngine) + ' -EngineOnly -ReportPath '
     $r1 = Invoke-M2Script $RigInstallScript ($a + (Q (F 'install.json')))
     $r2 = Invoke-M2Script $RigInstallScript ($a + (Q (F 'install-rerun.json')))
-    $r3 = Invoke-M2Script $RigInstallScript '-Check'
+    $r3 = Invoke-M2Script $RigInstallScript '-Check -EngineOnly'
     [IO.File]::WriteAllText((F 'install-check.txt'), "exit $($r3.exit)`r`n$($r3.stdout)`r`n$($r3.stderr)", $RigUtf8)
     $j1 = Read-Json (F 'install.json'); $j2 = Read-Json (F 'install-rerun.json')
     $res = [ordered]@{

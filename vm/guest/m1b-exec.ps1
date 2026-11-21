@@ -615,7 +615,7 @@ function Add-Result([string]$Key, [string]$Sub, $Value) {
 }
 
 function Step-Install {
-    $r1 = Invoke-M2Script $RigInstallScript ('-Engine ' + (Q $RigEngine) + ' -ReportPath ' + (Q (F 'install.json')))
+    $r1 = Invoke-M2Script $RigInstallScript ('-Engine ' + (Q $RigEngine) + ' -EngineOnly -ReportPath ' + (Q (F 'install.json')))
     Set-M2Result $R 'install' ([ordered]@{ exit = $r1.exit })
     $S.engine.exe = Get-M2EngineExe
     Set-M2Result $R 'engine_build' (Get-ExEngineBuild $Opts $RigEngine $RigEngineInstalled)

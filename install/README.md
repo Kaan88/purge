@@ -1,8 +1,9 @@
 # install
 
-`install.ps1` is the v1 deploy script (ENGINE_PLAN.md §3.2, §7.4, §7.9). It copies the engine to
-`%ProgramFiles%\Purge` and creates `C:\ProgramData\Purge` with protected DACLs, so the broker never
-works in a directory that a standard user could have pre-created or planted a junction in. A real
+`install.ps1` is the v1 deploy script (ENGINE_PLAN.md §3.2, §7.4, §7.9; package M3-INSTALL). It builds
+the release artifacts, copies `purge-engine.exe`, `purge-broker.exe`, the published UI (`Purge.exe` and
+its WinUI files) and `kb\` to `%ProgramFiles%\Purge`, creates `C:\ProgramData\Purge` with protected
+DACLs, registers the `Purge` event-log source and creates one all-users Start-menu shortcut. A real
 installer is an M7 item.
 
 This file is the **single documented source of the SDDL constants**. `purge-exec` storage checks
@@ -10,38 +11,48 @@ This file is the **single documented source of the SDDL constants**. `purge-exec
 
 ## Usage
 
-Windows PowerShell 5.1, 64-bit, elevated:
+Windows PowerShell 5.1, 64-bit, elevated (except `-WhatIf`):
 
 ```
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File install\install.ps1 [-Engine <purge-engine.exe>] [-Kb <dir>] [-ReportPath <json>]
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File install\install.ps1 -Check     [-ReportPath <json>]
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File install\install.ps1 -Uninstall [-ReportPath <json>]
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File install\install.ps1 [-Engine <exe>] [-Broker <exe>] [-UiPublishDir <dir>] [-Kb <dir>] [-SkipBuild] [-ReportPath <json>]
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File install\install.ps1 -WhatIf     [-ReportPath <json>]
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File install\install.ps1 -Check      [-ReportPath <json>]
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File install\install.ps1 -Uninstall  [-ReportPath <json>]
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File install\install.ps1 -EngineOnly [-Engine <exe>] [-Kb <dir>]   # legacy M1b/M2 rig mode
 ```
 
 | Parameter | Default | Meaning |
 |---|---|---|
-| `-Engine` | `<repo>\target\release\purge-engine.exe` | Engine to deploy; the file must be named `purge-engine.exe`. |
-| `-Kb` | `<engine dir>\kb` if it exists, else `<repo>\kb` | Knowledge files copied to `%ProgramFiles%\Purge\kb` (the engine reads `<exe dir>\kb`). |
-| `-ProgramFilesDir`, `-DataRoot` | `%ProgramFiles%\Purge`, `%ProgramData%\Purge` | Test overrides only (absolute drive paths). |
-| `-Check` | | Verify both trees, change nothing. Exit 0 only when both are exactly as installed. |
-| `-Uninstall` | | Remove `%ProgramFiles%\Purge` only. The data root is never touched. |
-| `-ReportPath` | | Write a `purge.install/1` JSON report (actions, renamed-aside trees with reasons, final SDDLs, log). |
+| `-Engine` | `<repo>\target\release\purge-engine.exe` | Engine to deploy; the file must be named `purge-engine.exe` and carry no executor marker. |
+| `-Broker` | `<repo>\target\release\purge-broker.exe` | Broker to deploy; the file must be named `purge-broker.exe`. |
+| `-UiPublishDir` | `<repo>\target\ui-publish` | The AOT publish folder; it must contain `Purge.exe`. |
+| `-Kb` | `<engine dir>\kb` if it exists, else `<repo>\kb` | Knowledge files copied to `%ProgramFiles%\Purge\kb` (the broker and the engine read `<exe dir>\kb`). |
+| `-SkipBuild` | | Deploy the artifacts as they are; run neither `cargo` nor `dotnet`. |
+| `-EngineOnly` | | Legacy M1b/M2 rig mode: deploy `purge-engine.exe` and `kb\` plus the data root only; no broker, UI, event-log source or shortcut, and no build. `-Check` and `-Uninstall` honour it. |
+| `-ProgramFilesDir`, `-DataRoot`, `-StartMenuDir` | `%ProgramFiles%\Purge`, `%ProgramData%\Purge`, the all-users Start-menu `Programs` folder | Test overrides only (absolute drive paths). |
+| `-WhatIf` (alias `-DryRun`) | | Print every step and change nothing. Needs no elevation; exit 0 when the plan is valid. |
+| `-Check` | | Verify both trees, every deployed file, the shortcut and the event-log source; change nothing. Exit 0 only when everything is exactly as installed. |
+| `-Uninstall` | | Remove `%ProgramFiles%\Purge`, the shortcut and the event-log source. The data root is never touched. |
+| `-ReportPath` | | Write a `purge.install/1` JSON report (actions, renamed-aside trees with reasons, final SDDLs, checks, log). |
 
 Exit code: 0 on success (including "nothing to do" and "something was renamed aside"; the report and the
-log say so), 1 on any failure (not elevated, 32-bit host, a rename or create failed, the tree did not
-verify after the bounded passes). Every line of output starts with `install:`.
+log say so), 1 on any failure (not elevated, 32-bit host, an artifact missing, an install directory off the
+system volume, a rename or create failed, the tree did not verify after the bounded passes). Every line of
+output starts with `install:`.
 
 The script never downloads anything, never changes Defender or System Restore settings, and signs
-nothing (signing stays out of M2, decision Q7).
+nothing (signing stays out of M2, decision Q7). It creates no service, task, run value or uninstall (ARP)
+entry; the `Purge` Application event-log source is the one registry key M3-HARDEN requires.
 
 ## Release build
 
-A release is two separate builds, run from the repository root, then the dependency check:
+A release is two separate Rust builds, the dependency check, then the UI publish:
 
 ```
 cargo build --release -p purge-engine
 cargo build --release -p purge-broker
 cargo xtask check-deps
+dotnet publish ui\Purge.App -c Release -r win-x64 -o target\ui-publish
 ```
 
 - Two commands, never one. `cargo build -p purge-engine -p purge-broker`, `--workspace` and
@@ -51,27 +62,62 @@ cargo xtask check-deps
 - No `--features`. The engine's `rig-exec` and `inject-view` are for the VM rig and for tests; the
   broker has no feature at all (rule 4b).
 - No `RUSTFLAGS` in the environment. It replaces the `crt-static` flags of `.cargo/config.toml`, and a
-  `--cfg feature="..."` in it would switch on feature-gated code that no dependency tree shows.
+  `--cfg feature="..."` in it would switch on feature-gated code that no dependency tree shows. The
+  script refuses to build when `RUSTFLAGS` is set.
 - `purge-broker.exe` is the only release binary that links the executor (`purge-exec`); it links the
   engine's library with the release engine's features. The second build compiles only that library, so
   the `purge-engine.exe` of the first build stays as it was.
 - `cargo xtask check-deps` checks the trees these two commands build (rule 4 in
   `tools/xtask/src/check_deps.rs`). Do not ship a build that fails it.
+- The UI publish is Native AOT and self-contained (`ui/Purge.App/Purge.App.csproj`); it needs the .NET 10
+  SDK and the Visual Studio C++ desktop workload. The script looks for `dotnet` on `PATH`, then in
+  `C:\Program Files\dotnet`.
 
-`-Engine` takes the `purge-engine.exe` of the first build. Deploying `purge-broker.exe` beside it comes
-with the M3 `install.ps1` additions.
+Before deploying, the script reads `purge-engine.exe` and refuses a binary that carries a `purge-exec`
+panic-location marker (`purge-exec\src` or `purge-exec/src`): such an engine was built with `rig-exec`.
+`-SkipBuild` skips only the build, not that check.
 
 ## Layout
 
 ```
-%ProgramFiles%\Purge\            ProgramFiles   engine + kb\ (files inherit the root's DACL)
+%ProgramFiles%\Purge\            ProgramFiles   purge-engine.exe, purge-broker.exe, Purge.exe and its
+                                                WinUI files, kb\ (every object admin-only writable)
 %ProgramData%\Purge\             DataRoot
     sessions\                    Sessions       one directory per session (created by purge-exec)
         index.json               Index          created as the 2-byte document {} (UTF-8, no BOM)
     Quarantine\                  Store          same-volume quarantine (purge-exec creates <session>\<op>)
     fp\                          Store          fingerprints
     kb\                          Store          writable knowledge (learned packs; empty in M2)
+%ProgramData%\Microsoft\Windows\Start Menu\Programs\Purge.lnk
+                                                one all-users shortcut to %ProgramFiles%\Purge\Purge.exe
+HKLM\SYSTEM\CurrentControlSet\Services\EventLog\Application\Purge
+                                                the "Purge" Application event-log source
 ```
+
+`Purge.exe` finds `purge-broker.exe` beside itself (`BrokerLauncher.PathBesideApp`) and
+`purge-engine.exe` beside itself (or the file named by `PURGE_ENGINE`, a development switch).
+
+## The broker's start checks and what satisfies them
+
+`bins/purge-broker/src/start.rs` refuses to start (exit 21 `install_untrusted`, 22 `store_integrity`,
+20 `not_elevated`) unless all of the following hold. The right column is the install step that makes it
+true; the left column names the code rule.
+
+| Check (start.rs) | Satisfied by |
+|---|---|
+| `restrict_dll_search` | the broker's own first call; nothing to install |
+| token elevated | the UI's `runas`; the installer itself is elevated |
+| own directory: plain drive path, no reparse point on any component, final path equal, on the system volume, admin-only writable (`trusted_install_dir`) | `Assert-SystemVolume` refuses an install directory off the Windows volume; `Install-Tree` creates `%ProgramFiles%\Purge` with the `ProgramFiles` descriptor in the creating call and rejects/recreates any tree with a reparse point at its top two levels |
+| the running executable (`purge-broker.exe`) admin-only writable | `Copy-Payload` copies it into the protected root, so it inherits the `ProgramFiles` descriptor, and the protection pass applies that descriptor itself to any object that fails the broker's rule |
+| `<install dir>\kb` passes the directory rule | `Copy-FileTree` creates `kb\` below the protected root; the protection pass judges it by the same rule; `Install-Tree` refuses a reparse-point `kb` |
+| `<install dir>\Purge.exe` (the client image) admin-only writable | the UI publish folder is copied into the protected root by `Copy-FileTree`; the protection pass covers `Purge.exe` itself |
+| every file directly in `<install dir>\kb\baselines` admin-only writable | the protection pass visits every file of the deployed tree, `kb\baselines\*.tsv.gz` included |
+| data root `%ProgramData%\Purge` passes the directory rule and `StorageRoots::check` | `Install-Tree` creates the data layout (root, `sessions`, `Quarantine`, `fp`, `kb`, `sessions\index.json`) with its own protected descriptors |
+| KB and baselines are `<install dir>\kb`, `PURGE_KB_DIR` is not read | the layout above; the engine and broker use `<exe dir>\kb` |
+
+`-Check` re-runs both tree verdicts, the deployed-file rule, the shortcut target and the event-log source,
+so it fails when any row above would fail after the fact (a replaced binary, a `Users` write ACE added to
+a baseline, a deleted file).
 
 ## SDDL constants
 
@@ -152,11 +198,41 @@ difference that grants nothing (an extra Users list ACE, a SYSTEM owner) rejects
 adopts exactly what it creates.
 
 Idempotence: on a good tree nothing is created, renamed or rewritten; payload files whose SHA-256
-already matches are left alone (report `changed: false`). Payload files present in Program Files but no
-longer in the source are reported as stale and left in place.
+already matches are left alone and a deployed object that already passes the broker's per-object rule is
+not touched (report `changed: false`). Payload files present in Program Files but no longer in the source
+are reported as stale and left in place.
 
 `-Uninstall` removes `%ProgramFiles%\Purge` (refusing if it is a reparse point or a file) with a walk that
-removes links as links and never enters them. It never touches the data root.
+removes links as links and never enters them, removes the Start-menu shortcut and removes the `Purge`
+event-log source. It never touches the data root.
+
+## Deployed files, shortcut and event-log source
+
+`Copy-Payload` copies `purge-engine.exe`, `purge-broker.exe`, the whole UI publish folder (relative paths
+kept, `Assets\` included) and `kb\` into the verified root. A file whose SHA-256 already matches is left
+alone; an existing file is overwritten; a file in the destination that matches no source is reported as
+`stale (left in place)` and never deleted.
+
+New files inherit the root's protected descriptor, but a replaced file or one copied from another tree can
+carry its own. The broker judges `purge-broker.exe`, `Purge.exe` and every file in `kb\baselines` one by
+one (`is_admin_only_writable`), so after copying, the script walks the whole deployed tree and applies the
+`ProgramFiles` constant (owner `Administrators`, protected DACL, Users read and execute) to any object
+that fails that rule. A reparse point anywhere in the deployed tree is refused, not followed. This is why
+an installed layout passes the broker's start check even when the source tree had other permissions.
+
+The shortcut is `Purge.lnk` in the all-users Start-menu `Programs` folder, target
+`%ProgramFiles%\Purge\Purge.exe`, working directory the install folder, icon from the same file. An
+existing shortcut with that target is left alone; `-Uninstall` removes it.
+
+The `Purge` Application event-log source is registered as
+`HKLM\SYSTEM\CurrentControlSet\Services\EventLog\Application\Purge`. The key alone is the registration:
+the broker passes its failure line as the event's text (`purge-win::eventlog`), so no message DLL is
+needed. The event id is the broker's exit code (20, 21, 22 for start failures; 23-27 and non-zero for
+other exits).
+
+`-WhatIf` (`-DryRun`) prints every step - the two cargo builds, the dependency check, the UI publish, the
+payload and data-tree installs, the protection pass, the event-log source and the shortcut - and returns 0
+without elevation or a single write.
 
 ## For purge-exec (M2-X-STORE)
 
@@ -184,12 +260,25 @@ good, second run a no-op, an attacker re-creating the root every pass), and exer
 a temp folder: create-with-descriptor round trip, `CREATE_NEW` refusal, reparse detection, handle-based
 rename of a junction (target untouched) and the non-following tree removal.
 
+The M3 rows add, in a temp folder and with a descriptor owned by the test user: a fresh payload copy of
+engine, broker, a UI publish tree and `kb` (including a subdirectory), a re-run that reports every file
+`unchanged` and `changed: false`, one changed source file reported `updated`, a stale file reported and
+left in place, the per-object protection rule (a file given an `Everyone` write ACE is named by `-Check`
+and re-protected by the next run), the shortcut create/verify/remove round trip, `Test-PayloadLayout`
+over the payload, the executor-marker check on a fake binary (clean, and a `purge-exec\src` marker
+refused), and the entry point's `-WhatIf` plan for install, check and uninstall (exit 0, no elevation,
+nothing written) plus the non-elevated real run (exit 1, "run elevated").
+
 VM gate G0 (`-Mode m2-install`, run by the rig, elevated in the guest):
 - fresh install: the canonical SDDL of `Purge`, `sessions`, `Quarantine`, `fp`, `kb`, `index.json` and
-  `%ProgramFiles%\Purge` equals the constants; `install.ps1 -Check` exits 0; a second install reports
-  `changed: false`;
+  `%ProgramFiles%\Purge` equals the constants; every file of the payload passes
+  `is_admin_only_writable`; the `Purge` event-log source and the Start-menu shortcut exist;
+  `install.ps1 -Check` exits 0; a second install reports `changed: false`;
 - a medium-integrity user (LaunchMedium) pre-creates `C:\ProgramData\Purge`, or plants a junction at
   `Quarantine` or `sessions\<x>` before install: the report lists the tree under `renamed_aside`, the
   junction targets (canaries) are unchanged, and the new tree verifies;
 - a medium-integrity user cannot create a file or a junction in any of the directories, cannot list
-  `Purge` or `sessions`, and can read `sessions\index.json`.
+  `Purge` or `sessions`, and can read `sessions\index.json`;
+- the installed `purge-broker.exe`, started with `--pipe`/`--parent`, passes its start checks (the
+  layout and DACLs above are exactly what `bins/purge-broker/src/start.rs` accepts), and `-Uninstall`
+  removes the Program Files tree, the shortcut and the source, leaving the data root.
