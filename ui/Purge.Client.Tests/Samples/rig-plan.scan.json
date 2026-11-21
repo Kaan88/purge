@@ -1,0 +1,67 @@
+{
+  "schema": "purge.scan/0",
+  "app": "rig-targets",
+  "tool": "purge",
+  "mode": "post",
+  "policy_version": "m1a.6",
+  "plan_hash": "942f107d3b6f83672a3545ea4025f1a3e3def2ab022403beaefdf1a99737e27a",
+  "items": [
+    {
+      "id": "files.dir",
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Local\\Temp\\purge-sample\\work\\app"
+      },
+      "action": "Quarantine",
+      "owner": {
+        "program_id": "HKLM|64|PurgeRigTargets",
+        "display_name": "Purge rig targets"
+      },
+      "origin": "ManualUser",
+      "scanner": "RIG-TARGETS",
+      "category": "AppFiles",
+      "evidence": [],
+      "blockers": [],
+      "harm": "Low",
+      "reversibility": "Full",
+      "children": [],
+      "size_bytes": null,
+      "child_count": null,
+      "decision": {
+        "band": "Safe",
+        "preselected": true,
+        "score": 9,
+        "explanation": "rig target (plan from-targets, a test tool of the VM rig); not decided by the policy"
+      }
+    },
+    {
+      "id": "single",
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Local\\Temp\\purge-sample\\work\\single.txt"
+      },
+      "action": "Quarantine",
+      "owner": {
+        "program_id": "HKLM|64|PurgeRigTargets",
+        "display_name": "Purge rig targets"
+      },
+      "origin": "ManualUser",
+      "scanner": "RIG-TARGETS",
+      "category": "AppFiles",
+      "evidence": [],
+      "blockers": [],
+      "harm": "Low",
+      "reversibility": "Full",
+      "children": [],
+      "size_bytes": null,
+      "child_count": null,
+      "decision": {
+        "band": "Safe",
+        "preselected": true,
+        "score": 9,
+        "explanation": "rig target (plan from-targets, a test tool of the VM rig); not decided by the policy"
+      }
+    }
+  ],
+  "absorbed": []
+}

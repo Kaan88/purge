@@ -1,0 +1,8 @@
+<Project>
+  <!-- Optional: keep obj\ and bin\ outside the source tree (another drive, say) by setting the environment
+       variable PURGE_UI_BUILD_ROOT before dotnet build / test / publish. Unset, the defaults apply. -->
+  <PropertyGroup Condition="'$(PURGE_UI_BUILD_ROOT)' != ''">
+    <BaseIntermediateOutputPath>$(PURGE_UI_BUILD_ROOT)\obj\$(MSBuildProjectName)\</BaseIntermediateOutputPath>
+    <BaseOutputPath>$(PURGE_UI_BUILD_ROOT)\bin\$(MSBuildProjectName)\</BaseOutputPath>
+  </PropertyGroup>
+</Project>

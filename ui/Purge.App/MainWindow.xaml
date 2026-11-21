@@ -1,0 +1,193 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="Purge.App.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="Purge">
+
+    <Grid x:Name="Root">
+        <Grid.Resources>
+            <!-- Left rail: plain Buttons in a StackPanel, not a NavigationView, to keep the first frame cheap (§9.4). -->
+            <ResourceDictionary>
+                <ResourceDictionary.ThemeDictionaries>
+                    <ResourceDictionary x:Key="Default">
+                        <StaticResource x:Key="RailHoverBrush" ResourceKey="SubtleFillColorSecondaryBrush" />
+                        <StaticResource x:Key="RailPressedBrush" ResourceKey="SubtleFillColorTertiaryBrush" />
+                    </ResourceDictionary>
+                    <ResourceDictionary x:Key="Light">
+                        <StaticResource x:Key="RailHoverBrush" ResourceKey="SubtleFillColorSecondaryBrush" />
+                        <StaticResource x:Key="RailPressedBrush" ResourceKey="SubtleFillColorTertiaryBrush" />
+                    </ResourceDictionary>
+                    <ResourceDictionary x:Key="HighContrast">
+                        <StaticResource x:Key="RailHoverBrush" ResourceKey="SystemColorHighlightBrush" />
+                        <StaticResource x:Key="RailPressedBrush" ResourceKey="SystemColorHighlightBrush" />
+                    </ResourceDictionary>
+                </ResourceDictionary.ThemeDictionaries>
+
+                <Style x:Key="RailButton" TargetType="Button">
+                    <Setter Property="Background" Value="Transparent" />
+                    <Setter Property="BorderThickness" Value="0" />
+                    <Setter Property="HorizontalAlignment" Value="Stretch" />
+                    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                    <Setter Property="Height" Value="36" />
+                    <Setter Property="Padding" Value="0" />
+                    <Setter Property="CornerRadius" Value="{ThemeResource ControlCornerRadius}" />
+                    <Setter Property="Foreground" Value="{ThemeResource TextFillColorPrimaryBrush}" />
+                    <Setter Property="Template">
+                        <Setter.Value>
+                            <ControlTemplate TargetType="Button">
+                                <Grid x:Name="RootGrid" Background="{TemplateBinding Background}" CornerRadius="{TemplateBinding CornerRadius}">
+                                    <VisualStateManager.VisualStateGroups>
+                                        <VisualStateGroup x:Name="CommonStates">
+                                            <VisualState x:Name="Normal" />
+                                            <VisualState x:Name="PointerOver">
+                                                <VisualState.Setters>
+                                                    <Setter Target="Hover.Background" Value="{ThemeResource RailHoverBrush}" />
+                                                </VisualState.Setters>
+                                            </VisualState>
+                                            <VisualState x:Name="Pressed">
+                                                <VisualState.Setters>
+                                                    <Setter Target="Hover.Background" Value="{ThemeResource RailPressedBrush}" />
+                                                    <Setter Target="Presenter.Opacity" Value="0.8" />
+                                                </VisualState.Setters>
+                                            </VisualState>
+                                            <VisualState x:Name="Disabled" />
+                                        </VisualStateGroup>
+                                    </VisualStateManager.VisualStateGroups>
+                                    <Border x:Name="Hover" CornerRadius="{TemplateBinding CornerRadius}" />
+                                    <ContentPresenter x:Name="Presenter"
+                                                      Padding="{TemplateBinding Padding}"
+                                                      HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                                      VerticalContentAlignment="Center"
+                                                      Content="{TemplateBinding Content}"
+                                                      Foreground="{TemplateBinding Foreground}" />
+                                </Grid>
+                            </ControlTemplate>
+                        </Setter.Value>
+                    </Setter>
+                </Style>
+                <Style x:Key="RailSelection" TargetType="Border">
+                    <!-- All four columns, so the highlight is the same width with or without a badge. -->
+                    <Setter Property="Grid.ColumnSpan" Value="4" />
+                    <Setter Property="Margin" Value="0" />
+                    <Setter Property="CornerRadius" Value="{ThemeResource ControlCornerRadius}" />
+                    <Setter Property="Background" Value="{ThemeResource SubtleFillColorSecondaryBrush}" />
+                    <Setter Property="Visibility" Value="Collapsed" />
+                </Style>
+                <Style x:Key="RailPill" TargetType="Border">
+                    <Setter Property="Width" Value="3" />
+                    <Setter Property="Height" Value="16" />
+                    <Setter Property="CornerRadius" Value="1.5" />
+                    <Setter Property="VerticalAlignment" Value="Center" />
+                    <Setter Property="Background" Value="{ThemeResource AccentFillColorDefaultBrush}" />
+                    <Setter Property="Visibility" Value="Collapsed" />
+                </Style>
+            </ResourceDictionary>
+        </Grid.Resources>
+
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <TitleBar x:Name="AppTitleBar" Title="Purge" IsBackButtonVisible="False" IsPaneToggleButtonVisible="False">
+            <TitleBar.IconSource>
+                <FontIconSource Glyph="&#xE74D;" FontSize="16" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+            </TitleBar.IconSource>
+            <TitleBar.RightHeader>
+                <!-- 7a delta 2: shown only when the UI itself runs elevated (set in code from engine.hello). -->
+                <Border x:Name="ElevationChip" Visibility="Collapsed" Margin="0,0,8,0" Padding="10,0" Height="28" CornerRadius="14"
+                        Background="{ThemeResource ControlFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}" BorderThickness="1"
+                        AutomationProperties.Name="Administrator">
+                    <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                        <FontIcon Glyph="&#xEA18;" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <TextBlock Text="Administrator" FontSize="12" />
+                    </StackPanel>
+                </Border>
+            </TitleBar.RightHeader>
+        </TitleBar>
+
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="232" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <Grid Padding="8,4,8,8" RowSpacing="2">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <StackPanel Spacing="2">
+                <Button x:Name="NavPrograms" Style="{StaticResource RailButton}" Tag="programs" AutomationProperties.Name="Programs" Click="OnRailClick">
+                    <Grid ColumnSpacing="12" Height="36">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="3" /><ColumnDefinition Width="Auto" /><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                        <Border x:Name="SelPrograms" Style="{StaticResource RailSelection}" Visibility="Visible" />
+                        <Border x:Name="PillPrograms" Style="{StaticResource RailPill}" Visibility="Visible" />
+                        <FontIcon Grid.Column="1" Glyph="&#xE71D;" FontSize="16" />
+                        <TextBlock Grid.Column="2" Text="Programs" VerticalAlignment="Center" />
+                        <TextBlock x:Name="ProgramsCount" Grid.Column="3" Margin="0,0,12,0" FontSize="12" VerticalAlignment="Center" Style="{StaticResource SecondaryText}" />
+                    </Grid>
+                </Button>
+                <Button x:Name="NavQueue" Style="{StaticResource RailButton}" Tag="queue" AutomationProperties.Name="Uninstall pipeline" Click="OnRailClick">
+                    <Grid ColumnSpacing="12" Height="36">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="3" /><ColumnDefinition Width="Auto" /><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                        <Border x:Name="SelQueue" Style="{StaticResource RailSelection}" />
+                        <Border x:Name="PillQueue" Style="{StaticResource RailPill}" />
+                        <FontIcon Grid.Column="1" Glyph="&#xE8FD;" FontSize="16" />
+                        <TextBlock Grid.Column="2" Text="Uninstall pipeline" VerticalAlignment="Center" />
+                        <Border Grid.Column="3" Margin="0,0,10,0" Style="{StaticResource ChipAccent}"><TextBlock Style="{StaticResource ChipTextOnAccent}" Text="3" /></Border>
+                    </Grid>
+                </Button>
+                <Button x:Name="NavLeftovers" Style="{StaticResource RailButton}" Tag="leftovers" AutomationProperties.Name="Leftovers" Click="OnRailClick">
+                    <Grid ColumnSpacing="12" Height="36">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="3" /><ColumnDefinition Width="Auto" /><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                        <Border x:Name="SelLeftovers" Style="{StaticResource RailSelection}" />
+                        <Border x:Name="PillLeftovers" Style="{StaticResource RailPill}" />
+                        <FontIcon Grid.Column="1" Glyph="&#xE71F;" FontSize="16" />
+                        <TextBlock Grid.Column="2" Text="Leftovers" VerticalAlignment="Center" />
+                        <Border Grid.Column="3" Margin="0,0,10,0" Style="{StaticResource ChipAccent}"><TextBlock Style="{StaticResource ChipTextOnAccent}" Text="12" /></Border>
+                    </Grid>
+                </Button>
+                <Button x:Name="NavHistory" Style="{StaticResource RailButton}" Tag="history" AutomationProperties.Name="History &amp; undo" Click="OnRailClick">
+                    <Grid ColumnSpacing="12" Height="36">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="3" /><ColumnDefinition Width="Auto" /><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                        <Border x:Name="SelHistory" Style="{StaticResource RailSelection}" />
+                        <Border x:Name="PillHistory" Style="{StaticResource RailPill}" />
+                        <FontIcon Grid.Column="1" Glyph="&#xE81C;" FontSize="16" />
+                        <TextBlock Grid.Column="2" Text="History &amp; undo" VerticalAlignment="Center" />
+                    </Grid>
+                </Button>
+                <Button x:Name="NavVault" Style="{StaticResource RailButton}" Tag="vault" AutomationProperties.Name="Quarantine vault" Click="OnRailClick">
+                    <Grid ColumnSpacing="12" Height="36">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="3" /><ColumnDefinition Width="Auto" /><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                        <Border x:Name="SelVault" Style="{StaticResource RailSelection}" />
+                        <Border x:Name="PillVault" Style="{StaticResource RailPill}" />
+                        <FontIcon Grid.Column="1" Glyph="&#xE7B8;" FontSize="16" />
+                        <TextBlock Grid.Column="2" Text="Quarantine vault" VerticalAlignment="Center" />
+                    </Grid>
+                </Button>
+                </StackPanel>
+                <StackPanel Grid.Row="2">
+                <Button x:Name="NavSettings" Style="{StaticResource RailButton}" Tag="settings" AutomationProperties.Name="Settings" Click="OnRailClick">
+                    <Grid ColumnSpacing="12" Height="36">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="3" /><ColumnDefinition Width="Auto" /><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                        <Border x:Name="SelSettings" Style="{StaticResource RailSelection}" />
+                        <Border x:Name="PillSettings" Style="{StaticResource RailPill}" />
+                        <FontIcon Grid.Column="1" Glyph="&#xE713;" FontSize="16" />
+                        <TextBlock Grid.Column="2" Text="Settings" VerticalAlignment="Center" />
+                    </Grid>
+                </Button>
+                </StackPanel>
+            </Grid>
+
+            <!-- Content card on the Mica backdrop. -->
+            <Border x:Name="ContentCard" Grid.Column="1"
+                    Background="{ThemeResource LayerFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1,1,0,0" CornerRadius="8,0,0,0" />
+        </Grid>
+    </Grid>
+</Window>

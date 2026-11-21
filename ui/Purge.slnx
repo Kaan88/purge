@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="Purge.App/Purge.App.csproj" />
+  <Project Path="Purge.Client/Purge.Client.csproj" />
+  <Project Path="Purge.Client.Tests/Purge.Client.Tests.csproj" />
+</Solution>
