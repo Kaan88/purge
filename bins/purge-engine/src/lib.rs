@@ -8,4 +8,5 @@
 //! environment into [`cli::run`].
 
 pub mod cli;
+pub mod icons;
 pub mod pipeline;
