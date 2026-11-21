@@ -19,8 +19,8 @@ public interface IEngineClient : IAsyncDisposable
     Task<InventoryDoc> ListProgramsAsync(CancellationToken ct = default);
 
     /// <summary>
-    /// True when scanning and removing work (a broker or the CLI helper is behind the client). False in this build's
-    /// stdio client: the Programs page shows Uninstall disabled with the reason.
+    /// True when the Uninstall click can start the flow: the engine is live, so it can route the program and start
+    /// the elevated broker. The sample client answers false, and its page disables Uninstall with the reason.
     /// </summary>
     bool CanChangePc { get; }
 
@@ -51,6 +51,21 @@ public interface IEngineClient : IAsyncDisposable
     /// The engine stores the new list when it ends a <c>programs.list</c>, so ask before listing.
     /// </summary>
     Task<Rpc.InventoryChanges> GetInventoryChangesAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// <c>uninstall.route</c>: where the program's uninstaller belongs (<c>broker</c> or <c>medium</c>), and the exact
+    /// interactive and quiet command lines it will run, with their signer and the processes that hold the program.
+    /// The medium engine never runs a broker-route command; the broker never runs a medium-route one.
+    /// </summary>
+    Task<Rpc.RouteInfo> GetUninstallRouteAsync(string programId, CancellationToken ct = default);
+
+    /// <summary>
+    /// <c>uninstall.run_user</c>: runs a medium-route uninstaller at this process's own level, with the command
+    /// <see cref="GetUninstallRouteAsync"/> showed for the same <paramref name="quiet"/> choice. Progress arrives as
+    /// <c>uninstall.progress</c> on the client's reader thread.
+    /// </summary>
+    Task<Rpc.RunUserResult> RunUserUninstallAsync(string programId, bool quiet, Action<Rpc.Progress>? progress = null,
+        CancellationToken ct = default);
 
     /// <summary>
     /// <c>programs.forecast</c> (proposed, not in the engine yet): expected leftovers for the given programs. Asked

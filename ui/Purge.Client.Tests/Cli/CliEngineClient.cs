@@ -86,6 +86,15 @@ public sealed class CliEngineClient : IEngineClient
 
     public Task<Rpc.InventoryChanges> GetInventoryChangesAsync(CancellationToken ct = default) => Task.FromResult(new Rpc.InventoryChanges());
 
+    /// <summary>The CLI test helper lists only; the pipeline is tested with the scripted clients.</summary>
+    public Task<Rpc.RouteInfo> GetUninstallRouteAsync(string programId, CancellationToken ct = default) =>
+        throw new NotSupportedException("the CLI test helper does not route uninstallers");
+
+    /// <summary>The CLI test helper lists only; the pipeline is tested with the scripted clients.</summary>
+    public Task<Rpc.RunUserResult> RunUserUninstallAsync(string programId, bool quiet, Action<Rpc.Progress>? progress = null,
+        CancellationToken ct = default) =>
+        throw new NotSupportedException("the CLI test helper does not run uninstallers");
+
     /// <summary>Not in the engine yet: every program stays "not known yet".</summary>
     public Task<IReadOnlyList<LeftoverForecast>> GetForecastsAsync(IReadOnlyList<string> programIds, CancellationToken ct = default) =>
         Task.FromResult<IReadOnlyList<LeftoverForecast>>([]);

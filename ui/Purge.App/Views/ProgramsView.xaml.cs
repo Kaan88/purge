@@ -5,6 +5,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Purge.Client;
 using Purge.Client.Model;
+using Purge.Client.Pipeline;
 
 namespace Purge.App.Views;
 
@@ -320,7 +321,6 @@ public sealed partial class ProgramsView : UserControl
         var engine = Program.Engine;
         var right = engine.IsLive ? "Engine connected" : "Sample data · engine not connected";
         if (engine.IsLive && _sizing && _all.Count > 0) right += $" · measuring sizes {Math.Min(_sizesDone, _all.Count)} of {_all.Count}";
-        if (!engine.CanChangePc && engine.IsLive) right += " · uninstalling needs the Purge security prompt";
         if (LaunchMarkers.Get("list_reply") is { } reply) right += $" · list in {reply.ToString("F0", CultureInfo.CurrentCulture)} ms";
         if (LaunchMarkers.Get("presented") is { } ms) right += $" · on screen in {ms.ToString("F0", CultureInfo.CurrentCulture)} ms";
         StatusRight.Text = right;
@@ -496,8 +496,8 @@ public sealed partial class ProgramsView : UserControl
     }
 
     /// <summary>
-    /// Uninstall changes the PC, so it waits for the broker: until then the buttons are disabled and the tooltip says
-    /// why. Sample data has no engine to ask at all.
+    /// Uninstall asks for the broker on the click; until the engine is live the buttons are disabled and the tooltip
+    /// says why. Sample data has no engine to ask at all.
     /// </summary>
     private void UpdateCommandState()
     {
@@ -513,7 +513,7 @@ public sealed partial class ProgramsView : UserControl
     }
 
     private static string UninstallHint(IEngineClient engine) => engine.IsLive
-        ? "Uninstalling arrives with the Purge security prompt. This build lists programs only."
+        ? "The engine is not usable, so an uninstaller cannot be routed."
         : "Sample data: no engine is connected.";
 
     private void ShowDetailsTile(ProgramRow row)
@@ -658,28 +658,10 @@ public sealed partial class ProgramsView : UserControl
                 _ = ReloadAsync();
                 return;
             case "uninstall" when Program.Engine.CanChangePc && _current is { } row:
-                _ = ConfirmUninstallAsync(row);
+                MainWindow.Instance.OpenUninstall().Begin(new UninstallTarget(row.Entry.ProgramId, row.Name));
                 return;
         }
         ShowNotice(UninstallHint(Program.Engine));
-    }
-
-    /// <summary>Asks before the vendor's uninstaller runs, then hands over to S3, which scans when it is done.</summary>
-    private async Task ConfirmUninstallAsync(ProgramRow row)
-    {
-        var dialog = new ContentDialog
-        {
-            XamlRoot = XamlRoot,
-            Title = $"Uninstall {row.Name}?",
-            Content = "Purge records the program, runs its own uninstaller in quiet mode, then scans for what it left " +
-                      "behind. Nothing is moved by Purge until you confirm the list on the next page.",
-            PrimaryButtonText = "Uninstall and scan",
-            CloseButtonText = "Cancel",
-            DefaultButton = ContentDialogButton.Close,
-            RequestedTheme = MainWindow.Instance.ActualTheme,
-        };
-        if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
-        await MainWindow.Instance.OpenReview().ScanAsync(row.Entry.ProgramId, row.Name, ScanKind.UninstallThenScan);
     }
 
     /// <summary>Reads the program list from the engine again (after an uninstall, or Refresh list).</summary>
