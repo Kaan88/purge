@@ -1,12 +1,23 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "RunParams",
-  "description": "`uninstall.run {session_id, quiet}`.",
+  "description": "`uninstall.run {session_id, quiet, restore_point?}`. The broker asks in its own consent dialog\nbefore it starts the session's command (review M3-R2 M1).",
   "type": "object",
   "properties": {
     "quiet": {
       "description": "Run the quiet uninstall command.",
       "type": "boolean"
+    },
+    "restore_point": {
+      "description": "The restore-point choice for the leftover cleanup that follows, for the dialog to show; the\nrun itself makes none, and `plan.execute` takes the setting it acts on.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RestorePoint"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "session_id": {
       "description": "The uninstall session from `uninstall.prepare`.",
@@ -19,6 +30,26 @@
     "quiet"
   ],
   "$defs": {
+    "RestorePoint": {
+      "description": "When `plan.execute` asks for a restore point.",
+      "oneOf": [
+        {
+          "description": "Never.",
+          "type": "string",
+          "const": "off"
+        },
+        {
+          "description": "Only for a high-risk run.",
+          "type": "string",
+          "const": "high_risk"
+        },
+        {
+          "description": "For every run.",
+          "type": "string",
+          "const": "always"
+        }
+      ]
+    },
     "UninstallSessionId": {
       "type": "string",
       "pattern": "^u-[0-9a-f]{16}$"

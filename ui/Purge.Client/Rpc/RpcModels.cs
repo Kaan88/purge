@@ -1710,12 +1710,21 @@ public sealed class RouteInfo
 }
 
 /// <summary>
-/// `uninstall.run {session_id, quiet}`.
+/// `uninstall.run {session_id, quiet, restore_point?}`. The broker asks in its own consent dialog
+/// before it starts the session's command (review M3-R2 M1).
 /// </summary>
 public sealed class RunParams
 {
     [JsonPropertyName("quiet")]
     public bool Quiet { get; set; }
+
+    /// <summary>
+    /// The restore-point choice for the leftover cleanup that follows, for the dialog to show; the
+    /// run itself makes none, and `plan.execute` takes the setting it acts on.
+    /// </summary>
+    [JsonPropertyName("restore_point")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RestorePoint? RestorePoint { get; set; }
 
     [JsonPropertyName("session_id")]
     public string SessionId { get; set; } = "";

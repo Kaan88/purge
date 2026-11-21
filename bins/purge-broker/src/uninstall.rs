@@ -11,7 +11,9 @@
 //! The commands a session runs are the ones `prepare` resolved and returned. `uninstall.run` never
 //! resolves them again: it picks the interactive or the quiet [`QuietCommand`] out of the session and
 //! passes it verbatim to [`Machine::run_uninstall`]. So the command shown is the command run, even if
-//! the Uninstall key changes between the two requests.
+//! the Uninstall key changes between the two requests. Before it starts anything, `uninstall.run` asks
+//! the broker's consent dialog (program, exact command, signer, quiet or interactive, restore point),
+//! drawn from that same command (review M3-R2 M1).
 //!
 //! # The fingerprint
 //!
@@ -52,8 +54,11 @@ use purge_rpc::methods::{
 use purge_rpc::table::CallSet;
 use purge_source::live::Live;
 use purge_source::types::ProcessInfo;
+use purge_win::taskdialog::Outcome as Answer;
 use serde_json::Value;
 
+use crate::consent::dialog;
+use crate::consent::view::{self, UninstallFacts};
 use crate::serve::{Ctx, Handler};
 use crate::session::gone;
 
@@ -766,7 +771,8 @@ impl<H: FlowHandler> RunProgress<'_, H> {
     }
 }
 
-/// `uninstall.run`: runs the session's own command in the broker, and only for a broker-route session.
+/// `uninstall.run`: runs the session's own command in the broker, and only for a broker-route session,
+/// and only after the broker's own consent dialog, drawn from that command, was approved (B4).
 fn run<H: FlowHandler>(
     flow: &Flow,
     ctx: &Ctx<'_, H>,
@@ -793,6 +799,33 @@ fn run<H: FlowHandler>(
 
     let machine = flow.machine();
     let program = session.program.clone();
+
+    // The dialog is drawn from the very command that is started below (review M3-R2 M1): a declined
+    // dialog, a dialog that cannot be drawn or shown, and a lost client or parent start nothing.
+    let facts = UninstallFacts {
+        app_name: session.display_name.clone(),
+        program_id: program.to_string(),
+        command: command.clone(),
+        quiet: params.quiet,
+        signer: machine.sources().fs.signer_cn(&command.exe).ok().flatten(),
+        restore_point: params.restore_point,
+    };
+    let consent = view::view_uninstall(&facts)
+        .map_err(|e| ErrorObject::runtime(format!("the dialog cannot be built: {e}")))?;
+    if !consent.describes_uninstall(&command, params.quiet) {
+        return Err(ErrorObject::runtime(
+            "the consent dialog does not describe this command",
+        ));
+    }
+    if dialog::ask(ctx, &consent) != Answer::Approved || ctx.lost() {
+        return Err(ErrorObject::server(ErrorData::ConsentDeclined));
+    }
+    if !consent.describes_uninstall(&command, params.quiet) {
+        return Err(ErrorObject::runtime(
+            "the consent dialog does not describe this command",
+        ));
+    }
+
     let uninstalled = {
         let mut fingerprint = session
             .fingerprint

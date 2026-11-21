@@ -293,7 +293,7 @@ Broker over the pipe:
 | `engine.hello` | Read | result `EngineHello` with `elevated: true` and the baseline status |
 | ⇢ `baseline.changed` | Read | `BaselineBuild`, and `rescan_offered[]` (scan ids) when a build completes |
 | `uninstall.prepare` ⇢ `prepare.progress` | Execute | `{program_ids[]}`, result per program `{session_id, route, command, quiet_command, signer, co_products[], running[], fingerprint_summary, warnings[]}` |
-| `uninstall.run` ⇢ `uninstall.progress` | Execute | `{session_id, quiet}`, result `{exit_code, outcome, verify_gone}`; broker route only |
+| `uninstall.run` ⇢ `uninstall.progress` | Execute | `{session_id, quiet, restore_point?}`, result `{exit_code, outcome, verify_gone}`; broker route only. Ends in the broker's consent dialog (program, exact frozen command, signer, quiet or interactive, restore point); a declined dialog is `consent_declined` and starts nothing (R2 M1) |
 | `uninstall.observed` | Execute | `{session_id}`, result `{verify_gone}`; after a medium-route run |
 | `leftovers.stored` | Read | `{program_ids[]}`, result: which have a stored fingerprint |
 | `leftovers.scan` ⇢ `scan.progress` | Read | `{session_id, forced?}` or `{program_id}` (stored fingerprint), result `{scan_id, mode, counts, baseline_trust, warnings[]}`. The client can ask for `forced`; it can never raise a mode. |

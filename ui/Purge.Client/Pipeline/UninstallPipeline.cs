@@ -87,9 +87,17 @@ public sealed record UninstallLaunch(UninstallLaunchState State, IUninstallBroke
 /// <summary>The broker side of the Uninstall pipeline: the four requests of design 3.2 and 6.3.</summary>
 public interface IUninstallBroker : IAsyncDisposable
 {
+    /// <summary>The broker's consent dialog is up (<c>consent.shown</c>); the code is the one in its footer.</summary>
+    event Action<ConsentShown>? ConsentShown;
+
     Task<PrepareResult> PrepareAsync(IReadOnlyList<string> programIds, Action<Progress>? progress, CancellationToken ct);
 
-    Task<RunResult> RunAsync(string sessionId, bool quiet, Action<Progress>? progress, CancellationToken ct);
+    /// <summary>
+    /// <c>uninstall.run</c>. The broker asks its own dialog first and answers <c>consent_declined</c> when it is
+    /// declined; <paramref name="restorePoint"/> is shown in that dialog.
+    /// </summary>
+    Task<RunResult> RunAsync(string sessionId, bool quiet, RestorePoint restorePoint, Action<Progress>? progress,
+        CancellationToken ct);
 
     Task<ObservedResult> ObservedAsync(string sessionId, RunOutcome? outcome, CancellationToken ct);
 
@@ -139,8 +147,20 @@ public sealed class BrokerUninstallClient : IUninstallBroker
         return _session;
     }
 
+    public event Action<ConsentShown>? ConsentShown;
+
     private void OnNotification(BrokerNotification notification)
     {
+        if (notification.Method == "consent.shown")
+        {
+            try
+            {
+                if (notification.Params.Deserialize(RpcJsonContext.Default.ConsentShown) is { } shown)
+                    ConsentShown?.Invoke(shown);
+            }
+            catch (Exception e) when (e is JsonException or InvalidOperationException) { }
+            return;
+        }
         if (notification.Method is not ("prepare.progress" or "uninstall.progress" or "scan.progress")) return;
         Progress? progress;
         try { progress = notification.Params.Deserialize(RpcJsonContext.Default.Progress); }
@@ -156,9 +176,14 @@ public sealed class BrokerUninstallClient : IUninstallBroker
         Send("uninstall.prepare", new ProgramsParams { ProgramIds = [.. programIds] }, RpcJsonContext.Default.ProgramsParams,
             RpcJsonContext.Default.PrepareResult, progress, ct);
 
-    public Task<RunResult> RunAsync(string sessionId, bool quiet, Action<Progress>? progress, CancellationToken ct) =>
-        Send("uninstall.run", new RunParams { SessionId = sessionId, Quiet = quiet }, RpcJsonContext.Default.RunParams,
-            RpcJsonContext.Default.RunResult, progress, ct);
+    public Task<RunResult> RunAsync(string sessionId, bool quiet, RestorePoint restorePoint, Action<Progress>? progress,
+        CancellationToken ct)
+    {
+        // The broker's dialog is drawn by another process: let it come to the front.
+        _session.AllowForeground();
+        return Send("uninstall.run", new RunParams { SessionId = sessionId, Quiet = quiet, RestorePoint = restorePoint },
+            RpcJsonContext.Default.RunParams, RpcJsonContext.Default.RunResult, progress, ct);
+    }
 
     public Task<ObservedResult> ObservedAsync(string sessionId, RunOutcome? outcome, CancellationToken ct) =>
         Send("uninstall.observed", new ObservedParams { SessionId = sessionId, Outcome = outcome },
@@ -598,14 +623,31 @@ public sealed class UninstallController : IAsyncDisposable
 
     private async Task RunBrokerAsync(CancellationToken ct)
     {
-        SetStep(UninstallStep.Run, StepState.Active, Quiet ? "Running its quiet uninstaller" : "Running its uninstaller");
+        // The broker asks its own dialog before it starts anything: wait for it, and say nothing has run.
+        SetStep(UninstallStep.Run, StepState.Active, "Waiting for the Purge security prompt. Nothing has run yet.");
         CurrentStep = UninstallStep.Run;
         Raise();
+        var broker = _broker!;
+        void PromptShown(ConsentShown shown)
+        {
+            SetStep(UninstallStep.Run, StepState.Active,
+                $"Confirm in the Purge security prompt (code {shown.Code}). Nothing has run yet.");
+            Raise();
+        }
         RunResult result;
+        broker.ConsentShown += PromptShown;
         try
         {
-            result = await _broker!.RunAsync(_prepared!.SessionId, Quiet,
+            result = await broker.RunAsync(_prepared!.SessionId, Quiet, RestorePoint,
                 p => SetStep(UninstallStep.Run, StepState.Active, p.Phase), ct).ConfigureAwait(false);
+        }
+        catch (BrokerRpcException e) when (e.Kind == "consent_declined")
+        {
+            SetStep(UninstallStep.Run, StepState.Warning, "Not started: the security prompt was declined");
+            _retry = RetryStage.Run;
+            AddNotice(new UninstallNotice(UninstallNoticeKind.Info, "You declined in the Purge security prompt.",
+                "Nothing was run. The program was only recorded. You can ask again.", CanRetry: true));
+            return;
         }
         catch (BrokerRpcException e) when (e.Kind == "uninstall_failed")
         {
@@ -618,6 +660,10 @@ public sealed class UninstallController : IAsyncDisposable
             SetStep(UninstallStep.Run, StepState.Failed, "The wrong part was asked");
             FailWrongRoute(e.Details?.Route ?? Route.Medium);
             return;
+        }
+        finally
+        {
+            broker.ConsentShown -= PromptShown;
         }
         SetStep(UninstallStep.Run, StepState.Done, ExitDetail(result.ExitCode, Quiet));
         await CheckBrokerGoneAsync(result, ct).ConfigureAwait(false);

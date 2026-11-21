@@ -198,7 +198,7 @@ pub fn left_out(n: usize) -> String {
 
 /// One path component (or a whole name) as pieces of one shown character each; at most
 /// [`NAME_CUT`] of them plus the marker.
-fn component(comp: &str, flags: &mut Flags) -> Vec<String> {
+fn component(comp: &str, flags: &mut Flags, cut: bool) -> Vec<String> {
     let chars: Vec<char> = comp.chars().collect();
     let look_alike = look_alike_in_word(&chars);
     let first_visible = chars.iter().position(|c| *c != ' ');
@@ -219,7 +219,7 @@ fn component(comp: &str, flags: &mut Flags) -> Vec<String> {
             out.push(c.to_string());
         }
     }
-    if out.len() > NAME_CUT {
+    if cut && out.len() > NAME_CUT {
         let left_out_n = out.len() - NAME_CUT;
         let tail = out.split_off(out.len() - TAIL);
         out.truncate(HEAD);
@@ -282,7 +282,7 @@ pub fn shown(text: &str) -> Shown {
         }
     }
     for (comp, sep) in parts {
-        pieces.extend(component(comp, &mut flags));
+        pieces.extend(component(comp, &mut flags, true));
         if !sep.is_empty() {
             pieces.push(sep.to_owned());
         }
@@ -292,6 +292,25 @@ pub fn shown(text: &str) -> Shown {
         text: pieces.concat(),
         flags,
     }
+}
+
+/// Free text for the dialog: the same escapes as [`shown`], but `\` and `/` do not end a component, so
+/// a command's arguments (`/S /D=C:\x`) are one piece, and only the whole text is cut ([`LINE_COST`]).
+pub fn shown_line(text: &str) -> Shown {
+    let mut flags = Flags::default();
+    let mut pieces = component(text, &mut flags, false);
+    cap_line(&mut pieces, &mut flags);
+    Shown {
+        text: pieces.concat(),
+        flags,
+    }
+}
+
+/// [`shown_line`] in double quotes.
+pub fn quote_line(text: &str) -> Shown {
+    let mut s = shown_line(text);
+    s.text = format!("\"{}\"", s.text);
+    s
 }
 
 /// [`shown`] in double quotes.
@@ -381,6 +400,24 @@ mod tests {
             assert_eq!(sh.text, s);
             assert!(sh.flags.is_plain(), "{s}");
         }
+    }
+
+    #[test]
+    fn free_text_keeps_slashes_and_long_words_but_escapes_the_same_things() {
+        let args = r"/S /D=C:\Program Files\Vendor /LOG=C:\Users\Someone\AppData\Local\Temp\a-very-long-file-name-that-goes-on-and-on-and-on-beyond-eighty-characters.log";
+        let sh = shown_line(args);
+        assert_eq!(sh.text, args);
+        assert!(sh.flags.is_plain());
+        assert!(
+            !shown(args).flags.is_plain(),
+            "a path reading would flag it"
+        );
+        let sh = quote_line("/S \u{202e}x\n  y");
+        assert_eq!(sh.text, "\"/S \\u{202e}x\\u{a} \\u{20}y\"");
+        assert!(sh.flags.escaped);
+        let long = format!("/S {}", "x".repeat(900));
+        let sh = shown_line(&long);
+        assert!(sh.flags.shortened && sh.text.contains("characters not shown"));
     }
 
     #[test]

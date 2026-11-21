@@ -15,6 +15,7 @@ package that stops using it.
 | `view::view_restore(&BoundPlan, &RestoreFacts)` | `undo.run`: ops to put back, conflicts as attention |
 | `view::view_recover(&BoundPlan, &RecoverFacts)` | `journal.resume`, `.rollback`, `.retry_held` |
 | `view::view_purge(&[PurgeUnit])`, `view_purge_user_data(unit)`, `split_purge(items, backups)` | `quarantine.purge`; user data one unit per dialog |
+| `view::view_uninstall(&UninstallFacts)` | `uninstall.run` (R2 M1): program name, the frozen command's program file and arguments, signer, quiet or interactive, the restore-point choice; `ConsentView::describes_uninstall(&QuietCommand, quiet)` is the handler's check |
 | `ConsentView` | strings only (instruction, summary, attention entries, other entries, box, button, footer), counts, code |
 | `dialog::pages(&ConsentView) -> Vec<Page>`, `dialog::ask(ctx, &view) -> Outcome` | TaskDialog pages; asks through `Ctx::consent`, which sends `consent.shown {request, code}` once the window is up |
 | `text::{shown, quote}` | the only way a name or path reaches the dialog |
@@ -103,3 +104,34 @@ a debug build (see open points).
   to compute from the journal; the view trusts only that the ops are in the plan.
 - Time and date come in as `Stamp` (the caller converts); the purge listing's `expires` is not shown.
 - 80-character cuts flag some real names (long AppX full names); they become attention entries.
+
+## R2 M1: the uninstall dialog
+
+`uninstall.run` no longer starts anything before the broker's own dialog is approved (design B4, T2, T11).
+
+- **Drawn from the frozen command.** `uninstall::run` picks the session's `QuietCommand` (interactive or quiet),
+  builds `UninstallFacts` from it and calls `view_uninstall`. The view keeps that `QuietCommand` and the mode
+  (`UninstallDrawn`); `describes_uninstall` is checked before the dialog and again after the answer, against the very
+  value passed to `Machine::run_uninstall`. A mismatch is `runtime`, nothing starts.
+- **What it says.** Instruction `Run the uninstaller of "<name>" as administrator?`; lines `Starts: "<program file>"`,
+  `Arguments: "<arguments>"` (or `none`), `Signed by: "<signer>"` (or `no signer known`; read from the program file
+  by the broker's own sources), `Mode: quiet|interactive`, the restore-point choice for the leftover cleanup that
+  follows (a new optional `restore_point` of `RunParams`, shown only: the run makes no restore point and
+  `plan.execute` has its own dialog), and "Purge cannot undo what it does. Nothing has been started yet."
+  Warning icon, one button "Run the uninstaller", Cancel the default, armed after 1 s by the TaskDialog layer.
+- **Names.** Program, program file, arguments and signer go through `text::shown` / `text::quote` (the arguments and
+  the signer through the new `text::shown_line`, which does not read `/` and `\` as component ends or cut at 80
+  characters, only at the 400 of a whole text). Anything escaped or cut becomes an attention entry and brings the
+  verification box; plain commands need only the button.
+- **Code.** `ConfirmCode` of `selection_hash` over `uninstall \n program id \n quiet \n exe \n args`; `consent.shown`
+  is sent as for every variant (`Ctx::consent`).
+- **Declined, lost.** Cancel, a dialog that cannot be built or shown, a lost pipe or parent (the closer closes the
+  window as Cancel) and a loss noticed just after an approval are `consent_declined` or nothing at all: no process
+  starts and the session stays usable (a declined request can be asked again).
+- **UI.** `BrokerUninstallClient.RunAsync` takes the restore point, lets the broker's window come to the front
+  (`AllowForeground`) and forwards `consent.shown`; `UninstallController` shows "Waiting for the Purge security
+  prompt. Nothing has run yet." and then the code, and maps `consent_declined` to an info bar with Retry. The UI's own
+  confirm dialog stays (quiet toggle, restore point).
+- **Needs the VM:** the dialog drawn by the real TaskDialog with a real Inno/MSI uninstaller (wrapping of a long
+  command, the escape legend, window to the front over the UI), the 1 s arming, and the code in the footer equal to
+  the one the UI shows while it waits.
