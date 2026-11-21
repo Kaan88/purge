@@ -35,7 +35,11 @@ so the work can be continued from any harness: read it, then `git log --oneline 
 ## - M3: user answered open questions 1-6 (028cab7 on `m3-design`, M3_DESIGN.md section 7 + DECISIONS row).
 ##   Reading notes by Flash in `docs/m3-notes/reading-{a,b}.md` (11eeac5) cover section 9's reading list except
 ##   the WinAppSDK 2.6.x restore check. Next: Fable finishes M3_DESIGN.{md,json} from the draft + notes, then Q7.
-## - Push of `baseline` and `m3-design` waits for the user.
+## - Pushed 2026-11-21: `baseline` adc5d82, `bl-r1-fixes` 84df1ed, `m3-design` 3c0d030.
+## - M3 DESIGN DONE (Fable): `m3-design` cc3beae (local, not pushed): M3_DESIGN.{md,json} complete, 33 packages in
+##   8 waves, Fable reviews after waves 2, 5, 7; mockup deltas in section 7a; 8 coordinator DECISIONS rows (Q7: UI
+##   starts from the 0d9c008 `ui/` tree by copy). WinAppSDK 2.6.5 restores with .NET SDK 10.0.404. Next: merge
+##   `m3-design`, then wave 1. Later user items: 5 laptop reboots for the cold-boot bench; code-signing cert.
 
 ## Paused: BL-R1 fixes (critical, Fable), branch `bl-r1-fixes` at 081f507 (pushed, not merged)
 - 10 commits on e285d26; 081f507 adds the review's Disposition section, a DECISIONS row for what the fixes decided
