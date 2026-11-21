@@ -315,6 +315,43 @@ fn programs_get_and_sizes_read_the_same_inventory() {
 }
 
 #[test]
+fn programs_icons_and_uninstall_route_answer_from_the_inventory() {
+    let fx = machine();
+    let store = scratch("icons-route-store");
+    let (lines, _) = run_requests(
+        &fx,
+        None,
+        &store,
+        &[
+            json!({"jsonrpc": "2.0", "id": 4, "method": "programs.icons",
+                   "params": {"program_ids": ["HKLM|64|Alpha", "HKLM|64|Beta"], "px": 24}}),
+            json!({"jsonrpc": "2.0", "id": 5, "method": "uninstall.route",
+                   "params": {"program_id": "HKLM|64|Alpha"}}),
+        ],
+    );
+
+    // Two `icon.batch` lines are not needed at 32 per line: one batch carries both programs.
+    let batch = lines
+        .iter()
+        .find(|line| line["method"] == "icon.batch")
+        .expect("no icon.batch");
+    assert_eq!(batch["params"]["request"], 4);
+    let icons = batch["params"]["icons"].as_array().unwrap();
+    let ids: Vec<&str> = icons
+        .iter()
+        .map(|icon| icon["program_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["HKLM|64|Alpha", "HKLM|64|Beta"]);
+    assert!(icons.iter().all(|icon| icon["px"] == 24));
+    assert_eq!(response(&lines, 4)["result"]["count"], 2);
+
+    // Alpha is machine-scope under C:\Apps, which the default fixture roots leave user-writable.
+    let route = &response(&lines, 5)["result"];
+    assert_eq!(route["route"], "medium");
+    assert_eq!(route["command"], r"C:\Apps\Alpha\uninst.exe");
+}
+
+#[test]
 fn inventory_changes_compares_with_the_stored_list() {
     let fx = machine();
     let store = scratch("changes-store");
