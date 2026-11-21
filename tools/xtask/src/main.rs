@@ -18,7 +18,9 @@
 //!   `test-support` features (crash matrix, object ops), check-deps, no-new-walks, ui-strings,
 //!   scanner-coverage.
 
+mod bench_launch;
 mod check_deps;
+mod gen_dto;
 mod lex;
 mod no_new_walks;
 mod replay;

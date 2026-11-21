@@ -32,6 +32,8 @@ pub mod known_folders;
 pub mod msi;
 pub mod msi_db;
 pub mod os;
+pub mod pipe;
+pub mod privilege;
 pub mod process;
 pub mod reg;
 #[cfg(feature = "write")]
@@ -45,5 +47,7 @@ pub mod sid;
 pub mod signer;
 #[cfg(feature = "write")]
 pub mod sr;
+pub mod taskdialog;
 pub mod taskschd;
+pub mod token;
 pub mod versioninfo;
