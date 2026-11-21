@@ -561,6 +561,29 @@ rigtool baseline-diff --truth SHIPPED.tsv.gz --local LOCAL.tsv.gz [--neighbour S
   (`bl_check` in `baseline-local-lib.sh`) exits 3 when the seal failed, the two passes differ below the header, the
   local file is not of the truth's Windows, or a build exit code was not 0. The guest needs a `rigtool.exe` built from
   this tree (Push-Tools pushes it), and the Linux host a Linux rigtool (§9).
+- **Running gate M on the Windows rig host** (the laptop since 2026-11-19, docs/MIGRATION-laptop.md; VirtualBox 7.2,
+  Windows PowerShell 5.1): `vm\rig-baseline-local.ps1` is the way; the bash scripts above stay as the Linux path. From
+  the repository root, with `target\release\purge-engine.exe` (`cargo build --release -p purge-engine`) and
+  `vm\rigtool\target\release\rigtool.exe` (`cargo build --release` in `vm\rigtool`) built from this tree:
+
+  ```
+  $env:VMPWFILE = 'C:\path\to\pw.txt'
+  .\vm\rig-baseline-local.ps1 -Mode R1    # Purge-CleanPro, run bl-r1-cleanpro
+  .\vm\rig-baseline-local.ps1 -Mode R2    # Inbound-Win11-Test, -No3D, run bl-r2-inbound
+  .\vm\rig-baseline-local.ps1 -Mode R5    # this host, elevated PowerShell, no VM, no VMPWFILE
+  ```
+
+  It dot-sources `rig.ps1` and does what `baseline-local-vm.sh` / `-r5.sh` do: the same refusals (exit 2: a per-VM
+  lock `vm\runs\.lock-<vm>`, VMPWFILE, the VM busy or unknown, another rig script for the VM alive, the engine without
+  the builder, a missing shipped baseline, a rigtool whose `version` hash is not the tree's or without baseline-diff,
+  under 6 GiB RAM free), the same guest job (`Get-BlBuildJob`: the text of `bl_build_job`), the same outputs and the
+  same final check (`Test-BlReport`: `bl_check` in PowerShell, exit 3). Differences: the host diff uses the Windows
+  rigtool (the one checked is also the one pushed); after `Pull-Run` the VM is restored to `rig-base` and left off;
+  R5 refuses while a VirtualBox VM runs (its times are the W4 budgets), takes `-AllowUnelevated` for
+  `--allow-unelevated`, and writes its build files to `vm\runs\r5-host\` (not `target\baseline-local\`). `-Engine` and
+  `-RigTool` (default `$env:RIG_RIGTOOL`, else the path above) override the binaries. Console log:
+  `vm\runs\bl-<run>-<stamp>.log`. Exit 1: the VM part or the diff failed (R5: 2). The pure parts are covered by
+  `vm\guest\tests\rig-selftest.ps1`.
 
 ## 9. Running the rig from Linux (CachyOS host, 2026-11-14)
 
