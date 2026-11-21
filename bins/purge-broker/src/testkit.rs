@@ -358,6 +358,8 @@ struct ConsentState {
     closed_by_broker: bool,
     pages: Vec<Page>,
     primary: i32,
+    /// How many dialogs have been asked in all.
+    asked: u64,
 }
 
 /// A consent dialog the test answers (`cfg(test)` only).
@@ -394,6 +396,23 @@ impl ScriptedConsent {
         self.state.lock().unwrap().pages.clone()
     }
 
+    /// Waits for a dialog asked after the `seen`-th, and returns its number and pages. `None` when no
+    /// new dialog opens within `timeout`. The number is `0` before the first dialog.
+    pub fn next_dialog(&self, seen: u64, timeout: Duration) -> Option<(u64, Vec<Page>)> {
+        let deadline = Instant::now() + timeout;
+        let mut g = self.state.lock().unwrap();
+        loop {
+            if g.asked > seen {
+                return Some((g.asked, g.pages.clone()));
+            }
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return None;
+            }
+            g = self.cv.wait_timeout(g, left).unwrap().0;
+        }
+    }
+
     /// The primary button id of the dialog that was asked last.
     pub fn primary(&self) -> i32 {
         self.state.lock().unwrap().primary
@@ -414,6 +433,7 @@ impl Consent for Arc<ScriptedConsent> {
             g.answer = None;
             g.pages = pages.to_vec();
             g.primary = primary;
+            g.asked += 1;
             self.cv.notify_all();
         }
         if self.announce.load(Ordering::SeqCst) {
