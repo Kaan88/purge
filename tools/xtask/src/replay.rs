@@ -28,6 +28,13 @@
 //! `replay` also writes the scan sidecar `<plan>.scan.json` next to the plan; `replay-all` does not (its
 //! plans sit in the run's `plans` directory, which the scorer reads).
 //!
+//! `--baseline-view exact|merged|local|none` (docs/BASELINE_LOCAL_DESIGN.md §8.1, run R3) picks the baseline view
+//! the replay scans with: `exact` (the default) is today's exact-match selection from `--baselines`; `none` scans
+//! with no baseline at all (the values-only path, the reference of invariant L5). `merged` (`--local <file>` and one
+//! to three `--neighbour <shipped file>`) and `local` (`--local <file>` only) check their inputs (the local file's
+//! `#end` line and seal, each neighbour's header, leave-one-out) and then stop: the engine takes an injected view
+//! only from BL-VIEW and BL-FRAMEWORK on (wave 5), which complete them. [`ViewArgs`] holds the flags.
+//!
 //! `replay-all` replays the frozen M0 runs [`M0_RUNS`] into `vm/runs/<id>/plans/purge-replay.json` (the
 //! runs directory is git-ignored; the plan is a new file next to the other tools' plans) and then, when
 //! `vm/rigtool/target/release/rigtool(.exe)` exists, prints `rigtool score --set …` over them.
@@ -41,6 +48,8 @@ use purge_engine::pipeline::{self, Settings, Sources};
 use purge_guard::prefix;
 use purge_harvest::coproducts;
 use purge_identity::kbdata::Kb;
+use purge_index::baseline::Baseline;
+use purge_index::local_baseline::LocalBaseline;
 use purge_inventory::verify_gone::{self, VerifyTarget};
 use purge_model::{Band, FileTime, InventoryEntry, ScanMode};
 use purge_source::fixture::Fixture;
@@ -57,7 +66,8 @@ pub const REPLAY_PLAN: &str = "purge-replay.json";
 pub const RUNS_DIR_VAR: &str = "PURGE_RUNS_DIR";
 
 const REPLAY_USAGE: &str = "usage: cargo xtask replay --run <vm/runs/<id>> --app <truth id> -o <plan.json> \
-                            [--overlay <dir>] [--baselines <dir>] [--fp <fp.json>] [--live]";
+                            [--overlay <dir>] [--baselines <dir>] [--fp <fp.json>] [--live] \
+                            [--baseline-view exact|merged|local|none] [--local <file>] [--neighbour <file>]...";
 const REPLAY_ALL_USAGE: &str = "usage: cargo xtask replay-all [--runs <vm/runs>] [--overlay-root <dir>] [--if-present] [--no-score]";
 
 // ---------------------------------------------------------------------------------------------------------
@@ -415,6 +425,145 @@ fn report(app: &str, out: &Path, r: &Replayed) {
 }
 
 // ---------------------------------------------------------------------------------------------------------
+// Baseline view (BASELINE_LOCAL_DESIGN.md §8.1, R3; BL-RIG-DIFF wave 2, completed by BL-FRAMEWORK in wave 5)
+// ---------------------------------------------------------------------------------------------------------
+
+/// `--baseline-view`: the trust level of the view a replay scans with (design §4.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewMode {
+    /// The shipped baseline of exactly the snap's Windows, from `--baselines` (today's behaviour).
+    Exact,
+    /// The local baseline merged with shipped neighbours.
+    Merged,
+    /// The local baseline alone.
+    Local,
+    /// No baseline: values-only.
+    None,
+}
+
+impl ViewMode {
+    fn parse(text: &str) -> Result<ViewMode> {
+        Ok(match text {
+            "exact" => ViewMode::Exact,
+            "merged" => ViewMode::Merged,
+            "local" => ViewMode::Local,
+            "none" => ViewMode::None,
+            other => bail!(
+                "--baseline-view {other:?}: one of exact, merged, local, none\n{REPLAY_USAGE}"
+            ),
+        })
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            ViewMode::Exact => "exact",
+            ViewMode::Merged => "merged",
+            ViewMode::Local => "local",
+            ViewMode::None => "none",
+        }
+    }
+}
+
+/// At most this many neighbours in a merged view (design §4.1 rule 3).
+pub const MAX_NEIGHBOURS: usize = 3;
+
+/// The baseline-view flags of `replay`.
+#[derive(Debug, Clone)]
+pub struct ViewArgs {
+    /// `--baseline-view` (default [`ViewMode::Exact`]).
+    pub mode: ViewMode,
+    /// `--local`: a local baseline file (`purge-engine baseline build`).
+    pub local: Option<PathBuf>,
+    /// `--neighbour`: shipped baseline files, in the order given.
+    pub neighbours: Vec<PathBuf>,
+}
+
+impl ViewArgs {
+    /// Checks the flags and their files, and returns the baseline directory the replay scans with: `baselines` for
+    /// `exact`, none for `none`. `merged` and `local` end in an error after their inputs are checked, until the
+    /// engine takes an injected view (BL-VIEW, BL-FRAMEWORK). `baselines_given`: `--baselines` was on the command
+    /// line (it contradicts every mode but `exact`).
+    pub fn baseline_dir(
+        &self,
+        baselines: Option<PathBuf>,
+        baselines_given: bool,
+    ) -> Result<Option<PathBuf>> {
+        let mode = self.mode.name();
+        if self.mode != ViewMode::Exact && baselines_given {
+            bail!(
+                "--baseline-view {mode} hides the exact baseline; --baselines does not go with it"
+            );
+        }
+        match self.mode {
+            ViewMode::Exact | ViewMode::None => {
+                if self.local.is_some() || !self.neighbours.is_empty() {
+                    bail!(
+                        "--baseline-view {mode} takes no --local or --neighbour{}",
+                        if self.mode == ViewMode::None {
+                            " yet (presence from neighbours at trust None comes with BL-FRAMEWORK)"
+                        } else {
+                            ""
+                        }
+                    );
+                }
+                return Ok(if self.mode == ViewMode::Exact {
+                    baselines
+                } else {
+                    None
+                });
+            }
+            ViewMode::Local if !self.neighbours.is_empty() => {
+                bail!("--baseline-view local takes no --neighbour (that is merged)")
+            }
+            ViewMode::Merged if self.neighbours.is_empty() => {
+                bail!("--baseline-view merged needs at least one --neighbour <shipped baseline>")
+            }
+            ViewMode::Merged if self.neighbours.len() > MAX_NEIGHBOURS => {
+                bail!("--baseline-view merged takes at most {MAX_NEIGHBOURS} --neighbour files")
+            }
+            ViewMode::Local | ViewMode::Merged => {}
+        }
+        let path = self.local.as_ref().with_context(|| {
+            format!("--baseline-view {mode} needs --local <local baseline file>")
+        })?;
+        let local =
+            LocalBaseline::load(path).map_err(|e| anyhow!("--local {}: {e}", path.display()))?;
+        if !local.complete() {
+            bail!(
+                "--local {}: the local baseline is incomplete ({}); an incomplete local baseline gives trust None \
+                 (design L2): use --baseline-view none",
+                path.display(),
+                local.incomplete_reasons().join("; ")
+            );
+        }
+        let h = local.header();
+        let mut names = Vec::new();
+        for n in &self.neighbours {
+            let b = Baseline::load(n).map_err(|e| anyhow!("--neighbour {}: {e}", n.display()))?;
+            if b.is_for(&h.edition, h.build, h.ubr) {
+                bail!(
+                    "--neighbour {}: it is the exact baseline of the local file's Windows ({} {}.{}); a merged view \
+                     leaves it out",
+                    n.display(),
+                    h.edition,
+                    h.build,
+                    h.ubr
+                );
+            }
+            names.push(format!("{}-{}.{}", b.edition(), b.build(), b.ubr()));
+        }
+        bail!(
+            "--baseline-view {mode}: inputs checked (local {} {}.{}, complete; neighbours [{}]), but the engine \
+             cannot scan with an injected baseline view yet: BL-VIEW and BL-FRAMEWORK (wave 5) complete this flag",
+            h.edition,
+            h.build,
+            h.ubr,
+            names.join(", ")
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------
 // Commands
 // ---------------------------------------------------------------------------------------------------------
 
@@ -457,6 +606,15 @@ impl Flags {
     fn has(&self, name: &str) -> bool {
         self.switches.iter().any(|s| s == name)
     }
+
+    /// Every value of a repeatable flag, in order.
+    fn all(&self, name: &str) -> Vec<&str> {
+        self.pairs
+            .iter()
+            .filter(|(k, _)| k == name)
+            .map(|(_, v)| v.as_str())
+            .collect()
+    }
 }
 
 pub(crate) fn default_baselines(root: &Path) -> Option<PathBuf> {
@@ -477,9 +635,29 @@ pub fn run_one(root: &Path, args: &[String]) -> Result<bool> {
             "--overlay",
             "--baselines",
             "--fp",
+            "--baseline-view",
+            "--local",
+            "--neighbour",
         ],
         &["--live"],
         REPLAY_USAGE,
+    )?;
+    let view = ViewArgs {
+        mode: f
+            .get(&["--baseline-view"])
+            .map_or(Ok(ViewMode::Exact), ViewMode::parse)?,
+        local: f.get(&["--local"]).map(PathBuf::from),
+        neighbours: f
+            .all("--neighbour")
+            .into_iter()
+            .map(PathBuf::from)
+            .collect(),
+    };
+    let baselines = view.baseline_dir(
+        f.get(&["--baselines"])
+            .map(PathBuf::from)
+            .or_else(|| default_baselines(root)),
+        f.get(&["--baselines"]).is_some(),
     )?;
     let run_dir = f
         .get(&["--run", "--run-dir"])
@@ -495,10 +673,7 @@ pub fn run_one(root: &Path, args: &[String]) -> Result<bool> {
         app: app.to_owned(),
         out: PathBuf::from(out),
         overlay: f.get(&["--overlay"]).map(PathBuf::from),
-        baselines: f
-            .get(&["--baselines"])
-            .map(PathBuf::from)
-            .or_else(|| default_baselines(root)),
+        baselines,
         fp: f.get(&["--fp"]).map(PathBuf::from),
         sidecar: true,
         live: f.has("--live"),
@@ -673,6 +848,112 @@ mod tests {
         assert!(f.has("--if-present"));
         assert!(Flags::parse(&args, &[], &[], "u").is_err());
         assert!(Flags::parse(&["--runs".to_owned()], &["--runs"], &[], "u").is_err());
+    }
+
+    fn view(mode: ViewMode, local: Option<&Path>, neighbours: &[&Path]) -> ViewArgs {
+        ViewArgs {
+            mode,
+            local: local.map(Path::to_path_buf),
+            neighbours: neighbours.iter().map(|p| p.to_path_buf()).collect(),
+        }
+    }
+
+    /// A local baseline file of Professional 26340.9882 with one key; `complete`: every source ok.
+    fn local_file(dir: &Path, complete: bool) -> PathBuf {
+        use purge_index::local_baseline::file::encode;
+        use purge_index::local_baseline::{
+            BUILDER_VERSION, LocalHeader, LocalSource, Records, SourceLine, SourceStatus,
+        };
+        let header = LocalHeader {
+            built_at: "2026-11-21T00:00:00Z".into(),
+            computer: "PC".into(),
+            edition: "Professional".into(),
+            build: 26340,
+            ubr: 9882,
+            builder_version: BUILDER_VERSION.into(),
+            source_id: "abc".into(),
+        };
+        let ok = |s: LocalSource| complete || s != LocalSource::S4;
+        let sources: Vec<SourceLine> = LocalSource::REQUIRED
+            .iter()
+            .map(|s| SourceLine {
+                source: *s,
+                status: if ok(*s) {
+                    SourceStatus::Ok
+                } else {
+                    SourceStatus::Incomplete
+                },
+                items: 1,
+                records: 1,
+                skipped: 0,
+                reasons: if ok(*s) {
+                    vec![]
+                } else {
+                    vec!["not elevated".into()]
+                },
+                facts: vec![],
+            })
+            .collect();
+        let mut records = Records::new();
+        records.add_key("HKLM\\SOFTWARE\\A");
+        let enc = encode(&header, &sources, &records).unwrap();
+        let p = dir.join(format!("local-{complete}.tsv.gz"));
+        std::fs::write(&p, enc.bytes).unwrap();
+        p
+    }
+
+    fn shipped_file(dir: &Path, edition: &str, os: &str) -> PathBuf {
+        let p = dir.join(format!("{edition}-{os}.tsv"));
+        std::fs::write(
+            &p,
+            format!(
+                "#purge-baseline 1\t2026-11-21T00:00:00Z\tPC\t{edition}\t{os}\n#source\tx\nK\tHKLM\\\\SOFTWARE\\\\A\n"
+            ),
+        )
+        .unwrap();
+        p
+    }
+
+    #[test]
+    fn baseline_view_flags() {
+        let dir = std::env::temp_dir().join(format!("purge-xtask-view-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let kb = Some(PathBuf::from("kb/baselines"));
+        let err = |v: &ViewArgs, given: bool| {
+            format!("{:#}", v.baseline_dir(kb.clone(), given).unwrap_err())
+        };
+        assert_eq!(ViewMode::parse("merged").unwrap(), ViewMode::Merged);
+        assert!(ViewMode::parse("exactly").is_err());
+        // exact: today's directory; none: no baseline.
+        let exact = view(ViewMode::Exact, None, &[]);
+        assert_eq!(exact.baseline_dir(kb.clone(), true).unwrap(), kb);
+        let none = view(ViewMode::None, None, &[]);
+        assert_eq!(none.baseline_dir(kb.clone(), false).unwrap(), None);
+        assert!(err(&none, true).contains("--baselines does not go"));
+        let full = local_file(&dir, true);
+        let part = local_file(&dir, false);
+        let nb = shipped_file(&dir, "EnterpriseSEval", "26100.1742");
+        let same = shipped_file(&dir, "Professional", "26340.9882");
+        let e = |m, l: Option<&Path>, n: &[&Path]| err(&view(m, l, n), false);
+        assert!(e(ViewMode::Exact, Some(&full), &[]).contains("takes no --local"));
+        assert!(e(ViewMode::None, None, &[&nb]).contains("BL-FRAMEWORK"));
+        assert!(e(ViewMode::Merged, Some(&full), &[]).contains("at least one --neighbour"));
+        assert!(e(ViewMode::Merged, None, &[&nb]).contains("needs --local"));
+        assert!(e(ViewMode::Local, Some(&full), &[&nb]).contains("takes no --neighbour"));
+        assert!(e(ViewMode::Merged, Some(&full), &[&nb, &nb, &nb, &nb]).contains("at most 3"));
+        assert!(e(ViewMode::Local, Some(&part), &[]).contains("incomplete"));
+        assert!(e(ViewMode::Merged, Some(&full), &[&same]).contains("leaves it out"));
+        // A shipped file is no local baseline (L6).
+        assert!(e(ViewMode::Local, Some(&nb), &[]).starts_with("--local"));
+        let m = e(ViewMode::Merged, Some(&full), &[&nb]);
+        assert!(
+            m.contains("inputs checked")
+                && m.contains("EnterpriseSEval-26100.1742")
+                && m.contains("BL-FRAMEWORK"),
+            "{m}"
+        );
+        assert!(e(ViewMode::Local, Some(&full), &[]).contains("inputs checked"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Replays the frozen git run into the temp directory (never into vm/runs).

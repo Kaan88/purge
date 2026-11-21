@@ -496,6 +496,72 @@ From `rig-base`'s `snap-0` minus `rig` items: the keys, value names and paths of
 engine's "present on clean Windows" check. Written to `kb\baselines\<EditionID>-<build>.<ubr>.tsv.gz`,
 `K`/`V`(key, name, type, hash)/`D`/`F`(path) records only.
 
+## 8a. Local baseline measurement (`rigtool baseline-diff`, gate M; docs/BASELINE_LOCAL_DESIGN.md §8)
+
+`purge-engine baseline build --out <file>` builds the *local baseline* of the Windows it runs on, read-only
+(`#purge-baseline-local 1`, `#src` lines, `#end` count and SHA-256; design §3.5). Gate M (package BL-MEASURE) measures
+it against the shipped baselines with:
+
+```
+rigtool baseline-diff --truth SHIPPED.tsv.gz --local LOCAL.tsv.gz [--neighbour SHIPPED.tsv.gz...]
+                      --areas kb/baselines/view.json --out report.json
+```
+
+- **Inputs.** `--truth` and every `--neighbour` must carry the shipped header, `--local` the local one (each the other
+  way round is refused, L6); a local file without a correct `#end` (record count and SHA-256 of everything before it)
+  is refused, never read in part. A neighbour that is the truth file (same SHA-256 or the same `<edition>-<build.ubr>`)
+  is refused: leave-one-out needs the exact file hidden. An incomplete local file (a `#src` line of S1-S4 missing or
+  not `ok`) is still diffed; the report says `complete: false` with the reasons.
+- **What is compared.** Names, not hashes: the `K` records of every file, unescaped, folded with the engine's fold and
+  normalised as `purge_index::baseline` normalises a baseline key (roots, control sets, `<sid>`,
+  `HKU\<sid>\Software\Classes` = `HKU\<sid>_Classes`, `HKU\S-1-5-18` = `HKU\.DEFAULT`, `WOW6432Node\Classes` =
+  `Classes\WOW6432Node`; `baseline_diff.rs` mirrors that code and must follow it), and only inside the capture scope
+  (`Baseline::key_in_scope`: `HKLM\SOFTWARE`, `HKLM\SYSTEM\CurrentControlSet` without `Enum` and
+  `Control\DeviceClasses`, `HKU\…`). `V`, `D`, `F` records are counted, not compared. A truth key is **covered** by a
+  set when the set has it or, for a 32-bit-view spelling, its 64-bit twin (`Baseline::has_key`); checked equal to
+  `LocalBaseline::has_key` / `Baseline::has_key` over a real host build (2026-11-21: 207,897 of 275,869 keys local,
+  263,704 merged, the same in both).
+- **Areas.** `kb/baselines/view.json` (`purge.baseline-view/1`) lists the areas in order; a key belongs to the first
+  area with a prefix it is at or below (prefixes are written normalised; the file is refused otherwise) and whose
+  shape matches (`any`, `ext`: the first segment below the prefix starts with `.`, `shell`: a later segment is `shell`
+  or `shellex`). A key no area matches goes to `(unmatched)`. The flags `merged` and `local` are false until gate M
+  sets them from the reports.
+- **Shared-container shapes** (design §8.1): `ext` (`Classes\.x`), `ext_openwithprogids`, `shell` (a key whose leaf is
+  `shell`), `shellex` (a `shellex` key below the top level and its direct children), `progid` (a top-level key of
+  Classes that is not `.x` nor `CLSID`, `Interface`, `TypeLib`, `AppID`, `WOW6432Node`, `MIME`,
+  `Component Categories`, `Record`, `Local Settings`), `vendor_depth1` / `vendor_depth2` (`SOFTWARE\<a>` and
+  `SOFTWARE\<a>\<b>`, also under `WOW6432Node` and in `HKU\<sid>\Software`, `HKU\.DEFAULT\Software`). The classes
+  roots are those of HKLM and of `HKU\<sid>_Classes`, and their `WOW6432Node`.
+- **Report** `purge.baseline-diff/1`: `rigtool` (version, source SHA-256); `inputs` (path, SHA-256, name, header,
+  record counts, keys in and out of scope; for the local file `complete`, `incomplete_reasons`, the `#src` lines);
+  `sets` (the local set first, then the neighbours); `total` and one entry per area (with its `title` and `flags`):
+  `truth`, `covered_local`, `covered_merged`, `covered_merged_via_twin`, `coverage_local`, `coverage_merged`,
+  `false_absent_local`, `false_absent_merged` (in truth, in no set), `shared_shape_false_absent_local` / `_merged`,
+  `other_false_absent_local` / `_merged`, `shared_shape_by_kind`, `extra_local`, `extra_merged` (in a set, not in
+  truth; merged counts a key once), `per_source` (per set: `covered`, `only`, `share` of the merged coverage, `extra`),
+  `checks` (`s3_local`, `s2_merged`: no shared-shape false-absent key and the others at most 0.5 % of the area's truth
+  keys, design §8.3; `s2_merged` is null without a neighbour; `total.checks.w1_scope`: merged coverage at least 99 %),
+  and per area the first 200 false-absent keys of each kind (`false_absent_local_first`, `false_absent_merged_first`,
+  sorted). `shared_shape_false_absent` lists **every** false-absent key of a shared-container shape: the key as the
+  truth spells it, normalised, area, shape, `false_absent` (`merged` or `local_only`), `covered_by` (the neighbours that
+  have it) and `expected_source` (a heuristic by root naming the source that should have had it, for the reviewer).
+  Coverage ratios are rounded to six places. The command prints a per-area table to stderr; it exits 0 whenever the
+  report is written (the checks are data, gate M decides).
+- **Runs** (`tools/linux/campaigns/`, design §8.2; BL-MEASURE runs them): `baseline-local-r1.sh` (Purge-CleanPro, truth
+  `Professional-26340.9882`, neighbour `EnterpriseSEval-26100.1742`) and `baseline-local-r2.sh` (Inbound-Win11-Test,
+  `-No3D`, truth and neighbour the other way round), both through `baseline-local-vm.sh`: restore `rig-base` (nothing is
+  installed), `Push-Tools -NoBaselines` (no shipped baseline in the guest), one guest job that builds twice (cold, warm)
+  with `PURGE_TIMING=1` into `C:\cr\out\<run>\` (`local-cold.tsv.gz`, `local-warm.tsv.gz`, `build-<pass>.log`,
+  `info.txt`, `build.json`: seconds, peak working set, file size, the `baseline info` load time, CPUs, elevation),
+  `Pull-Run`, then on the host `rigtool baseline-diff` into `vm/truth/baseline-local/<run>.json` with `build.json`
+  copied beside it as `<run>-build.json`. `baseline-local-r5.sh` is R5's build part on the Windows host itself (Git
+  Bash, elevated; files under `target/baseline-local/`, reports `vm/truth/baseline-local/r5-host-*.json` against each
+  shipped baseline as a proxy truth, for the budgets and context only). Each script refuses a rigtool not built from
+  the tree's sources (the `rigtool version` hash, as BIND) and an engine without the builder, and its final check
+  (`bl_check` in `baseline-local-lib.sh`) exits 3 when the seal failed, the two passes differ below the header, the
+  local file is not of the truth's Windows, or a build exit code was not 0. The guest needs a `rigtool.exe` built from
+  this tree (Push-Tools pushes it), and the Linux host a Linux rigtool (§9).
+
 ## 9. Running the rig from Linux (CachyOS host, 2026-11-14)
 
 The same repository (Windows `C:` mounted at `/mnt/C`) and the same two VMs (on `E:`, mounted at `/mnt/E`) are

@@ -14,6 +14,10 @@ never had a test app installed, minus rig-owned items. vm/RIG.md §2 and §8 are
 The Professional baseline matches a host only on build 26340.9882. A host on another build has no matching
 baseline and gets values-only + X-SYSTIDY (ENGINE_PLAN §5.7.1).
 
+`view.json` (`purge.baseline-view/1`) is not a baseline: it lists the registry areas of the local-baseline view and
+the neighbour rule (docs/BASELINE_LOCAL_DESIGN.md §4.1, §4.2; `vm/RIG.md` §8a). Its `merged` / `local` flags are set
+only by gate M from the measurement reports.
+
 ## File name
 
 `<EditionID>-<build>.<ubr>.tsv.gz`, e.g. `EnterpriseSEval-26100.1742.tsv.gz`.
