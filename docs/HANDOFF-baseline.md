@@ -6,8 +6,11 @@ so the work can be continued from any harness: read it, then `git log --oneline 
 
 
 ## RESUMED 2026-11-21 night (OpenCode, Opus coordinating, Flash/Sonnet writers). Goal: reach wave 5 fast.
-- M3-R1 Fable review DONE: docs/reviews/m3/r1-review.md (B0 M2 S9 N11). Fixes in worktree `m3-r1-fixes` (Flash,
-  running): M1 DEPENDENTLOADFLAG, M2 unique candidate ids, S1-S9, the 5 DECISIONS rows.
+- M3-R1 DONE: review docs/reviews/m3/r1-review.md (B0 M2 S9 N11, Fixes section), fixes merged bfde762. Deferred:
+  S1 + S7 rest -> M3-BROKER-CORE; S8 (release provenance, design decision). No "pending review" DECISIONS rows left.
+- Disk: C: ran full (parallel worktree targets ~10 GB each). Use CARGO_INCREMENTAL=0; delete merged worktrees' target/.
+- Running now: M3-STDIO, M3-ICONS (Flash, from 2a6aa97), M3-UI-SHELL (Sonnet 5.5, worktree `m3-ui-shell-b`; old
+  `m3-ui-shell` abandoned), M3-BROKER-CORE (Sonnet 5.5) and M3-GEN-DTO (Flash) from bfde762.
 - M3-BENCH reviewed + fixed (0202a25), merged into baseline 2a6aa97. Timings NOT taken: warm run needs an idle
   host (later), cold series needs 5 user reboots (`cargo xtask bench-launch --cold [--reset] --purge out\purge`).
 - Wave 3 started early, in parallel (unelevated ci deferred to merge time): worktrees `m3-stdio` (Flash),
