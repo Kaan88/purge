@@ -755,6 +755,15 @@ pub struct ProgramPatch {
     /// Whether the entry is an AppX package.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub appx: Option<bool>,
+    /// Whether the entry has `SystemComponent` set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_component: Option<bool>,
+    /// Whether the entry has no `DisplayName` (the row's `name` is then its key name).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unnamed: Option<bool>,
+    /// The name of the parent Uninstall key (`ParentKeyName`), for entries that hang under another.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_key: Option<String>,
 }
 
 /// `programs.get`: the details pane.

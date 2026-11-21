@@ -8,7 +8,10 @@ namespace Purge.Client;
 /// <param name="Engine">The client to use from now on (the sample client when the engine could not be used).</param>
 /// <param name="Error">A sentence for the fallback notice; null when the engine answered (or sample data was asked for).</param>
 /// <param name="UiElevated">Whether this process itself runs elevated (the "Administrator" chip).</param>
-public sealed record StartupResult(IEngineClient Engine, EngineHello Hello, InventoryDoc Inventory, string? Error, bool UiElevated);
+/// <param name="Changes">The <c>inventory.changes</c> answer, asked before the list (the engine stores the new list when
+/// the list ends); null when it could not be asked, and it never faults.</param>
+public sealed record StartupResult(IEngineClient Engine, EngineHello Hello, InventoryDoc Inventory, string? Error, bool UiElevated,
+    Task<Rpc.InventoryChanges?>? Changes = null);
 
 /// <summary>
 /// The engine link of the custom <c>Main</c> (ENGINE_PLAN.md A9.2): starts the engine, sends <c>engine.hello</c> and
@@ -75,9 +78,11 @@ public sealed class EngineLink
                 var engine = _client;
                 var hello = await engine.HelloAsync(cts.Token).ConfigureAwait(false);
                 _engineReady?.Invoke();
+                // Written before the list request, so the engine answers it against the list of the last run.
+                var changes = ChangesAsync(engine);
                 var doc = await engine.ListProgramsAsync(cts.Token).ConfigureAwait(false);
                 _listReply?.Invoke();
-                return new StartupResult(engine, hello, doc, null, elevated);
+                return new StartupResult(engine, hello, doc, null, elevated, changes);
             }
             catch (Exception e) when (e is not OutOfMemoryException)
             {
@@ -91,10 +96,17 @@ public sealed class EngineLink
         var sampleClient = _client;
         var sampleHello = await sampleClient.HelloAsync().ConfigureAwait(false);
         _engineReady?.Invoke();
+        var sampleChanges = ChangesAsync(sampleClient);
         var sampleList = await sampleClient.ListProgramsAsync().ConfigureAwait(false);
         _listReply?.Invoke();
         return new StartupResult(sampleClient, sampleHello, sampleList,
-            error is null ? null : "Purge couldn't use its engine, so this list is sample data. " + error, elevated);
+            error is null ? null : "Purge couldn't use its engine, so this list is sample data. " + error, elevated, sampleChanges);
+    }
+
+    private static async Task<Rpc.InventoryChanges?> ChangesAsync(IEngineClient engine)
+    {
+        try { return await engine.GetInventoryChangesAsync().ConfigureAwait(false); }
+        catch (Exception e) when (e is not OutOfMemoryException) { return null; }
     }
 
     private static string Describe(Exception e)

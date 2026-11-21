@@ -1,17 +1,16 @@
 using System.ComponentModel;
 using System.Globalization;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Imaging;
 using Purge.Client.Model;
 
 namespace Purge.App.Views;
 
-/// <summary>Which S1 tab an entry belongs to (§9.4). Grouping is UI policy; the engine never hides entries.</summary>
-public enum ProgramTab { Apps, Components, Unnamed, Store, Recent }
-
 /// <summary>
 /// One row of the S1 program list, precomputed so the row template only reads strings. The first frame binds only
 /// the tile, the two-line name and the size; <see cref="Extras"/> turns on after the first Rendering tick and loads
-/// the deferred parts (size bar, expected leftovers, install date). The forecast arrives later still.
+/// the deferred parts (size bar, expected leftovers, install date, icon). Patches, sizes, icons and details arrive
+/// later still and update the row in place.
 /// </summary>
 public sealed partial class ProgramRow : INotifyPropertyChanged
 {
@@ -23,24 +22,18 @@ public sealed partial class ProgramRow : INotifyPropertyChanged
         Name = entry.DisplayName;
         Version = entry.Version ?? "";
         Publisher = entry.Publisher ?? "";
-        SizeBytes = sizeBytes;
-        SizeText = sizeBytes is { } b ? FormatSize(b) : "";
-        Installed = InstallDate(entry);
+        _sizeBytes = sizeBytes;
+        _sizeText = sizeBytes is { } b ? FormatSize(b) : "";
+        Installed = ProgramRules.InstallDate(entry);
         InstalledText = Installed?.ToString("d MMM yyyy", CultureInfo.CurrentCulture) ?? "";
         Initial = Name.Length > 0 && char.IsLetterOrDigit(Name[0]) ? char.ToUpperInvariant(Name[0]).ToString() : "?";
-        IsChild = entry.Flags.ParentKey is not null;
-        Indent = IsChild ? new Microsoft.UI.Xaml.Thickness(28, 0, 0, 0) : new Microsoft.UI.Xaml.Thickness(0);
-
-        IsApp = entry.Flags.HasDisplayName && !entry.Flags.SystemComponent && !IsChild;
-        IsComponent = entry.Flags.HasDisplayName && (entry.Flags.SystemComponent || IsChild);
-        IsUnnamed = !entry.Flags.HasDisplayName;
-        IsRecent = IsApp && Installed is { } d && (today - d).TotalDays <= 14;
-        NewTag = Installed is { } n && (today - n).TotalDays <= 3 ? "new" : "";
-        TileBrush = TileFor(Publisher.Length > 0 ? Publisher : Name);
-        SubLine = Publisher.Length > 0 ? $"{Publisher} · {KindChip}" : KindChip;
+        _today = today;
+        Classify();
     }
 
-    // Placeholder tiles until real icons arrive (programs.icons): a colour per publisher, the first letter.
+    private readonly DateTime _today;
+
+    // Placeholder tiles until an icon arrives: a colour per publisher, the first letter.
     private static readonly Windows.UI.Color[] TileColors =
     [
         Rgb(0x0F, 0x6C, 0xBD), Rgb(0x87, 0x64, 0xB8), Rgb(0xC2, 0x39, 0xB3), Rgb(0xCA, 0x50, 0x10),
@@ -60,20 +53,67 @@ public sealed partial class ProgramRow : INotifyPropertyChanged
         return h;
     }
 
-    public InventoryEntry Entry { get; }
+    /// <summary>The entry as the engine described it so far; patches and details replace it.</summary>
+    public InventoryEntry Entry { get; private set; }
     public string Name { get; }
     public string Version { get; }
     public string Publisher { get; }
-    public long? SizeBytes { get; }
-    public string SizeText { get; }
     public DateTime? Installed { get; }
     public string InstalledText { get; }
     public string Initial { get; }
-    public string NewTag { get; }
-    public Brush TileBrush { get; }
-    public bool IsChild { get; }
+    public string NewTag { get; private set; } = "";
+
+    private Brush? _tile;
+    /// <summary>The placeholder tile; made when a row is first shown, not for every row of the list.</summary>
+    public Brush TileBrush => _tile ??= TileFor(Publisher.Length > 0 ? Publisher : Name);
+
+    public bool IsChild { get; private set; }
+    public Microsoft.UI.Xaml.Thickness Indent { get; private set; }
+
     /// <summary>Second line of the name cell: publisher and installer kind.</summary>
-    public string SubLine { get; }
+    public string SubLine { get; private set; } = "";
+
+    public bool IsApp { get; private set; }
+    public bool IsComponent { get; private set; }
+    public bool IsUnnamed { get; private set; }
+    public bool IsRecent { get; private set; }
+
+    /// <summary>Sorts and classifies the row again from <see cref="Entry"/> (after a patch).</summary>
+    private void Classify()
+    {
+        var c = ProgramRules.Classify(Entry, Installed, _today);
+        IsChild = c.IsChild;
+        IsApp = c.IsApp;
+        IsComponent = c.IsComponent;
+        IsUnnamed = c.IsUnnamed;
+        IsRecent = c.IsRecent;
+        Indent = IsChild ? new Microsoft.UI.Xaml.Thickness(28, 0, 0, 0) : new Microsoft.UI.Xaml.Thickness(0);
+        NewTag = Installed is { } n && (_today - n).TotalDays <= 3 ? "new" : "";
+        SubLine = Publisher.Length > 0 ? $"{Publisher} · {KindChip}" : KindChip;
+    }
+
+    /// <summary>Takes what <c>programs.patch</c> or a later reading says about the program.</summary>
+    public void Update(InventoryEntry entry)
+    {
+        Entry = entry;
+        Classify();
+    }
+
+    private long? _sizeBytes;
+    private string _sizeText;
+
+    /// <summary>Measured size on disk; null until <c>size.ready</c> has it.</summary>
+    public long? SizeBytes => _sizeBytes;
+
+    public string SizeText => _sizeText;
+
+    /// <summary>Takes a measured size (null: could not be measured).</summary>
+    public void SetSize(long? bytes)
+    {
+        _sizeBytes = bytes;
+        _sizeText = bytes is { } b ? FormatSize(b) : "";
+        Raise(nameof(SizeText));
+    }
 
     private bool _extras;
     /// <summary>True once the first frame is out: loads the deferred parts of the row.</summary>
@@ -83,8 +123,44 @@ public sealed partial class ProgramRow : INotifyPropertyChanged
         set { if (_extras != value) { _extras = value; Raise(nameof(Extras)); RaiseVerdict(); } }
     }
 
-    /// <summary>Width of the size bar in px (0–96), relative to the largest program in the list.</summary>
-    public double BarWidth { get; set; }
+    private double _barWidth;
+    /// <summary>Width of the size bar in px (0 to 96), relative to the largest program in the list.</summary>
+    public double BarWidth
+    {
+        get => _barWidth;
+        set { if (_barWidth != value) { _barWidth = value; Raise(nameof(BarWidth)); } }
+    }
+
+    private ImageSource? _icon;
+    /// <summary>The program's icon; null shows the placeholder tile.</summary>
+    public ImageSource? Icon => _icon;
+
+    /// <summary>Whether an icon replaced the placeholder tile (creates the row's image on demand).</summary>
+    public bool HasIcon => _icon is not null;
+
+    /// <summary>The image of an atlas or engine icon.</summary>
+    public static ImageSource ToImage(AtlasIcon icon)
+    {
+        var bitmap = new WriteableBitmap(icon.Px, icon.Px);
+        using (var stream = System.Runtime.InteropServices.WindowsRuntime.WindowsRuntimeBufferExtensions.AsStream(bitmap.PixelBuffer))
+            stream.Write(IconLoader.Premultiply(icon.Bgra));
+        bitmap.Invalidate();
+        return bitmap;
+    }
+
+    /// <summary>Shows an icon instead of the placeholder tile.</summary>
+    public void SetIcon(ImageSource image)
+    {
+        _icon = image;
+        Raise(nameof(Icon));
+        Raise(nameof(HasIcon));
+    }
+
+    /// <summary>True once <c>programs.get</c> was asked for this row.</summary>
+    public bool DetailsRequested { get; set; }
+
+    /// <summary>True once the details of <c>programs.get</c> are in <see cref="Entry"/> (or the entry already had them).</summary>
+    public bool DetailsLoaded { get; set; }
 
     private LeftoverForecast? _forecast;
     /// <summary>Expected leftovers; null until the engine has answered (shown as "Not known yet").</summary>
@@ -123,30 +199,12 @@ public sealed partial class ProgramRow : INotifyPropertyChanged
     }
 
     private void Raise(string name) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
-    public Microsoft.UI.Xaml.Thickness Indent { get; }
 
-    public bool IsApp { get; }
-    public bool IsComponent { get; }
-    public bool IsUnnamed { get; }
-    public bool IsRecent { get; }
+    public bool InTab(ProgramTab tab) => ProgramRules.Classify(Entry, Installed, _today).InTab(tab);
 
-    public bool InTab(ProgramTab tab) => tab switch
-    {
-        ProgramTab.Apps => IsApp,
-        ProgramTab.Components => IsComponent,
-        ProgramTab.Unnamed => IsUnnamed,
-        ProgramTab.Recent => IsRecent,
-        _ => false,
-    };
+    public bool Matches(string query) => ProgramRules.Matches(Entry, query);
 
-    public bool Matches(string query) =>
-        query.Length == 0
-        || Name.Contains(query, StringComparison.OrdinalIgnoreCase)
-        || Publisher.Contains(query, StringComparison.OrdinalIgnoreCase)
-        || Version.Contains(query, StringComparison.OrdinalIgnoreCase)
-        || (Entry.InstallLocation?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false);
-
-    public string KindChip => Entry.InstallerKind switch
+    public string KindChip => Entry.Appx ? "Store app" : Entry.InstallerKind switch
     {
         InstallerKind.Msi => "MSI",
         InstallerKind.Inno => "Inno",
@@ -155,7 +213,7 @@ public sealed partial class ProgramRow : INotifyPropertyChanged
         _ => "Other",
     };
 
-    public string KindText => Entry.InstallerKind switch
+    public string KindText => Entry.Appx ? "Store app" : Entry.InstallerKind switch
     {
         InstallerKind.Msi => "MSI",
         InstallerKind.Inno => "Inno Setup",
@@ -167,26 +225,5 @@ public sealed partial class ProgramRow : INotifyPropertyChanged
     public string BitsText => Entry.View == RegistryView.K32 ? "32-bit" : "64-bit";
     public string ScopeText => Entry.Scope == InstallScope.User ? "this user" : "all users";
 
-    /// <summary>Picks the install date: ARP or MSI date first, then the key's last write.</summary>
-    private static DateTime? InstallDate(InventoryEntry e)
-    {
-        if (e.InstallTimeEvidence is not { Count: > 0 } ev) return null;
-        InstallTimeEvidence? pick = null;
-        foreach (var h in ev)
-        {
-            if (h.Source is InstallTimeSource.ArpInstallDate or InstallTimeSource.MsiInstallDate) { pick = h; break; }
-            pick ??= h;
-        }
-        return pick is null ? null : DateTime.FromFileTimeUtc((long)pick.Time).ToLocalTime().Date;
-    }
-
-    public static string FormatSize(long bytes)
-    {
-        string[] units = ["B", "KB", "MB", "GB", "TB"];
-        double v = bytes;
-        var u = 0;
-        while (v >= 1024 && u < units.Length - 1) { v /= 1024; u++; }
-        var fmt = v >= 100 || u == 0 ? "F0" : "F1";
-        return v.ToString(fmt, CultureInfo.CurrentCulture) + " " + units[u];
-    }
+    public static string FormatSize(long bytes) => ProgramRules.FormatSize(bytes);
 }

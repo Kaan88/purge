@@ -621,6 +621,9 @@ fn patch_of(entry: &InventoryEntry, packages: &[purge_source::types::PackageInfo
         bundle: (entry.installer_kind == purge_model::InstallerKind::Burn)
             .then(|| entry.program_id.clone()),
         appx: appx.then_some(true),
+        system_component: entry.flags.system_component.then_some(true),
+        unnamed: (!entry.flags.has_display_name).then_some(true),
+        parent_key: entry.flags.parent_key.clone(),
     }
 }
 

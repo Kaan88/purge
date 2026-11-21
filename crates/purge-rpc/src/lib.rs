@@ -835,6 +835,9 @@ mod api_tests {
                         product_code: None,
                         bundle: None,
                         appx: Some(false),
+                        system_component: Some(false),
+                        unnamed: None,
+                        parent_key: None,
                     }],
                 }),
             );

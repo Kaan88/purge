@@ -18,8 +18,39 @@ public interface IEngineClient : IAsyncDisposable
     /// <summary><c>programs.list</c>: the inventory document (the raw ARP batch).</summary>
     Task<InventoryDoc> ListProgramsAsync(CancellationToken ct = default);
 
-    /// <summary><c>programs.sizes</c>: measured size in bytes per program id; missing ids are not measured yet.</summary>
-    Task<IReadOnlyDictionary<string, long>> GetSizesAsync(CancellationToken ct = default);
+    /// <summary>
+    /// True when scanning and removing work (a broker or the CLI helper is behind the client). False in this build's
+    /// stdio client: the Programs page shows Uninstall disabled with the reason.
+    /// </summary>
+    bool CanChangePc { get; }
+
+    /// <summary>
+    /// Patches that arrived after the <c>programs.list</c> reply (the engine normally sends them before it). Raised on
+    /// the client's reader thread.
+    /// </summary>
+    event Action<IReadOnlyList<Rpc.ProgramPatch>>? ProgramsPatched;
+
+    /// <summary>
+    /// <c>programs.sizes</c>: measures the given programs; <paramref name="onBatch"/> gets each <c>size.ready</c> batch
+    /// (bytes null when a size could not be measured) on the client's reader thread. Completes when the engine has
+    /// answered for every id.
+    /// </summary>
+    Task MeasureSizesAsync(IReadOnlyList<string> programIds, Action<IReadOnlyList<Rpc.ProgramSize>> onBatch, CancellationToken ct = default);
+
+    /// <summary>
+    /// <c>programs.icons</c>: <paramref name="px"/> pixel icons, in the order given (viewport first), delivered per
+    /// <c>icon.batch</c> on the client's reader thread. An icon that could not be read arrives with null pixels.
+    /// </summary>
+    Task LoadIconsAsync(IReadOnlyList<string> programIds, int px, Action<IReadOnlyList<ProgramIcon>> onBatch, CancellationToken ct = default);
+
+    /// <summary><c>programs.get</c>: the details pane's data of one program; null when the engine no longer knows it.</summary>
+    Task<Rpc.ProgramDetails?> GetProgramAsync(string programId, CancellationToken ct = default);
+
+    /// <summary>
+    /// <c>inventory.changes</c>: programs gone or new since the list the engine stored at the last <c>programs.list</c>.
+    /// The engine stores the new list when it ends a <c>programs.list</c>, so ask before listing.
+    /// </summary>
+    Task<Rpc.InventoryChanges> GetInventoryChangesAsync(CancellationToken ct = default);
 
     /// <summary>
     /// <c>programs.forecast</c> (proposed, not in the engine yet): expected leftovers for the given programs. Asked

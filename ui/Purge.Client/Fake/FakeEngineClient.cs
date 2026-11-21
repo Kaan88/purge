@@ -48,13 +48,78 @@ public sealed class FakeEngineClient : IEngineClient
         return doc;
     }
 
-    public Task<IReadOnlyDictionary<string, long>> GetSizesAsync(CancellationToken ct = default)
+    public bool CanChangePc => false;
+
+    public event Action<IReadOnlyList<Rpc.ProgramPatch>>? ProgramsPatched { add { } remove { } }
+
+    public Task MeasureSizesAsync(IReadOnlyList<string> programIds, Action<IReadOnlyList<Rpc.ProgramSize>> onBatch, CancellationToken ct = default)
     {
         using var s = Open("Purge.Client.sample-sizes.json");
-        IReadOnlyDictionary<string, long> sizes =
-            JsonSerializer.Deserialize(s, PurgeJsonContext.Default.DictionaryStringInt64) ?? new();
-        return Task.FromResult(sizes);
+        var sizes = JsonSerializer.Deserialize(s, PurgeJsonContext.Default.DictionaryStringInt64) ?? new();
+        var wanted = programIds.ToHashSet(StringComparer.Ordinal);
+        var batch = sizes.Where(kv => wanted.Contains(kv.Key))
+            .Select(kv => new Rpc.ProgramSize { ProgramId = kv.Key, Bytes = (ulong)kv.Value }).ToList();
+        if (batch.Count > 0) onBatch(batch);
+        return Task.CompletedTask;
     }
+
+    /// <summary>
+    /// Made-up icons for the sample page: a round dot in a colour per program, so the icon path shows without an
+    /// engine. The launch bench stub (<see cref="BenchRows"/>) sends none.
+    /// </summary>
+    public Task LoadIconsAsync(IReadOnlyList<string> programIds, int px, Action<IReadOnlyList<ProgramIcon>> onBatch, CancellationToken ct = default)
+    {
+        if (BenchRows > 0 || px < 2) return Task.CompletedTask;
+        var batch = new List<ProgramIcon>();
+        foreach (var id in programIds)
+        {
+            var hash = 17;
+            foreach (var c in id) hash = hash * 31 + c;
+            byte b = (byte)(hash & 0xFF), g = (byte)((hash >> 8) & 0xFF), r = (byte)((hash >> 16) & 0xFF);
+            var bgra = new byte[px * px * 4];
+            var mid = (px - 1) / 2.0;
+            for (var y = 0; y < px; y++)
+                for (var x = 0; x < px; x++)
+                {
+                    var inside = (x - mid) * (x - mid) + (y - mid) * (y - mid) <= mid * mid;
+                    var at = (y * px + x) * 4;
+                    bgra[at] = b; bgra[at + 1] = g; bgra[at + 2] = r; bgra[at + 3] = inside ? (byte)255 : (byte)0;
+                }
+            batch.Add(new ProgramIcon(id, px, bgra));
+        }
+        if (batch.Count > 0) onBatch(batch);
+        return Task.CompletedTask;
+    }
+
+    public async Task<Rpc.ProgramDetails?> GetProgramAsync(string programId, CancellationToken ct = default)
+    {
+        var e = (await ListProgramsAsync(ct).ConfigureAwait(false)).Entries.FirstOrDefault(x => x.ProgramId == programId);
+        if (e is null) return null;
+        return new Rpc.ProgramDetails
+        {
+            ProgramId = e.ProgramId, Name = e.DisplayName, Publisher = e.Publisher, Version = e.Version,
+            Scope = e.Scope == InstallScope.User ? Rpc.InstallScope.User : Rpc.InstallScope.Machine,
+            Installer = e.InstallerKind switch
+            {
+                InstallerKind.Msi => Rpc.InstallerKind.Msi, InstallerKind.Inno => Rpc.InstallerKind.Inno,
+                InstallerKind.Nsis => Rpc.InstallerKind.Nsis, InstallerKind.Burn => Rpc.InstallerKind.Burn, _ => Rpc.InstallerKind.Unknown,
+            },
+            WritableBy = e.WritableBy == WritableBy.User ? Rpc.WritableBy.User : Rpc.WritableBy.Admin,
+            InstallLocation = e.InstallLocation, UninstallCommand = e.UninstallString, QuietUninstallCommand = e.QuietUninstallString,
+            ProductCode = e.ProductCode,
+        };
+    }
+
+    /// <summary>Two sample programs "removed outside Purge", so the attention group has something to show.</summary>
+    public Task<Rpc.InventoryChanges> GetInventoryChangesAsync(CancellationToken ct = default) =>
+        Task.FromResult(new Rpc.InventoryChanges
+        {
+            Disappeared =
+            [
+                new Rpc.ProgramRef { ProgramId = "HKU:S-1-5-21-1000000001-2000000002-3000000003-1001|64|Notion", Name = "Notion" },
+                new Rpc.ProgramRef { ProgramId = "HKU:S-1-5-21-1000000001-2000000002-3000000003-1001|64|slack", Name = "Slack" },
+            ],
+        });
 
     private List<LeftoverForecast>? _forecasts;
 

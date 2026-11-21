@@ -71,7 +71,8 @@ public sealed record InventoryEntry(
     string? QuietUninstallString,
     string? DisplayIcon,
     IReadOnlyList<InstallTimeEvidence>? InstallTimeEvidence,
-    MsiInfo? Msi);
+    MsiInfo? Msi,
+    bool Appx = false);
 
 /// <summary>An MSI product without an Uninstall key.</summary>
 public sealed record MsiOnlyRow(

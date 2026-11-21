@@ -1438,12 +1438,24 @@ public sealed class ProgramPatch
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public InstallerKind? Installer { get; set; }
 
+    [JsonPropertyName("parent_key")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ParentKey { get; set; }
+
     [JsonPropertyName("product_code")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ProductCode { get; set; }
 
     [JsonPropertyName("program_id")]
     public string ProgramId { get; set; } = "";
+
+    [JsonPropertyName("system_component")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? SystemComponent { get; set; }
+
+    [JsonPropertyName("unnamed")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? Unnamed { get; set; }
 
 }
 

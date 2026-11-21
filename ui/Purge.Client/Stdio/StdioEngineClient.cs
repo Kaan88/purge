@@ -1,4 +1,4 @@
-﻿using System.Buffers;
+using System.Buffers;
 using System.Collections.Concurrent;
 using System.Globalization;
 using System.Text;
@@ -21,9 +21,10 @@ public sealed class EngineLinkException(string message) : Exception(message);
 
 /// <summary>
 /// The product link to <c>purge-engine --stdio</c>: newline-delimited JSON-RPC 2.0 over the engine's stdin and stdout
-/// (crates/purge-rpc, <c>frame.rs</c>). One reader thread; requests are numbered from 1 and may overlap. Only the
-/// calls the shell makes at start are implemented (<c>engine.hello</c>, <c>programs.list</c>); the rest need the
-/// broker (M3-BROKER-FLOW) and say so.
+/// (crates/purge-rpc, <c>frame.rs</c>), reading and writing the DTOs of <c>Rpc/</c>. One reader thread; requests are
+/// numbered from 1 and may overlap. The read-only calls of the Programs page are implemented (<c>engine.hello</c>,
+/// <c>programs.list</c> with its batches and patches, <c>programs.get</c>, <c>programs.sizes</c>,
+/// <c>programs.icons</c>, <c>inventory.changes</c>); the rest need the broker (M3-BROKER-FLOW) and say so.
 /// </summary>
 public sealed class StdioEngineClient : IEngineClient
 {
@@ -37,6 +38,7 @@ public sealed class StdioEngineClient : IEngineClient
     private readonly object _writeGate = new();
     private readonly ArrayBufferWriter<byte> _buffer = new();
     private ulong _nextId;
+    private long _listRequest;
     private volatile string? _closedReason;
     private int _disposed;
 
@@ -61,18 +63,21 @@ public sealed class StdioEngineClient : IEngineClient
 
     public bool IsLive => true;
 
-    public async Task<EngineHello> HelloAsync(CancellationToken ct = default)
+    public bool CanChangePc => false;
+
+    public event Action<IReadOnlyList<Rpc.ProgramPatch>>? ProgramsPatched;
+
+    public async Task<Model.EngineHello> HelloAsync(CancellationToken ct = default)
     {
-        var result = await CallAsync("engine.hello", null, ct).ConfigureAwait(false);
-        var hello = result.Deserialize(WireJsonContext.Default.WireHello) ?? throw new InvalidDataException("empty engine.hello result");
-        return new EngineHello(
+        var result = await CallAsync("engine.hello", null, null, ct).ConfigureAwait(false);
+        var hello = result.Deserialize(Rpc.RpcJsonContext.Default.MediumHello) ?? throw new InvalidDataException("empty engine.hello result");
+        return new Model.EngineHello(
             Version: hello.Version,
             Elevated: hello.Elevated,
             UserSid: hello.UserSid,
             ShellSid: hello.ShellSid ?? hello.UserSid,
             Edition: hello.Edition,
-            Build: hello.Build.ToString(CultureInfo.InvariantCulture)
-                   + (hello.Ubr is { } ubr ? "." + ubr.ToString(CultureInfo.InvariantCulture) : ""),
+            Build: hello.Build.ToString(CultureInfo.InvariantCulture) + (hello.Ubr != 0 ? "." + hello.Ubr.ToString(CultureInfo.InvariantCulture) : ""),
             BaselineAvailable: hello.BaselineAvailable,
             PolicyVersion: hello.PolicyVersion,
             BuildNote: hello.BaselineBuild?.Reason);
@@ -80,25 +85,57 @@ public sealed class StdioEngineClient : IEngineClient
 
     public async Task<InventoryDoc> ListProgramsAsync(CancellationToken ct = default)
     {
-        var rows = new RowCollector();
+        var feed = new ListFeed(patches => Raise(ProgramsPatched, patches));
+        await CallAsync("programs.list", null, feed, ct, onSent: id => Interlocked.Exchange(ref _listRequest, (long)id)).ConfigureAwait(false);
+        var entries = feed.Rows.Select(ProgramEntries.FromRow).ToList();
+        var byId = new Dictionary<string, int>(entries.Count, StringComparer.Ordinal);
+        for (var i = 0; i < entries.Count; i++) byId[entries[i].ProgramId] = i;
+        foreach (var patch in feed.Close())
+            if (byId.TryGetValue(patch.ProgramId, out var at)) entries[at] = ProgramEntries.Apply(entries[at], patch);
+        return new InventoryDoc(InventoryDoc.SchemaId, entries, null);
+    }
+
+    public Task MeasureSizesAsync(IReadOnlyList<string> programIds, Action<IReadOnlyList<Rpc.ProgramSize>> onBatch, CancellationToken ct = default)
+    {
+        if (programIds.Count == 0) return Task.CompletedTask;
+        return CallAsync("programs.sizes", w =>
+        {
+            w.WriteStartArray("program_ids");
+            foreach (var id in programIds) w.WriteStringValue(id);
+            w.WriteEndArray();
+        }, new SizeFeed(onBatch), ct);
+    }
+
+    public Task LoadIconsAsync(IReadOnlyList<string> programIds, int px, Action<IReadOnlyList<ProgramIcon>> onBatch, CancellationToken ct = default)
+    {
+        if (programIds.Count == 0) return Task.CompletedTask;
+        return CallAsync("programs.icons", w =>
+        {
+            w.WriteStartArray("program_ids");
+            foreach (var id in programIds) w.WriteStringValue(id);
+            w.WriteEndArray();
+            w.WriteNumber("px", px);
+        }, new IconFeed(onBatch), ct);
+    }
+
+    public async Task<Rpc.ProgramDetails?> GetProgramAsync(string programId, CancellationToken ct = default)
+    {
         try
         {
-            var result = await CallAsync("programs.list", rows, ct).ConfigureAwait(false);
-            var started = result.Deserialize(WireJsonContext.Default.WireStarted) ?? throw new InvalidDataException("empty programs.list result");
-            var all = await rows.WaitForAsync(started.Count, ct).ConfigureAwait(false);
-            return new InventoryDoc(InventoryDoc.SchemaId, all.Select(ToEntry).ToList(), null);
+            var result = await CallAsync("programs.get", w => w.WriteString("program_id", programId), null, ct).ConfigureAwait(false);
+            return result.Deserialize(Rpc.RpcJsonContext.Default.ProgramDetails);
         }
-        finally
+        catch (EngineRpcException e) when (e.Kind == "gone")
         {
-            // The request stays registered until its rows are in: they follow the reply.
-            foreach (var (id, pending) in _pending)
-                if (ReferenceEquals(pending.Rows, rows)) _pending.TryRemove(id, out _);
+            return null;
         }
     }
 
-    // programs.sizes and programs.forecast are separate calls that come later; until then "not known yet".
-    public Task<IReadOnlyDictionary<string, long>> GetSizesAsync(CancellationToken ct = default) =>
-        Task.FromResult<IReadOnlyDictionary<string, long>>(new Dictionary<string, long>());
+    public async Task<Rpc.InventoryChanges> GetInventoryChangesAsync(CancellationToken ct = default)
+    {
+        var result = await CallAsync("inventory.changes", null, null, ct).ConfigureAwait(false);
+        return result.Deserialize(Rpc.RpcJsonContext.Default.InventoryChanges) ?? throw new InvalidDataException("empty inventory.changes result");
+    }
 
     public Task<IReadOnlyList<LeftoverForecast>> GetForecastsAsync(IReadOnlyList<string> programIds, CancellationToken ct = default) =>
         Task.FromResult<IReadOnlyList<LeftoverForecast>>([]);
@@ -132,43 +169,30 @@ public sealed class StdioEngineClient : IEngineClient
         return ValueTask.CompletedTask;
     }
 
-    private static InventoryEntry ToEntry(WireProgramRow row)
+    // A callback of the page must not end the reader thread, and so the link.
+    private static void Raise<T>(Action<T>? handler, T value)
     {
-        // A program id is "HKLM|64|key" or "HKU:<sid>|32|key".
-        var parts = row.ProgramId.Split('|', 3);
-        var hive = parts[0];
-        var view = parts.Length > 1 && parts[1] == "32" ? RegistryView.K32 : RegistryView.K64;
-        var key = parts.Length > 2 ? parts[2] : row.ProgramId;
-        var sid = hive.StartsWith("HKU:", StringComparison.Ordinal) ? hive[4..] : null;
-        var software = sid is null ? "SOFTWARE" : "Software";
-        var wow = view == RegistryView.K32 ? "\\WOW6432Node" : "";
-        var keyPath = $"{(sid is null ? "HKLM" : "HKU\\" + sid)}\\{software}{wow}\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{key}";
-        IReadOnlyList<InstallTimeEvidence>? time = row.InstallTime is { } t ? [new InstallTimeEvidence(InstallTimeSource.ArpInstallDate, t)] : null;
-        return new InventoryEntry(
-            ProgramId: row.ProgramId, KeyPath: keyPath, HiveSid: sid, View: view, DisplayName: row.Name, Version: row.Version,
-            Publisher: row.Publisher,
-            // The raw ARP row has no flags yet; programs.patch fills in what the engine learns later.
-            Flags: new RawFlags(SystemComponent: false, HasDisplayName: true, HasUninstallString: true, ParentKey: null, ReleaseType: null,
-                WindowsInstaller: false),
-            InstallerKind: InstallerKind.Unknown, Scope: row.Scope, ProductCode: null, UpgradeCode: null, InnoAppId: null,
-            WritableBy: row.Scope == InstallScope.Machine ? WritableBy.Admin : WritableBy.User, InstallLocation: null,
-            UninstallString: null, QuietUninstallString: null, DisplayIcon: null, InstallTimeEvidence: time, Msi: null);
+        try { handler?.Invoke(value); }
+        catch (Exception e) when (e is not OutOfMemoryException) { }
     }
 
-    private async Task<JsonElement> CallAsync(string method, RowCollector? rows, CancellationToken ct)
+    private async Task<JsonElement> CallAsync(string method, Action<Utf8JsonWriter>? writeParams, Feed? feed, CancellationToken ct,
+        Action<ulong>? onSent = null)
     {
         var id = Interlocked.Increment(ref _nextId);
-        var pending = new Pending(rows);
+        var pending = new Pending(feed);
         if (_closedReason is { } closed) throw new EngineLinkException(closed);
         _pending[id] = pending;
         try
         {
+            onSent?.Invoke(id);
             Send(w =>
             {
                 w.WriteString("jsonrpc", "2.0");
                 w.WriteNumber("id", id);
                 w.WriteString("method", method);
                 w.WriteStartObject("params");
+                writeParams?.Invoke(w);
                 w.WriteEndObject();
             });
             // The reader may have failed between the check above and the registration.
@@ -179,11 +203,18 @@ public sealed class StdioEngineClient : IEngineClient
                 catch (EngineLinkException) { }
                 pending.Cancel(ct);
             });
-            return await pending.Result.Task.ConfigureAwait(false);
+            var result = await pending.Result.Task.ConfigureAwait(false);
+            if (feed is not null)
+            {
+                // The data follows the reply in notifications, or came before it: wait until all of it is in.
+                var started = result.Deserialize(Rpc.RpcJsonContext.Default.Started) ?? throw new InvalidDataException($"empty {method} result");
+                await feed.WaitForAsync((int)started.Count, ct).ConfigureAwait(false);
+            }
+            return result;
         }
         finally
         {
-            if (rows is null) _pending.TryRemove(id, out _);
+            _pending.TryRemove(id, out _);
         }
     }
 
@@ -252,27 +283,40 @@ public sealed class StdioEngineClient : IEngineClient
             else if (root.TryGetProperty("result", out var result)) pending.Result.TrySetResult(result.Clone());
             else pending.Fail(new InvalidDataException("a response has neither result nor error"));
         }
-        else if (root.TryGetProperty("method", out var method) && method.ValueKind == JsonValueKind.String && method.GetString() == "programs.batch"
-                 && root.TryGetProperty("params", out var args))
+        else if (root.TryGetProperty("method", out var method) && method.ValueKind == JsonValueKind.String
+                 && root.TryGetProperty("params", out var args) && args.ValueKind == JsonValueKind.Object
+                 && args.TryGetProperty("request", out var request) && request.TryGetUInt64(out var requestId))
         {
-            var batch = args.Deserialize(WireJsonContext.Default.WireProgramsBatch);
-            if (batch is not null && _pending.TryGetValue(batch.Request, out var pending)) pending.Rows?.Add(batch.Rows);
+            var name = method.GetString();
+            if (_pending.TryGetValue(requestId, out var pending) && pending.Feed is { } feed)
+                feed.Notification(name!, args);
+            else if (name == "programs.patch" && (long)requestId == Interlocked.Read(ref _listRequest))
+            {
+                // Patches of a list that already ended: the page applies them to the rows it has.
+                var late = args.Deserialize(Rpc.RpcJsonContext.Default.ProgramsPatch);
+                if (late is not null) Raise(ProgramsPatched, late.Patches);
+            }
         }
-        // Other notifications (programs.patch, icon.batch, size.ready, inventory changes) are not read yet.
+        // Other notifications (baseline.changed, progress of the broker's calls) are not the stdio engine's.
     }
 
     private static Exception ToException(JsonElement error)
     {
-        var code = error.TryGetProperty("code", out var c) && c.TryGetInt32(out var n) ? n : 0;
-        var message = error.TryGetProperty("message", out var m) ? m.GetString() : null;
-        string? kind = null;
-        if (error.TryGetProperty("data", out var data) && data.ValueKind == JsonValueKind.Object)
+        Rpc.ErrorObject? parsed;
+        try { parsed = error.Deserialize(Rpc.RpcJsonContext.Default.ErrorObject); }
+        catch (JsonException)
         {
-            var d = data.Deserialize(WireJsonContext.Default.WireErrorData);
-            kind = d?.Kind;
-            message = d?.Message ?? message;
+            // An error whose data this client does not know is still an error, and must not end the link.
+            var code = error.TryGetProperty("code", out var c) && c.TryGetInt32(out var n) ? n : 0;
+            var text = error.TryGetProperty("message", out var m) && m.ValueKind == JsonValueKind.String ? m.GetString() : null;
+            string? kindText = null;
+            if (error.TryGetProperty("data", out var d) && d.ValueKind == JsonValueKind.Object && d.TryGetProperty("kind", out var k) && k.ValueKind == JsonValueKind.String)
+                kindText = k.GetString();
+            return new EngineRpcException(code, kindText, string.IsNullOrEmpty(text) ? "The engine reported an error." : text);
         }
-        return new EngineRpcException(code, kind, message ?? "The engine reported an error.");
+        var kind = parsed?.Data?.Kind;
+        var message = parsed?.Data?.Message ?? parsed?.Message;
+        return new EngineRpcException(parsed?.Code ?? 0, kind, string.IsNullOrEmpty(message) ? "The engine reported an error." : message);
     }
 
     private void Fail(string reason)
@@ -281,42 +325,45 @@ public sealed class StdioEngineClient : IEngineClient
         foreach (var pending in _pending.Values) pending.Fail(new EngineLinkException(reason));
     }
 
-    private sealed class Pending(RowCollector? rows)
+    private sealed class Pending(Feed? feed)
     {
         public TaskCompletionSource<JsonElement> Result { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public RowCollector? Rows { get; } = rows;
+        public Feed? Feed { get; } = feed;
 
         public void Fail(Exception e)
         {
             Result.TrySetException(e);
-            Rows?.Fail(e);
+            Feed?.Fail(e);
         }
 
         public void Cancel(CancellationToken ct)
         {
             Result.TrySetCanceled(ct);
-            Rows?.Cancel(ct);
+            Feed?.Cancel(ct);
         }
     }
 
-    /// <summary>The rows of one <c>programs.list</c>: they arrive in notifications, before or after the reply that counts them.</summary>
-    private sealed class RowCollector
+    /// <summary>The notifications of one request: counted, so the call ends when every item the reply promised is in.</summary>
+    private abstract class Feed
     {
         private readonly object _gate = new();
-        private readonly List<WireProgramRow> _rows = [];
-        private readonly TaskCompletionSource<List<WireProgramRow>> _done = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _done = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _received;
         private int _expected = -1;
 
-        public void Add(List<WireProgramRow> batch)
+        /// <summary>A notification of this request, on the reader thread.</summary>
+        public abstract void Notification(string method, JsonElement args);
+
+        protected void Count(int items)
         {
             lock (_gate)
             {
-                _rows.AddRange(batch);
+                _received += items;
                 Check();
             }
         }
 
-        public Task<List<WireProgramRow>> WaitForAsync(int count, CancellationToken ct)
+        public Task WaitForAsync(int count, CancellationToken ct)
         {
             lock (_gate)
             {
@@ -328,11 +375,78 @@ public sealed class StdioEngineClient : IEngineClient
 
         private void Check()
         {
-            if (_expected >= 0 && _rows.Count >= _expected) _done.TrySetResult(_rows);
+            if (_expected >= 0 && _received >= _expected) _done.TrySetResult();
         }
 
         public void Fail(Exception e) => _done.TrySetException(e);
 
         public void Cancel(CancellationToken ct) => _done.TrySetCanceled(ct);
+    }
+
+    /// <summary><c>programs.batch</c> rows and <c>programs.patch</c> patches of one <c>programs.list</c>.</summary>
+    private sealed class ListFeed(Action<IReadOnlyList<Rpc.ProgramPatch>> late) : Feed
+    {
+        private readonly object _gate = new();
+        private readonly List<Rpc.ProgramPatch> _patches = [];
+        private bool _closed;
+
+        public List<Rpc.ProgramRow> Rows { get; } = [];
+
+        public override void Notification(string method, JsonElement args)
+        {
+            if (method == "programs.batch")
+            {
+                var batch = args.Deserialize(Rpc.RpcJsonContext.Default.ProgramsBatch);
+                if (batch is null) return;
+                lock (_gate) Rows.AddRange(batch.Rows);
+                Count(batch.Rows.Count);
+            }
+            else if (method == "programs.patch")
+            {
+                var patch = args.Deserialize(Rpc.RpcJsonContext.Default.ProgramsPatch);
+                if (patch is null) return;
+                bool closed;
+                lock (_gate)
+                {
+                    closed = _closed;
+                    if (!closed) _patches.AddRange(patch.Patches);
+                }
+                if (closed) late(patch.Patches);
+            }
+        }
+
+        /// <summary>The patches received so far; later ones go to the <c>late</c> callback.</summary>
+        public List<Rpc.ProgramPatch> Close()
+        {
+            lock (_gate)
+            {
+                _closed = true;
+                return _patches;
+            }
+        }
+    }
+
+    private sealed class SizeFeed(Action<IReadOnlyList<Rpc.ProgramSize>> onBatch) : Feed
+    {
+        public override void Notification(string method, JsonElement args)
+        {
+            if (method != "size.ready") return;
+            var ready = args.Deserialize(Rpc.RpcJsonContext.Default.SizeReady);
+            if (ready is null) return;
+            Raise(onBatch, ready.Sizes);
+            Count(ready.Sizes.Count);
+        }
+    }
+
+    private sealed class IconFeed(Action<IReadOnlyList<ProgramIcon>> onBatch) : Feed
+    {
+        public override void Notification(string method, JsonElement args)
+        {
+            if (method != "icon.batch") return;
+            var batch = args.Deserialize(Rpc.RpcJsonContext.Default.IconBatch);
+            if (batch is null) return;
+            Raise(onBatch, batch.Icons.Select(ProgramEntries.ToIcon).ToList());
+            Count(batch.Icons.Count);
+        }
     }
 }

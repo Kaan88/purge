@@ -20,5 +20,6 @@
   <ItemGroup>
     <ProjectReference Include="..\Purge.Client\Purge.Client.csproj" />
     <Compile Include="..\Purge.App\Shell\IconAtlas.cs" Link="Shell\IconAtlas.cs" />
+    <Compile Include="..\Purge.App\Shell\IconLoader.cs" Link="Shell\IconLoader.cs" />
   </ItemGroup>
 </Project>
