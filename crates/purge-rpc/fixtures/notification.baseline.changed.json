@@ -1,0 +1,7 @@
+{
+  "rescan": true,
+  "rescan_offered": [
+    "s-0123456789abcdef"
+  ],
+  "state": "done"
+}

@@ -1,0 +1,45 @@
+{
+  "sessions": [
+    {
+      "app": "HKLM|64|Git_is1",
+      "backup_bytes": 1234567,
+      "counts": {
+        "done": 21,
+        "failed": 0,
+        "held_retry": 1,
+        "pending_reboot": 0,
+        "skipped": 0,
+        "vanished": 0
+      },
+      "expires": {
+        "backups": 134232273020000000,
+        "journal": 134392113020000000,
+        "quarantine": 134102673020000000
+      },
+      "finished": 134076753620000000,
+      "id": "20251115T101502Z-9f3a6c1d2b7e4a50",
+      "owner": null,
+      "pending_reboot": false,
+      "plan_hash": "a1b2c3d400000000000000000000000000000000000000000000000000000001",
+      "purged": [],
+      "started": 134076753020000000,
+      "state": "Committed",
+      "undone": 0,
+      "usage": [
+        {
+          "bytes": 1234567,
+          "root": "C:\\",
+          "serial": 305441741
+        }
+      ]
+    }
+  ],
+  "volumes": [
+    {
+      "cap": 10737418240,
+      "root": "C:\\",
+      "serial": 305441741,
+      "used": 1234567
+    }
+  ]
+}

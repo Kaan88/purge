@@ -1,0 +1,7 @@
+{
+  "code": -32000,
+  "data": {
+    "kind": "install_untrusted"
+  },
+  "message": "install_untrusted"
+}

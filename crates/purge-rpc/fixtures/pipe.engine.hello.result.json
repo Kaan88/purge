@@ -1,0 +1,21 @@
+{
+  "baseline_available": true,
+  "baseline_build": {
+    "reason": "exact shipped baseline",
+    "state": "none"
+  },
+  "baseline_trust": "Exact",
+  "baseline_view": {
+    "local_id": null,
+    "name": "Professional-26100.9711",
+    "trust": "Exact"
+  },
+  "build": 26100,
+  "edition": "Professional",
+  "elevated": true,
+  "policy_version": "bl.1",
+  "shell_sid": null,
+  "ubr": 9711,
+  "user_sid": "S-1-5-21-1-2-3-1001",
+  "version": "0.1.0"
+}

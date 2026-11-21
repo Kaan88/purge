@@ -1,0 +1,16 @@
+{
+  "items": [
+    {
+      "app": "Git",
+      "bytes": 345000000,
+      "class": "Quarantine",
+      "expired": 134102673020000000,
+      "expiry_id": "e-0e0e000000000007",
+      "files": [
+        "C:\\Program Files\\Git"
+      ],
+      "session": "20251115T101502Z-9f3a6c1d2b7e4a50",
+      "user_data": false
+    }
+  ]
+}

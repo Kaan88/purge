@@ -1,0 +1,15 @@
+{
+  "install_location": "C:\\Program Files\\Git\\",
+  "install_time": 134076753020000000,
+  "installer": "Inno",
+  "name": "Git",
+  "product_code": null,
+  "program_id": "HKLM|64|Git_is1",
+  "publisher": "The Git Development Community",
+  "quiet_uninstall_command": "\"C:\\Program Files\\Git\\unins000.exe\" /SILENT",
+  "scope": "Machine",
+  "size_bytes": 345000000,
+  "uninstall_command": "\"C:\\Program Files\\Git\\unins000.exe\"",
+  "version": "2.47.0",
+  "writable_by": "admin"
+}
