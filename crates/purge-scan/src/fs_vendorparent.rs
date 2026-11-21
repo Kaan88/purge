@@ -554,10 +554,10 @@ mod tests {
         let mut world = firefox(fixture());
         let mut text = format!("#purge-baseline 1\tT\tPC\t{EDITION}\t26340.9882\n");
         text.push_str(&format!("D\t{}\n", SHARED.replace('\\', "\\\\")));
-        world.baseline = Some(
+        world.baseline = Some(purge_index::baseline_view::BaselineView::exact(
             purge_index::baseline::Baseline::from_bytes(text.as_bytes())
                 .expect("the baseline parses"),
-        );
+        ));
         assert_eq!(paths(&scan(&world)), [&format!(r"{ROAMING}\Mozilla")]);
         // The same machine with an empty baseline offers all three.
         let mut world = firefox(fixture());

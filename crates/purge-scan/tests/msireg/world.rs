@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 use purge_guard::canon::GuardEnv;
 use purge_guard::deny::{self, Exemptions};
 use purge_index::baseline::Baseline;
+use purge_index::baseline_view::BaselineView;
 use purge_index::ownership::{MACHINE_SID, OwnershipIndex, OwnershipInput, USERDATA, pack_guid};
 use purge_model::{
     AppRef, Band, Blocker, Candidate, EvidenceKind, ExeFile, Fingerprint, FingerprintSchema,
@@ -263,7 +264,7 @@ pub struct World {
     pub fixture: Fixture,
     pub fp: Fingerprint,
     pub inventory: Vec<InventoryEntry>,
-    baseline: Baseline,
+    pub baseline: BaselineView,
     env: BTreeMap<String, String>,
     pub guard: GuardEnv,
     pub other_apps: OtherApps,
@@ -284,7 +285,9 @@ impl World {
             fixture,
             fp,
             inventory: vec![msi_entry(OTHER, LP_OTHER)],
-            baseline: Baseline::from_bytes(header.as_bytes()).expect("baseline parses"),
+            baseline: BaselineView::exact(
+                Baseline::from_bytes(header.as_bytes()).expect("baseline parses"),
+            ),
             env: BTreeMap::new(),
             guard: GuardEnv::sample(),
             other_apps: OtherApps::default(),
@@ -314,7 +317,7 @@ impl World {
             fs: &self.fixture,
             sys: &self.fixture,
             fp: &self.fp,
-            baseline: Some(&self.baseline),
+            baseline: &self.baseline,
             mode: ScanMode::Post,
             verify_gone: Some(VerifyGone::new(true, true, true)),
             env: &self.env,

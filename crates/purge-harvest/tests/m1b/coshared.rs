@@ -103,7 +103,7 @@ fn co_product_harvest_reuses_the_indexes() {
         entry(&doc, SUITE),
         &doc,
         sources,
-        None,
+        purge_index::baseline_view::BaselineView::empty(),
         Kb::shipped(),
         &HarvestOpts {
             table_cache: Some(&cache),
@@ -134,7 +134,7 @@ fn co_product_harvest_reuses_the_indexes() {
             msi_only: Vec::new(),
         },
         Sources::of(&f),
-        None,
+        purge_index::baseline_view::BaselineView::empty(),
         Kb::shipped(),
     );
     assert!(!co.msi.is_empty(), "the candidate's MSI facts were read");
@@ -168,7 +168,7 @@ fn harvest_uses_the_callers_indexes() {
             fs: &fs,
             sys: &sys,
         },
-        None,
+        purge_index::baseline_view::BaselineView::empty(),
         Kb::shipped(),
         &HarvestOpts {
             table_cache: None,
@@ -235,7 +235,7 @@ fn entries_only(f: &Fixture, doc: &InventoryDoc, name: &str) -> Fingerprint {
             msi_only: Vec::new(),
         },
         Sources::of(f),
-        None,
+        purge_index::baseline_view::BaselineView::empty(),
         Kb::shipped(),
     )
 }

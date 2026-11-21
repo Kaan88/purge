@@ -125,18 +125,21 @@ fn a_verb_named_by_a_harvested_token_carries_it() {
 
 #[test]
 fn without_a_baseline_only_the_values_are_offered() {
-    let mut world = world();
-    world.baseline = None;
-    let lines = world.golden(&ClsVerbs);
-    assert_eq!(lines.len(), 6, "{lines:?}");
-    // `*\shell`, `Directory\shell` and the like are places every program and the user add verbs to:
-    // without an installer record a value that points at the app is Tier B.
-    assert!(lines.iter().all(|l| l.starts_with("value ")
-        && l.ends_with("DeleteValue [DanglingRef/B/Value, PointsIntoInstallRoot/B/Value]")));
-    assert!(lines.contains(&format!(
-        "value {}|Icon DeleteValue [DanglingRef/B/Value, PointsIntoInstallRoot/B/Value]",
-        verb("*", "AcmeEdit")
-    )));
+    // Every view below Exact takes the no-baseline path (presence-only, design L5).
+    for below in 0..purge_index::baseline_view::fixture::BELOW_EXACT {
+        let mut world = world();
+        world.baseline = purge_index::baseline_view::fixture::below_exact(below, &world.fp.os);
+        let lines = world.golden(&ClsVerbs);
+        assert_eq!(lines.len(), 6, "{lines:?}");
+        // `*\shell`, `Directory\shell` and the like are places every program and the user add verbs to:
+        // without an installer record a value that points at the app is Tier B.
+        assert!(lines.iter().all(|l| l.starts_with("value ")
+            && l.ends_with("DeleteValue [DanglingRef/B/Value, PointsIntoInstallRoot/B/Value]")));
+        assert!(lines.contains(&format!(
+            "value {}|Icon DeleteValue [DanglingRef/B/Value, PointsIntoInstallRoot/B/Value]",
+            verb("*", "AcmeEdit")
+        )));
+    }
 }
 
 #[test]
@@ -163,4 +166,11 @@ fn trusted_installer_owned_verb_carries_the_blocker() {
         &r"key HKLM\SOFTWARE\Classes\Drive\shell\AcmeEdit DeleteKey [ChainedRef/A/Key] !TrustedInstallerOwned"
             .to_owned()
     ));
+}
+
+/// Invariant L5 over this world: a view below Exact only takes away (`tests/shared/l5.rs`).
+#[test]
+fn l5_a_view_below_exact_only_takes_away() {
+    let offered = crate::l5_check("verbs", &world);
+    assert!(offered > 0, "the world offers something without a baseline");
 }

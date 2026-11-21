@@ -147,14 +147,17 @@ fn handler_of_a_class_gone_everywhere_safe() {
 /// own: listed, never Safe.
 #[test]
 fn handler_without_baseline_likely() {
-    let mut fx = machine();
-    dangling_class(&mut fx);
-    sz(&mut fx, &star_menu(), CLS_A);
-    let mut world = app_world(fx);
-    world.baseline = None;
-    let found = world.ready(&[]).shellex();
-    let c = get(&found, &star_menu());
-    assert_eq!(band(c), Band::Likely, "{c:#?}");
+    // Every view below Exact takes the no-baseline path (presence-only, design L5).
+    for below in 0..purge_index::baseline_view::fixture::BELOW_EXACT {
+        let mut fx = machine();
+        dangling_class(&mut fx);
+        sz(&mut fx, &star_menu(), CLS_A);
+        let mut world = app_world(fx);
+        world.baseline = purge_index::baseline_view::fixture::below_exact(below, &world.fp.os);
+        let found = world.ready(&[]).shellex();
+        let c = get(&found, &star_menu());
+        assert_eq!(band(c), Band::Likely, "{c:#?}");
+    }
 }
 
 /// Hostile: a handler key Windows has, re-pointed by the app at its own class. Never taken, neither
@@ -312,4 +315,32 @@ fn class_claimed_by_other_app_not_offered() {
         "{class:#?}"
     );
     assert!(world.shellex().is_empty());
+}
+
+/// Invariant L5 over the handler worlds: a view below Exact only takes away (`tests/shared/l5.rs`).
+#[test]
+fn l5_a_view_below_exact_only_takes_away() {
+    for dangling in [false, true] {
+        let make = || {
+            let mut fx = machine();
+            if dangling {
+                dangling_class(&mut fx);
+            }
+            sz(&mut fx, &star_menu(), CLS_A);
+            app_world(fx)
+        };
+        let none = crate::l5::check(
+            &format!("handler, dangling class {dangling}"),
+            &make().fp.os,
+            &|view| {
+                let mut world = make();
+                world.baseline = view;
+                world.ready(&[]).shellex()
+            },
+        );
+        assert!(
+            !none.is_empty(),
+            "the handler is offered without a baseline"
+        );
+    }
 }

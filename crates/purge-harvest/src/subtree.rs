@@ -86,6 +86,7 @@ use purge_guard::canon::GuardEnv;
 use purge_guard::containers::is_value_container;
 use purge_guard::prefix;
 use purge_index::baseline::Baseline;
+use purge_index::baseline_view::{Absence, BaselineView};
 use purge_index::queries::{self, SubtreeLimits, hash_hex, values_referencing};
 use purge_index::refscan::RefScanOptions;
 use purge_model::{InnoRecordKind, RefSnapEntry, SubtreeBaseline, SubtreeValue, Target};
@@ -192,8 +193,9 @@ fn too_shallow(key: &str) -> bool {
     }
 }
 
-fn in_baseline(baseline: Option<&Baseline>, key: &str) -> bool {
-    baseline.is_some_and(|b| Baseline::key_in_scope(key) && b.has_key(key))
+/// P: some set of the view has the key (inside the scope baselines capture).
+fn in_baseline(baseline: &BaselineView, key: &str) -> bool {
+    Baseline::key_in_scope(key) && baseline.has_key(key)
 }
 
 /// Whether a key last written at `lwt` is older than the install, by the exact cutoff only (see the
@@ -289,7 +291,6 @@ pub fn keys_with(
     options: &SubtreeOptions,
 ) -> Vec<String> {
     let env = container_env(ctx);
-    let baseline = ctx.matching_baseline();
     let bound = ctx.bind_sid();
     let sid = bound.as_deref();
     let mut seen: BTreeSet<String> = BTreeSet::new();
@@ -338,10 +339,11 @@ pub fn keys_with(
             if !capturable(&key) {
                 break;
             }
-            let known = in_baseline(baseline, &key);
             add(key.clone());
-            // A baseline key ends the climb; without a baseline there is nothing to end it at.
-            if known || baseline.is_none() || !Baseline::key_in_scope(&key) {
+            // A: the climb goes on only above a key the exact baseline of this Windows proves is not
+            // Windows' own. A baseline key ends it; without such a baseline (none, or a view below
+            // Exact) there is nothing to end it at; outside the capture scope nothing is proven.
+            if !matches!(ctx.key_absence(&key), Absence::Proven) {
                 break;
             }
             match prefix::parent(&key) {
@@ -469,7 +471,7 @@ pub fn capture_with<K: AsRef<str>>(
         ctx,
         matcher: ctx.matcher(),
         attribution: Attribution::new(ctx),
-        baseline: ctx.matching_baseline(),
+        baseline: ctx.presence(),
         env: container_env(ctx),
         // Whether this source records key owners at all. `HKLM\SOFTWARE` exists on every Windows.
         owners_known: ctx
@@ -543,7 +545,8 @@ struct State<'a, 'c> {
     ctx: &'c HarvestCtx<'a>,
     matcher: purge_index::matcher::RefMatcher,
     attribution: Attribution,
-    baseline: Option<&'a Baseline>,
+    /// P: the view asked "is this Windows' own?".
+    baseline: &'a BaselineView,
     env: GuardEnv,
     owners_known: bool,
 }

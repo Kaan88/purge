@@ -140,12 +140,15 @@ fn clsid_in_baseline_no_candidate() {
 /// Without a baseline of this Windows the key is not proven not Windows' own: listed, never Safe.
 #[test]
 fn clsid_without_baseline_is_tier_b() {
-    let mut world = one_class(HKLM_CLASSES, "InprocServer32", &app_file("a.dll"));
-    world.baseline = None;
-    let found = world.ready(&[]).classes();
-    let c = get(&found, &clsid_key(HKLM_CLASSES, CLS_A));
-    assert!(has(c, EvidenceKind::ComKeyOwnership, Tier::B));
-    assert_eq!(band(c), Band::Likely);
+    // Every view below Exact takes the no-baseline path (presence-only, design L5).
+    for below in 0..purge_index::baseline_view::fixture::BELOW_EXACT {
+        let mut world = one_class(HKLM_CLASSES, "InprocServer32", &app_file("a.dll"));
+        world.baseline = purge_index::baseline_view::fixture::below_exact(below, &world.fp.os);
+        let found = world.ready(&[]).classes();
+        let c = get(&found, &clsid_key(HKLM_CLASSES, CLS_A));
+        assert!(has(c, EvidenceKind::ComKeyOwnership, Tier::B));
+        assert_eq!(band(c), Band::Likely);
+    }
 }
 
 /// A subkey COM does not define for a class (an `Instance` list others add to) keeps the key from Tier A.
@@ -439,4 +442,28 @@ fn msi_foreign_row_blocks_clsid_value() {
         c.blockers
     );
     assert_eq!(band(c), Band::Blocked);
+}
+
+/// Invariant L5 over the class worlds: a view below Exact only takes away (`tests/shared/l5.rs`).
+#[test]
+fn l5_a_view_below_exact_only_takes_away() {
+    for (root, server, data) in [
+        (HKLM_CLASSES, "InprocServer32", app_file("a.dll")),
+        (HKLM_CLASSES, "LocalServer32", app_file("a.exe")),
+        (HKLM_CLASSES32, "InprocServer32", app_file("a.dll")),
+    ] {
+        let make = || one_class(root, server, &data);
+        let none = crate::l5::check(&format!("class {root} {server}"), &make().fp.os, &|view| {
+            let mut world = make();
+            world.baseline = view;
+            let world = world.ready(&[]);
+            let mut found = world.classes();
+            found.extend(world.interfaces());
+            found
+        });
+        assert!(
+            !none.is_empty(),
+            "{root} {server}: the class is offered without a baseline"
+        );
+    }
 }

@@ -53,6 +53,7 @@ use purge_harvest::refsnap::HarvestCtx;
 use purge_harvest::roots::guard_env;
 use purge_identity::kbdata::Kb;
 use purge_index::baseline::{Baseline, RecordCounts};
+use purge_index::baseline_view::BaselineView;
 use purge_index::matcher::AnchorSet;
 use purge_index::ownership::{
     CacheKey, DiskTableCache, MemTableCache, OwnershipLimits, TableCache,
@@ -402,7 +403,9 @@ pub fn harvest(
         entry.display_name
     ));
 
-    let baseline = baseline_for(sources, settings, &mut warnings, &mut step);
+    // BL-FRAMEWORK (compile-only): the exact baseline as an Exact view, the empty view without one.
+    let baseline =
+        baseline_for(sources, settings, &mut warnings, &mut step).map(BaselineView::exact);
     step.say("harvest: reading roots, Inno log, anchors and the reference snapshot");
     let (cache, cache_kind) = table_cache(sources, settings);
     let cache = CountingCache::new(cache.as_ref());
@@ -410,7 +413,14 @@ pub fn harvest(
         table_cache: Some(&cache),
         shared: None,
     };
-    let mut report = harvest_report_with(entry, &inv.doc, sources, baseline.as_ref(), kb, &opts);
+    let mut report = harvest_report_with(
+        entry,
+        &inv.doc,
+        sources,
+        BaselineView::or_empty(baseline.as_ref()),
+        kb,
+        &opts,
+    );
     cache.report(cache_kind, settings);
     if !sources.sys.elevated() {
         let w = not_elevated_warning("harvest");
@@ -547,7 +557,7 @@ pub fn uninstall(
                 anchors: &anchors,
                 roots: &fp.roots,
                 inno: &fp.inno,
-                baseline: None,
+                baseline: BaselineView::empty(),
                 inventory: &before.doc.entries,
                 target: entry,
                 cutoff: None,
@@ -769,7 +779,7 @@ pub fn scan_path(
         table_cache: Some(&cache),
         shared: None,
     };
-    let report = harvest_report_with(&entry, &inv.doc, sources, None, kb, &opts);
+    let report = harvest_report_with(&entry, &inv.doc, sources, BaselineView::empty(), kb, &opts);
     cache.report(cache_kind, settings);
     if report.fingerprint.roots.is_empty() {
         let why = report
@@ -979,7 +989,9 @@ fn run_scan(
         other_apps.apps().len()
     ));
 
-    let baseline = baseline_for(sources, settings, &mut warnings, &mut step);
+    // BL-FRAMEWORK (compile-only): the exact baseline as an Exact view, the empty view without one.
+    let baseline =
+        baseline_for(sources, settings, &mut warnings, &mut step).map(BaselineView::exact);
 
     // Scanners. What every scanner shares is read once, before the first (C-SCANEXT): the one
     // reference walk, the MSI ownership index and the system objects.
@@ -1015,7 +1027,7 @@ fn run_scan(
         fs: sources.fs,
         sys: sources.sys,
         fp,
-        baseline: baseline.as_ref(),
+        baseline: BaselineView::or_empty(baseline.as_ref()),
         mode,
         verify_gone,
         env: &env,

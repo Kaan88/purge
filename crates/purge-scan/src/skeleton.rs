@@ -50,6 +50,7 @@
 //! `shell` / `shellex` root rules (§5.10 "unless `ProvenOwnedSkeleton`").
 
 use purge_index::baseline::Baseline;
+use purge_index::baseline_view::Absence;
 use purge_model::{
     AnchorKind, Evidence, EvidenceKind, Facts, Scope, SourceTrust, SubtreeBaseline, Target,
 };
@@ -114,14 +115,18 @@ pub fn check(ctx: &ScanCtx<'_>, key: &str) -> Result<Evidence, NotProven> {
     if ctx.in_unowned_com_class(key) {
         return Err(NotProven::UnownedComRegistration);
     }
-    let baseline = ctx.baseline.ok_or(NotProven::NoBaseline)?;
+    // A: only an Exact view proves absence. Below Exact (a local baseline, neighbours, nothing) there
+    // is no baseline in this sense, whatever the view holds for presence.
+    if !ctx.has_exact_baseline() {
+        return Err(NotProven::NoBaseline);
+    }
     // The machine as it is now decides; the fingerprint's record of it is the fallback.
-    let os = ctx.sys.os_info().unwrap_or_else(|_| ctx.fp.os.clone());
-    if !baseline.is_for(&os.edition, os.build, os.ubr) {
+    let os = ctx.os_now();
+    if !ctx.has_matching_exact_baseline() {
         return Err(NotProven::BaselineMismatch);
     }
     let mut budget = ctx.limits.max_key_children;
-    let proof = prove(ctx, baseline, key, 0, &mut budget)?;
+    let proof = prove(ctx, key, 0, &mut budget)?;
     let (trust, source, via): (SourceTrust, String, &str) = match proof {
         Proof::Subtree(subtree) => (
             app_trust(ctx.fp),
@@ -239,7 +244,6 @@ fn verb_parent<'a>(ctx: &ScanCtx<'a>, key: &str) -> Option<&'a SubtreeBaseline> 
 /// Conditions 1 to 5 for `key` as the top of its own proof.
 fn prove<'a>(
     ctx: &ScanCtx<'a>,
-    baseline: &Baseline,
     key: &str,
     depth: u32,
     budget: &mut usize,
@@ -247,8 +251,11 @@ fn prove<'a>(
     if !Baseline::key_in_scope(key) {
         return Err(NotProven::OutOfBaselineScope);
     }
-    if baseline.has_key(key) {
-        return Err(NotProven::InBaseline(key.to_owned()));
+    // A, through the capped path: only `Proven` goes on.
+    match ctx.key_absence(key) {
+        Absence::Proven => {}
+        Absence::Present => return Err(NotProven::InBaseline(key.to_owned())),
+        Absence::Unknown | Absence::Inferred(_) => return Err(NotProven::NoBaseline),
     }
     // Older than the install: not the app's, whichever proof would speak for it (the subtree
     // record, the installer's key record, the verbs under a `shell` key).
@@ -270,7 +277,7 @@ fn prove<'a>(
         vouched,
         owners_known: source_records_owners(ctx),
     };
-    empty_now(ctx, baseline, key, record, "", depth, budget, true)?;
+    empty_now(ctx, key, record, "", depth, budget, true)?;
     Ok(proof)
 }
 
@@ -300,7 +307,6 @@ fn source_records_owners(ctx: &ScanCtx<'_>) -> bool {
 #[allow(clippy::too_many_arguments)]
 fn empty_now(
     ctx: &ScanCtx<'_>,
-    baseline: &Baseline,
     key: &str,
     record: Record<'_>,
     rel: &str,
@@ -354,22 +360,13 @@ fn empty_now(
                 .any(|known| prefix::is_same(known, &child_rel))
         });
         if listed {
-            if baseline.has_key(&child) {
+            if ctx.key_absence(&child).is_present() {
                 return Err(NotProven::InBaseline(child));
             }
-            empty_now(
-                ctx,
-                baseline,
-                &child,
-                record,
-                &child_rel,
-                depth + 1,
-                budget,
-                false,
-            )?;
+            empty_now(ctx, &child, record, &child_rel, depth + 1, budget, false)?;
         } else {
             // Not part of the attributed subtree: it must be proven on its own record.
-            match prove(ctx, baseline, &child, depth + 1, budget) {
+            match prove(ctx, &child, depth + 1, budget) {
                 Ok(_) => {}
                 Err(NotProven::NotAttributed | NotProven::Gone) => {
                     return Err(NotProven::UnprovenSubkey(child));
@@ -612,22 +609,26 @@ mod tests {
     /// Condition 4: no baseline, or one of another build, gives no evidence.
     #[test]
     fn no_matching_baseline_is_not_proven() {
-        for key in [SH_AUTO_FILE, LIBRARY_SHELL] {
-            let mut world = world();
-            world.baseline = None;
-            assert_eq!(
-                check(&world.ctx(), key),
-                Err(NotProven::NoBaseline),
-                "{key}"
-            );
-            assert_eq!(proven_owned_skeleton(&world.ctx(), key), None);
-            // A baseline of another edition is not this Windows' baseline.
-            world.baseline = Some(baseline("EnterpriseS", &[]));
-            assert_eq!(
-                check(&world.ctx(), key),
-                Err(NotProven::BaselineMismatch),
-                "{key}"
-            );
+        // Every view below Exact takes the no-baseline path (presence-only, design L5).
+        for below in 0..purge_index::baseline_view::fixture::BELOW_EXACT {
+            for key in [SH_AUTO_FILE, LIBRARY_SHELL] {
+                let mut world = world();
+                world.baseline =
+                    purge_index::baseline_view::fixture::below_exact(below, &world.fp.os);
+                assert_eq!(
+                    check(&world.ctx(), key),
+                    Err(NotProven::NoBaseline),
+                    "{key}"
+                );
+                assert_eq!(proven_owned_skeleton(&world.ctx(), key), None);
+                // A baseline of another edition is not this Windows' baseline.
+                world.baseline = Some(baseline("EnterpriseS", &[]));
+                assert_eq!(
+                    check(&world.ctx(), key),
+                    Err(NotProven::BaselineMismatch),
+                    "{key}"
+                );
+            }
         }
     }
 
@@ -1071,101 +1072,104 @@ mod tests {
     /// The rule names `shell` keys only, and the other four conditions still hold for them.
     #[test]
     fn verb_parent_rule_is_bounded() {
-        // The same records under a key that is not called `shell`.
-        let other = r"HKLM\SOFTWARE\Classes\LibraryFolder\background\menu";
-        let mut world = verb_world();
-        world.fixture.add_key(other);
-        world.fp.subtrees = vec![unattributed_shell(other)];
-        world.fp.ref_snapshot.clear();
-        for (verb, exe) in [("git_gui", GIT_GUI), ("git_shell", GIT_BASH)] {
-            let (subtrees, refs) = verb_records(other, verb, exe);
-            world.fp.subtrees.extend(subtrees);
-            world.fp.ref_snapshot.extend(refs);
-        }
-        assert_eq!(check(&world.ctx(), other), Err(NotProven::NotAttributed));
-
-        // A `shell` key of clean Windows.
-        let mut world = verb_world();
-        world.baseline = Some(baseline(EDITION, &[LIBRARY_SHELL]));
-        assert_eq!(
-            check(&world.ctx(), LIBRARY_SHELL),
-            Err(NotProven::InBaseline(LIBRARY_SHELL.into()))
-        );
-        // No matching baseline.
-        world.baseline = None;
-        assert_eq!(
-            check(&world.ctx(), LIBRARY_SHELL),
-            Err(NotProven::NoBaseline)
-        );
-
-        // The installer found the key, a key above it or one of its verbs in place.
-        let old_verb = format!(r"{LIBRARY_SHELL}\git_gui");
-        for existed in [
-            LIBRARY_SHELL,
-            r"HKLM\SOFTWARE\Classes\LibraryFolder\background",
-            old_verb.as_str(),
-        ] {
+        // Every view below Exact takes the no-baseline path (presence-only, design L5).
+        for below in 0..purge_index::baseline_view::fixture::BELOW_EXACT {
+            // The same records under a key that is not called `shell`.
+            let other = r"HKLM\SOFTWARE\Classes\LibraryFolder\background\menu";
             let mut world = verb_world();
-            world.fp.inno = vec![InnoRecord {
-                kind: InnoRecordKind::RegDeleteKeyIfEmpty,
-                target: Target::RegKey {
-                    path: existed.into(),
-                },
-                view: Some(View::K64),
-                user_hive: false,
-                existed_before: true,
-                shared: false,
-                key_create: false,
-            }];
+            world.fixture.add_key(other);
+            world.fp.subtrees = vec![unattributed_shell(other)];
+            world.fp.ref_snapshot.clear();
+            for (verb, exe) in [("git_gui", GIT_GUI), ("git_shell", GIT_BASH)] {
+                let (subtrees, refs) = verb_records(other, verb, exe);
+                world.fp.subtrees.extend(subtrees);
+                world.fp.ref_snapshot.extend(refs);
+            }
+            assert_eq!(check(&world.ctx(), other), Err(NotProven::NotAttributed));
+
+            // A `shell` key of clean Windows.
+            let mut world = verb_world();
+            world.baseline = Some(baseline(EDITION, &[LIBRARY_SHELL]));
             assert_eq!(
                 check(&world.ctx(), LIBRARY_SHELL),
-                Err(NotProven::NotAttributed),
-                "{existed}"
+                Err(NotProven::InBaseline(LIBRARY_SHELL.into()))
+            );
+            // No matching baseline.
+            world.baseline = purge_index::baseline_view::fixture::below_exact(below, &world.fp.os);
+            assert_eq!(
+                check(&world.ctx(), LIBRARY_SHELL),
+                Err(NotProven::NoBaseline)
+            );
+
+            // The installer found the key, a key above it or one of its verbs in place.
+            let old_verb = format!(r"{LIBRARY_SHELL}\git_gui");
+            for existed in [
+                LIBRARY_SHELL,
+                r"HKLM\SOFTWARE\Classes\LibraryFolder\background",
+                old_verb.as_str(),
+            ] {
+                let mut world = verb_world();
+                world.fp.inno = vec![InnoRecord {
+                    kind: InnoRecordKind::RegDeleteKeyIfEmpty,
+                    target: Target::RegKey {
+                        path: existed.into(),
+                    },
+                    view: Some(View::K64),
+                    user_hive: false,
+                    existed_before: true,
+                    shared: false,
+                    key_create: false,
+                }];
+                assert_eq!(
+                    check(&world.ctx(), LIBRARY_SHELL),
+                    Err(NotProven::NotAttributed),
+                    "{existed}"
+                );
+            }
+
+            // TrustedInstaller, at harvest or now.
+            let mut world = verb_world();
+            world.fp.subtrees[0].ti_owned = true;
+            assert_eq!(
+                check(&world.ctx(), LIBRARY_SHELL),
+                Err(NotProven::TrustedInstaller(LIBRARY_SHELL.into()))
+            );
+            let mut world = verb_world();
+            world.fixture.set_ti_owned(LIBRARY_SHELL, true);
+            assert_eq!(
+                check(&world.ctx(), LIBRARY_SHELL),
+                Err(NotProven::TrustedInstaller(LIBRARY_SHELL.into()))
+            );
+
+            // A verb that is still there: with a value it keeps the key; empty, its owner must be known,
+            // because the harvest did not vouch for the owners below a subtree it could not attribute.
+            let verb = format!(r"{LIBRARY_SHELL}\git_gui");
+            let mut world = verb_world();
+            world.fixture.add_key(&verb);
+            assert_eq!(
+                check(&world.ctx(), LIBRARY_SHELL),
+                Err(NotProven::TrustedInstaller(verb.clone()))
+            );
+            world.fixture.set_ti_owned(&verb, false);
+            assert!(check(&world.ctx(), LIBRARY_SHELL).is_ok());
+            world
+                .fixture
+                .set_value(&verb, "", RegData::from_sz("Open Git &GUI here"));
+            assert_eq!(
+                check(&world.ctx(), LIBRARY_SHELL),
+                Err(NotProven::HasValues(verb))
+            );
+
+            // A verb that appeared after the harvest is nobody's.
+            let newcomer = format!(r"{LIBRARY_SHELL}\other_tool");
+            let mut world = verb_world();
+            world.fixture.add_key(&newcomer);
+            world.fixture.set_ti_owned(&newcomer, false);
+            assert_eq!(
+                check(&world.ctx(), LIBRARY_SHELL),
+                Err(NotProven::UnprovenSubkey(newcomer))
             );
         }
-
-        // TrustedInstaller, at harvest or now.
-        let mut world = verb_world();
-        world.fp.subtrees[0].ti_owned = true;
-        assert_eq!(
-            check(&world.ctx(), LIBRARY_SHELL),
-            Err(NotProven::TrustedInstaller(LIBRARY_SHELL.into()))
-        );
-        let mut world = verb_world();
-        world.fixture.set_ti_owned(LIBRARY_SHELL, true);
-        assert_eq!(
-            check(&world.ctx(), LIBRARY_SHELL),
-            Err(NotProven::TrustedInstaller(LIBRARY_SHELL.into()))
-        );
-
-        // A verb that is still there: with a value it keeps the key; empty, its owner must be known,
-        // because the harvest did not vouch for the owners below a subtree it could not attribute.
-        let verb = format!(r"{LIBRARY_SHELL}\git_gui");
-        let mut world = verb_world();
-        world.fixture.add_key(&verb);
-        assert_eq!(
-            check(&world.ctx(), LIBRARY_SHELL),
-            Err(NotProven::TrustedInstaller(verb.clone()))
-        );
-        world.fixture.set_ti_owned(&verb, false);
-        assert!(check(&world.ctx(), LIBRARY_SHELL).is_ok());
-        world
-            .fixture
-            .set_value(&verb, "", RegData::from_sz("Open Git &GUI here"));
-        assert_eq!(
-            check(&world.ctx(), LIBRARY_SHELL),
-            Err(NotProven::HasValues(verb))
-        );
-
-        // A verb that appeared after the harvest is nobody's.
-        let newcomer = format!(r"{LIBRARY_SHELL}\other_tool");
-        let mut world = verb_world();
-        world.fixture.add_key(&newcomer);
-        world.fixture.set_ti_owned(&newcomer, false);
-        assert_eq!(
-            check(&world.ctx(), LIBRARY_SHELL),
-            Err(NotProven::UnprovenSubkey(newcomer))
-        );
     }
 
     /// Rule T input: a per-user registration yields UserWritable evidence, which policy will not accept

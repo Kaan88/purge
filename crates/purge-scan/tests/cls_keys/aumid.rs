@@ -84,14 +84,17 @@ fn aumid_keys_of_the_anchor_set_are_offered() {
 
 #[test]
 fn without_a_baseline_only_values_are_offered() {
-    let mut world = world();
-    world.baseline = None;
-    assert_golden(
-        world.golden(&ClsAumid),
-        &[
-            r"value HKLM\SOFTWARE\Classes\AppUserModelId\Acme.Editor|IconUri DeleteValue [DanglingRef/A/Value, PointsIntoInstallRoot/A/Value]",
-        ],
-    );
+    // Every view below Exact takes the no-baseline path (presence-only, design L5).
+    for below in 0..purge_index::baseline_view::fixture::BELOW_EXACT {
+        let mut world = world();
+        world.baseline = purge_index::baseline_view::fixture::below_exact(below, &world.fp.os);
+        assert_golden(
+            world.golden(&ClsAumid),
+            &[
+                r"value HKLM\SOFTWARE\Classes\AppUserModelId\Acme.Editor|IconUri DeleteValue [DanglingRef/A/Value, PointsIntoInstallRoot/A/Value]",
+            ],
+        );
+    }
 }
 
 #[test]
@@ -119,4 +122,11 @@ fn an_aumid_another_app_shares_is_blocked() {
             r"key HKLM\SOFTWARE\Classes\AppUserModelId\Acme.Editor DeleteKey [ChainedRef/A/Key] !TrustedInstallerOwned !ReferencedByOtherApp(Acme Viewer)",
         ],
     );
+}
+
+/// Invariant L5 over this world: a view below Exact only takes away (`tests/shared/l5.rs`).
+#[test]
+fn l5_a_view_below_exact_only_takes_away() {
+    let offered = crate::l5_check("aumid", &world);
+    assert!(offered > 0, "the world offers something without a baseline");
 }

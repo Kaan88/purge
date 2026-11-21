@@ -7,6 +7,7 @@ use std::path::Path;
 
 use purge_guard::canon::GuardEnv;
 use purge_index::baseline::Baseline;
+use purge_index::baseline_view::BaselineView;
 use purge_model::{
     Action, AppRef, Band, Blocker, Candidate, Category, EvidenceKind, ExeFile, Fingerprint,
     FingerprintSchema, IdentitySnapshot, OsInfo, ProgramId, Reversibility, Root, RootKind,
@@ -115,7 +116,7 @@ fn machine() -> FixtureBuilder {
 struct World {
     fixture: Fixture,
     fp: Fingerprint,
-    baseline: Baseline,
+    baseline: BaselineView,
     env: BTreeMap<String, String>,
     guard: GuardEnv,
     other_apps: OtherApps,
@@ -138,7 +139,9 @@ impl World {
         Self {
             fixture,
             fp: npp_fp(),
-            baseline: Baseline::from_bytes(header.as_bytes()).expect("baseline parses"),
+            baseline: BaselineView::exact(
+                Baseline::from_bytes(header.as_bytes()).expect("baseline parses"),
+            ),
             env,
             guard: GuardEnv::sample(),
             other_apps: OtherApps::default(),
@@ -160,7 +163,7 @@ impl World {
             fs: &self.fixture,
             sys: &self.fixture,
             fp: &self.fp,
-            baseline: Some(&self.baseline),
+            baseline: &self.baseline,
             mode: ScanMode::Post,
             verify_gone: Some(VerifyGone::new(true, true, true)),
             env: &self.env,
@@ -528,4 +531,23 @@ fn budget_no_key_opens() {
     }
     // `packages` once, then `elevated` and `user_sid` (the metered source counts all three as System).
     assert!(calls.get(Op::System).calls <= 3, "{}", calls.summary());
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Invariant L5 (BASELINE_LOCAL_DESIGN.md §2): a view below Exact only takes away
+// ---------------------------------------------------------------------------------------------------------
+
+#[path = "shared/l5.rs"]
+mod l5;
+/// The app's package, registered for the current user only: a view below Exact gives the no-baseline
+/// candidates exactly (`tests/shared/l5.rs`; SYS-APPX asks the baseline nothing).
+#[test]
+fn l5_a_view_below_exact_only_takes_away() {
+    let make = || World::with_packages(vec![package(PACKAGE, FAMILY, &[ME])]);
+    let none = l5::check("packages", &make().fp.os, &|view| {
+        let mut world = make();
+        world.baseline = view.unwrap_or_else(|| BaselineView::empty().clone());
+        world.run()
+    });
+    assert_eq!(none.len(), 1, "{none:#?}");
 }

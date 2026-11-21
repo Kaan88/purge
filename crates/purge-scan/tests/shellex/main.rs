@@ -3,5 +3,7 @@
 
 mod budget;
 mod handlers;
+#[path = "../shared/l5.rs"]
+mod l5;
 mod lists;
 mod world;

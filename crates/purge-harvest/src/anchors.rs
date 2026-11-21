@@ -74,6 +74,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use purge_guard::canon::GuardEnv;
 use purge_guard::prefix;
 use purge_index::baseline::Baseline;
+use purge_index::baseline_view::BaselineView;
 use purge_index::matcher::{AnchorSet, RefMatcher};
 use purge_inventory::kind::is_braced_guid;
 use purge_model::{AnchorKind, Anchors, ExeFile, FileTime, Root, RootKind, RunEntry};
@@ -294,8 +295,9 @@ pub struct AnchorInput<'a> {
     pub env: &'a BTreeMap<String, String>,
     /// The users whose hives are read (the interactive user, the user the app is installed for).
     pub user_sids: &'a [String],
-    /// The baseline **for this Windows**, when there is one.
-    pub baseline: Option<&'a Baseline>,
+    /// The baseline view **for this Windows** ([`BaselineView::empty`] without one). Presence only:
+    /// what some set of it has is Windows' own and never an anchor.
+    pub baseline: &'a BaselineView,
     /// The directories of every other installed app (`RootEnv::other_dirs`), for the shared-server
     /// test of COM classes.
     pub other_dirs: &'a [OtherAnchor],
@@ -486,10 +488,9 @@ impl<'a> Pass<'a> {
             || self.runs_app(raw)
     }
 
+    /// P: some set of the view has the key (inside the scope baselines capture).
     fn in_baseline(&self, key: &str) -> bool {
-        self.input
-            .baseline
-            .is_some_and(|b| Baseline::key_in_scope(key) && b.has_key(key))
+        Baseline::key_in_scope(key) && self.input.baseline.has_key(key)
     }
 
     /// Whether Windows owns the key. A key that is not there is not owned; a key whose information
@@ -1158,7 +1159,7 @@ mod tests {
             guard: &guard,
             env: &env,
             user_sids: &sids,
-            baseline: None,
+            baseline: BaselineView::empty(),
             other_dirs: &[],
             other_files: &[],
             install_time: None,
@@ -1419,7 +1420,7 @@ mod tests {
                 guard: &guard,
                 env: &env,
                 user_sids: &sids,
-                baseline: None,
+                baseline: BaselineView::empty(),
                 other_dirs: &[],
                 other_files: &[],
                 install_time,
@@ -1557,7 +1558,7 @@ mod tests {
                 guard: &guard,
                 env: &env,
                 user_sids: &sids,
-                baseline: None,
+                baseline: BaselineView::empty(),
                 other_dirs: dirs,
                 other_files: files,
                 install_time: Some(ComCutoff {

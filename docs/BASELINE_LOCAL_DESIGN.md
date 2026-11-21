@@ -260,6 +260,22 @@ That makes every one of today's uses a compile error, and each is rewritten as P
 An xtask check `baseline-sites` (in the style of `no-new-walks`) fails when `key_absent` is called
 outside the listed files, or when a scanner calls a P method and negates it.
 
+**As built (BL-FRAMEWORK, presence-only; DECISIONS 2026-11-21).** The "with a non-exact view" column of the A
+rows above is the design; what ships is its `Unknown` half only. Each crate has one *capped path* that asks
+the view for absence and hands `Inferred` out as `Unknown`: `purge-scan` `framework/absence.rs`
+(`ScanCtx::key_absence`, `has_exact_baseline`, `has_matching_exact_baseline`) and `purge-harvest` `refsnap.rs`
+(`HarvestCtx::key_absence`, `has_exact_baseline`, `presence`). Below Exact every A site therefore takes the path it
+took without a baseline, and every P site asks the union. The carrier (`CandidateBuilder::absence`) and the seal
+(`ScanCtx::baseline_cap_missing`, in `ScanCtx::run`) exist and are tested, with no production caller that hands
+them an inferred answer. The seal acts on evidence that *claims* baseline absence (`framework::claims_absence`:
+`ProvenOwnedSkeleton`, `HarvestedToken`, and `ComKeyOwnership` or a key-scope Inno record without `baseline=none`),
+not on every absence-dependent kind: key-scope MSI and Burn records and key-scope `ChainedRef` never ask the
+baseline, and the no-baseline paths emit them. The fingerprint records a view below Exact with the trust of the
+absence facts made with it, which is `None` (`BaselineTrust::presence_only`); an Exact view and an empty one record
+nothing, so those fingerprints are byte-identical to the M1b gate's. `cargo xtask baseline-sites` holds the site
+table (every call, its class, what it does below Exact) and fails on an unlisted call, on `key_absent` outside the
+two capped files, on a capped file without the `Inferred => Unknown` arm, and on a negated presence call.
+
 ### 4.4 Where the cap is applied (three layers)
 
 1. **Scanner layer, the carrier.** `CandidateBuilder` gets `absence(&mut self, a: Absence)`. For

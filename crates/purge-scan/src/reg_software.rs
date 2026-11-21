@@ -533,7 +533,7 @@ impl Pass<'_, '_> {
         // The exact-view query, not `ctx.in_baseline`: a vendor key directly under
         // `HKLM\SOFTWARE\WOW6432Node` is a separate key from its 64-bit namesake, so clean Windows having
         // `HKLM\SOFTWARE\<Vendor>` says nothing about it. Classes and shared keys stay folded there.
-        let in_baseline = ctx.baseline.is_some_and(|b| b.has_key_exact_view(key));
+        let in_baseline = ctx.baseline.has_key_exact_view(key);
         if holds_other_app
             || containers::is_value_container(key, ctx.guard)
             || in_baseline

@@ -604,6 +604,7 @@ mod tests {
 
     use purge_guard::canon::GuardEnv;
     use purge_index::baseline::Baseline;
+    use purge_index::baseline_view::BaselineView;
     use purge_model::{
         Anchors, AppRef, ExeFile, FileTime, Fingerprint, FingerprintSchema, IdentitySnapshot,
         OsInfo, ProgramId, Root, RootSource, ScanMode, SourceTrust, TimeWindow, VerifyGone, View,
@@ -768,9 +769,10 @@ mod tests {
         .into_iter()
         .map(|(k, v)| (k.to_owned(), v.to_owned()))
         .collect();
-        let baseline =
+        let baseline = BaselineView::exact(
             Baseline::from_bytes(b"#purge-baseline 1\tT\tPC\tProfessional\t26340.9882\n")
-                .expect("the baseline parses");
+                .expect("the baseline parses"),
+        );
         let guard = GuardEnv::sample();
         let other_apps = OtherApps::new(others);
         let ctx = ScanCtx {
@@ -778,7 +780,7 @@ mod tests {
             fs: fixture,
             sys: fixture,
             fp,
-            baseline: Some(&baseline),
+            baseline: &baseline,
             mode: ScanMode::Post,
             verify_gone: Some(VerifyGone::new(true, true, true)),
             env: &env,

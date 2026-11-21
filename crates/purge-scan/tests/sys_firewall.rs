@@ -11,6 +11,7 @@ use std::path::Path;
 
 use purge_guard::canon::GuardEnv;
 use purge_index::baseline::Baseline;
+use purge_index::baseline_view::BaselineView;
 use purge_index::sysobj::{self, FirewallFacts, ProgramRef};
 use purge_model::{
     Action, Anchors, AppFileOutsideRoot, AppRef, Band, Blocker, Candidate, Category, EvidenceKind,
@@ -128,7 +129,7 @@ fn fingerprint() -> Fingerprint {
 struct World {
     fixture: Fixture,
     fp: Fingerprint,
-    baseline: Option<Baseline>,
+    baseline: Option<BaselineView>,
     env: BTreeMap<String, String>,
     guard: GuardEnv,
     other_apps: OtherApps,
@@ -147,7 +148,9 @@ impl World {
         Self {
             fixture,
             fp: fingerprint(),
-            baseline: Some(Baseline::from_bytes(baseline_text.as_bytes()).unwrap()),
+            baseline: Some(BaselineView::exact(
+                Baseline::from_bytes(baseline_text.as_bytes()).unwrap(),
+            )),
             env: BTreeMap::new(),
             guard: GuardEnv::sample(),
             other_apps: OtherApps::default(),
@@ -186,7 +189,7 @@ impl World {
             fs: &self.fixture,
             sys: &self.fixture,
             fp: &self.fp,
-            baseline: self.baseline.as_ref(),
+            baseline: BaselineView::or_empty(self.baseline.as_ref()),
             mode: ScanMode::Post,
             verify_gone: Some(VerifyGone::new(true, true, true)),
             env: &self.env,
@@ -661,4 +664,29 @@ fn recorded_rule_unresolved_now_is_not_preselected() {
     w.fp.sys.firewall_rules.last_mut().unwrap().program =
         Some(r"C:\Program Files\Other\tool.exe".into());
     assert!(!offered(&w.run(), UNEXPANDED));
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Invariant L5 (BASELINE_LOCAL_DESIGN.md §2): a view below Exact only takes away
+// ---------------------------------------------------------------------------------------------------------
+
+#[path = "shared/l5.rs"]
+mod l5;
+/// The app's recorded, dangling rule: a view below Exact that holds nothing gives the no-baseline
+/// candidates exactly (`tests/shared/l5.rs`; a rule is a value of the baseline, which the fixture views
+/// of the second half do not hold).
+#[test]
+fn l5_a_view_below_exact_only_takes_away() {
+    let make = || {
+        let mut w = World::new();
+        w.record(OWNED, ObjectWhy::ProgramInRoot);
+        w.root_gone();
+        w
+    };
+    let none = l5::check("firewall rules", &make().fp.os, &|view| {
+        let mut w = make();
+        w.baseline = view;
+        w.run()
+    });
+    assert!(offered(&none, OWNED), "{none:#?}");
 }

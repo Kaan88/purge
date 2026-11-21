@@ -385,6 +385,21 @@ impl BaselineTrust {
         }
     }
 
+    /// The trust of the absence answers a **presence-only** engine takes from a view of this trust
+    /// (DECISIONS.md, Post-M1b, 2026-11-21 "The local baseline ships presence-only"): `Exact` stays
+    /// `Exact`; `Merged`, `Local` and `None` are `None`, because below Exact no absence is consumed at
+    /// all and the view only says "this is Windows' own". It is what a harvest records beside its
+    /// absence facts and what a scan hands on as its own trust while the A side is not wired.
+    #[must_use]
+    pub fn presence_only(self) -> BaselineTrust {
+        match self {
+            BaselineTrust::Exact => BaselineTrust::Exact,
+            BaselineTrust::Merged | BaselineTrust::Local | BaselineTrust::None => {
+                BaselineTrust::None
+            }
+        }
+    }
+
     /// The value of the evidence detail fact `baseline_trust` for this trust: `exact`, `merged`, `local`
     /// or `none` (design §4.4 layer 1).
     #[must_use]
@@ -395,6 +410,13 @@ impl BaselineTrust {
             BaselineTrust::Local => "local",
             BaselineTrust::None => "none",
         }
+    }
+}
+
+impl std::fmt::Display for BaselineTrust {
+    /// [`BaselineTrust::as_fact`].
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_fact())
     }
 }
 
@@ -963,6 +985,12 @@ mod tests {
         assert_eq!(BaselineTrust::for_policy(Exact, Merged), Merged);
         assert_eq!(BaselineTrust::for_policy(None, Local), Local);
         assert_eq!(BaselineTrust::for_policy(Exact, None), Exact);
+        // Presence-only: below Exact no absence is consumed.
+        assert_eq!(
+            all.map(BaselineTrust::presence_only),
+            [Exact, None, None, None]
+        );
+        assert_eq!(Merged.to_string(), "merged");
     }
 
     #[test]

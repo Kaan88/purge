@@ -219,3 +219,24 @@ fn budget_key_opens() {
             .all(|c| matches!(&c.target, Target::RegKey { path } if path.contains(r"\Interface\")))
     );
 }
+
+/// Invariant L5 over the AppID and type-library worlds: a view below Exact only takes away
+/// (`tests/shared/l5.rs`).
+#[test]
+fn l5_a_view_below_exact_only_takes_away() {
+    let appid = || appid_world(false);
+    let typelib = || typelib_world(&app_file("app64.tlb"));
+    type Make<'a> = &'a dyn Fn() -> World;
+    let worlds: [(&str, Make<'_>); 2] = [("appid", &appid), ("typelib", &typelib)];
+    for (name, make) in worlds {
+        // The shared data (`World::ready`) does not depend on the baseline.
+        let none = crate::l5::check(name, &make().fp.os, &|view| {
+            let mut world = make();
+            world.baseline = view;
+            let mut found = world.classes();
+            found.extend(world.interfaces());
+            found
+        });
+        assert!(none.len() >= 3, "{name}: {none:#?}");
+    }
+}

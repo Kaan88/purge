@@ -7,6 +7,7 @@ use std::path::Path;
 
 use purge_guard::canon::GuardEnv;
 use purge_index::baseline::Baseline;
+use purge_index::baseline_view::BaselineView;
 use purge_index::sysobj::{self, ServiceFacts};
 use purge_model::{
     Action, AppRef, Band, Blocker, Candidate, Category, EvidenceKind, ExeFile, Fingerprint,
@@ -88,7 +89,7 @@ fn fingerprint(fx: &Fixture) -> Fingerprint {
 struct World {
     fixture: Fixture,
     fp: Fingerprint,
-    baseline: Baseline,
+    baseline: BaselineView,
     env: BTreeMap<String, String>,
     guard: GuardEnv,
     other_apps: OtherApps,
@@ -108,7 +109,9 @@ impl World {
         Self {
             fixture,
             fp,
-            baseline: Baseline::from_bytes(header.as_bytes()).expect("baseline parses"),
+            baseline: BaselineView::exact(
+                Baseline::from_bytes(header.as_bytes()).expect("baseline parses"),
+            ),
             env,
             guard: GuardEnv::sample(),
             other_apps: OtherApps::default(),
@@ -159,7 +162,7 @@ impl World {
             fs: &self.fixture,
             sys: &self.fixture,
             fp: &self.fp,
-            baseline: Some(&self.baseline),
+            baseline: &self.baseline,
             mode: ScanMode::Post,
             verify_gone: Some(VerifyGone::new(true, true, true)),
             env: &self.env,
@@ -662,4 +665,33 @@ fn budget_no_key_opens() {
     }
     // The file system is asked only about the programs of offered services.
     assert!(calls.get(Op::FsListDir).calls == 0, "{}", calls.summary());
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Invariant L5 (BASELINE_LOCAL_DESIGN.md §2): a view below Exact only takes away
+// ---------------------------------------------------------------------------------------------------------
+
+#[path = "shared/l5.rs"]
+mod l5;
+/// The app's recorded, dangling service: a view below Exact that holds nothing gives the no-baseline
+/// candidates exactly; one whose sets have the service's key offers nothing that was not offered and
+/// preselects nothing new (`tests/shared/l5.rs`).
+#[test]
+fn l5_a_view_below_exact_only_takes_away() {
+    let make = || {
+        let mut w = World::new();
+        w.record("AppSvc", ObjectWhy::ProgramInRoot);
+        w.remove_root();
+        w
+    };
+    let none = l5::check("services", &make().fp.os, &|view| {
+        let mut w = make();
+        w.baseline = view.unwrap_or_else(|| BaselineView::empty().clone());
+        w.run()
+    });
+    assert!(
+        none.iter()
+            .any(|c| matches!(&c.target, Target::Service { name } if name == "AppSvc")),
+        "{none:#?}"
+    );
 }

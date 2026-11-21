@@ -39,7 +39,7 @@
 
 use purge_guard::deny::{DenyList, ObjectGuardFacts};
 use purge_guard::prefix;
-use purge_index::baseline::Baseline;
+use purge_index::baseline_view::BaselineView;
 use purge_index::sysobj::{
     Env, FIREWALL_RULES_KEY, ProgramRef, SERVICES_KEY, SysObjectIndex, task_programs,
 };
@@ -73,8 +73,9 @@ pub struct SysInput<'a> {
     pub clsids: &'a [String],
     /// The deny-list (object rules).
     pub deny: &'a DenyList,
-    /// The baseline of this Windows, when there is one.
-    pub baseline: Option<&'a Baseline>,
+    /// The baseline view of this Windows ([`BaselineView::empty`] without one). Presence only: an
+    /// object some set of it has is guarded.
+    pub baseline: &'a BaselineView,
     /// The machine environment, for task action paths.
     pub env: &'a Env,
 }
@@ -153,9 +154,7 @@ pub fn record(inp: &SysInput<'_>) -> SysHarvest {
             per_user_template: service.per_user_template,
             package_bound: false,
             resource_name: false,
-            in_baseline: inp
-                .baseline
-                .is_some_and(|b| b.has_key(&format!("{SERVICES_KEY}\\{name}"))),
+            in_baseline: inp.baseline.has_key(&format!("{SERVICES_KEY}\\{name}")),
         };
         if service.is_driver || inp.deny.check_object(ObjectKind::Service, &facts).is_some() {
             continue;
@@ -220,7 +219,7 @@ pub fn record(inp: &SysInput<'_>) -> SysHarvest {
         }
         let in_baseline = inp
             .baseline
-            .is_some_and(|b| b.has_key(&format!("{TASK_TREE}{}", identity.path)));
+            .has_key(&format!("{TASK_TREE}{}", identity.path));
         // The guard's object rule with every program, or with none for a COM-only task.
         let programs_checked: Vec<Option<&str>> = if files.is_empty() {
             vec![None]
@@ -267,9 +266,7 @@ pub fn record(inp: &SysInput<'_>) -> SysHarvest {
             program: Some(program),
             package_bound: rule.package_bound,
             resource_name: rule.resource_name || embedded_resource,
-            in_baseline: inp
-                .baseline
-                .is_some_and(|b| b.has_value(FIREWALL_RULES_KEY, id)),
+            in_baseline: inp.baseline.has_value(FIREWALL_RULES_KEY, id),
             ..ObjectGuardFacts::default()
         };
         if inp

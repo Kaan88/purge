@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 
 use purge_guard::canon::GuardEnv;
 use purge_index::baseline::Baseline;
+use purge_index::baseline_view::BaselineView;
 use purge_model::{
     AnchorKind, AnchorRef, Anchors, AppRef, Candidate, ExeFile, ExtJournalEntry, Fingerprint,
     FingerprintSchema, IdentitySnapshot, OsInfo, ProgramId, RefCarrier, RefSnapEntry, Root,
@@ -136,7 +137,7 @@ pub fn ref_snap(key: &str, name: &str, progid: &str) -> RefSnapEntry {
 }
 
 /// A baseline of the test Windows (or of `edition`) holding `keys` and `values` (key, name, type, hash).
-pub fn baseline(edition: &str, keys: &[&str], values: &[(&str, &str, u32, u64)]) -> Baseline {
+pub fn baseline(edition: &str, keys: &[&str], values: &[(&str, &str, u32, u64)]) -> BaselineView {
     let escape = |s: &str| s.replace('\\', "\\\\");
     let mut text = format!("#purge-baseline 1\tT\tPC\t{edition}\t{BUILD}.{UBR}\n");
     for key in keys {
@@ -145,14 +146,14 @@ pub fn baseline(edition: &str, keys: &[&str], values: &[(&str, &str, u32, u64)])
     for (key, name, ty, hash) in values {
         text.push_str(&format!("V\t{}\t{name}\t{ty}\t{hash:016x}\n", escape(key)));
     }
-    Baseline::from_bytes(text.as_bytes()).expect("the baseline parses")
+    BaselineView::exact(Baseline::from_bytes(text.as_bytes()).expect("the baseline parses"))
 }
 
 /// Everything a [`ScanCtx`] borrows, owned in one place.
 pub struct World {
     pub fixture: Fixture,
     pub fp: Fingerprint,
-    pub baseline: Option<Baseline>,
+    pub baseline: Option<BaselineView>,
     pub env: BTreeMap<String, String>,
     pub guard: GuardEnv,
     pub other_apps: OtherApps,
@@ -177,7 +178,7 @@ impl World {
             fs: &self.fixture,
             sys: &self.fixture,
             fp: &self.fp,
-            baseline: self.baseline.as_ref(),
+            baseline: BaselineView::or_empty(self.baseline.as_ref()),
             mode: ScanMode::Post,
             verify_gone: Some(VerifyGone::new(true, true, true)),
             env: &self.env,

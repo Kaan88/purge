@@ -3,5 +3,7 @@
 
 mod class;
 mod iface;
+#[path = "../shared/l5.rs"]
+mod l5;
 mod other;
 mod world;

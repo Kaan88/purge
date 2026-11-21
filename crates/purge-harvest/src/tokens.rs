@@ -26,7 +26,7 @@
 //! uses, identifies neither.
 
 use purge_guard::prefix;
-use purge_index::baseline::Baseline;
+use purge_index::baseline_view::BaselineView;
 use purge_model::{HarvestedToken, InventoryEntry, SourceId};
 
 /// Fewest hexadecimal digits of a non-GUID token.
@@ -81,8 +81,9 @@ pub struct TokenInput<'a> {
     pub inno_app_id: Option<&'a str>,
     /// Names other programs registered (ProgIDs, AUMIDs, registered applications).
     pub foreign_names: &'a [String],
-    /// The baseline **for this Windows**, when there is one.
-    pub baseline: Option<&'a Baseline>,
+    /// The baseline view **for this Windows** ([`BaselineView::empty`] without one). Presence only: a
+    /// token some set of it knows is dropped.
+    pub baseline: &'a BaselineView,
 }
 
 fn is_guid_at(bytes: &[u8]) -> bool {
@@ -237,7 +238,7 @@ pub fn harvest(input: TokenInput<'_>) -> TokenHarvest {
             .or_else(|| {
                 input
                     .baseline
-                    .is_some_and(|b| b.has_token(&token))
+                    .has_token(&token)
                     .then_some(DropReason::Baseline)
             });
         match reason {
@@ -351,7 +352,7 @@ mod tests {
             aumids: &[],
             inno_app_id: None,
             foreign_names: foreign,
-            baseline: None,
+            baseline: BaselineView::empty(),
         }
     }
 
@@ -470,5 +471,41 @@ mod tests {
             got.dropped[0].reason,
             DropReason::OtherApp("Something Else".into())
         );
+    }
+
+    /// Presence at every trust: a token some set of the view knows (the exact baseline, the local
+    /// baseline, a neighbour) is Windows' own and is dropped.
+    #[test]
+    fn a_token_windows_knows_is_dropped_at_every_trust() {
+        use purge_index::baseline_view::fixture;
+        let target = firefox();
+        let inventory = [target.clone()];
+        let progids = [format!("FirefoxHTML-{HASH}")];
+        let key = format!(r"HKLM\SOFTWARE\Microsoft\Shipped\{HASH}");
+        let known = [key.as_str()];
+        let (e, b, u) = ("Professional", 26100, 1742);
+        let views = [
+            BaselineView::exact(fixture::shipped(e, b, u, &known)),
+            fixture::merged_view(e, b, u, &known, &[]),
+            fixture::merged_view(e, b, u, &[], &known),
+            fixture::local_view(e, b, u, &known),
+            fixture::none_view(e, b, u, &known),
+        ];
+        for view in &views {
+            let got = harvest(TokenInput {
+                baseline: view,
+                ..input(&target, &inventory, &progids, &[])
+            });
+            assert!(got.tokens.is_empty(), "{}: {:?}", view.name(), got.tokens);
+            assert_eq!(got.dropped.len(), 1, "{}", view.name());
+            assert_eq!(got.dropped[0].reason, DropReason::Baseline);
+        }
+        // A view that does not know it keeps it, whatever its trust.
+        let empty = fixture::merged_view(e, b, u, &[], &[]);
+        let got = harvest(TokenInput {
+            baseline: &empty,
+            ..input(&target, &inventory, &progids, &[])
+        });
+        assert_eq!(got.tokens.len(), 1);
     }
 }

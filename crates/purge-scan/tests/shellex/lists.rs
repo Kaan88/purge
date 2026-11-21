@@ -188,3 +188,27 @@ fn per_user_and_wow64_places() {
     assert!(user_menu.starts_with(&format!(r"HKU\{SID}_Classes\")));
     assert!(overlay32.starts_with(r"HKLM\SOFTWARE\WOW6432Node\"));
 }
+
+/// Invariant L5 over the approval lists and an overlay handler of the app's gone class: a view below
+/// Exact only takes away (`tests/shared/l5.rs`).
+#[test]
+fn l5_a_view_below_exact_only_takes_away() {
+    let make = || {
+        let mut fx = machine();
+        dangling_class(&mut fx);
+        fx.set_value(&approved(CV), CLS_A, RegData::from_sz("App menu"));
+        fx.set_value(&approved(&user_cv()), CLS_A, RegData::from_sz("App"));
+        sz(
+            &mut fx,
+            &format!(r"{CV}\Explorer\ShellIconOverlayIdentifiers\App"),
+            CLS_A,
+        );
+        app_world(fx)
+    };
+    let none = crate::l5::check("approval lists", &make().fp.os, &|view| {
+        let mut world = make();
+        world.baseline = view;
+        world.ready(&[]).shellex()
+    });
+    assert!(none.len() >= 2, "{none:#?}");
+}

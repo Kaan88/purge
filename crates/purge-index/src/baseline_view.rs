@@ -54,6 +54,8 @@
 //! [`HashedSets`]: crate::baseline::HashedSets
 //! [`HashedSets::scheme`]: crate::baseline::HashedSets::scheme
 
+#[doc(hidden)]
+pub mod fixture;
 mod neighbours;
 mod rules;
 #[cfg(test)]
@@ -61,6 +63,7 @@ mod tests;
 
 use std::fmt;
 use std::path::Path;
+use std::sync::OnceLock;
 
 pub use neighbours::{
     HostOs, Neighbour, NeighbourFile, load_neighbours, rank_neighbours, select_neighbours,
@@ -73,55 +76,9 @@ pub use rules::{
 use crate::baseline::{Baseline, BaselineValue, PathKind, key_forms, normalised_key, under};
 use crate::local_baseline::{LocalBaseline, SourceLine};
 
-/// How much an absence answer of a view is worth. See the module documentation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum BaselineTrust {
-    /// A shipped baseline of exactly this Windows: absence is proof.
-    Exact,
-    /// A complete local baseline and at least one shipped neighbour: absence is inferred, capped (L4).
-    Merged,
-    /// A complete local baseline alone: absence is inferred only where an area is marked `local`.
-    Local,
-    /// No absence at all; presence from whatever exists.
-    None,
-}
-
-impl BaselineTrust {
-    /// `exact`, `merged`, `local` or `none`, as detail facts and the fingerprint spell it.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            BaselineTrust::Exact => "exact",
-            BaselineTrust::Merged => "merged",
-            BaselineTrust::Local => "local",
-            BaselineTrust::None => "none",
-        }
-    }
-
-    fn rank(self) -> u8 {
-        match self {
-            BaselineTrust::None => 0,
-            BaselineTrust::Local => 1,
-            BaselineTrust::Merged => 2,
-            BaselineTrust::Exact => 3,
-        }
-    }
-
-    /// The weaker of two trusts (None below Local below Merged below Exact): what an absence fact
-    /// recorded at one trust is worth when it is read at another (§4.5).
-    pub fn weaker(self, other: BaselineTrust) -> BaselineTrust {
-        if self.rank() <= other.rank() {
-            self
-        } else {
-            other
-        }
-    }
-}
-
-impl fmt::Display for BaselineTrust {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
+/// How much an absence answer of a view is worth: the engine's one trust type, shared with the policy
+/// and the fingerprint. See the module documentation.
+pub use purge_model::BaselineTrust;
 
 /// What a view knows about a key not being Windows' own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -387,6 +344,48 @@ impl BaselineView {
                 unreadable,
             })),
             warnings,
+        }
+    }
+
+    /// The view that holds nothing: trust None, no set, no warning, the name `none`. It is what a
+    /// caller without any baseline passes; every presence question answers no and
+    /// [`BaselineView::key_absent`] answers [`Absence::Unknown`].
+    pub fn empty() -> &'static BaselineView {
+        static EMPTY: OnceLock<BaselineView> = OnceLock::new();
+        EMPTY.get_or_init(|| BaselineView {
+            inner: Inner::Union(Box::new(Union {
+                trust: BaselineTrust::None,
+                local: None,
+                neighbours: Vec::new(),
+                rules: ViewRules::closed(),
+                unreadable: Vec::new(),
+            })),
+            warnings: Vec::new(),
+        })
+    }
+
+    /// `view`, or [`BaselineView::empty`] without one.
+    pub fn or_empty(view: Option<&BaselineView>) -> &BaselineView {
+        view.unwrap_or_else(|| Self::empty())
+    }
+
+    /// Whether this is an Exact view whose baseline describes exactly this Windows
+    /// ([`Baseline::is_for`]: the edition compares case-insensitively). The view trusts its caller's
+    /// selection; a consumer that knows the Windows of a fingerprint asks here before it takes
+    /// absence as proof.
+    pub fn is_exact_for(&self, edition: &str, build: u32, ubr: u32) -> bool {
+        match &self.inner {
+            Inner::Exact(b) => b.is_for(edition, build, ubr),
+            Inner::Union(_) => false,
+        }
+    }
+
+    /// Whether the view holds no set at all (no exact baseline, no local baseline, no neighbour):
+    /// it can then say nothing, not even "this is Windows' own".
+    pub fn holds_nothing(&self) -> bool {
+        match &self.inner {
+            Inner::Exact(_) => false,
+            Inner::Union(u) => u.local.is_none() && u.neighbours.is_empty(),
         }
     }
 

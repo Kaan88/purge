@@ -249,7 +249,7 @@ pub(crate) mod classes {
     use std::collections::{BTreeMap, HashMap};
 
     use purge_guard::prefix;
-    use purge_index::baseline::Baseline;
+    use purge_index::baseline_view::Absence;
     use purge_model::{
         Action, AnchorKind, Candidate, Category, FileTime, Root, RootKind, Target, Tier,
     };
@@ -449,25 +449,23 @@ pub(crate) mod classes {
         out
     }
 
-    /// The loaded baseline, when it is for exactly this Windows (the machine as the source reports it,
-    /// else as the fingerprint recorded it).
-    pub(crate) fn matching_baseline<'a>(ctx: &ScanCtx<'a>) -> Option<&'a Baseline> {
-        let baseline = ctx.baseline?;
-        let os = ctx.sys.os_info().unwrap_or_else(|_| ctx.fp.os.clone());
-        baseline
-            .is_for(&os.edition, os.build, os.ubr)
-            .then_some(baseline)
+    /// **A.** Whether the scan's view is the exact baseline of this Windows (the machine as the source
+    /// reports it, else as the fingerprint recorded it): the only view whose absence is proof.
+    pub(crate) fn has_matching_baseline(ctx: &ScanCtx<'_>) -> bool {
+        ctx.has_matching_exact_baseline()
+    }
+
+    /// **A.** Whether the matching baseline of this Windows shows `key` is not Windows' own: it is
+    /// loaded, it captures the key's place, and it does not have the key. Below Exact: never.
+    pub(crate) fn proven_not_windows(ctx: &ScanCtx<'_>, key: &str) -> bool {
+        has_matching_baseline(ctx) && matches!(ctx.key_absence(key), Absence::Proven)
     }
 
     /// Whether `key` may be offered as a key at all: a matching baseline is loaded, the key is in the
     /// scope baselines capture and is not in it, and no Inno record says it existed before the install.
     /// Otherwise the scanners work values-only on it (§5.7.1 step 3, §5.4 "pre-existing ProgIDs").
     pub(crate) fn key_offerable(ctx: &ScanCtx<'_>, key: &str) -> bool {
-        let Some(baseline) = matching_baseline(ctx) else {
-            return false;
-        };
-        Baseline::key_in_scope(key)
-            && !baseline.has_key(key)
+        proven_not_windows(ctx, key)
             && !ctx.fp.inno.iter().any(|record| {
                 record.existed_before
                     && matches!(&record.target, Target::RegKey { path }

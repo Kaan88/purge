@@ -161,7 +161,7 @@ fn real_vscode_skeletons_are_covered() {
     .expect("a baseline for the rig image is shipped");
 
     let mut world = World::new(after, fp);
-    world.baseline = Some(baseline);
+    world.baseline = Some(purge_index::baseline_view::BaselineView::exact(baseline));
     let out = world.scan(&ClsAssoc);
 
     let proven: Vec<&Candidate> = out

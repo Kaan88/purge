@@ -279,3 +279,29 @@ fn iface_proxy_clsid_likely_then_iface_likely() {
     assert!(!has_kind(c, EvidenceKind::DanglingRef));
     assert_eq!(band(c), Band::Likely);
 }
+
+/// Invariant L5 over a world with two interfaces of the app's proxy (one in the app's type library,
+/// one a row of its MSI package): a view below Exact only takes away (`tests/shared/l5.rs`).
+#[test]
+fn l5_a_view_below_exact_only_takes_away() {
+    let make = || {
+        let mut world = proxy_world(false);
+        interface(&mut world.fixture, HKLM_CLASSES, IID_1, PROXY, Some(TLB));
+        interface(&mut world.fixture, HKLM_CLASSES, IID_2, PROXY, None);
+        own_typelib(&mut world);
+        world
+            .fp
+            .msi
+            .push(own_msi(&[iface_key(HKLM_CLASSES, IID_2)]));
+        world
+    };
+    let none = crate::l5::check("interfaces", &make().fp.os, &|view| {
+        let mut world = make();
+        world.baseline = view;
+        let world = world.ready(&[]);
+        let mut found = world.interfaces();
+        found.extend(world.classes());
+        found
+    });
+    assert!(none.len() >= 2, "{none:#?}");
+}
