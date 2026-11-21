@@ -1968,10 +1968,15 @@ fn write_back_converges_after_an_attempt_that_ended_between_create_and_set() {
 /// The same for the hardest leftover: the recorded owner is SYSTEM, the key was created without it,
 /// and its DACL (in force since creation) grants no `WRITE_OWNER`, so the key can be opened again for
 /// `WRITE_DAC` only. The DACL is set alone, group and DACL are then the recorded ones (what the exact
-/// check compares), and the owner left is named in a note; nothing fails.
+/// check compares). Unelevated the owner left is named in a note and nothing fails; elevated
+/// (`SeRestorePrivilege`, review R8b M1) the owner is the recorded one too, see
+/// `elevated_write_back_restores_the_owner_of_a_leftover_key_it_cannot_open_for_write_owner`.
 #[test]
 fn write_back_converges_on_a_leftover_key_it_cannot_open_for_write_owner() {
     let t = TestKey::new();
+    if may_assign_system_owner(&t) {
+        return;
+    }
     let dacl = stored_dacl(&t, NO_WRITE_OWNER);
     let recorded = format!("O:SYG:SY{dacl}");
     drop(
@@ -2107,6 +2112,48 @@ fn elevated_write_back_converges_on_a_system_owned_key_after_an_interrupted_atte
         Vec::<String>::new()
     );
     assert_eq!(wb_sddl(&t, "System"), system);
+}
+
+/// Review R8b M1, elevated (the production case): an interrupted service undo left a key created
+/// without its recorded owner SYSTEM (creation refuses it), and the recorded DACL, in force since
+/// creation, gives administrators no `WRITE_OWNER`, so the next attempt can open the key for
+/// `WRITE_DAC` alone. The resumed write-back puts the whole recorded descriptor back, owner included,
+/// with nothing noted, and `SeRestorePrivilege` is off before and after (T10). Unelevated this is
+/// `write_back_converges_on_a_leftover_key_it_cannot_open_for_write_owner`, with the note.
+#[test]
+#[ignore = "needs an elevated administrator (SeRestorePrivilege)"]
+fn elevated_write_back_restores_the_owner_of_a_leftover_key_it_cannot_open_for_write_owner() {
+    let t = TestKey::new();
+    assert!(may_assign_system_owner(&t), "run elevated");
+    let off = || {
+        !purge_win::privilege::thread_impersonates().unwrap()
+            && !purge_win::privilege::restore_privilege_enabled().unwrap()
+    };
+    let recorded = format!("O:SYG:SY{}", stored_dacl(&t, NO_WRITE_OWNER));
+    let root = wb_root(&t);
+    root.create_subkey("System", "", None, false)
+        .unwrap()
+        .set_security(&recorded)
+        .unwrap();
+    assert_eq!(wb_sddl(&t, "System"), recorded);
+    let backup = wb_tree(&t);
+    wb_remove(&root, "System");
+    // Attempt 1 ended between the creation (without the owner) and the security write.
+    drop(
+        root.create_subkey("System", "", Some(owner_aside(&recorded)), false)
+            .unwrap(),
+    );
+    assert_ne!(wb_sddl(&t, "System"), recorded);
+    let half = wb_tree(&t);
+    let writes = write_back_ops(&backup, &half);
+    assert_eq!(writes, vec![set_security(&["System"], &recorded)]);
+    assert!(off());
+    // Attempt 2, the resume.
+    assert_eq!(wb_apply(&t, &writes).unwrap(), Vec::<String>::new());
+    assert!(off());
+    assert_eq!(wb_sddl(&t, "System"), recorded);
+    assert_eq!(tree_difference(&backup, &wb_tree(&t)), None);
+    assert_eq!(write_back_ops(&backup, &wb_tree(&t)), Vec::new());
 }
 
 /// The real delete and re-create of a throwaway service. Elevated, changes the SCM: VM rig only.

@@ -90,8 +90,9 @@
 //! service's own that exists with another security descriptor than the recorded one (a key an earlier
 //! attempt created before the process ended, or one the SCM made during create or config2). The backend
 //! applies every write it can and then reports all failures together; an owner that cannot be assigned
-//! (no `SeRestorePrivilege`, or no `WRITE_OWNER` on a key opened again) is not a failure, since the exact
-//! check sets the owner aside, but it is named in the detail of the outcome.
+//! (no `SeRestorePrivilege`, which a key opened again without `WRITE_OWNER` needs too: review R8b M1) is
+//! not a failure, since the exact check sets the owner aside, but it is named in the detail of the
+//! outcome.
 //!
 //! Nothing here starts, stops or controls a service: the backend has no such entry, and the restored
 //! service keeps the start type its backup records.
@@ -2922,8 +2923,10 @@ fn create_recorded(
 ///
 /// The key is opened again for the security write, with `WRITE_OWNER` where the DACL in force grants
 /// it and with `WRITE_DAC` alone (the owner's by default) where not; [`restore_key_security`] then
-/// writes what that handle can. A key that cannot be opened for either is an error only when its
-/// group or DACL is not the recorded one.
+/// writes what that handle can. Where that leaves only the owner differing, the recorded owner is
+/// put on with [`CreatedKey::reopen_and_set_owner`], the only step of the executor that enables
+/// `SeRestorePrivilege` for an open (review R8b M1); without the privilege the note stays. A key that
+/// cannot be opened for either is an error only when its group or DACL is not the recorded one.
 fn set_recorded_security(
     root: &WKey,
     path: &[String],
@@ -2947,7 +2950,22 @@ fn set_recorded_security(
         Err(e) => return Err(ObjErr::os(&what, e)),
     };
     match parent.reopen_created_subkey(leaf, false) {
-        Ok(key) => restore_key_security(&key, recorded, &shown),
+        Ok(key) => {
+            let Some(note) = restore_key_security(&key, recorded, &shown)? else {
+                return Ok(None);
+            };
+            // Group and DACL are the recorded ones now, the owner is not (review R8b M1): the one
+            // step that enables `SeRestorePrivilege` to open the key for `WRITE_OWNER`. When it fails
+            // (an unelevated token, or the open refused) the note stays.
+            let owner = format!("O:{}", sddl_owner(recorded));
+            if key.reopen_and_set_owner(&owner).is_err() {
+                return Ok(Some(note));
+            }
+            let live = key
+                .security_sddl()
+                .map_err(|e| ObjErr::os(&format!("read the security descriptor of {shown}"), e))?;
+            security_result(&live, recorded, &shown, Some(denied), &what)
+        }
         Err(e) if e == Win32Error::ACCESS_DENIED => {
             let live = parent
                 .open_subkey(leaf, KeyAccess::READ)

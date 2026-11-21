@@ -20,11 +20,15 @@
 //! - **Purge never raises its own access.** No ownership is taken, and [`KeyAccess`] cannot
 //!   request `WRITE_DAC` or `WRITE_OWNER`. The only security write is
 //!   [`CreatedKey::set_security`], reachable solely through the value returned by
-//!   [`WKey::create_subkey`], that is, on a key this process created a moment ago (undo). The one
-//!   privilege ever enabled is `SeRestorePrivilege`, and only there: when the recorded owner is one
-//!   the token may not assign (SYSTEM, TrustedInstaller), on a private impersonation copy of the
-//!   process token, for the single `NtSetSecurityObject` call on that handle, reverted at once. It
-//!   opens nothing and grants no access to any other object.
+//!   [`WKey::create_subkey`] or [`WKey::reopen_created_subkey`], that is, on a key this undo
+//!   created. The one privilege ever enabled is `SeRestorePrivilege` ([`crate::privilege`]: a
+//!   private impersonation copy of the process token, the current thread only, reverted at once),
+//!   and only for two steps on such a key: the single `NtSetSecurityObject` call of
+//!   [`CreatedKey::set_security`] when the recorded owner is one the token may not assign (SYSTEM,
+//!   TrustedInstaller); and [`CreatedKey::reopen_and_set_owner`] (review R8b M1), which opens that
+//!   same key once more with backup intent for `WRITE_OWNER`, sets the owner alone and closes the
+//!   handle inside the scope. Neither grants access to any other object, and no delete, move or
+//!   value write runs under it.
 //! - **Exact data.** Values are read and written as raw type and raw bytes through
 //!   `NtQueryValueKey`, `NtEnumerateValueKey` and `NtSetValueKey`: `RegSetValueExW` may append a
 //!   terminator to string types, and the Win32 reads may zero the last byte of an odd-length
@@ -44,36 +48,29 @@ use std::ffi::c_void;
 use std::ops::{BitOr, Deref};
 use std::ptr;
 
-use windows_sys::Win32::Foundation::{
-    CloseHandle, FILETIME, GetLastError, HANDLE, LUID, LocalFree, RtlNtStatusToDosError,
-    UNICODE_STRING,
-};
+use windows_sys::Win32::Foundation::{FILETIME, LocalFree, RtlNtStatusToDosError, UNICODE_STRING};
 use windows_sys::Win32::Security::Authorization::{
     ConvertSecurityDescriptorToStringSecurityDescriptorW,
     ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
 };
 use windows_sys::Win32::Security::{
-    ACL, AdjustTokenPrivileges, DACL_SECURITY_INFORMATION, DuplicateTokenEx,
-    GROUP_SECURITY_INFORMATION, GetSecurityDescriptorControl, GetSecurityDescriptorDacl,
-    GetSecurityDescriptorGroup, GetSecurityDescriptorOwner, GetSecurityDescriptorSacl,
-    LUID_AND_ATTRIBUTES, LookupPrivilegeValueW, OWNER_SECURITY_INFORMATION,
-    PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, RevertToSelf,
-    SE_DACL_AUTO_INHERIT_REQ, SE_DACL_AUTO_INHERITED, SE_DACL_PROTECTED, SE_PRIVILEGE_ENABLED,
-    SECURITY_ATTRIBUTES, SecurityImpersonation, SetSecurityDescriptorControl,
-    TOKEN_ADJUST_PRIVILEGES, TOKEN_DUPLICATE, TOKEN_IMPERSONATE, TOKEN_PRIVILEGES, TOKEN_QUERY,
-    TokenImpersonation, UNPROTECTED_DACL_SECURITY_INFORMATION,
+    ACL, DACL_SECURITY_INFORMATION, GROUP_SECURITY_INFORMATION, GetSecurityDescriptorControl,
+    GetSecurityDescriptorDacl, GetSecurityDescriptorGroup, GetSecurityDescriptorOwner,
+    GetSecurityDescriptorSacl, OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION,
+    PSECURITY_DESCRIPTOR, PSID, SE_DACL_AUTO_INHERIT_REQ, SE_DACL_AUTO_INHERITED,
+    SE_DACL_PROTECTED, SECURITY_ATTRIBUTES, SetSecurityDescriptorControl,
+    UNPROTECTED_DACL_SECURITY_INFORMATION,
 };
 use windows_sys::Win32::System::Registry::{
     HKEY, HKEY_LOCAL_MACHINE, HKEY_USERS, KEY_CREATE_SUB_KEY, KEY_QUERY_VALUE, KEY_READ,
-    KEY_SET_VALUE, KEY_WOW64_32KEY, KEY_WOW64_64KEY, REG_CREATED_NEW_KEY, REG_OPTION_NON_VOLATILE,
-    REG_OPTION_OPEN_LINK, REG_OPTION_VOLATILE, RegCloseKey, RegCreateKeyExW, RegDeleteValueW,
-    RegEnumKeyExW, RegFlushKey, RegOpenKeyExW, RegQueryInfoKeyW,
-};
-use windows_sys::Win32::System::Threading::{
-    GetCurrentProcess, GetCurrentThread, OpenProcessToken, OpenThreadToken, SetThreadToken,
+    KEY_SET_VALUE, KEY_WOW64_32KEY, KEY_WOW64_64KEY, REG_CREATED_NEW_KEY,
+    REG_OPTION_BACKUP_RESTORE, REG_OPTION_NON_VOLATILE, REG_OPTION_OPEN_LINK, REG_OPTION_VOLATILE,
+    RegCloseKey, RegCreateKeyExW, RegDeleteValueW, RegEnumKeyExW, RegFlushKey, RegOpenKeyExW,
+    RegQueryInfoKeyW,
 };
 
 use crate::os::{Win32Error, from_wide_ptr, wide};
+use crate::privilege::with_restore_privilege;
 use crate::reg::{KeySecurity, REG_LINK, RegRoot, RegValue, RegView, filetime_u64};
 use crate::sid::{TRUSTED_INSTALLER_SID, sd_facts};
 
@@ -92,12 +89,6 @@ pub const NAME_NOT_REPRESENTABLE: Win32Error = Win32Error(1113);
 
 /// `ERROR_INVALID_OWNER`: the token may not assign the owner of a security descriptor.
 const INVALID_OWNER: Win32Error = Win32Error(1307);
-/// `ERROR_PRIVILEGE_NOT_HELD`: the token does not hold `SeRestorePrivilege`.
-const PRIVILEGE_NOT_HELD: Win32Error = Win32Error(1314);
-/// `ERROR_NO_TOKEN`: the thread does not impersonate.
-const NO_TOKEN: Win32Error = Win32Error(1008);
-/// `ERROR_NOT_ALL_ASSIGNED`: `AdjustTokenPrivileges` succeeded without enabling the privilege.
-const NOT_ALL_ASSIGNED: u32 = 1300;
 
 /// Name of the value that holds a link key's target.
 const SYMBOLIC_LINK_VALUE: &str = "SymbolicLinkValue";
@@ -176,7 +167,30 @@ unsafe extern "system" {
     /// Writes parts of the security descriptor of the object behind the handle (needs `WRITE_DAC`
     /// and/or `WRITE_OWNER` on that handle).
     fn NtSetSecurityObject(handle: HKEY, info: u32, sd: PSECURITY_DESCRIPTOR) -> i32;
+    /// Opens a key by `attributes` (here: the empty name relative to an open key, that is, the
+    /// same key object again) with `options` (`REG_OPTION_OPEN_LINK`, `REG_OPTION_BACKUP_RESTORE`).
+    /// Used only by [`CreatedKey::reopen_and_set_owner`].
+    fn NtOpenKeyEx(
+        key: *mut HKEY,
+        access: u32,
+        attributes: *const ObjectAttributes,
+        options: u32,
+    ) -> i32;
 }
+
+/// `OBJECT_ATTRIBUTES` (the `windows-sys` definition sits behind the WDK feature set).
+#[repr(C)]
+struct ObjectAttributes {
+    length: u32,
+    root_directory: HKEY,
+    object_name: *const UNICODE_STRING,
+    attributes: u32,
+    security_descriptor: *const c_void,
+    security_quality_of_service: *const c_void,
+}
+
+/// `OBJ_CASE_INSENSITIVE`, what the Win32 registry calls pass.
+const OBJ_CASE_INSENSITIVE: u32 = 0x40;
 
 /// `KEY_VALUE_INFORMATION_CLASS::KeyValueFullInformation`: title index, type, data offset, data
 /// length, name length (bytes), name; five `u32` and then the name.
@@ -448,111 +462,6 @@ impl ParsedSd {
         }
         Ok(())
     }
-}
-
-/// A token handle, closed on drop.
-struct Token(HANDLE);
-
-impl Drop for Token {
-    fn drop(&mut self) {
-        // SAFETY: the handle came from a successful token open or duplicate, is owned by this value
-        // and is closed exactly once here.
-        unsafe { CloseHandle(self.0) };
-    }
-}
-
-/// Ends the current thread's impersonation on drop (also on unwind). A revert that fails stops the
-/// process: the thread would go on with `SeRestorePrivilege` enabled, and Windows documents that a
-/// process must not continue then (F5 of the M2 fix-round review).
-struct Impersonation;
-
-impl Drop for Impersonation {
-    fn drop(&mut self) {
-        // SAFETY: takes no arguments; the thread impersonates since `SetThreadToken` succeeded.
-        if unsafe { RevertToSelf() } == 0 {
-            std::process::abort();
-        }
-    }
-}
-
-/// Runs `f` with `SeRestorePrivilege` enabled for the current thread only: on an impersonation copy
-/// of the process token, set on this thread for the call and reverted right after it. The process
-/// token is not changed. Fails, without running `f`, with [`PRIVILEGE_NOT_HELD`] when the token does
-/// not hold the privilege (an unelevated token), with [`Win32Error::ACCESS_DENIED`] when the thread
-/// already impersonates (that token is left alone), and with the error of a failed token call.
-fn with_restore_privilege<T>(f: impl FnOnce() -> T) -> Result<T, Win32Error> {
-    let mut held: HANDLE = ptr::null_mut();
-    // SAFETY: the pseudo handle of the current thread needs no closing; `held` is a valid
-    // out-pointer.
-    if unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, 1, &mut held) } != 0 {
-        drop(Token(held));
-        return Err(Win32Error::ACCESS_DENIED);
-    }
-    let e = Win32Error::last();
-    if e != NO_TOKEN {
-        return Err(e);
-    }
-    let mut process: HANDLE = ptr::null_mut();
-    // SAFETY: the pseudo handle of the current process needs no closing; `process` is a valid
-    // out-pointer.
-    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_DUPLICATE, &mut process) } == 0 {
-        return Err(Win32Error::last());
-    }
-    let process = Token(process);
-    let mut copy: HANDLE = ptr::null_mut();
-    // SAFETY: `process.0` is a live token opened with TOKEN_DUPLICATE; no attributes are given;
-    // `copy` is a valid out-pointer.
-    let ok = unsafe {
-        DuplicateTokenEx(
-            process.0,
-            TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY | TOKEN_IMPERSONATE,
-            ptr::null(),
-            SecurityImpersonation,
-            TokenImpersonation,
-            &mut copy,
-        )
-    };
-    if ok == 0 {
-        return Err(Win32Error::last());
-    }
-    let copy = Token(copy);
-    let name = wide("SeRestorePrivilege");
-    let mut luid = LUID {
-        LowPart: 0,
-        HighPart: 0,
-    };
-    // SAFETY: `name` is NUL-terminated and outlives the call; the system name is null (local);
-    // `luid` is a valid out-pointer.
-    if unsafe { LookupPrivilegeValueW(ptr::null(), name.as_ptr(), &mut luid) } == 0 {
-        return Err(Win32Error::last());
-    }
-    let privileges = TOKEN_PRIVILEGES {
-        PrivilegeCount: 1,
-        Privileges: [LUID_AND_ATTRIBUTES {
-            Luid: luid,
-            Attributes: SE_PRIVILEGE_ENABLED,
-        }],
-    };
-    // SAFETY: `copy.0` is a live token opened with TOKEN_ADJUST_PRIVILEGES; `privileges` is a valid
-    // TOKEN_PRIVILEGES with one entry; the previous state is not requested.
-    let ok = unsafe {
-        AdjustTokenPrivileges(copy.0, 0, &privileges, 0, ptr::null_mut(), ptr::null_mut())
-    };
-    // SAFETY: reads the calling thread's last error, as `AdjustTokenPrivileges` documents.
-    let last = unsafe { GetLastError() };
-    if ok == 0 {
-        return Err(Win32Error(last));
-    }
-    if last == NOT_ALL_ASSIGNED {
-        return Err(PRIVILEGE_NOT_HELD);
-    }
-    // SAFETY: a null thread pointer means the current thread; `copy.0` is a live impersonation
-    // token opened with TOKEN_IMPERSONATE.
-    if unsafe { SetThreadToken(ptr::null(), copy.0) } == 0 {
-        return Err(Win32Error::last());
-    }
-    let _revert = Impersonation;
-    Ok(f())
 }
 
 /// An open registry key for the executor: explicit view, opened with `REG_OPTION_OPEN_LINK`, never
@@ -1066,7 +975,8 @@ impl WKey {
     /// key's security descriptor in force: `WRITE_DAC` is the owner's by default, `WRITE_OWNER` only
     /// when the DACL grants it, and `ERROR_ACCESS_DENIED` otherwise. No privilege is enabled for the
     /// open. Refuses when this key is a link; a subkey that is a link is opened as the link and
-    /// refused by [`CreatedKey::set_security`].
+    /// refused by [`CreatedKey::set_security`]. Where only `WRITE_DAC` is granted, the recorded owner
+    /// is put on with [`CreatedKey::reopen_and_set_owner`].
     pub fn reopen_created_subkey(&self, name: &str, owner: bool) -> Result<CreatedKey, Win32Error> {
         let name_w = component_w(name)?;
         self.refuse_link()?;
@@ -1143,7 +1053,7 @@ fn open_path(
 ///
 /// It dereferences to [`WKey`] and adds the one security write Purge performs: putting a recorded
 /// owner, group and DACL back on a key it re-creates during undo. No other key can reach
-/// [`CreatedKey::set_security`].
+/// [`CreatedKey::set_security`] or [`CreatedKey::reopen_and_set_owner`].
 #[derive(Debug)]
 pub struct CreatedKey(WKey);
 
@@ -1186,6 +1096,61 @@ impl CreatedKey {
             }
             other => other,
         }
+    }
+
+    /// Assigns the owner in `owner_sddl` (an owner part alone, such as `O:SY`) to this key when no
+    /// handle of this undo holds `WRITE_OWNER` for it (review R8b M1): a key an interrupted undo
+    /// created without its recorded owner, whose DACL in force grants no `WRITE_OWNER`, opened again
+    /// by the next attempt with [`WKey::reopen_created_subkey`] for `WRITE_DAC` only.
+    ///
+    /// With `SeRestorePrivilege` enabled for this one step (on an impersonation copy of the process
+    /// token, the current thread only), the key this handle refers to is opened once more (the empty
+    /// name relative to this handle, `REG_OPTION_OPEN_LINK | REG_OPTION_BACKUP_RESTORE`, for
+    /// `WRITE_OWNER`), the owner is set through that handle, and the handle is closed, all before
+    /// the privilege is dropped. Nothing else is written: a group, DACL or SACL part is refused with
+    /// `ERROR_INVALID_PARAMETER` before anything is opened. Refuses when this key is a link.
+    ///
+    /// Fails, with nothing changed, with `ERROR_PRIVILEGE_NOT_HELD` (1314) when the token does not
+    /// hold the privilege (an unelevated token), `ERROR_ACCESS_DENIED` when the thread already
+    /// impersonates or the open is refused, and the error of the open or the write otherwise.
+    pub fn reopen_and_set_owner(&self, owner_sddl: &str) -> Result<(), Win32Error> {
+        let sd = ParsedSd::parse(owner_sddl)?;
+        if sd.info != OWNER_SECURITY_INFORMATION {
+            return Err(Win32Error::INVALID_PARAMETER);
+        }
+        self.0.refuse_link()?;
+        let empty = [0u16];
+        let name = unicode_string(&empty)?;
+        let attributes = ObjectAttributes {
+            length: size_of::<ObjectAttributes>() as u32,
+            root_directory: self.0.hkey,
+            object_name: &name,
+            attributes: OBJ_CASE_INSENSITIVE,
+            security_descriptor: ptr::null(),
+            security_quality_of_service: ptr::null(),
+        };
+        with_restore_privilege(|| {
+            let mut out: HKEY = ptr::null_mut();
+            // SAFETY: `attributes` names the empty string relative to the live handle `hkey`
+            // (`name` and `empty` outlive the call); `out` is a valid out-pointer written only on
+            // success.
+            nt(unsafe {
+                NtOpenKeyEx(
+                    &mut out,
+                    WRITE_OWNER,
+                    &attributes,
+                    REG_OPTION_OPEN_LINK | REG_OPTION_BACKUP_RESTORE,
+                )
+            })?;
+            // Closed on drop, inside the scope: what the privilege granted at the open does not
+            // outlive it.
+            let again = WKey {
+                hkey: out,
+                view: self.0.view,
+            };
+            // SAFETY: `sd.psd` is a valid descriptor kept alive by `sd`; `again.hkey` is live.
+            nt(unsafe { NtSetSecurityObject(again.hkey, OWNER_SECURITY_INFORMATION, sd.psd) })
+        })?
     }
 
     /// Gives up the security write and keeps the plain key handle.
@@ -2175,13 +2140,93 @@ mod tests {
 
     /// Whether the current thread holds an impersonation token.
     fn thread_impersonates() -> bool {
-        let mut token: HANDLE = ptr::null_mut();
-        // SAFETY: `token` is a valid out-pointer; the pseudo handle needs no closing.
-        let ok = unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, 1, &mut token) };
-        if ok != 0 {
-            drop(Token(token));
+        crate::privilege::thread_impersonates().unwrap()
+    }
+
+    /// Off on the thread and in the process token, and no impersonation left (T10).
+    fn privilege_off() -> bool {
+        !thread_impersonates() && !crate::privilege::restore_privilege_enabled().unwrap()
+    }
+
+    /// Review R8b M1, the part this token can run: the owner-only write refuses every other part
+    /// before it opens anything, and without the privilege (unelevated) it changes nothing and
+    /// leaves the privilege off. Elevated, the owner is assigned through a handle that has no
+    /// `WRITE_OWNER`.
+    #[test]
+    fn reopen_and_set_owner_writes_an_owner_alone_and_only_with_the_privilege() {
+        let root = TestRoot::new();
+        let sid = current_user_sid().unwrap();
+        let dacl = format!("D:P(A;CI;KR;;;{sid})(A;CI;KA;;;SY)");
+        let key = root.key.create_subkey("k", "", Some(&dacl), false).unwrap();
+        let _restore = RestoreDacl(&key, format!("O:{sid}D:P(A;CI;KA;;;{sid})"));
+        assert_eq!(
+            root.key.reopen_created_subkey("k", true).unwrap_err(),
+            ACCESS_DENIED
+        );
+        let again = root.key.reopen_created_subkey("k", false).unwrap();
+        let before = again.security_sddl().unwrap();
+        for not_owner_alone in ["O:SYG:SY", &format!("O:SY{dacl}"), "G:SY", &dacl] {
+            assert_eq!(
+                again.reopen_and_set_owner(not_owner_alone),
+                Err(Win32Error::INVALID_PARAMETER),
+                "{not_owner_alone}"
+            );
         }
-        ok != 0
+        assert_eq!(again.security_sddl().unwrap(), before);
+        assert!(privilege_off());
+        if restore_privilege_held() {
+            again.reopen_and_set_owner("O:SY").unwrap();
+            let after = again.security_sddl().unwrap();
+            assert!(after.starts_with("O:SYG:"), "{after}");
+            assert_eq!(
+                after[after.find("G:").unwrap()..],
+                before[before.find("G:").unwrap()..]
+            );
+        } else {
+            assert_eq!(
+                again.reopen_and_set_owner("O:SY"),
+                Err(crate::privilege::PRIVILEGE_NOT_HELD)
+            );
+            assert_eq!(again.security_sddl().unwrap(), before);
+        }
+        assert!(privilege_off());
+    }
+
+    /// Review R8b M1, the production descriptor, elevated: a key created without its recorded owner
+    /// SYSTEM, whose DACL grants administrators read only, is opened again for `WRITE_DAC` alone and
+    /// gets its DACL and then its owner; the privilege is off afterwards.
+    /// `cargo test -p purge-win --features write --lib -- --ignored elevated_reopen_and_set_owner`.
+    #[test]
+    #[ignore = "needs an elevated administrator (SeRestorePrivilege)"]
+    fn elevated_reopen_and_set_owner_assigns_system_without_write_owner() {
+        assert!(restore_privilege_held(), "run elevated");
+        let root = TestRoot::new();
+        let sid = current_user_sid().unwrap();
+        let recorded = "O:SYG:SYD:PAI(A;CI;KR;;;BA)(A;CI;KA;;;SY)";
+        let key = root
+            .key
+            .create_subkey(
+                "m1",
+                "",
+                Some("G:SYD:PAI(A;CI;KR;;;BA)(A;CI;KA;;;SY)"),
+                false,
+            )
+            .unwrap();
+        let _restore = RestoreDacl(&key, format!("O:{sid}D:P(A;CI;KA;;;{sid})(A;CI;KA;;;BA)"));
+        assert_eq!(
+            root.key.reopen_created_subkey("m1", true).unwrap_err(),
+            ACCESS_DENIED
+        );
+        let again = root.key.reopen_created_subkey("m1", false).unwrap();
+        assert_eq!(again.set_security(recorded).unwrap_err(), ACCESS_DENIED);
+        again
+            .set_security("D:PAI(A;CI;KR;;;BA)(A;CI;KA;;;SY)")
+            .unwrap();
+        assert_ne!(again.security_sddl().unwrap(), recorded);
+        assert!(privilege_off());
+        again.reopen_and_set_owner("O:SY").unwrap();
+        assert_eq!(again.security_sddl().unwrap(), recorded);
+        assert!(privilege_off());
     }
 
     /// The SYSTEM owner case of the smoke run (`O:SYG:SYD:P...` came back owned by BA): needs an
@@ -2213,6 +2258,6 @@ mod tests {
                 .unwrap()
                 .starts_with(&format!("{trusted_installer}G:SY"))
         );
-        assert!(!thread_impersonates());
+        assert!(privilege_off());
     }
 }
