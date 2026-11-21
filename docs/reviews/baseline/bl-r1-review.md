@@ -380,3 +380,32 @@ exceptions (a key replaced by its values) get their own rule instead of a hole i
 3. Before M3's broker: S4, N5.
 4. Any time: S5, S6, N8.
 5. Carry N4 into 8.5 as the list of what the cap lift has to redo.
+
+## Disposition
+
+Added 2026-11-21 by the BL-R1 fixes (branch `bl-r1-fixes`, from `baseline` at e285d26). One line per finding:
+fixed in a commit, deferred to a milestone, or accepted. The text above is the review as written.
+
+| Finding | Disposition |
+|---|---|
+| M1 | Fixed in d645393: `rig.ps1 Push-Tools` protects `C:\cr\bin\kb` (and takes delete and re-ACL rights on `C:\cr`, `C:\cr\bin` from standard users) through an elevated guest job that checks the result against the directory rule; new CLI verb `hello` prints `engine.hello`; `run-app.ps1` phase `engine-hello` fails a run whose `baseline_trust` is not the one the run is for (`-ExpectTrust`, default Exact when the pushed baselines hold the guest's own). **Not run on a VM**: the rig self-test covers the host logic and the descriptors only. `win-unit.ps1` and `rig-baseline-local.ps1` were not changed (the first grants Modify on its own tree and runs unit tests, not the engine tree; the second pushes with `-NoBaselines`, which is now protected like any push) |
+| M2 | Fixed in 7c114e1 and ba949a1 (and the frozen-run test's comparison in the commit that adds this section): `xtask replay --baseline-view merged\|local\|none` injects the view into harvest and scan through `purge-engine`'s feature `inject-view` (xtask only; a test pins that no CLI source names the doors); `l5_violations` and `--l5-against` check L5 over two plans; a test replays a case with injected Merged, Local and None views. The purge-harvest test "a whole fingerprint harvested under a view is a subset" was not added: deferred to BL-GATE (R3 shows it end to end; the replay test compares fingerprints only for views that hold nothing) |
+| M3 | Fixed in 957c1be: `purge_model::has_classes_hive` used by `regpath`, `canon::user_key` and `source_key`; one table of spellings tested in all three crates, a deny-list test, and a Live test. `HKU\.DEFAULT_Classes\…` is not refused as an invalid path: it is read as the hive it names, which does not exist, so it is absent in every spelling (accepted: refusing it would change what `regpath` and the guard accept for every caller) |
+| S1 | Fixed in 2c415f4 (texts only, as recommended): DECISIONS row, design 4.3, 4.4 heading and 8.5, the comment on `claims_absence` |
+| S2 | Fixed in 2a8a917: `ScanCtx::has_exact_baseline`, `key_absence` and `absence_trust` require the exact baseline of the Windows the scan runs on |
+| S3 | Fixed in ba07878: values and files in the fixture views, seeded partial presence, "no new candidate" and "no band raised", per-scanner non-vacuity with named exemptions, and a self-check that the comparison bites |
+| S4 | Deferred to M3 (the broker): an elevated engine still takes `PURGE_KB_DIR` and the data root from the environment, and the directory rule cannot tell a volume written elsewhere |
+| S5 | Fixed in f094230: on a miss the newest part of the same edition and build answers presence, marked incomplete (trust None), and still counts as missing for the build |
+| S6 | Fixed in c588741: only the `#[cfg(test)]` item is skipped, every crate of the workspace is read for the absence side, the view's public methods must be classified. Textual negation and "the file contains the cap arm" stay as they are (accepted: a tripwire; the module documentation says so) |
+| S7 | Fixed in ba07878: L5 is stated once in design section 2; 4.6 and 8.3 S4 refer to it; the scanner tests and `l5_violations` check that statement |
+| N1 | Accepted: `cargo xtask baseline-sites` was run for these fixes and passes |
+| N2 | Accepted for now, narrowed by 2a8a917 (the scan refuses an Exact view of another Windows) and c588741 (`BaselineView::exact` outside the listed maker fails `baseline-sites`); making the constructor take the host is deferred to M3 |
+| N3 | Deferred to M3: compound allow ACEs treated as grants, and "create the directory protected first" for an installer that copies and then tightens |
+| N4 | Deferred to the cap lift (design 8.5): the list of what becomes a safety item when an area lets inferred absence count; S1's condition is written into 8.5 |
+| N5 | Deferred to M3: a fingerprint or plan made at medium integrity is a document its author can edit; the broker harvests and scans itself |
+| N6 | Accepted: the unelevated engine gets no local cache under the `install.ps1` data root; M3 runs user-facing scans in the broker |
+| N7 | Accepted: only where Users can read the cache directory, which the `install.ps1` root does not allow; costs presence only |
+| N8 | Deferred to M3: a failed build is not remembered, so every elevated run builds again |
+| N9 | Accepted: a crafted fingerprint can only lower the policy trust |
+| N10 | Deferred to M3: `has_classes_hive` is lexical and lists four hives; service accounts with a loaded profile and a user whose classes hive is not loaded are still rewritten. The one predicate of 957c1be is where "is `HKU\<sid>_Classes` loaded" would go. The check that `HKU\S-1-5-19\Software\Classes` is a key and not a link is still open (rig) |
+| N11 | Fixed in ba07878: design 4.6 says the merged golden was not made and why |

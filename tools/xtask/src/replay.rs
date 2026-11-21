@@ -1508,12 +1508,25 @@ mod tests {
         out.into_iter().collect()
     }
 
-    /// What the harvest found, without what it says about how it ran (its warnings, the view it names).
+    /// What the harvest found, without what it says about how it ran (its warnings, the view it names),
+    /// in the fingerprint and in the fingerprints of its co-removed products.
     fn harvest_facts(fp: &purge_model::Fingerprint) -> serde_json::Value {
+        fn strip(fp: &mut serde_json::Value) {
+            let Some(map) = fp.as_object_mut() else {
+                return;
+            };
+            map.remove("warnings");
+            map.remove("baseline_view");
+            if let Some(co) = map.get_mut("co_removed").and_then(|c| c.as_array_mut()) {
+                for product in co {
+                    if let Some(inner) = product.get_mut("fingerprint") {
+                        strip(inner);
+                    }
+                }
+            }
+        }
         let mut v = serde_json::to_value(fp).unwrap();
-        let map = v.as_object_mut().unwrap();
-        map.remove("warnings");
-        map.remove("baseline_view");
+        strip(&mut v);
         v
     }
 

@@ -415,10 +415,15 @@ Exact when their `os` matches a shipped baseline and as None otherwise, which is
   `Settings::check_shipped_dir`; fixtures and replays do not, because their file system source describes
   another machine than the one the baseline directory is on. As built, the exact baseline's file and
   `view.json` are judged themselves too (a file moved into the directory keeps its old owner and grants; a
-  hard link shares them); one that fails is not used and the view is built without it. Open before BL-GATE
-  (question 5 of §11, not checked on the VMs): the rig's `C:\cr\bin\kb\baselines` is made by `mkdir` below
-  the drive root and so inherits its grant for Authenticated Users; unless the rig protects `C:\cr\bin`, its
-  elevated engine uses no shipped baseline and the exact runs become values-only.
+  hard link shares them); one that fails is not used and the view is built without it. The rig (review BL-R1
+  M1; scripts changed, **not yet run on a VM**): its `C:\cr\bin\kb\baselines` is made by `mkdir` below the
+  drive root and so inherits its grant for Authenticated Users, which made its elevated engine drop every
+  shipped baseline. `rig.ps1` `Push-Tools` now protects `C:\cr\bin\kb` after the copies (owner Administrators;
+  protected DACL: SYSTEM and Administrators full, Users read and execute) and takes delete and re-ACL rights
+  on `C:\cr` and `C:\cr\bin` from standard users, and every engine run asks `purge-engine hello` (the result
+  of `engine.hello`) and fails when `baseline_trust` is not the trust the run is for (`vm/RIG.md` §4a). The
+  first rig run confirms it, or shows what the directory rule still objects to (the run's `engine-hello`
+  phase logs it).
 - **Budget** (`PURGE_TIMING` phases `baseline.local.*`; `read` is the workers' time taking the next manifest and
   reading it, outside the listing lock since gate M round 2): cold build at background I/O and CPU priority,
   in parallel over the manifests: at most 30 s on the 591-program host, at most 120 s on a 2-vCPU VM;
