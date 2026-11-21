@@ -131,7 +131,7 @@ function Invoke-Start {
     Phase 'edge-pause' { $S.edge_pause = Suspend-EdgeUpdate } $S
     Phase 'traps-pre' { $e = Invoke-Traps '-Stage pre-install'; if ($e -ne 0) { throw "m2-traps pre-install exit $e" } } $S
     Phase 'install' {
-        $r1 = Invoke-M2Script $RigInstallScript ('-Engine ' + (Q $RigEngine) + ' -ReportPath ' + (Q (F 'install.json')))
+        $r1 = Invoke-M2Script $RigInstallScript ('-Engine ' + (Q $RigEngine) + ' -EngineOnly -ReportPath ' + (Q (F 'install.json')))
         Set-M2Result $R 'install' ([ordered]@{ exit = $r1.exit })
         if ($r1.exit -ne 0) { throw "install.ps1 exited $($r1.exit)" }
         $S.engine.exe = Get-M2EngineExe
