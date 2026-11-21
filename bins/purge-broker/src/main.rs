@@ -37,6 +37,10 @@ fn main() -> ExitCode {
         failure.report();
         return ExitCode::from(failure.exit_code());
     }
+    if let Err(failure) = start::restrict_working_directory() {
+        failure.report();
+        return ExitCode::from(failure.exit_code());
+    }
     let started = match start::check() {
         Ok(started) => started,
         Err(failure) => {

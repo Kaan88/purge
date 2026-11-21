@@ -265,6 +265,7 @@ pub fn set_thread_background(on: bool) -> io::Result<()> {
 /// Process creation, Job objects and the MSI mutex probe (feature `run` only).
 #[cfg(feature = "run")]
 mod job {
+    use std::collections::BTreeMap;
     use std::ffi::c_void;
     use std::io;
     use std::mem;
@@ -303,6 +304,10 @@ mod job {
     pub struct SpawnOptions<'a> {
         /// Working directory; `None` inherits ours.
         pub current_dir: Option<&'a Path>,
+        /// The full environment block, names case-insensitive; `None` inherits ours. An elevated
+        /// uninstaller gets the machine environment plus the profile variables, never the broker's own
+        /// (review M3-R2 S4).
+        pub environment: Option<&'a BTreeMap<String, String>>,
         /// Start console programs without a console window (`CREATE_NO_WINDOW`).
         pub hide_console: bool,
         /// Terminate every process in the job when the [`JobProcess`] is dropped
@@ -320,6 +325,27 @@ mod job {
         },
         /// The timeout elapsed with processes still in the job.
         TimedOut,
+    }
+
+    /// A `CREATE_UNICODE_ENVIRONMENT` block: sorted `NAME=value` strings, each NUL-terminated,
+    /// followed by an empty string. Sorted by the upper-cased names Windows compares.
+    fn environment_block(env: &BTreeMap<String, String>) -> Vec<u16> {
+        let mut block = Vec::new();
+        for (name, value) in env {
+            // An entry that starts with `=` is a drive mapping, not a variable.
+            if name.is_empty() || name.starts_with('=') {
+                continue;
+            }
+            block.extend(name.encode_utf16());
+            block.push(u16::from(b'='));
+            block.extend(value.encode_utf16());
+            block.push(0);
+        }
+        if block.is_empty() {
+            block.push(0);
+        }
+        block.push(0);
+        block
     }
 
     /// A process started inside its own Job object.
@@ -363,6 +389,7 @@ mod job {
                     .chain(std::iter::once(0))
                     .collect::<Vec<u16>>()
             });
+            let env_block = options.environment.map(environment_block);
             // SAFETY: plain data; zero is valid once `cb` is set.
             let mut si: STARTUPINFOW = unsafe { mem::zeroed() };
             si.cb = mem::size_of::<STARTUPINFOW>() as u32;
@@ -372,8 +399,8 @@ mod job {
             if options.hide_console {
                 flags |= CREATE_NO_WINDOW;
             }
-            // SAFETY: `cmd` is a mutable NUL-terminated buffer; `cwd` is NUL-terminated or null; no handles
-            // are inherited.
+            // SAFETY: `cmd` is a mutable NUL-terminated buffer; `cwd` is NUL-terminated or null;
+            // `env_block` is a sorted, double-NUL-terminated block or null; no handles are inherited.
             let ok = unsafe {
                 CreateProcessW(
                     ptr::null(),
@@ -382,7 +409,9 @@ mod job {
                     ptr::null(),
                     0,
                     flags,
-                    ptr::null(),
+                    env_block
+                        .as_ref()
+                        .map_or(ptr::null(), |e| e.as_ptr().cast::<c_void>()),
                     cwd.as_ref().map_or(ptr::null(), |c| c.as_ptr()),
                     &si,
                     &mut pi,

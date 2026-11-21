@@ -735,6 +735,175 @@ fn a_failed_uninstaller_is_forced_even_when_the_program_is_gone() {
     b.exit(SECS);
 }
 
+/// A planted `%ProgramData%` in `HKCU\Environment` must not turn a machine-scope command into a
+/// broker-route one, and the broker must never run that session (review M3-R2 B1).
+#[test]
+fn a_planted_user_environment_keeps_a_machine_command_medium() {
+    let mut fx = app_fixture();
+    {
+        let facts = fx.system_mut();
+        facts.machine_env = facts.env.clone();
+        facts
+            .env
+            .insert("PROGRAMDATA".into(), r"C:\Users\tester\planted".into());
+    }
+    fx.add_file(r"C:\Windows\System32\cmd.exe", 1);
+    fx.add_file(r"C:\ProgramData\Vendor\uninstall.cmd", 1);
+    fx.set_admin_only_roots(vec![
+        r"C:\Program Files".into(),
+        r"C:\Program Files (x86)".into(),
+        r"C:\Windows".into(),
+        r"C:\ProgramData".into(),
+    ]);
+    let key = format!(r"{UNINSTALL}\Planted App_is1");
+    fx.set_value(&key, "DisplayName", RegData::from_sz("Planted App"));
+    fx.set_value(
+        &key,
+        "UninstallString",
+        RegData::from_sz(
+            r#""C:\Windows\System32\cmd.exe" /c "%ProgramData%\Vendor\uninstall.cmd""#,
+        ),
+    );
+    let id = ProgramId::machine(View::K64, "Planted App_is1").expect("program id");
+
+    let mut b = Broker::start(FixtureMachine::new(fx));
+    let c = b.client();
+    let prepare = prepared(&c, 2, &[id]);
+    assert_eq!(
+        prepare["result"]["programs"][0]["route"], "medium",
+        "a value in HKCU\\Environment changed the command: {prepare}"
+    );
+    assert!(
+        prepare["result"]["programs"][0]["command"]
+            .as_str()
+            .is_some_and(|command| !command.contains("planted")),
+        "the planted path was shown as the command: {prepare}"
+    );
+    let session = prepare["result"]["programs"][0]["session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let run = ask(
+        &c,
+        3,
+        "uninstall.run",
+        json!({ "session_id": session, "quiet": false }),
+    );
+    assert_eq!(kind(&run), "wrong_route", "{run}");
+    c.close();
+    b.exit(SECS);
+}
+
+/// An admin-only interpreter whose script a standard user can replace stays medium (review M3-R2 M2).
+#[test]
+fn a_user_writable_script_under_an_admin_only_interpreter_is_medium() {
+    let mut fx = app_fixture();
+    fx.add_file(r"C:\Windows\System32\cmd.exe", 1);
+    fx.add_file(r"C:\Users\tester\AppData\Local\Planted\uninstall.cmd", 1);
+    let key = format!(r"{UNINSTALL}\Planted Script_is1");
+    fx.set_value(&key, "DisplayName", RegData::from_sz("Planted Script"));
+    fx.set_value(
+        &key,
+        "UninstallString",
+        RegData::from_sz(
+            r#""C:\Windows\System32\cmd.exe" /c "C:\Users\tester\AppData\Local\Planted\uninstall.cmd""#,
+        ),
+    );
+    let id = ProgramId::machine(View::K64, "Planted Script_is1").expect("program id");
+    let mut b = Broker::start(FixtureMachine::new(fx));
+    let c = b.client();
+    let prepare = prepared(&c, 2, &[id]);
+    assert_eq!(
+        prepare["result"]["programs"][0]["route"], "medium",
+        "a user-writable script was routed to the broker: {prepare}"
+    );
+    c.close();
+    b.exit(SECS);
+}
+
+/// `uninstall.observed` refuses a broker-route session, so a failed `uninstall.run` cannot be raised to
+/// a `post` scan by a later observation (review M3-R2 M3).
+#[test]
+fn observed_cannot_raise_a_failed_broker_run() {
+    let mut b = Broker::start(FixtureMachine::new(app_fixture()));
+    b.machine.script(ScriptedRun {
+        outcome: RunOutcome::Failed,
+        exit_code: Some(1),
+        verify: VerifyGone::new(true, true, true),
+    });
+    let c = b.client();
+    let prepare = prepared(&c, 2, &[broker_id()]);
+    let session = prepare["result"]["programs"][0]["session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let run = ask(
+        &c,
+        3,
+        "uninstall.run",
+        json!({ "session_id": session, "quiet": true }),
+    );
+    assert_eq!(kind(&run), "uninstall_failed", "{run}");
+    let observed = ask(
+        &c,
+        4,
+        "uninstall.observed",
+        json!({ "session_id": session, "outcome": "Success" }),
+    );
+    assert_eq!(kind(&observed), "wrong_route", "{observed}");
+    let scan = scan_session(&c, 5, &session, false);
+    assert_eq!(scan["result"]["mode"], "forced", "{scan}");
+    assert_eq!(scan["result"]["counts"]["preselected"], 0, "{scan}");
+    c.close();
+    b.exit(SECS);
+}
+
+/// The first passing observation records the window; a later one leaves it unchanged (ruling on
+/// flagged point 7).
+#[test]
+fn an_observation_records_the_window_once() {
+    let mut b = Broker::start(FixtureMachine::new(app_fixture()));
+    b.machine.scripted_verify(VerifyGone::new(true, true, true));
+    let c = b.client();
+    let prepare = prepared(&c, 2, &[medium_id()]);
+    let session = prepare["result"]["programs"][0]["session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    ask(
+        &c,
+        3,
+        "uninstall.observed",
+        json!({ "session_id": session, "outcome": "Success" }),
+    );
+    let first = b
+        .machine
+        .stored(&medium_id())
+        .expect("the observation writes the fingerprint back")
+        .window
+        .t_end
+        .expect("a window");
+    std::thread::sleep(Duration::from_millis(20));
+    ask(
+        &c,
+        4,
+        "uninstall.observed",
+        json!({ "session_id": session, "outcome": "Success" }),
+    );
+    let second = b
+        .machine
+        .stored(&medium_id())
+        .expect("the observation writes the fingerprint back")
+        .window
+        .t_end
+        .expect("a window");
+    assert_eq!(first, second, "a later observation moved the window's end");
+    let scan = scan_session(&c, 5, &session, false);
+    assert_eq!(scan["result"]["mode"], "post", "{scan}");
+    c.close();
+    b.exit(SECS);
+}
+
 /// A scan after a successful run is `post`; asking for forced lowers it.
 #[test]
 fn a_successful_run_scans_post_and_forced_lowers_it() {

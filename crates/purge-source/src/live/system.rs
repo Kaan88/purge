@@ -463,6 +463,10 @@ impl SystemSource for LiveSystem {
         Ok(interactive_env(&self.registry, &sid))
     }
 
+    fn machine_env(&self) -> SourceResult<BTreeMap<String, String>> {
+        Ok(machine_env(&self.registry))
+    }
+
     fn processes(&self) -> SourceResult<Vec<ProcessInfo>> {
         Ok(process::snapshot_processes()
             .map_err(|e| map_io(&e))?

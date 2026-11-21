@@ -667,14 +667,16 @@ fn baseline_loaded(name: &str, n: RecordCounts, timing: bool) -> String {
 // Route
 // ---------------------------------------------------------------------------------------------------------
 
-/// The commands an entry's Uninstall key names, expanded with the interactive user's environment.
+/// The commands an entry's Uninstall key names, expanded with `env`.
 ///
 /// `command` is the interactive `UninstallString`; `quiet` is the quiet form [`quiet_command`] resolves
 /// (`QuietUninstallString`, or the generated form). Either is `None` when the entry does not give a
 /// usable command. The engine shows these strings and runs the chosen one verbatim: `uninstall.route`
 /// answers with them and `uninstall.run_user` passes the matching [`QuietCommand`] to
-/// [`uninstall_with_command`], so the command shown is the command run.
-#[derive(Debug, Clone, Default)]
+/// [`uninstall_with_command`], so the command shown is the command run. A machine-scope command is
+/// expanded with the machine environment (never the user's `HKCU\Environment`) before it is shown to
+/// the broker's client (review M3-R2 B1).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct UninstallCommands {
     /// The interactive command, expanded.
     pub command: Option<QuietCommand>,
@@ -732,21 +734,40 @@ pub fn uninstall_commands(
 /// command a standard user can replace. A machine-scope entry is broker only when **every** command the
 /// entry names (the interactive and the quiet one) is writable by administrators alone; a path that
 /// cannot be read or does not exist is not provably admin-only and therefore stays medium.
+///
+/// `env` is the interactive user's environment and `machine_env` the machine's. The command is expanded
+/// with both; any difference between the two strings would let a value in `HKCU\Environment` change the
+/// command after it was shown, so it makes the route medium. A `%NAME%` neither map defines is medium
+/// for the same reason (review M3-R2 B1). A known host executable (`cmd`, `rundll32`, `wscript`,
+/// `cscript`, `powershell`, `mshta`, `regsvr32`, `msiexec`, `java`, `sdbinst`) is judged on the script,
+/// DLL or package it is told to load as well; a load path that is user-writable, cannot be found or
+/// cannot be worked out makes the route medium (review M3-R2 M2).
 pub fn route(
     entry: &InventoryEntry,
     fs: &dyn FileSystemSource,
     env: &BTreeMap<String, String>,
+    machine_env: &BTreeMap<String, String>,
 ) -> purge_rpc::methods::Route {
     let per_user = entry.hive_sid.is_some() || entry.writable_by == WritableBy::User;
     if per_user {
         return purge_rpc::methods::Route::Medium;
     }
-    let commands = uninstall_commands(entry, env);
+    let machine_commands = uninstall_commands(entry, machine_env);
+    let user_commands = uninstall_commands(entry, env);
+    if machine_commands != user_commands {
+        return purge_rpc::methods::Route::Medium;
+    }
+    let commands = &machine_commands;
     let mut exes: Vec<&str> = Vec::new();
     for command in [commands.command.as_ref(), commands.quiet.as_ref()]
         .into_iter()
         .flatten()
     {
+        if has_undefined_reference(&command.exe, &[machine_env, env])
+            || has_undefined_reference(&command.args, &[machine_env, env])
+        {
+            return purge_rpc::methods::Route::Medium;
+        }
         if !exes.iter().any(|e| e.eq_ignore_ascii_case(&command.exe)) {
             exes.push(&command.exe);
         }
@@ -755,14 +776,170 @@ pub fn route(
         // Nothing to run, and nothing that proves the path admin-only.
         return purge_rpc::methods::Route::Medium;
     }
-    if exes
+    let exes_admin_only = exes
         .iter()
-        .all(|exe| fs.is_admin_only_writable(exe) == Ok(true))
-    {
+        .all(|exe| fs.is_admin_only_writable(exe) == Ok(true));
+    let loads_admin_only = [commands.command.as_ref(), commands.quiet.as_ref()]
+        .into_iter()
+        .flatten()
+        .all(|command| command_loads_admin_only(command, fs));
+    if exes_admin_only && loads_admin_only {
         purge_rpc::methods::Route::Broker
     } else {
         purge_rpc::methods::Route::Medium
     }
+}
+
+/// Whether `s` holds a `%NAME%` reference that no map in `maps` defines.
+fn has_undefined_reference(s: &str, maps: &[&BTreeMap<String, String>]) -> bool {
+    let mut rest = s;
+    while let Some(open) = rest.find('%') {
+        let after = &rest[open + 1..];
+        let Some(close) = after.find('%') else {
+            break;
+        };
+        let name = &after[..close];
+        if !name.is_empty()
+            && !maps
+                .iter()
+                .any(|map| map.contains_key(&name.to_ascii_uppercase()))
+        {
+            return true;
+        }
+        rest = &after[close + 1..];
+    }
+    false
+}
+
+/// The argument string split into tokens; a quoted part stays one token, quotes removed.
+fn arg_tokens(args: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut token = String::new();
+    let mut quoted = false;
+    for c in args.chars() {
+        match c {
+            '"' => quoted = !quoted,
+            c if c.is_whitespace() && !quoted => {
+                if !token.is_empty() {
+                    out.push(std::mem::take(&mut token));
+                }
+            }
+            c => token.push(c),
+        }
+    }
+    if !token.is_empty() {
+        out.push(token);
+    }
+    out
+}
+
+/// A token as a file path: no quotes, and for `rundll32` no `,EntryPoint` suffix.
+fn path_token(token: &str) -> &str {
+    token
+        .trim_matches('"')
+        .split_once(',')
+        .map_or_else(|| token.trim_matches('"'), |(path, _)| path)
+}
+
+/// Whether `path` starts at a drive or a UNC share.
+fn is_absolute_path(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    (bytes.len() >= 2 && bytes[1] == b':') || path.starts_with(r"\\") || path.starts_with("//")
+}
+
+/// The file names whose arguments name a file that decides what runs, under the Windows directory.
+fn is_host_executable(exe: &str) -> bool {
+    let name = exe.rsplit(['\\', '/']).next().unwrap_or(exe);
+    [
+        "cmd.exe",
+        "rundll32.exe",
+        "wscript.exe",
+        "cscript.exe",
+        "powershell.exe",
+        "pwsh.exe",
+        "mshta.exe",
+        "regsvr32.exe",
+        "msiexec.exe",
+        "java.exe",
+        "javaw.exe",
+        "sdbinst.exe",
+    ]
+    .iter()
+    .any(|host| name.eq_ignore_ascii_case(host))
+}
+
+/// The path a known host is told to load. `None` means it cannot be worked out from the arguments.
+fn host_load_path(exe: &str, tokens: &[&str]) -> Option<String> {
+    let name = exe.rsplit(['\\', '/']).next().unwrap_or(exe);
+    let lower = name.to_ascii_lowercase();
+    let first_operand = || {
+        tokens
+            .iter()
+            .find(|t| !t.starts_with('/') && !t.starts_with('-'))
+            .map(|t| path_token(t).to_owned())
+    };
+    let after_switch = |switch: &str| {
+        tokens
+            .iter()
+            .position(|t| t.eq_ignore_ascii_case(switch))
+            .and_then(|at| tokens.get(at + 1))
+            .map(|t| path_token(t).to_owned())
+    };
+    match lower.as_str() {
+        "cmd.exe" => after_switch("/c").or_else(|| after_switch("/k")),
+        "rundll32.exe" => first_operand(),
+        "wscript.exe" | "cscript.exe" | "mshta.exe" | "regsvr32.exe" | "sdbinst.exe" => {
+            first_operand()
+        }
+        "powershell.exe" | "pwsh.exe" => after_switch("-file").or_else(|| after_switch("-f")),
+        "msiexec.exe" => tokens
+            .iter()
+            .map(|t| path_token(t))
+            .find(|p| p.to_ascii_lowercase().ends_with(".msi"))
+            .map(str::to_owned)
+            .or_else(|| first_operand_filtered(tokens)),
+        "java.exe" | "javaw.exe" => after_switch("-jar"),
+        _ => None,
+    }
+}
+
+/// The first operand of `msiexec` that looks like a path, so `/x C:\pkg.msi` is judged even without
+/// the extension. `msiexec /x {GUID}` has no such operand and is accepted.
+fn first_operand_filtered(tokens: &[&str]) -> Option<String> {
+    tokens
+        .iter()
+        .map(|t| path_token(t))
+        .find(|p| is_absolute_path(p))
+        .map(str::to_owned)
+}
+
+/// Whether the file `command` is told to load, if any, is writable by administrators alone. A known
+/// host whose load path cannot be found or worked out is not provably safe.
+fn command_loads_admin_only(command: &QuietCommand, fs: &dyn FileSystemSource) -> bool {
+    let tokens = arg_tokens(&command.args);
+    let tokens: Vec<&str> = tokens.iter().map(String::as_str).collect();
+    // Any absolute path in the arguments that exists and is user-writable is enough to stay medium.
+    for token in &tokens {
+        let path = path_token(token);
+        if is_absolute_path(path) && fs.is_admin_only_writable(path) == Ok(false) {
+            return false;
+        }
+    }
+    if !is_host_executable(&command.exe) {
+        return true;
+    }
+    let Some(load) = host_load_path(&command.exe, &tokens) else {
+        // A host that names no script, DLL or package: `msiexec` with a ProductCode and a shell with
+        // an inline command load no file of their own, everything else is undetermined.
+        let name = command
+            .exe
+            .rsplit(['\\', '/'])
+            .next()
+            .unwrap_or(&command.exe)
+            .to_ascii_lowercase();
+        return matches!(name.as_str(), "msiexec.exe" | "powershell.exe" | "pwsh.exe");
+    };
+    is_absolute_path(&load) && fs.is_admin_only_writable(&load) == Ok(true)
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -2182,6 +2359,113 @@ mod tests {
             entries,
             msi_only: Vec::new(),
         }
+    }
+
+    /// A machine with admin-only interpreters and one user-writable script and DLL.
+    fn route_fixture() -> Fixture {
+        Fixture::builder()
+            .admin_only_roots(&[r"C:\Windows", r"C:\Program Files", r"C:\ProgramData"])
+            .file(r"C:\Windows\System32\cmd.exe", 1)
+            .file(r"C:\Windows\System32\rundll32.exe", 1)
+            .file(r"C:\Windows\System32\msiexec.exe", 1)
+            .file(r"C:\Program Files\App\unins000.exe", 1)
+            .file(r"C:\ProgramData\Vendor\uninstall.cmd", 1)
+            .file(r"C:\Users\tester\AppData\Local\App\evil.cmd", 1)
+            .file(r"C:\Users\tester\AppData\Local\App\evil.dll", 1)
+            .file(r"C:\Users\tester\AppData\Local\App\evil.ini", 1)
+            .build()
+    }
+
+    fn route_entry(uninstall: &str) -> InventoryEntry {
+        let mut entry = entry("App_is1", "App");
+        entry.uninstall_string = Some(uninstall.to_owned());
+        entry
+    }
+
+    fn env(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect()
+    }
+
+    #[test]
+    fn a_planted_user_environment_keeps_a_machine_command_medium() {
+        let fs = route_fixture();
+        let machine = env(&[("PROGRAMDATA", r"C:\ProgramData")]);
+        let user = env(&[("PROGRAMDATA", r"C:\Users\tester\planted")]);
+        let command =
+            route_entry(r#""C:\Windows\System32\cmd.exe" /c "%ProgramData%\Vendor\uninstall.cmd""#);
+        assert_eq!(
+            route(&command, &fs, &user, &machine),
+            purge_rpc::methods::Route::Medium,
+            "a value in HKCU\\Environment changed the expanded command"
+        );
+        assert_eq!(
+            route(&command, &fs, &machine, &machine),
+            purge_rpc::methods::Route::Broker
+        );
+
+        let undefined =
+            route_entry(r#""C:\Windows\System32\cmd.exe" /c "%X%\Vendor\uninstall.cmd""#);
+        assert_eq!(
+            route(&undefined, &fs, &machine, &machine),
+            purge_rpc::methods::Route::Medium,
+            "a reference neither map defines stays medium"
+        );
+    }
+
+    #[test]
+    fn a_user_writable_file_loaded_by_an_admin_only_host_is_medium() {
+        let fs = route_fixture();
+        let machine = env(&[("PROGRAMDATA", r"C:\ProgramData")]);
+        for command in [
+            r#""C:\Windows\System32\cmd.exe" /c "C:\Users\tester\AppData\Local\App\evil.cmd""#,
+            r#""C:\Windows\System32\rundll32.exe" "C:\Users\tester\AppData\Local\App\evil.dll",Entry"#,
+            r#""C:\Program Files\App\unins000.exe" --config "C:\Users\tester\AppData\Local\App\evil.ini""#,
+        ] {
+            assert_eq!(
+                route(&route_entry(command), &fs, &machine, &machine),
+                purge_rpc::methods::Route::Medium,
+                "{command}"
+            );
+        }
+        assert_eq!(
+            route(
+                &route_entry(
+                    r#""C:\Windows\System32\cmd.exe" /c "C:\ProgramData\Vendor\uninstall.cmd""#
+                ),
+                &fs,
+                &machine,
+                &machine
+            ),
+            purge_rpc::methods::Route::Broker,
+            "an admin-only script is safe"
+        );
+        assert_eq!(
+            route(
+                &route_entry(
+                    r#""C:\Windows\System32\cmd.exe" /c "C:\ProgramData\Vendor\missing.cmd""#
+                ),
+                &fs,
+                &machine,
+                &machine
+            ),
+            purge_rpc::methods::Route::Medium,
+            "a load path that cannot be found is not provably safe"
+        );
+        assert_eq!(
+            route(
+                &route_entry(
+                    r#""C:\Windows\System32\msiexec.exe" /x {11111111-1111-1111-1111-111111111111} /qn"#
+                ),
+                &fs,
+                &machine,
+                &machine
+            ),
+            purge_rpc::methods::Route::Broker,
+            "msiexec with a ProductCode loads no client-chosen file"
+        );
     }
 
     #[test]

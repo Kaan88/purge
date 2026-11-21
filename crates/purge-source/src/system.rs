@@ -35,6 +35,12 @@ pub trait SystemSource: Send + Sync {
     /// upper-cased** and values expanded.
     fn env(&self) -> SourceResult<BTreeMap<String, String>>;
 
+    /// The machine environment block only (values Windows derives plus
+    /// `HKLM\...\Session Manager\Environment`), with variable **names upper-cased** and values
+    /// expanded. It never contains a value from the interactive user's `HKCU\Environment`; an
+    /// elevated command is expanded and started with this map (review M3-R2 B1/S4).
+    fn machine_env(&self) -> SourceResult<BTreeMap<String, String>>;
+
     /// The running processes.
     fn processes(&self) -> SourceResult<Vec<ProcessInfo>>;
 

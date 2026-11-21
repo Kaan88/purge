@@ -416,6 +416,18 @@ impl Session {
         self.uninstaller_ok.store(uninstaller_ok, Ordering::SeqCst);
     }
 
+    /// Records an observation. A session that already ran is never raised: `uninstaller_ok` may only
+    /// go from true to false, so a failed run cannot be turned into a `post` scan by a later
+    /// `uninstall.observed` (review M3-R2 M3).
+    fn record_observation(&self, uninstaller_ok: bool) {
+        let already_ran = self.ran.swap(true, Ordering::SeqCst);
+        if !uninstaller_ok {
+            self.uninstaller_ok.store(false, Ordering::SeqCst);
+        } else if !already_ran {
+            self.uninstaller_ok.store(true, Ordering::SeqCst);
+        }
+    }
+
     fn set_verify(&self, verify: VerifyGone) {
         *self.verify_gone.lock().unwrap_or_else(|e| e.into_inner()) = Some(verify);
     }
@@ -529,6 +541,7 @@ fn prepare<H: FlowHandler>(
     let machine = flow.machine();
     let sources = machine.sources();
     let env = sources.sys.env().unwrap_or_default();
+    let machine_env = sources.sys.machine_env().unwrap_or_default();
     let inventory = pipeline::inventory(sources);
     let mut programs = Vec::with_capacity(params.program_ids.as_slice().len());
     for program in params.program_ids.as_slice() {
@@ -539,8 +552,17 @@ fn prepare<H: FlowHandler>(
             .doc
             .entry(program)
             .ok_or_else(|| gone(IdKind::Program))?;
-        let route = pipeline::route(entry, sources.fs, &env);
-        let commands = pipeline::uninstall_commands(entry, &env);
+        let route = pipeline::route(entry, sources.fs, &env, &machine_env);
+        // A machine-scope command is expanded with the machine environment only. The broker starts
+        // such a command (or shows what would run), so a value in `HKCU\Environment` must never choose
+        // its executable or arguments (review M3-R2 B1). A per-user program keeps the interactive
+        // user's environment, which is the only one that can resolve its paths.
+        let command_env = if entry.hive_sid.is_none() {
+            &machine_env
+        } else {
+            &env
+        };
+        let commands = pipeline::uninstall_commands(entry, command_env);
         let command = commands
             .command_line()
             .or_else(|| commands.quiet_command_line())
@@ -815,15 +837,26 @@ fn run<H: FlowHandler>(
 /// nothing preselected, as after a failed run of the broker's own. A reported success is never taken
 /// as one: the broker's verify-gone still has to pass. So the report can only make the scan safer.
 ///
+/// Only a medium-route session may be observed: a broker-route session's run is the broker's own, and a
+/// session that already ran is never raised (`uninstaller_ok` may only go from true to false). This is
+/// the attack of review M3-R2 M3: a failed `uninstall.run` cannot be turned into a `post` scan.
+///
 /// When both hold, the session's fingerprint gets the uninstall window `prepare`'s harvest opened and
 /// this observation closed, which is what a `post` scan checks for (as `uninstall.run` records for a
-/// broker-route run). No window is recorded in every other case, so the scan stays forced.
+/// broker-route run). The first passing observation records it; a later one leaves it where it is. An
+/// observation more than two hours after `prepare` records none, so a client cannot stretch the window
+/// (ruling on flagged point 7). No window is recorded in every other case, so the scan stays forced.
 fn observed<H: FlowHandler>(
     flow: &Flow,
     ctx: &Ctx<'_, H>,
     params: &ObservedParams,
 ) -> Result<Value, ErrorObject> {
     let session = ctx.tables().sessions.get(params.session_id)?;
+    if session.route != Route::Medium {
+        return Err(ErrorObject::server(ErrorData::WrongRoute {
+            route: session.route,
+        }));
+    }
     let machine = flow.machine();
     let reported_ok = params.outcome.is_none_or(|outcome| outcome.is_success());
     let verify = {
@@ -833,25 +866,41 @@ fn observed<H: FlowHandler>(
             .unwrap_or_else(|e| e.into_inner());
         let verify = machine.verify_gone(&session.program, &fingerprint);
         fingerprint.verify_gone = Some(verify);
-        if reported_ok && verify.is_passed() {
+        if reported_ok && verify.is_passed() && fingerprint.window.t_end.is_none() {
             // The medium engine ran the uninstaller between `prepare`'s harvest and this observation,
             // so that is the window a `post` scan needs (which only the broker's `run` recorded
             // before). A failed report, a failed verify-gone or a cancel records no window: the scan
             // is forced, as it is after such a run of the broker's own.
-            let start = fingerprint.window.t_start.unwrap_or(session.window_start);
             let end = crate::purge::system_now();
-            fingerprint.window.t_start = Some(start);
-            fingerprint.window.t_end = Some(FileTime(end.0.max(start.0)));
+            if within_observation_cap(session.window_start, end) {
+                let start = session.window_start;
+                fingerprint.window.t_start = Some(start);
+                fingerprint.window.t_end = Some(FileTime(end.0.max(start.0)));
+            }
         }
         let _ = machine.write_fingerprint(&session.program, &fingerprint);
         verify
     };
-    session.set_ran(reported_ok && verify.is_passed());
+    let window_recorded = {
+        let fingerprint = session
+            .fingerprint
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        fingerprint.window.t_end.is_some()
+    };
+    session.record_observation(reported_ok && verify.is_passed() && window_recorded);
     session.set_verify(verify);
     serde_json::to_value(ObservedResult {
         verify_gone: verify,
     })
     .map_err(|e| ErrorObject::runtime(e.to_string()))
+}
+
+/// The longest uninstall window an observation may record, counted from `prepare` (two hours).
+const OBSERVATION_WINDOW_CAP: FileTime = FileTime(2 * 60 * 60 * 10_000_000);
+
+fn within_observation_cap(start: FileTime, end: FileTime) -> bool {
+    end.0.saturating_sub(start.0) <= OBSERVATION_WINDOW_CAP.0
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -872,4 +921,80 @@ fn stored<H: FlowHandler>(
         }
     }
     serde_json::to_value(StoredResult { stored }).map_err(|e| ErrorObject::runtime(e.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use purge_model::View;
+    use purge_rpc::methods::Route;
+
+    use super::*;
+
+    fn session(ran: bool, uninstaller_ok: bool) -> Session {
+        let program = ProgramId::machine(View::K64, "App_is1").expect("program id");
+        let fingerprint: Fingerprint = serde_json::from_value(serde_json::json!({
+            "schema": "purge.fp/0",
+            "app": {"program_id": program.to_string(), "display_name": "App"},
+            "identity": {"names": [], "vendors": [], "tokens": [], "mega_vendor": false},
+            "os": {"edition": "Professional", "build": 26340, "ubr": 9882},
+            "user_sid": "S-1-5-21-1-2-3-1001"
+        }))
+        .expect("fingerprint");
+        Session {
+            program,
+            display_name: "App".into(),
+            route: Route::Medium,
+            commands: UninstallCommands::default(),
+            window_start: FileTime(0),
+            fingerprint: Mutex::new(fingerprint),
+            verify_gone: Mutex::new(None),
+            ran: AtomicBool::new(ran),
+            uninstaller_ok: AtomicBool::new(uninstaller_ok),
+        }
+    }
+
+    #[test]
+    fn an_observation_never_raises_a_session_that_ran() {
+        let failed = session(true, false);
+        failed.record_observation(true);
+        assert!(failed.ran());
+        assert!(
+            !failed.uninstaller_ok(),
+            "a failed run was raised by an observation"
+        );
+
+        let passed = session(true, true);
+        passed.record_observation(true);
+        assert!(passed.uninstaller_ok());
+        passed.record_observation(false);
+        assert!(
+            !passed.uninstaller_ok(),
+            "a later failure must still lower the session"
+        );
+
+        let fresh = session(false, false);
+        fresh.record_observation(true);
+        assert!(fresh.ran());
+        assert!(
+            fresh.uninstaller_ok(),
+            "the first passing observation records"
+        );
+    }
+
+    #[test]
+    fn an_observation_window_is_capped_at_two_hours() {
+        let start = FileTime(1_000);
+        assert!(within_observation_cap(
+            start,
+            FileTime(start.0 + OBSERVATION_WINDOW_CAP.0)
+        ));
+        assert!(!within_observation_cap(
+            start,
+            FileTime(start.0 + OBSERVATION_WINDOW_CAP.0 + 1)
+        ));
+        assert!(within_observation_cap(
+            start,
+            FileTime(start.0.saturating_sub(10))
+        ));
+    }
 }
