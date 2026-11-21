@@ -167,6 +167,14 @@ impl Cancellation {
     }
 }
 
+/// A `programs.list` reply that is already on the wire and still owes its patches.
+struct PendingList {
+    /// The id of the request the patches belong to.
+    id: RequestId,
+    /// The rows the reply sent, stored for the next `inventory.changes`.
+    rows: Vec<ProgramRow>,
+}
+
 /// A server over one machine's sources.
 pub struct Server<'a> {
     sources: Sources<'a>,
@@ -175,6 +183,10 @@ pub struct Server<'a> {
     local_data: Option<PathBuf>,
     /// The inventory read for this server, once a request needed it.
     inventory: Option<InventoryDoc>,
+    /// A background thread enumerating the inventory; the first request that needs it awaits this.
+    warming: Option<Receiver<InventoryDoc>>,
+    /// A `programs.list` reply sent without its patches yet.
+    pending_list: Option<PendingList>,
     /// The Job-object host of `uninstall.run_user` (M3-RUNNER).
     host: Box<dyn ProcessHost + Send>,
     /// How long `uninstall.run_user` waits for its command.
@@ -192,6 +204,8 @@ impl<'a> Server<'a> {
             settings,
             local_data,
             inventory: None,
+            warming: None,
+            pending_list: None,
             host: Box::new(LiveHost::new()),
             run_options: RunOptions::default(),
             extensions: Vec::new(),
@@ -215,18 +229,25 @@ impl<'a> Server<'a> {
         self
     }
 
-    /// Reads the inventory now, so the first `programs.list` after the server is ready sends its first
-    /// batch without paying for the enumeration. `--stdio` calls this before it reads the first
-    /// request: the S1 first paint and the 50 ms rule are about the request, not process start.
-    pub fn warm(&mut self) {
-        let _ = self.inventory();
+    /// Takes the inventory a background thread is enumerating, so the first `programs.list` starts
+    /// from it without paying for the enumeration on its own thread. `--stdio` starts that thread
+    /// before it reads the first request: `engine.hello` is answered while it runs, and the first
+    /// batch is no later than it would have been had the enumeration run before the reader.
+    fn warm_from(&mut self, inventory: Receiver<InventoryDoc>) {
+        self.warming = Some(inventory);
     }
 
-    /// Reads the inventory if this is the first request that needs it.
+    /// Reads the inventory if this is the first request that needs it, awaiting the background
+    /// enumeration when there is one.
     fn load_inventory(&mut self) {
-        if self.inventory.is_none() {
-            self.inventory = Some(pipeline::inventory(self.sources).doc);
+        if self.inventory.is_some() {
+            return;
         }
+        let warmed = self
+            .warming
+            .take()
+            .and_then(|inventory| inventory.recv().ok());
+        self.inventory = Some(warmed.unwrap_or_else(|| pipeline::inventory(self.sources).doc));
     }
 
     /// The inventory of this machine, read once per server.
@@ -255,8 +276,23 @@ impl<'a> Server<'a> {
             sent += u32::try_from(batch.len()).unwrap_or(u32::MAX);
         }
 
-        // Patches need the AppX package list, which is a WinRT enumeration of its own: after the raw
-        // rows, never on the first batch's path.
+        // The reply leaves as soon as the raw rows are out: the UI paints its first frame from it, so
+        // the patches (whose AppX package enumeration is slow) must not hold it back. [`after_reply`]
+        // sends them right after the driver writes the reply.
+        self.pending_list = Some(PendingList { id, rows });
+        serde_json::to_value(Started { count: sent })
+            .map_err(|e| ErrorObject::runtime(e.to_string()))
+    }
+
+    /// Sends the patches owed by the `programs.list` reply just written, then stores its rows.
+    ///
+    /// The request stays active until here, so a `$/cancel` that arrives after the reply still stops
+    /// the patches. Patches need the AppX package list, a WinRT enumeration of its own; the store runs
+    /// after them, as it did when the reply came last.
+    fn after_reply(&mut self, notify: &mut dyn Notify) -> Result<(), FrameError> {
+        let Some(pending) = self.pending_list.take() else {
+            return Ok(());
+        };
         let patches: Vec<ProgramPatch> = {
             let packages = self.sources.sys.packages().unwrap_or_default();
             self.inventory()
@@ -269,18 +305,19 @@ impl<'a> Server<'a> {
             if self.cancellation.cancelled() {
                 break;
             }
-            notify
-                .notify(&ServerNotification::ProgramsPatch(ProgramsPatch {
-                    request: id,
-                    patches: batch.to_vec(),
-                }))
-                .map_err(notify_error)?;
+            if let Err(error) = notify.notify(&ServerNotification::ProgramsPatch(ProgramsPatch {
+                request: pending.id,
+                patches: batch.to_vec(),
+            })) {
+                self.cancellation.end(pending.id);
+                return Err(error);
+            }
         }
         if !self.cancellation.cancelled() {
-            self.store_list(&rows);
+            self.store_list(&pending.rows);
         }
-        serde_json::to_value(Started { count: sent })
-            .map_err(|e| ErrorObject::runtime(e.to_string()))
+        self.cancellation.end(pending.id);
+        Ok(())
     }
 
     fn get(&mut self, params: ProgramParams) -> Result<Value, ErrorObject> {
@@ -636,7 +673,15 @@ impl Dispatcher for Server<'_> {
             StdioCall::UninstallRoute(params) => self.route(&params),
             StdioCall::UninstallRunUser(params) => self.run_user(id, &params, notify),
         };
-        self.cancellation.end(id);
+        // A `programs.list` that sent its reply still owes its patches; it stays cancellable until
+        // [`Server::after_reply`] sends them.
+        if !self
+            .pending_list
+            .as_ref()
+            .is_some_and(|pending| pending.id == id)
+        {
+            self.cancellation.end(id);
+        }
         result
     }
 
@@ -880,6 +925,10 @@ fn drive<W: Write>(
                     },
                 );
                 table::write_response(&mut writer, &Response { id: Some(id), body })?;
+                // The list's patches follow its reply, never precede it.
+                server.after_reply(&mut WriterNotify {
+                    writer: &mut writer,
+                })?;
             }
             Event::Reply(response) => writer.send(&response)?,
             Event::Eof => return Ok(()),
@@ -911,10 +960,16 @@ pub fn serve_stdio(
     stdout: &mut dyn Write,
 ) -> Result<(), FrameError> {
     let mut server = Server::live(sources, settings);
-    // Pay the inventory enumeration before the first request, so `programs.list` leaves in one batch
-    // right after it arrives (the 50 ms rule) instead of after 1+ s of registry and file reads.
-    server.warm();
     std::thread::scope(|scope| {
+        // The inventory enumeration is slow but independent of the request stream: run it on its own
+        // thread now, so `engine.hello` is answered while it runs, and let the first `programs.list`
+        // await it (the 50 ms rule is about the request, and its first batch is no later than if the
+        // enumeration had run before the reader started).
+        let (warm_sender, warm_receiver) = std::sync::mpsc::sync_channel(1);
+        scope.spawn(move || {
+            let _ = warm_sender.send(pipeline::inventory(sources).doc);
+        });
+        server.warm_from(warm_receiver);
         let (sender, receiver) = std::sync::mpsc::channel();
         let cancellation = server.cancellation.clone();
         scope.spawn(move || {
