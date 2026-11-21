@@ -16,8 +16,9 @@ public sealed class BrokerRpcException(int code, string? kind, string message, E
     public string? Kind { get; } = kind;
 
     /// <summary>
-    /// The whole <c>error.data</c> object: <c>exit_code</c> and <c>forced_offered</c> of an
-    /// <c>uninstall_failed</c>, or the route of a <c>wrong_route</c>. Null when the broker sent none.
+    /// The whole <c>error.data</c> object: the refusals of a <c>plan_refused</c>, <c>exit_code</c> and
+    /// <c>forced_offered</c> of an <c>uninstall_failed</c>, or the route of a <c>wrong_route</c>. Null when the
+    /// broker sent none.
     /// </summary>
     public ErrorData? Details { get; } = data;
 }

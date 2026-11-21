@@ -6,7 +6,9 @@ engine and the broker, and replace the hand-written DTOs. The custom `Main` star
 `Purge.exe`, or the file named by `PURGE_ENGINE`) in a kill-on-close job with two inherited pipes and sends
 `engine.hello` and `programs.list` before XAML starts. `--sample` and `--bench-stub` use the sample-data stub
 (`FakeEngineClient`) instead; so does a missing or failing engine, with a notice in the Programs page. The Uninstall
-click starts the elevated broker on demand (never at app start); the sample stub keeps the button disabled.
+click starts the elevated broker on demand (never at app start); the sample stub keeps the button disabled. The
+Uninstall pipeline hands its scan to the Leftovers page (M3-UI-S3), which sends `scan.candidates`,
+`candidate.explain`, `plan.create`, `plan.execute` and `undo.run` over the same live broker link.
 
 ## Pages (7a, nine)
 
@@ -14,7 +16,7 @@ click starts the elevated broker on demand (never at app start); the sample stub
 |---|---|
 | Programs, refined | `Views/ProgramsView` (rail key `programs`) |
 | Uninstall pipeline | `Views/Uninstall/UninstallView` (`queue`) |
-| Leftovers, refined | `Views/ReviewView` (`leftovers`) |
+| Leftovers, refined | `Views/Leftovers/LeftoversView` (`leftovers`) |
 | Consent prompts, variant A | `Shell/ConsentPrompt.cs`, the TaskDialog layout kept as the reference for the broker's dialog, deleted later; the UI side becomes one "Confirm in the Purge security prompt" state of Leftovers |
 | History & undo | `Views/HistoryView` (`history`) |
 | Quarantine vault | `Views/VaultView` (`vault`) |
@@ -102,10 +104,17 @@ They show in Settings when present, and append one line per launch to the file n
   medium-route one runs `uninstall.run_user` in the engine and then `uninstall.observed` in the broker. The confirm
   dialog shows the five steps, the exact command (the engine's for a medium route, the broker's frozen one otherwise)
   and its signer, the quiet toggle and the restore-point choice. After `leftovers.scan` the page hands
-  `Shell/LeftoversRequest` to the leftovers page (`ILeftoversPage`, cached `ReviewView`). Error bars: exit code with
+  `Shell/LeftoversRequest` to the leftovers page (`ILeftoversPage`, cached `LeftoversView`). Error bars: exit code with
   "Run forced cleanup" and Retry, still installed, restart needed (text only); the running-process line is a hint and
   "Check again", never a close control. `RestorePointMadeRow` shows only when a restore point was actually made (the
   uninstall step makes none; the cleanup plan does).
+- Leftovers page (M3-UI-S3): eight groups in one virtualized `ListView` with header rows, group boxes that tick Safe
+  items only, a weak-matches toggle, Protected and report-only sections, and a detail pane fed by `candidate.explain`.
+  `plan.create`'s attention list is rendered from its own response (it can name absorbed ids that `scan.candidates`
+  never pages). The waiting state shows the `consent.shown` code; the result page shows `plan.execute`'s counts, held
+  items with their lockers and Undo all (`undo.run`). It never claims an item was moved before the result arrives, and
+  a broker that ends mid-execute becomes "interrupted", not a result. It pages the scan S2 handed over without asking
+  `leftovers.scan` again. Rules and tests are in `Views/Leftovers/LeftoversModel.cs` and `LeftoversPageTests`.
 - Still sample-only or pending the UI packages: the Settings expanders not in the M3 list (running apps, start as
   administrator, packs, other profiles, AI), sample banners, badges on the rail, "Check for leftovers" (needs the broker).
 

@@ -21,5 +21,7 @@
     <ProjectReference Include="..\Purge.Client\Purge.Client.csproj" />
     <Compile Include="..\Purge.App\Shell\IconAtlas.cs" Link="Shell\IconAtlas.cs" />
     <Compile Include="..\Purge.App\Shell\IconLoader.cs" Link="Shell\IconLoader.cs" />
+    <Compile Include="..\Purge.App\Shell\LeftoversRequest.cs" Link="Shell\LeftoversRequest.cs" />
+    <Compile Include="..\Purge.App\Views\Leftovers\LeftoversModel.cs" Link="Leftovers\LeftoversModel.cs" />
   </ItemGroup>
 </Project>

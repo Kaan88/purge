@@ -95,11 +95,11 @@ public sealed partial class MainWindow : Window
         _barHost.Children.Add(bar);
     }
 
-    /// <summary>The S3 review page (built on first use), for the scan started from S1.</summary>
-    public ReviewView OpenReview()
+    /// <summary>The S3 review page (built on first use); the Uninstall pipeline hands it the scan.</summary>
+    public LeftoversView OpenReview()
     {
         Navigate("leftovers");
-        return (ReviewView)_views["leftovers"];
+        return (LeftoversView)_views["leftovers"];
     }
 
     /// <summary>S2, built on first use; the Uninstall click on Programs starts its pipeline.</summary>
@@ -163,7 +163,7 @@ public sealed partial class MainWindow : Window
             view = key switch
             {
                 "queue" => new UninstallView(),
-                "leftovers" => new ReviewView(),
+                "leftovers" => new LeftoversView(),
                 "vault" => new VaultView(),
                 "history" => new HistoryView(),
                 "settings" => new SettingsView(),

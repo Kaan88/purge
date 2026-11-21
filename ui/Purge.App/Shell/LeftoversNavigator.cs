@@ -1,6 +1,3 @@
-using Purge.App.Views;
-using Purge.Client.Broker;
-
 namespace Purge.App.Shell;
 
 /// <summary>
@@ -9,37 +6,6 @@ namespace Purge.App.Shell;
 /// </summary>
 public static class LeftoversNavigator
 {
-    /// <summary>
-    /// Shows <paramref name="request"/> on the leftovers page. False when this build's page does not take a request
-    /// yet; the caller then keeps the page's own bar and the broker link is closed rather than lost.
-    /// </summary>
-    public static bool Show(LeftoversRequest request)
-    {
-        ReviewView page;
-        try
-        {
-            page = MainWindow.Instance.OpenReview();
-        }
-        catch (Exception e) when (e is not OutOfMemoryException)
-        {
-            Close(request.Broker);
-            return false;
-        }
-        // The object cast keeps this file independent of S3: when the leftovers page implements the contract, it
-        // receives the scan; until then the page is simply a shell and the caller shows its own bar.
-        if ((object)page is ILeftoversPage target)
-        {
-            target.Show(request);
-            return true;
-        }
-        Close(request.Broker);
-        return false;
-    }
-
-    private static void Close(BrokerSession? session)
-    {
-        if (session is null) return;
-        try { session.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
-        catch (Exception e) when (e is not OutOfMemoryException) { }
-    }
+    /// <summary>Shows <paramref name="request"/> on the leftovers page; the page owns the broker link from then on.</summary>
+    public static void Show(LeftoversRequest request) => MainWindow.Instance.OpenReview().Show(request);
 }

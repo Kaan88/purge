@@ -35,7 +35,6 @@ public sealed partial class UninstallView : UserControl
     private readonly UninstallController _controller;
     private readonly Dictionary<UninstallStep, StepRow> _rows = [];
     private bool _rendering;
-    private bool _handoffFailed;
 
     private sealed class StepRow(TextBlock glyph, TextBlock title, TextBlock detail)
     {
@@ -62,7 +61,6 @@ public sealed partial class UninstallView : UserControl
     /// <summary>Starts the pipeline for a program chosen on the Programs page.</summary>
     public void Begin(UninstallTarget target)
     {
-        _handoffFailed = false;
         ProgramTile.Background = ProgramRow.TileFor(target.ProgramName);
         _ = _controller.BeginAsync(target);
     }
@@ -238,18 +236,6 @@ public sealed partial class UninstallView : UserControl
         BarsHost.Children.Clear();
         foreach (var notice in _controller.Notices)
             BarsHost.Children.Add(BuildBar(notice));
-        if (_handoffFailed)
-        {
-            BarsHost.Children.Add(new InfoBar
-            {
-                Severity = InfoBarSeverity.Warning,
-                Title = "The leftovers page is not ready in this build.",
-                Message = "The uninstaller ran and the scan is in, but this page cannot show the list yet.",
-                IsOpen = true,
-                IsClosable = true,
-                RequestedTheme = MainWindow.Instance.ActualTheme,
-            });
-        }
     }
 
     private InfoBar BuildBar(UninstallNotice notice)
@@ -452,7 +438,7 @@ public sealed partial class UninstallView : UserControl
         if (broker is not null && session is null) _ = broker.DisposeAsync();
         var request = new LeftoversRequest(outcome.Target.ProgramId, outcome.Target.ProgramName, outcome.SessionId,
             outcome.ScanId, outcome.Mode, outcome.RestorePoint, outcome.Quiet, session);
-        _handoffFailed = !LeftoversNavigator.Show(request);
+        LeftoversNavigator.Show(request);
         if (broker is not null) _ = broker.DisposeAsync();
         Render();
     });
