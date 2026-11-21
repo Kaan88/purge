@@ -49,7 +49,16 @@ pub fn write_atomic(path: &Path, text: &str) -> io::Result<()> {
 /// A reparse point on the path, a path that is not a plain drive or share path, or any I/O error;
 /// the temporary file is removed when anything fails.
 pub fn write_atomic_no_follow(path: &Path, text: &str) -> io::Result<()> {
-    nofollow::write(path, text)
+    nofollow::write(path, text.as_bytes())
+}
+
+/// [`write_atomic`] for a binary file (the gzip of `baseline build`): the same writer, the same rules.
+///
+/// # Errors
+///
+/// As [`write_atomic_no_follow`].
+pub fn write_atomic_bytes(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    nofollow::write(path, bytes)
 }
 
 /// The sidecar of a plan file: `plan.json` -> `plan.scan.json`, `plan` -> `plan.scan.json`.

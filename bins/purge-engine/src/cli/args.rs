@@ -31,6 +31,8 @@ verbs:
   scan --fp <fp.json> [--mode post|external|forced] [--app <id>] -o <plan.json>
   scan --path <dir> [--app <id>] -o <plan.json>
   plan show <plan.json>
+  baseline build --out <file>               build this Windows' local baseline (writes only <file>)
+  baseline info <file>                      check a local baseline file and print its seal
   kb lint <pack.json>... [--baselines <dir>]
 
   <program_id> is an inventory id (HKLM|64|Git_is1) or the Uninstall key name of exactly one entry.
@@ -118,6 +120,10 @@ pub enum Command {
     QuarantinePurge,
     /// `plan from-targets` (a test tool of the VM rig).
     PlanFromTargets,
+    /// `baseline build`.
+    BaselineBuild,
+    /// `baseline info`.
+    BaselineInfo,
     /// `kb lint`.
     KbLint,
 }
@@ -144,6 +150,8 @@ impl Command {
             Command::QuarantineExpiring => "quarantine expiring",
             Command::QuarantinePurge => "quarantine purge",
             Command::PlanFromTargets => "plan from-targets",
+            Command::BaselineBuild => "baseline build",
+            Command::BaselineInfo => "baseline info",
             Command::KbLint => "kb lint",
         }
     }
@@ -167,6 +175,7 @@ impl Command {
             | Command::QuarantineExpiring
             | Command::QuarantinePurge
             | Command::PlanFromTargets => "M2",
+            Command::BaselineBuild | Command::BaselineInfo => "BL",
             Command::KbLint => "M4",
             Command::Stdio | Command::Broker => "M3",
         }
@@ -343,6 +352,20 @@ pub struct ScanArgs {
     pub out: PathBuf,
 }
 
+/// `baseline build --out <file>`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BaselineBuildArgs {
+    /// The local baseline file to write (the only file the verb writes).
+    pub out: PathBuf,
+}
+
+/// `baseline info <file>`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BaselineInfoArgs {
+    /// The local baseline file to read.
+    pub file: PathBuf,
+}
+
 /// `plan show <plan.json>`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanShowArgs {
@@ -369,6 +392,10 @@ pub enum Invocation {
     Scan(ScanArgs),
     /// `plan show`.
     PlanShow(PlanShowArgs),
+    /// `baseline build`.
+    BaselineBuild(BaselineBuildArgs),
+    /// `baseline info`.
+    BaselineInfo(BaselineInfoArgs),
     /// An executor verb (run only by a `rig-exec` build).
     Executor(ExecVerb),
 }
@@ -390,6 +417,8 @@ pub fn parse(args: &[String]) -> Result<Invocation, String> {
         Command::Uninstall => uninstall(&rest).map(Invocation::Uninstall),
         Command::Scan => scan(&rest).map(Invocation::Scan),
         Command::PlanShow => plan_show(&rest).map(Invocation::PlanShow),
+        Command::BaselineBuild => baseline_build(&rest).map(Invocation::BaselineBuild),
+        Command::BaselineInfo => baseline_info(&rest).map(Invocation::BaselineInfo),
         Command::PlanFromTargets => from_targets(&rest)
             .map(ExecVerb::PlanFromTargets)
             .map(Invocation::Executor),
@@ -487,6 +516,15 @@ fn verb(args: &[String]) -> Result<Verb, String> {
                 &[
                     ("expiring", Command::QuarantineExpiring),
                     ("purge", Command::QuarantinePurge),
+                ],
+            );
+        }
+        "baseline" => {
+            return sub(
+                "baseline",
+                &[
+                    ("build", Command::BaselineBuild),
+                    ("info", Command::BaselineInfo),
                 ],
             );
         }
@@ -669,6 +707,21 @@ fn plan_show(args: &[String]) -> Result<PlanShowArgs, String> {
     })
 }
 
+fn baseline_build(args: &[String]) -> Result<BaselineBuildArgs, String> {
+    let p = options("baseline build", args, &["out"], &[])?;
+    no_positional("baseline build", &p)?;
+    Ok(BaselineBuildArgs {
+        out: p.path("out").ok_or("baseline build: needs --out <file>")?,
+    })
+}
+
+fn baseline_info(args: &[String]) -> Result<BaselineInfoArgs, String> {
+    let p = options("baseline info", args, &[], &[])?;
+    Ok(BaselineInfoArgs {
+        file: PathBuf::from(one_positional("baseline info", "<file>", &p)?),
+    })
+}
+
 fn no_arguments(verb: &str, args: &[String]) -> Result<(), String> {
     let p = options(verb, args, &[], &[])?;
     no_positional(verb, &p)
@@ -834,6 +887,34 @@ mod tests {
                 vec!["a.json".into()]
             ))
         );
+    }
+
+    #[test]
+    fn baseline_verbs() {
+        assert_eq!(
+            p("baseline build --out x.tsv.gz"),
+            Ok(Invocation::BaselineBuild(BaselineBuildArgs {
+                out: PathBuf::from("x.tsv.gz")
+            }))
+        );
+        assert_eq!(
+            p("baseline build -o x"),
+            Ok(Invocation::BaselineBuild(BaselineBuildArgs {
+                out: PathBuf::from("x")
+            }))
+        );
+        assert_eq!(
+            p("baseline info x.tsv.gz"),
+            Ok(Invocation::BaselineInfo(BaselineInfoArgs {
+                file: PathBuf::from("x.tsv.gz")
+            }))
+        );
+        assert!(err("baseline build").contains("needs --out"));
+        assert!(err("baseline build --out a b").contains("unexpected argument"));
+        assert!(err("baseline info").contains("missing <file>"));
+        assert!(err("baseline info a b").contains("unexpected argument"));
+        assert!(err("baseline").contains("needs a sub-verb"));
+        assert!(err("baseline load").contains("unknown 'baseline' sub-verb"));
     }
 
     fn exec_verb(line: &str) -> ExecVerb {

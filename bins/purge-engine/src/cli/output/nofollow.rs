@@ -346,10 +346,10 @@ fn dispose(h: &impl AsRawHandle) -> io::Result<()> {
     )
 }
 
-/// Writes `text` to `path` through a temporary file in the verified directory, then renames it over
+/// Writes `bytes` to `path` through a temporary file in the verified directory, then renames it over
 /// `path` relative to that directory's handle. A reparse point at `path` itself, or a directory
 /// there, is refused and left alone.
-pub(super) fn write(path: &Path, text: &str) -> io::Result<()> {
+pub(super) fn write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let walk = split(path)?;
     let mut dir: File = OpenOptions::new()
         .access_mode(FILE_TRAVERSE | FILE_READ_ATTRIBUTES | SYNCHRONIZE)
@@ -400,7 +400,7 @@ pub(super) fn write(path: &Path, text: &str) -> io::Result<()> {
     .map(File::from)?;
     // Only the file this call created is ever removed again, through its own handle.
     let result = tmp
-        .write_all(text.as_bytes())
+        .write_all(bytes)
         .and_then(|()| tmp.sync_all())
         .and_then(|()| rename_at(&tmp, &dir, &walk.leaf));
     if result.is_err() {

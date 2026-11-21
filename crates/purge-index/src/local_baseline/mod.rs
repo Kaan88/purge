@@ -2,8 +2,9 @@
 //! (edition, build, ubr) and read-only (docs/BASELINE_LOCAL_DESIGN.md §3).
 //!
 //! Every source turns what it reads into [`Records`], the text records of the baseline format; the
-//! union of all sources is the local baseline (L1: a source only adds). Hashing, the file format and
-//! the completeness seal belong to the builder (BL-BUILD), not to the sources.
+//! union of all sources is the local baseline (L1: a source only adds). The builder ([`build`]) reads
+//! them all, seals the result (§3.4) and encodes the file ([`file`]); [`LocalBaseline`] reads it back
+//! into the hashed sets the shipped baselines use.
 //!
 //! Sources:
 //!
@@ -12,9 +13,19 @@
 //! - [`appx`]: S4, inbox package manifests and the package repository's generated ProgIDs.
 
 pub mod appx;
+pub mod build;
+pub mod file;
 pub mod hive;
 pub mod macros;
 pub mod manifest;
 mod records;
 
+pub use build::{
+    BUILDER_VERSION, BuildOptions, BuildTimings, FileStamps, LocalBaselineFile, SealFloors,
+    SourceStamp, build, file_stamps, iso_utc,
+};
+pub use file::{
+    LocalBaseline, LocalBaselineError, LocalHeader, LocalSource, SourceLine, SourceStatus,
+    local_file_name,
+};
 pub use records::{NO_DATA_HASH, Records, ValueRecord, escape_into};

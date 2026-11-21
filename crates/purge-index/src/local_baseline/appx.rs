@@ -25,7 +25,7 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
-use purge_source::local_baseline::{InboxReason, LocalSources, RepositoryProgId};
+use purge_source::local_baseline::{InboxPackages, InboxReason, LocalSources, RepositoryProgId};
 use purge_source::types::SourceResult;
 
 use super::Records;
@@ -124,8 +124,13 @@ pub struct InboxStats {
 /// S4: every inbox package of `src` into `out`. An error only when the package list itself could not
 /// be read.
 pub fn inbox_records(src: &dyn LocalSources, out: &mut Records) -> SourceResult<InboxStats> {
+    Ok(packages_records(&src.inbox_packages()?, out))
+}
+
+/// S4 from a package list already read ([`LocalSources::inbox_packages`]) into `out`; the builder
+/// keeps the list for the package names of its source id.
+pub fn packages_records(inbox: &InboxPackages, out: &mut Records) -> InboxStats {
     let before = record_count(out);
-    let inbox = src.inbox_packages()?;
     let mut stats = InboxStats {
         packages: inbox.packages.len() as u64,
         not_inbox: inbox.not_inbox,
@@ -154,7 +159,7 @@ pub fn inbox_records(src: &dyn LocalSources, out: &mut Records) -> SourceResult<
         }
     }
     stats.records = record_count(out) - before;
-    Ok(stats)
+    stats
 }
 
 /// One manifest (and the package's repository ProgIDs) into `out`. On an XML error nothing is added.
