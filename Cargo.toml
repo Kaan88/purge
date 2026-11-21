@@ -19,6 +19,7 @@ members = [
     "crates/purge-kb",
     "crates/purge-rpc",
     "bins/purge-engine",
+    "bins/purge-broker",
     "bins/purge-mcp",
     "tools/xtask",
 ]

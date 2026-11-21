@@ -33,6 +33,8 @@ pub mod msi;
 pub mod msi_db;
 pub mod offreg;
 pub mod os;
+pub mod pipe;
+pub mod privilege;
 pub mod process;
 pub mod reg;
 #[cfg(feature = "write")]
@@ -47,5 +49,7 @@ pub mod signer;
 #[cfg(feature = "write")]
 pub mod sr;
 pub mod sxs;
+pub mod taskdialog;
 pub mod taskschd;
+pub mod token;
 pub mod versioninfo;

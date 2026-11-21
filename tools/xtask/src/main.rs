@@ -22,7 +22,9 @@
 //!   scanner-coverage.
 
 mod baseline_sites;
+mod bench_launch;
 mod check_deps;
+mod gen_dto;
 mod lex;
 mod no_new_walks;
 mod replay;

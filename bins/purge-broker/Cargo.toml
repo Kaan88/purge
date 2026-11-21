@@ -1,0 +1,17 @@
+[package]
+name = "purge-broker"
+description = "Purge elevated broker: the only release binary that links the executor"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+purge-engine = { path = "../purge-engine" }
+purge-exec.workspace = true
+purge-rpc.workspace = true
+purge-win = { workspace = true, features = ["write"] }
+
+[lints]
+workspace = true

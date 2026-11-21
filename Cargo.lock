@@ -132,6 +132,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "purge-broker"
+version = "0.1.0"
+dependencies = [
+ "purge-engine",
+ "purge-exec",
+ "purge-rpc",
+ "purge-win",
+]
+
+[[package]]
 name = "purge-engine"
 version = "0.1.0"
 dependencies = [

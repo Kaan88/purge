@@ -8,6 +8,12 @@
 //! the result of `engine.hello` ([`EngineHello`]), because the baseline view reports through it
 //! (BASELINE_LOCAL_DESIGN.md, package BL-CACHE).
 
+pub mod error;
+pub mod frame;
+pub mod methods;
+pub mod sets;
+pub mod table;
+
 use purge_model::{BaselineTrust, BaselineViewRef};
 use serde::{Deserialize, Serialize};
 

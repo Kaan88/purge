@@ -120,6 +120,9 @@ fn unified_violations(inverted: &str, forbidden: &BTreeSet<&str>) -> Vec<String>
 const EXEC: &str = "purge-exec";
 /// The one crate that may depend on [`EXEC`].
 const ENGINE: &str = "purge-engine";
+/// TEMPORARY (M3-S0): the broker links purge-exec by design. Package M3-DEPS rewrites rule 4 for the
+/// broker and removes this allowance.
+const TEMP_EXEC_DEPENDENTS: &[&str] = &["purge-broker"];
 
 /// The features purge-exec is built with in a `-f "{p} {f}"` listing, or `None` if it is absent.
 fn exec_features(tree: &str) -> Option<BTreeSet<&str>> {
@@ -156,7 +159,10 @@ fn exec_violations(
             "unexpected cargo tree -i {EXEC} output (first package is not {EXEC})"
         ));
     }
-    for name in deps.filter(|n| *n != ENGINE).collect::<BTreeSet<_>>() {
+    for name in deps
+        .filter(|n| *n != ENGINE && !TEMP_EXEC_DEPENDENTS.contains(n))
+        .collect::<BTreeSet<_>>()
+    {
         out.push(format!("{name} depends on {EXEC}; only {ENGINE} may"));
     }
     let mut default = engine_default
@@ -217,7 +223,10 @@ fn default_build_violations(default_dependents: &str, engine_default: &str) -> V
             "unexpected cargo tree -i {EXEC} output (first package is not {EXEC})"
         ));
     }
-    for name in deps.collect::<BTreeSet<_>>() {
+    for name in deps
+        .filter(|n| !TEMP_EXEC_DEPENDENTS.contains(n))
+        .collect::<BTreeSet<_>>()
+    {
         out.push(format!(
             "a default workspace build links {EXEC} into {name}"
         ));
