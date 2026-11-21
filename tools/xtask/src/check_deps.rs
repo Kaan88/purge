@@ -466,7 +466,10 @@ mod tests {
             ("MsiConfigureProductEx(p, 0, 2, c)", "MsiConfigureProduct"),
             ("MsiReinstallProductW(p, 0)", "MsiReinstallProduct"),
             ("ORCreateHive(&mut h)", "ORCreateHive"),
-            ("ORCreateKey(h, name, None, 0, None, &mut k, None)", "ORCreateKey"),
+            (
+                "ORCreateKey(h, name, None, 0, None, &mut k, None)",
+                "ORCreateKey",
+            ),
             ("ORDeleteKey(h, name)", "ORDeleteKey"),
             ("ORDeleteValue(k, name)", "ORDeleteValue"),
             ("ORFlushHive(h)", "ORFlushHive"),
@@ -477,7 +480,10 @@ mod tests {
             ("ORSetValue(k, name, 1, data, n)", "ORSetValue"),
             ("ORSetVirtualFlags(k, 0)", "ORSetVirtualFlags"),
             ("RegLoadKeyW(HKEY_USERS, name, path)", "RegLoadKey"),
-            ("RegLoadAppKeyW(path, &mut k, 0x20019, 0, 0)", "RegLoadAppKey"),
+            (
+                "RegLoadAppKeyW(path, &mut k, 0x20019, 0, 0)",
+                "RegLoadAppKey",
+            ),
             ("Command::new(\"NETSH.exe\")", "netsh"),
             (
                 "let p = r\"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\";",
