@@ -8,6 +8,8 @@
 //!    `CurrentControlSet` is a registry link that `purge-win` refuses to traverse.
 //! 2. `HKU\<SID>\Software\Classes\<more>` → `HKU\<SID>_Classes\<more>`: the physical classes hive.
 //!    `HKU\<SID>\Software\Classes` itself is left alone, so it is opened (and reported) as the link it is.
+//!    Not for the hives that have no classes hive of their own (`.DEFAULT`, `S-1-5-18`, `S-1-5-19`,
+//!    `S-1-5-20`): there `Software\Classes` is an ordinary key and is read where it is.
 //! 3. The `WOW6432Node` segment is read the way [`TypedTarget`] reads it, i.e. only where Windows redirects:
 //!    `HKLM\SOFTWARE\WOW6432Node\X` → `SOFTWARE\X` opened with `KEY_WOW64_32KEY`, and
 //!    `HKU\<SID>_Classes\WOW6432Node\X` → `<SID>_Classes\X` with `KEY_WOW64_32KEY`. The redirector then
@@ -31,6 +33,8 @@ use crate::types::{SourceError, SourceResult};
 const WOW_NODE: &str = "WOW6432Node";
 /// Suffix of a user's classes hive under `HKEY_USERS`.
 const CLASSES_SUFFIX: &str = "_Classes";
+/// `HKEY_USERS` hives without a `<SID>_Classes` hive: their `Software\Classes` is an ordinary key.
+const NO_CLASSES_HIVE: [&str; 4] = [".DEFAULT", "S-1-5-18", "S-1-5-19", "S-1-5-20"];
 
 /// Where a canonical key path is opened.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -107,6 +111,7 @@ pub(crate) fn translate_key(
         }
         if segs.len() > 4
             && !ends_with_ci(&segs[1], CLASSES_SUFFIX)
+            && !NO_CLASSES_HIVE.iter().any(|s| eq_ci(&segs[1], s))
             && eq_ci(&segs[2], "Software")
             && eq_ci(&segs[3], "Classes")
         {
@@ -278,6 +283,32 @@ mod tests {
             (
                 r"HKU\.DEFAULT\Software".into(),
                 loc(Hku, r".DEFAULT\Software", K64),
+            ),
+            // Hives without a classes hive keep `Software\Classes` where it is.
+            (
+                r"HKU\.DEFAULT\Software\Classes\Local Settings".into(),
+                loc(Hku, r".DEFAULT\Software\Classes\Local Settings", K64),
+            ),
+            (
+                r"HKU\.default\Software\Classes\x".into(),
+                loc(Hku, r".default\Software\Classes\x", K64),
+            ),
+            (
+                r"HKU\S-1-5-18\Software\Classes\CLSID".into(),
+                loc(Hku, r"S-1-5-18\Software\Classes\CLSID", K64),
+            ),
+            (
+                r"HKU\S-1-5-19\Software\Classes\x".into(),
+                loc(Hku, r"S-1-5-19\Software\Classes\x", K64),
+            ),
+            (
+                r"HKU\S-1-5-20\Software\Classes\x".into(),
+                loc(Hku, r"S-1-5-20\Software\Classes\x", K64),
+            ),
+            // Only the exact well-known SIDs: a longer SID is an ordinary user.
+            (
+                r"HKU\S-1-5-18-1\Software\Classes\x".into(),
+                loc(Hku, r"S-1-5-18-1_Classes\x", K64),
             ),
         ];
         for (key, want) in cases {
