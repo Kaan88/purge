@@ -1,0 +1,188 @@
+using System.Runtime.InteropServices;
+using Microsoft.UI.Windowing;
+using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Media;
+using Purge.App.Shell;
+using Purge.App.Views;
+using Windows.Graphics;
+
+namespace Purge.App;
+
+public sealed partial class MainWindow : Window
+{
+    public static MainWindow Instance { get; private set; } = null!;
+
+    private readonly ProgramsView _programs;
+    private readonly Dictionary<string, UIElement> _views = new();
+    private readonly (Button Button, Border Selection, Border Pill)[] _rail;
+    private bool _firstTickSeen;
+
+    public MainWindow()
+    {
+        Instance = this;
+        InitializeComponent();
+        LaunchMarkers.Mark("window_ctor");
+
+        SystemBackdrop = new MicaBackdrop();
+        ExtendsContentIntoTitleBar = true;
+        SetTitleBar(AppTitleBar);
+        var icon = Path.Combine(AppContext.BaseDirectory, "Assets", "Purge.ico");
+        if (File.Exists(icon)) AppWindow.SetIcon(icon);
+        SizeAndCenter(1360, 860);
+        ApplyTheme(Program.Options.Theme);
+
+        _rail =
+        [
+            (NavPrograms, SelPrograms, PillPrograms), (NavQueue, SelQueue, PillQueue),
+            (NavLeftovers, SelLeftovers, PillLeftovers), (NavHistory, SelHistory, PillHistory),
+            (NavVault, SelVault, PillVault), (NavSettings, SelSettings, PillSettings),
+        ];
+
+        // S1 is the only view built for the first frame; its rows are set before Activate() when the list
+        // reply is already in (§9.2 step 4).
+        _programs = new ProgramsView();
+        _views["programs"] = _programs;
+        ContentCard.Child = _programs;
+        if (Program.Startup.IsCompletedSuccessfully)
+            OnStartup(Program.Startup.Result);
+        else
+            _ = LoadWhenReadyAsync();
+
+        if (Program.Options.Page is { } page) Navigate(page);
+        CompositionTarget.Rendering += OnFirstRendering;
+        // No engine outlives the window: the client ends what it runs and closes its kill-on-close job.
+        Closed += (_, _) => Program.Engine.DisposeAsync().AsTask().GetAwaiter().GetResult();
+    }
+
+    private async Task LoadWhenReadyAsync() => OnStartup(await Program.Startup);
+
+    private void OnStartup(StartupData data)
+    {
+        _programs.Load(data);
+        // The "Administrator" chip shows only when the UI itself runs elevated (7a delta 2).
+        ElevationChip.Visibility = data.Hello.Elevated ? Visibility.Visible : Visibility.Collapsed;
+        if (data.Error is { } error) _programs.ShowEngineNotice(error);
+    }
+
+    /// <summary>The S3 review page (built on first use), for the scan started from S1.</summary>
+    public ReviewView OpenReview()
+    {
+        Navigate("leftovers");
+        return (ReviewView)_views["leftovers"];
+    }
+
+    private void OnFirstRendering(object? sender, object e)
+    {
+        if (_firstTickSeen) return;
+        _firstTickSeen = true;
+        CompositionTarget.Rendering -= OnFirstRendering;
+        LaunchMarkers.Mark("first_tick");
+
+        // Approximate "first presented frame": the next DWM composition after the first tick has been committed.
+        // The precise number comes from Dwm-Core present events in WPR (§9.2 (a)).
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+        {
+            _programs.OnFirstTick();
+            Task.Run(() =>
+            {
+                LaunchMarkers.DwmFlush();
+                LaunchMarkers.Mark("presented");
+                LaunchMarkers.Flush();
+                if (Program.Options.BenchExit)
+                    DispatcherQueue.TryEnqueue(Close);
+                else
+                    DispatcherQueue.TryEnqueue(() => _programs.ShowLaunchTime());
+            });
+        });
+    }
+
+    private void OnRailClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: string key }) Navigate(key);
+    }
+
+    /// <summary>S1, built for the first frame and kept.</summary>
+    public ProgramsView Programs => _programs;
+
+    /// <summary>The view shown in the content card.</summary>
+    public UIElement? CurrentView => ContentCard.Child;
+
+    /// <summary>The page shown, by rail key.</summary>
+    public string CurrentPage { get; private set; } = "programs";
+
+    public void Navigate(string key)
+    {
+        if (!_views.TryGetValue(key, out var view))
+        {
+            view = key switch
+            {
+                "queue" => new QueueView(),
+                "leftovers" => new ReviewView(),
+                "vault" => new VaultView(),
+                "history" => new HistoryView(),
+                "settings" => new SettingsView(),
+                _ => _programs,
+            };
+            _views[key] = view;
+        }
+        ContentCard.Child = view;
+        foreach (var (button, selection, pill) in _rail)
+        {
+            var visibility = button.Tag as string == key ? Visibility.Visible : Visibility.Collapsed;
+            selection.Visibility = visibility;
+            pill.Visibility = visibility;
+        }
+        CurrentPage = key;
+        if (Root.RequestedTheme != ElementTheme.Default)
+            DispatcherQueue.TryEnqueue(() => PinInfoBars(view));
+    }
+
+    /// <summary>The theme the window shows (Settings → Appearance, else Windows).</summary>
+    public ElementTheme ActualTheme => Root.ActualTheme;
+
+    // InfoBar takes its severity fill from the app-level theme (the Windows setting) rather than from the
+    // RequestedTheme of its ancestors, so with Windows dark and Purge set to Light a warning bar showed dark brown.
+    // Setting RequestedTheme on the bar itself makes it follow the window.
+    private void PinInfoBars(DependencyObject node)
+    {
+        if (node is InfoBar bar) bar.RequestedTheme = Root.ActualTheme;
+        var n = VisualTreeHelper.GetChildrenCount(node);
+        for (var i = 0; i < n; i++) PinInfoBars(VisualTreeHelper.GetChild(node, i));
+    }
+
+    public nint Hwnd => WinRT.Interop.WindowNative.GetWindowHandle(this);
+
+    public void SetProgramsCount(int count) => ProgramsCount.Text = count.ToString(System.Globalization.CultureInfo.CurrentCulture);
+
+    public ElementTheme Theme => Root.RequestedTheme;
+
+    public void ApplyTheme(ElementTheme theme)
+    {
+        Root.RequestedTheme = theme;
+        if (ContentCard?.Child is { } current) PinInfoBars(current);
+        AppWindow.TitleBar.PreferredTheme = theme switch
+        {
+            ElementTheme.Light => TitleBarTheme.Light,
+            ElementTheme.Dark => TitleBarTheme.Dark,
+            _ => TitleBarTheme.UseDefaultAppMode,
+        };
+    }
+
+
+    private void SizeAndCenter(int width, int height)
+    {
+        var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+        var scale = GetDpiForWindow(hwnd) / 96.0;
+        var size = new SizeInt32((int)(width * scale), (int)(height * scale));
+        var area = DisplayArea.GetFromWindowId(AppWindow.Id, DisplayAreaFallback.Primary).WorkArea;
+        size.Width = Math.Min(size.Width, area.Width);
+        size.Height = Math.Min(size.Height, area.Height);
+        AppWindow.MoveAndResize(new RectInt32(
+            area.X + (area.Width - size.Width) / 2, area.Y + (area.Height - size.Height) / 2, size.Width, size.Height));
+    }
+
+    [LibraryImport("user32.dll")]
+    private static partial uint GetDpiForWindow(nint hwnd);
+}

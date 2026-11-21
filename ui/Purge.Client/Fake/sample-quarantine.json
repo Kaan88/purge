@@ -1,0 +1,102 @@
+{
+ "volumes": [
+  {
+   "volume": "C:",
+   "used_bytes": 1353606757,
+   "cap_bytes": 10737418240,
+   "note": null
+  },
+  {
+   "volume": "D:",
+   "used_bytes": 222298112,
+   "cap_bytes": 10737418240,
+   "note": "Steam library cleanups"
+  }
+ ],
+ "batches": [
+  {
+   "session_id": "2026-11-12T0414",
+   "program_name": "Mozilla Firefox",
+   "publisher": "Mozilla",
+   "created": "2026-11-12T04:14:00+03:00",
+   "volume": "C:",
+   "file_items": 3,
+   "registry_items": 5,
+   "bytes": 2831155,
+   "state": "Undoable",
+   "user_data_items": 1
+  },
+  {
+   "session_id": "2026-11-12T0416",
+   "program_name": "Python 3.12.7 (64-bit)",
+   "publisher": "Python Software Foundation",
+   "created": "2026-11-12T04:16:00+03:00",
+   "volume": "C:",
+   "file_items": 3,
+   "registry_items": 3,
+   "bytes": 32505856,
+   "state": "Partial",
+   "user_data_items": 0
+  },
+  {
+   "session_id": "2026-11-12T0358",
+   "program_name": "Notepad++",
+   "publisher": "Notepad++ Team",
+   "created": "2026-11-12T03:58:00+03:00",
+   "volume": "C:",
+   "file_items": 0,
+   "registry_items": 0,
+   "bytes": 0,
+   "state": "Restored",
+   "user_data_items": 0
+  },
+  {
+   "session_id": "2026-11-10T2241",
+   "program_name": "Microsoft Visual Studio Code",
+   "publisher": "Microsoft Corporation",
+   "created": "2026-11-10T22:41:00+03:00",
+   "volume": "C:",
+   "file_items": 3,
+   "registry_items": 138,
+   "bytes": 29779558,
+   "state": "Undoable",
+   "user_data_items": 1
+  },
+  {
+   "session_id": "2026-11-10T2230",
+   "program_name": "7-Zip 24.08",
+   "publisher": "Igor Pavlov",
+   "created": "2026-11-10T22:30:00+03:00",
+   "volume": "C:",
+   "file_items": 0,
+   "registry_items": 0,
+   "bytes": 0,
+   "state": "KeptAll",
+   "user_data_items": 0
+  },
+  {
+   "session_id": "2026-10-16T1802",
+   "program_name": "Zoom Workplace",
+   "publisher": "Zoom Communications, Inc.",
+   "created": "2026-10-16T18:02:00+03:00",
+   "volume": "C:",
+   "file_items": 38,
+   "registry_items": 3,
+   "bytes": 1288490188,
+   "state": "Undoable",
+   "user_data_items": 2
+  },
+  {
+   "session_id": "2026-11-03T2015",
+   "program_name": "Steam game: Old Demo",
+   "publisher": "Valve Corporation",
+   "created": "2026-11-03T20:15:00+03:00",
+   "volume": "D:",
+   "file_items": 4,
+   "registry_items": 1,
+   "bytes": 222298112,
+   "state": "Undoable",
+   "user_data_items": 0
+  }
+ ]
+}

@@ -1,0 +1,45 @@
+{
+  "schema": "purge.sessions/1",
+  "sessions": [
+    {
+      "id": "20261115T223530Z-cada70265f85311e",
+      "app": "rig-targets",
+      "owner": {
+        "program_id": "HKLM|64|PurgeRigTargets",
+        "display_name": "Purge rig targets"
+      },
+      "plan_hash": "942f107d3b6f83672a3545ea4025f1a3e3def2ab022403beaefdf1a99737e27a",
+      "state": "Committed",
+      "started": 134392557304866784,
+      "finished": 134392557305229055,
+      "counts": {
+        "done": 2,
+        "vanished": 0,
+        "skipped": 0,
+        "held_retry": 0,
+        "pending_reboot": 0,
+        "failed": 0
+      },
+      "undone": 0,
+      "backup_bytes": 11,
+      "usage": [
+        {
+          "serial": 1633208402887983107,
+          "root": "C:\\",
+          "bytes": 11
+        }
+      ],
+      "expires": {
+        "quarantine": 134418477304866784,
+        "backups": 134548077304866784,
+        "journal": 134707917304866784
+      },
+      "purged": [],
+      "pending_reboot": false,
+      "journal": {
+        "records": 10,
+        "head": "80db47bebdbab0b736af84e5975e77e587073e7c7aa9643e5e50f79e54cbb728"
+      }
+    }
+  ]
+}

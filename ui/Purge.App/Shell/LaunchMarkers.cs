@@ -1,0 +1,73 @@
+using System.Runtime.InteropServices;
+using System.Text;
+
+namespace Purge.App;
+
+/// <summary>
+/// Launch markers relative to process creation (ENGINE_PLAN.md §9.2, measurement (a)). Each marker is the
+/// time in milliseconds since the kernel created this process. When <c>PURGE_BENCH_OUT</c> names a file, the
+/// markers are appended to it as one line per launch once the first frame has been presented.
+/// TraceLogging output comes later.
+/// </summary>
+public static partial class LaunchMarkers
+{
+    private static readonly long CreationFileTime = GetCreationTime();
+    private static readonly List<(string Name, double Ms)> Marks = [];
+    private static readonly Lock Gate = new();
+
+    public static double Mark(string name)
+    {
+        GetSystemTimePreciseAsFileTime(out var now);
+        var ms = (now - CreationFileTime) / 10_000.0;
+        lock (Gate) Marks.Add((name, ms));
+        return ms;
+    }
+
+    public static IReadOnlyList<(string Name, double Ms)> Snapshot()
+    {
+        lock (Gate) return Marks.ToArray();
+    }
+
+    public static double? Get(string name)
+    {
+        lock (Gate)
+            foreach (var (n, ms) in Marks)
+                if (n == name) return ms;
+        return null;
+    }
+
+    public static string Format()
+    {
+        var sb = new StringBuilder();
+        foreach (var (n, ms) in Snapshot())
+            sb.Append(n).Append('=').Append(ms.ToString("F1", System.Globalization.CultureInfo.InvariantCulture)).Append(' ');
+        return sb.ToString().TrimEnd();
+    }
+
+    public static void Flush()
+    {
+        var path = Environment.GetEnvironmentVariable("PURGE_BENCH_OUT");
+        if (string.IsNullOrEmpty(path)) return;
+        try { File.AppendAllText(path, Format() + Environment.NewLine); }
+        catch (IOException) { }
+    }
+
+    private static long GetCreationTime()
+    {
+        GetProcessTimes(GetCurrentProcess(), out var creation, out _, out _, out _);
+        return creation;
+    }
+
+    [LibraryImport("kernel32.dll")]
+    private static partial nint GetCurrentProcess();
+
+    [LibraryImport("kernel32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetProcessTimes(nint process, out long creation, out long exit, out long kernel, out long user);
+
+    [LibraryImport("kernel32.dll")]
+    private static partial void GetSystemTimePreciseAsFileTime(out long fileTime);
+
+    [LibraryImport("dwmapi.dll")]
+    internal static partial int DwmFlush();
+}

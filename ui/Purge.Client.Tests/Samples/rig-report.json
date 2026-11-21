@@ -1,0 +1,58 @@
+{
+  "schema": "purge.exec/1",
+  "session": "20261115T223530Z-cada70265f85311e",
+  "app": "rig-targets",
+  "plan_hash": "942f107d3b6f83672a3545ea4025f1a3e3def2ab022403beaefdf1a99737e27a",
+  "selection_hash": "a7a45c77edb1657b77f372bb3465bf034582a7e4e8c689d623829033c20d90a7",
+  "state": "Committed",
+  "started": 134392557304866784,
+  "finished": 134392557305229055,
+  "items": [
+    {
+      "item": "files.dir",
+      "op": 1,
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Local\\Temp\\purge-sample\\work\\app"
+      },
+      "exec_op": {
+        "kind": "QuarantineMove",
+        "path": "C:\\Users\\tester\\AppData\\Local\\Temp\\purge-sample\\work\\app"
+      },
+      "outcome": {
+        "kind": "Done"
+      },
+      "backup_bytes": 5
+    },
+    {
+      "item": "single",
+      "op": 2,
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Local\\Temp\\purge-sample\\work\\single.txt"
+      },
+      "exec_op": {
+        "kind": "QuarantineMove",
+        "path": "C:\\Users\\tester\\AppData\\Local\\Temp\\purge-sample\\work\\single.txt"
+      },
+      "outcome": {
+        "kind": "Done"
+      },
+      "backup_bytes": 6
+    }
+  ],
+  "counts": {
+    "done": 2,
+    "vanished": 0,
+    "skipped": 0,
+    "held_retry": 0,
+    "pending_reboot": 0,
+    "failed": 0
+  },
+  "backup_bytes": 11,
+  "pending_reboot": false,
+  "restore_point": {
+    "kind": "NotRequested"
+  },
+  "warnings": []
+}
