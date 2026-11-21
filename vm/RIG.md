@@ -1747,3 +1747,52 @@ R8 B1, below). It comes from null runs of the executor flows, not from hand rule
   `ambient-guest-differs`, `ambient-declared-missing`, `ambient-few-null-runs`, `ambient-gate-run-id`,
   `ambient-fixture-name`, `ambient-schema` (each must fail BIND); rigtool
   `m2_run_records_keep_added_records_only_when_asked`.
+
+## 13. M3 rig spike: UAC on, secure desktop answered from the host, UIPI probe (`rig-m3.ps1`, M3-RIG-UAC)
+
+docs/M3_DESIGN.json package M3-RIG-UAC; M3_DESIGN.md section 4 (T1) and 11.2 (modes `m3-consent`, `m3-uac`). Host
+driver `vm\rig-m3.ps1` (dot-sources rig.ps1), guest side `vm\guest\m3-uipi-probe.ps1` (one agent job per phase; it
+holds the C# source of the probe `m3probe.exe`, compiled in the guest with the .NET Framework 4 `csc.exe` and a
+comctl32 v6 manifest). Results of the first run: `vm\truth\m3-rig-uac.md`.
+
+```powershell
+$env:VMPWFILE = 'C:\path\to\pw.txt'
+.\vm\rig-m3.ps1                  # -Mode all: build m3-uac-on if missing, then the probe (about 6 min)
+.\vm\rig-m3.ps1 -Mode snapshot   # only the snapshot (-Rebuild deletes an existing m3-uac-on first)
+.\vm\rig-m3.ps1 -Mode probe      # only the probe
+```
+
+- **Snapshot `m3-uac-on`** on Inbound-Win11-Test (offline, child of `rig-base`): `rig-base` restored with 3D off
+  (section 9), guest phase `uac-set` writes `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System`
+  `ConsentPromptBehaviorAdmin=5` and `PromptOnSecureDesktop=1` and checks `EnableLUA=1` (the Windows defaults;
+  `rig-base` already had them, so the snapshot differs from `rig-base` only in being a fixed named state with 3D off),
+  ACPI shutdown, `snapshot take`. The agent still starts elevated without a prompt: the `PurgeRigAgent` logon task
+  runs at the highest level, which the task scheduler grants without consent. Only Inbound-Win11-Test is accepted.
+- **UIPI matrix** (phase `uipi`, `guest\uipi\<level>-<method>\`): for each driver level (medium first, through the
+  one-shot task `PurgeRigM3Drive` at the limited run level; then high, started by the agent, as the control) and each
+  method, a fresh high-integrity dummy TaskDialog (`m3probe dialog`: custom button 1001 "&Delete (probe)", Cancel as
+  default button, a verification check box; it takes the foreground itself; every `TDN_BUTTON_CLICKED` returns
+  `S_FALSE`, so one dialog takes every attempt; `events.log` is the ground truth) is shown and `m3probe drive` tries:
+  `sendinput-key` (Alt+D, then Enter), `sendinput-mouse` (click at the button's centre; the rectangle comes from the
+  dialog's own UI Automation scan, `buttons.json`), `postmessage` (`TDM_CLICK_BUTTON` 1001, `WM_COMMAND` 1001,
+  `BM_CLICK` to the child `Button` window, `SendMessageTimeout TDM_CLICK_BUTTON`), `uia` (list descendants,
+  `InvokePattern.Invoke` on the custom button, `TogglePattern.Toggle` on the check box). An attempt "reached" when the
+  dialog logged a click within 1.2 s of it. `uipi.json`: per case the dialog's and the driver's integrity level, the
+  foreground before each attempt, the API return values, and `medium_blocked_all`, `control_reached`.
+- **Secure desktop** (phases `uac-arm`, `uac-result`, `guest\uac-<tag>\`): the medium process `m3probe runas` (task
+  `PurgeRigM3RunAs`) calls ShellExecute `runas` on `m3probe whoami`; the agent waits for `consent.exe` and records the
+  input desktop (`OpenInputDesktop` from high fails with error 5 while the Winlogon desktop is the input desktop;
+  `Default` otherwise). The host takes `uac-<tag>-1-prompt.png` (`controlvm screenshotpng`), sends set-1 scancodes
+  with `controlvm keyboardputscancode` (No: Alt+N = `38 31 b1 b8`, fallback Esc; Yes: Alt+Y = `38 15 95 b8`, fallback
+  Left+Enter; a fallback is sent only while the outcome is still pending), takes `uac-<tag>-2-after-<keys>.png`, and
+  `uac-result` reads `runas.json` (error 1223 = cancelled) and `elevated.json` (the child's integrity level). The
+  prompt's focused button is **No**: a bare Enter declines.
+- **Evidence**: `-Evidence` (default `E:\purge-build\gate-evidence\m3-rig-uac\`): `rig-m3-<stamp>.log`, the PNGs,
+  `jobs\*.log` (each guest job's log), `guest\` (the guest's `C:\cr\out\m3-rig-uac\`, zipped by phase `pack` and
+  pulled), `summary.json` (every `M3 ...` result line and the per-answer records). Afterwards the VM is powered off and
+  `rig-base` restored. Do not hold the host log open (for example `tail -f`) while the script runs: `Write-RigLog`
+  then loses its file lines silently (the console still has them).
+- **Refusals** (exit 2): VMPWFILE not a readable file, the VM missing, any VirtualBox VM running (one VM at a time),
+  or the lock `vm\runs\.lock-Inbound-Win11-Test` held. Exit 1 when a phase did not finish or wrote no result line.
+- **Not covered here**: the real broker dialog (`m3-consent` repeats this matrix against it), a standard-user account
+  typing administrator credentials (T8, `m3-uac`), and the manual `SendInput` check of section 11.3.
