@@ -23,6 +23,7 @@ pub mod appx;
 pub mod appx_write;
 pub mod cmdline;
 pub mod env;
+pub mod eventlog;
 #[cfg(feature = "write")]
 pub mod firewall;
 pub mod fs;

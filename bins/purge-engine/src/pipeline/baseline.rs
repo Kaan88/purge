@@ -26,6 +26,10 @@
 //! says who can add or remove files, not who can write a file that was moved into it. A neighbour
 //! only ever adds presence, so its file is not judged.
 //!
+//! Elevated, the shipped directory and the cache directory must also be on the volume of
+//! [`Settings::volume_rule`], for the live engine the system volume (BL-R1 S4): descriptors are made
+//! of well-known SIDs, so a volume written on another machine can carry administrator-only ones.
+//!
 //! # The background build (W4 as restated 2026-11-21)
 //!
 //! [`start_local_build`] is called once when the engine starts (the CLI: at the start of `harvest`,
@@ -53,7 +57,7 @@ use purge_rpc::{BaselineBuild, BaselineStatus};
 use purge_source::local_baseline::LocalSources;
 use purge_win::sxs::SxsBase;
 
-use super::{Settings, Sources, load_baseline};
+use super::{Settings, Sources, VolumeRule, load_baseline, volume_admits};
 
 /// What a pipeline step knows about "Windows' own": the view, and how it came about.
 #[derive(Debug, Clone)]
@@ -137,14 +141,18 @@ impl PipelineBaseline {
     }
 }
 
-/// Whether the shipped baseline directory may be used: always, unless the settings ask for the
-/// check and the engine is elevated; then only when it is admin-only writable.
+/// Whether the shipped baseline directory may be used: always when the engine is not elevated.
+/// Elevated, only when it passes [`Settings::volume_rule`] (the system volume for the live engine,
+/// BL-R1 S4) and, when the settings ask for the check, is admin-only writable.
 fn shipped_dir_trusted(sources: Sources<'_>, settings: &Settings, dir: &Path) -> bool {
-    !settings.check_shipped_dir
+    let judged = settings.check_shipped_dir || settings.volume_rule != VolumeRule::Any;
+    !judged
         || !sources.sys.elevated()
-        || dir
-            .to_str()
-            .is_some_and(|d| sources.fs.is_admin_only_writable(d) == Ok(true))
+        || (settings.volume_rule.admits(dir)
+            && (!settings.check_shipped_dir
+                || dir
+                    .to_str()
+                    .is_some_and(|d| sources.fs.is_admin_only_writable(d) == Ok(true))))
 }
 
 /// Whether one file of a shipped directory that passed [`shipped_dir_trusted`] may be used: under
@@ -191,6 +199,9 @@ fn user_writable_warning(file: &Path) -> String {
 /// (`LocalCache::open`). The directory is created only by an elevated engine and only inside a data
 /// root (its parent, `<ProgramData>\Purge`) that exists and is itself admin-only writable; a
 /// directory that fails the rule is ignored, never repaired. Writable only when elevated.
+///
+/// Elevated, the data root and the directory must also pass [`Settings::volume_rule`] (BL-R1 S4):
+/// a cache on another volume is never created, read or built into.
 pub fn local_cache(sources: Sources<'_>, settings: &Settings) -> Option<LocalCache> {
     let dir = settings.local_baseline_dir.as_deref()?;
     let elevated = sources.sys.elevated();
@@ -198,9 +209,18 @@ pub fn local_cache(sources: Sources<'_>, settings: &Settings) -> Option<LocalCac
         p.to_str()
             .is_some_and(|s| sources.fs.is_admin_only_writable(s) == Ok(true))
     };
-    if elevated && !dir.is_dir() && dir.parent().is_some_and(admin_only) {
+    let on_volume = |p: &Path| volume_admits(sources, settings, p);
+    if elevated
+        && !dir.is_dir()
+        && dir
+            .parent()
+            .is_some_and(|root| on_volume(root) && admin_only(root))
+    {
         // Failing to create it leaves the engine without a cache; the next run tries again.
         let _ = std::fs::create_dir(dir);
+    }
+    if !on_volume(dir) {
+        return None;
     }
     LocalCache::open(dir, sources.fs, elevated)
 }
@@ -230,8 +250,8 @@ fn load_with(
     let shipped = shipped_dir_trusted(sources, settings, dir);
     if !shipped {
         warnings.push(format!(
-            "baseline: {} can be written by a standard user (or its protection could not be read); \
-             no shipped baseline is used",
+            "baseline: {} can be written by a standard user or is not on the system volume (or \
+             its protection could not be read); no shipped baseline is used",
             dir.display()
         ));
     }
@@ -611,8 +631,8 @@ where
     }
     let Some(cache) = local_cache(sources, settings) else {
         return none(
-            "the cache directory does not exist under an admin-only data root, or a standard \
-             user can write it"
+            "the cache directory does not exist under an admin-only data root, a standard \
+             user can write it, or it is not on the system volume"
                 .into(),
         );
     };
@@ -1030,6 +1050,84 @@ mod tests {
         let f = machine(true, Some(false));
         let loaded = load(Sources::of(&f), &t.settings(), &os(), &mut Vec::new());
         assert_eq!(loaded.trust(), BaselineTrust::Exact);
+    }
+
+    /// BL-R1 S4: elevated, the shipped directory and the cache directory are trusted only on the
+    /// volume of [`Settings::volume_rule`]. The temp tree is on the system volume, which the live
+    /// rule names; a rule naming another volume stands for a tree on a disk written elsewhere.
+    #[test]
+    fn an_elevated_engine_trusts_directories_only_on_the_rule_s_volume() {
+        use super::super::VolumeRule;
+        let t = tree("volume");
+        t.shipped(
+            "Professional-26100.9711",
+            "Professional\t26100.9711",
+            r"hklm\\software\\exactkey",
+        );
+        let system = purge_win::secure::system_volume().unwrap();
+        if purge_win::secure::volume_of(&t.kb).unwrap() != system {
+            eprintln!("the temp directory is not on the system volume: skipped");
+            return;
+        }
+        let kb = t.kb.to_str().unwrap();
+        let exact_file = format!(r"{kb}\Professional-26100.9711.tsv.gz");
+        let machine = |elevated: bool| {
+            let mut f = t.machine(elevated, true);
+            f.add_dir(kb);
+            f.set_admin_only_writable(kb, true);
+            f.add_file(&exact_file, 1);
+            f
+        };
+        let with = |rule: VolumeRule| Settings {
+            check_shipped_dir: true,
+            volume_rule: rule,
+            ..t.settings()
+        };
+
+        // On the system volume: used.
+        let mut warnings = Vec::new();
+        let loaded = load(
+            Sources::of(&machine(true)),
+            &with(VolumeRule::On(system.clone())),
+            &os(),
+            &mut warnings,
+        );
+        assert_eq!(loaded.trust(), BaselineTrust::Exact, "{warnings:?}");
+        assert!(VolumeRule::live().admits(&t.kb));
+
+        let other = VolumeRule::On(r"\\?\volume{00000000-0000-0000-0000-000000000000}\".into());
+        for rule in [other, VolumeRule::Unreadable] {
+            // Elevated: no shipped baseline, exact or neighbour, and no cache: not opened, not made.
+            let mut warnings = Vec::new();
+            let loaded = load(
+                Sources::of(&machine(true)),
+                &with(rule.clone()),
+                &os(),
+                &mut warnings,
+            );
+            assert_eq!(loaded.trust(), BaselineTrust::None, "{rule:?}");
+            assert!(loaded.exact_counts().is_none());
+            assert!(!loaded.view.has_key(r"HKLM\SOFTWARE\ExactKey"));
+            assert!(has(&warnings, "not on the system volume"), "{warnings:?}");
+            assert!(!t.cache.exists(), "{rule:?}: the cache directory was made");
+            let end = build_to_end(&machine(true), &with(rule.clone()));
+            assert!(
+                matches!(&end, BaselineBuild::None { reason } if reason.contains("system volume")),
+                "{rule:?}: {end:?}"
+            );
+            assert!(
+                !t.cache.exists(),
+                "{rule:?}: the build made the cache directory"
+            );
+            // Not elevated: the volume is not judged.
+            let loaded = load(
+                Sources::of(&machine(false)),
+                &with(rule),
+                &os(),
+                &mut Vec::new(),
+            );
+            assert_eq!(loaded.trust(), BaselineTrust::Exact);
+        }
     }
 
     /// Local sources whose manifest listing waits until the test lets it go.

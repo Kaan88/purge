@@ -14,9 +14,23 @@
 //!   paths work and names that end in a dot or a space keep their exact spelling.
 //!
 //! Nothing here changes anything: no ownership change, no ACL edit, no privilege is enabled.
+//!
+//! # Directories an elevated process trusts (M3 design 3.4, BL-R1 S4)
+//!
+//! - [`system_volume`] is the volume of the running Windows directory
+//!   (`known_folders::system_windows_dir`), named by its volume GUID path (`\\?\Volume{…}\`). The
+//!   GUID path is the mount manager's name of a volume mounted on this machine, read from an open
+//!   handle ([`handle_volume`]): a disk prepared elsewhere, a share, a `subst` drive or a mapped
+//!   letter cannot answer with the system volume's name, whatever its serial number or descriptors
+//!   say.
+//! - [`trusted_install_dir`] is the start check of the broker's own directory and data root: a
+//!   plain drive spelling, no reparse point on any component, on the system volume, and the
+//!   directory and every ancestor writable by administrators only (`sid::is_admin_only_writable`).
+//! - [`restrict_dll_search`] is the first call of each `main`: `LoadLibrary` searches System32 only.
 #![cfg(feature = "read")]
 
 use std::ffi::OsString;
+use std::fmt;
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, FromRawHandle, OwnedHandle};
 use std::path::{Path, PathBuf};
@@ -33,8 +47,12 @@ use windows_sys::Win32::Security::{
     SE_DACL_PROTECTED,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
-    FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING, READ_CONTROL, SYNCHRONIZE,
+    CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_NAME_NORMALIZED,
+    FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    GetFinalPathNameByHandleW, OPEN_EXISTING, READ_CONTROL, SYNCHRONIZE, VOLUME_NAME_GUID,
+};
+use windows_sys::Win32::System::LibraryLoader::{
+    LOAD_LIBRARY_SEARCH_SYSTEM32, SetDefaultDllDirectories,
 };
 
 use crate::fs::FileHandle;
@@ -338,6 +356,224 @@ pub fn handle_sddl(handle: &impl AsHandle) -> Result<String, Win32Error> {
     handle_security(handle).map(|s| s.sddl)
 }
 
+/// The volume of the object behind `handle`, as its volume GUID path in lower case
+/// (`\\?\volume{…}\`): `GetFinalPathNameByHandleW(FILE_NAME_NORMALIZED | VOLUME_NAME_GUID)` cut after
+/// the volume name. A file on a share, or on a volume the mount manager gave no GUID name, is an
+/// error, never a volume.
+pub fn handle_volume(handle: &impl AsHandle) -> Result<String, Win32Error> {
+    let mut buf = vec![0u16; 512];
+    loop {
+        // SAFETY: the borrowed handle is live for the call; `buf` has `buf.len()` writable units.
+        let n = unsafe {
+            GetFinalPathNameByHandleW(
+                handle.as_handle().as_raw_handle(),
+                buf.as_mut_ptr(),
+                buf.len() as u32,
+                FILE_NAME_NORMALIZED | VOLUME_NAME_GUID,
+            )
+        } as usize;
+        if n == 0 {
+            return Err(Win32Error::last());
+        }
+        if n < buf.len() {
+            return volume_of_guid_path(&String::from_utf16_lossy(&buf[..n]))
+                .ok_or(Win32Error::INVALID_DATA);
+        }
+        // Too small: `n` is the size needed, terminator included.
+        buf.resize(n + 1, 0);
+    }
+}
+
+/// `\\?\volume{<guid>}\` (lower case) of a path in volume GUID form (`\\?\Volume{<guid>}\rest`);
+/// `None` for any other form.
+fn volume_of_guid_path(path: &str) -> Option<String> {
+    let rest = path.strip_prefix(r"\\?\")?;
+    let name = rest.split('\\').next()?.to_ascii_lowercase();
+    let guid = name.strip_prefix("volume{")?.strip_suffix('}')?;
+    let well_formed = guid.len() == 36
+        && guid.char_indices().all(|(i, c)| match i {
+            8 | 13 | 18 | 23 => c == '-',
+            _ => c.is_ascii_hexdigit(),
+        });
+    well_formed.then(|| format!(r"\\?\{name}\"))
+}
+
+/// The volume of `path` ([`handle_volume`] of [`open_for_security`]: a final reparse point is not
+/// followed, so this is the volume the name itself is on).
+pub fn volume_of(path: &Path) -> Result<String, Win32Error> {
+    handle_volume(&open_for_security(path)?)
+}
+
+/// The system volume: the volume of the running Windows directory
+/// (`known_folders::system_windows_dir`, not `%SystemRoot%`), as [`handle_volume`] names it.
+pub fn system_volume() -> Result<String, Win32Error> {
+    volume_of(&crate::known_folders::system_windows_dir()?)
+}
+
+/// Why [`trusted_install_dir`] refused a directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UntrustedDir {
+    /// Not a plain absolute drive path (`X:\a\b`): relative, UNC, device or `\\?\GLOBALROOT` form,
+    /// a `.` or `..` component, an empty component, stream syntax, a character Windows does not
+    /// allow in a name, or a name ending in a dot or a space (which the Win32 form drops, so it
+    /// would name another object than the `\\?\` form).
+    Spelling(String),
+    /// A component of the path is a reparse point (any tag, not only links).
+    ReparsePoint {
+        /// The component.
+        path: PathBuf,
+        /// Its reparse tag.
+        tag: u32,
+    },
+    /// The directory is not on the system volume.
+    OtherVolume {
+        /// The directory's volume, or the reason it has none.
+        volume: String,
+        /// The system volume.
+        system: String,
+    },
+    /// The directory or an ancestor can be changed by a principal that is not SYSTEM,
+    /// Administrators or TrustedInstaller (`sid::is_admin_only_writable`).
+    UserWritable,
+    /// A component, or the system volume, could not be opened or read.
+    Unreadable {
+        /// What could not be read.
+        path: PathBuf,
+        /// The error.
+        error: Win32Error,
+    },
+}
+
+impl fmt::Display for UntrustedDir {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            UntrustedDir::Spelling(why) => write!(f, "not a plain drive path: {why}"),
+            UntrustedDir::ReparsePoint { path, tag } => {
+                write!(f, "{} is a reparse point (tag {tag:#x})", path.display())
+            }
+            UntrustedDir::OtherVolume { volume, system } => {
+                write!(f, "on volume {volume}, not on the system volume {system}")
+            }
+            UntrustedDir::UserWritable => {
+                f.write_str("it or an ancestor can be written by a non-administrator")
+            }
+            UntrustedDir::Unreadable { path, error } => {
+                write!(f, "{} could not be read: {error}", path.display())
+            }
+        }
+    }
+}
+
+impl std::error::Error for UntrustedDir {}
+
+/// `path` when it is a plain absolute drive path (`X:\a\b`, or `X:\`); a leading `\\?\` is accepted
+/// and dropped, because with the rules below both forms name the same object. See
+/// [`UntrustedDir::Spelling`] for what is refused.
+fn plain_drive_path(path: &Path) -> Result<PathBuf, String> {
+    let s = path.to_str().ok_or("not valid Unicode")?;
+    let s = s.strip_prefix(r"\\?\").unwrap_or(s);
+    let b = s.as_bytes();
+    if !(b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && b[2] == b'\\') {
+        return Err(format!("{s:?} is not an absolute drive path"));
+    }
+    let rest = &s[3..];
+    if !rest.is_empty() {
+        for c in rest.split('\\') {
+            let bad_char = c
+                .chars()
+                .any(|ch| ch < ' ' || matches!(ch, '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|'));
+            if c.is_empty()
+                || c == "."
+                || c == ".."
+                || bad_char
+                || c.ends_with('.')
+                || c.ends_with(' ')
+            {
+                return Err(format!("{s:?} has the component {c:?}"));
+            }
+        }
+    }
+    Ok(PathBuf::from(s))
+}
+
+/// Whether an elevated Purge may trust `dir` as its own directory or its data root (M3 design 3.4,
+/// BL-R1 S4): `Ok(())` when
+///
+/// 1. it is a plain absolute drive path ([`UntrustedDir::Spelling`]);
+/// 2. no component, from the drive root down, is a reparse point of any kind, each opened without
+///    following it ([`UntrustedDir::ReparsePoint`]);
+/// 3. the path is the directory's own name: its final path (`GetFinalPathNameByHandleW`) is the
+///    same string up to ASCII case, so no `subst` or mapped letter and no short name stands in
+///    for it ([`UntrustedDir::Spelling`]);
+/// 4. it is on the [`system_volume`] ([`UntrustedDir::OtherVolume`]): a volume written on another
+///    machine has administrator-only descriptors as easily as this one, but it is not the volume
+///    the running Windows is on;
+/// 5. the directory and every ancestor are writable by administrators only
+///    (`sid::is_admin_only_writable`, [`UntrustedDir::UserWritable`]).
+///
+/// The checks run in this order and the first failure is the answer. Once they pass, no standard
+/// user and no medium-integrity process can rename, re-ACL or replace any component, so a later
+/// open of the same path reaches the same objects (as long as the drive letter itself still names
+/// the same volume: the check cannot rule out a redefinition of the letter in the process's own
+/// DOS device directory after it ran).
+pub fn trusted_install_dir(dir: &Path) -> Result<(), UntrustedDir> {
+    let plain = plain_drive_path(dir).map_err(UntrustedDir::Spelling)?;
+    let unreadable = |path: &Path, error| UntrustedDir::Unreadable {
+        path: path.to_path_buf(),
+        error,
+    };
+    let components: Vec<&Path> = plain.ancestors().collect();
+    let mut leaf = None;
+    for component in components.into_iter().rev() {
+        let handle = open_for_security(component).map_err(|e| unreadable(component, e))?;
+        let tag = handle.reparse_tag().map_err(|e| unreadable(component, e))?;
+        if tag != 0 {
+            return Err(UntrustedDir::ReparsePoint {
+                path: component.to_path_buf(),
+                tag,
+            });
+        }
+        leaf = Some(handle);
+    }
+    let leaf = leaf.ok_or_else(|| UntrustedDir::Spelling("no component".into()))?;
+    // The name must be the object's own: a `subst` or mapped letter, or a short (8.3) spelling,
+    // names the same object under another path, and the checks below would judge that path.
+    let resolved = leaf.final_path().map_err(|e| unreadable(&plain, e))?;
+    let resolved = resolved.strip_prefix(r"\\?\").unwrap_or(&resolved);
+    let given = plain.to_string_lossy();
+    if !resolved
+        .trim_end_matches('\\')
+        .eq_ignore_ascii_case(given.trim_end_matches('\\'))
+    {
+        return Err(UntrustedDir::Spelling(format!(
+            "{given:?} is the object {resolved:?}"
+        )));
+    }
+    let system = system_volume().map_err(|e| unreadable(Path::new("the system volume"), e))?;
+    let volume = handle_volume(&leaf).unwrap_or_else(|e| format!("none ({e})"));
+    if volume != system {
+        return Err(UntrustedDir::OtherVolume { volume, system });
+    }
+    match crate::sid::is_admin_only_writable(&plain) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(UntrustedDir::UserWritable),
+        Err(e) => Err(unreadable(&plain, e)),
+    }
+}
+
+/// `SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32)`: from now on `LoadLibrary` without a
+/// full path, and the dependencies it pulls in, are searched in System32 only, never in the
+/// executable's directory, the current directory or `PATH`. The first call of each `main`
+/// (M3 design 3.4). It does not cover the imports the loader resolved before `main` ran; for
+/// those the broker relies on its directory passing [`trusted_install_dir`].
+pub fn restrict_dll_search() -> Result<(), Win32Error> {
+    // SAFETY: takes a flag value only.
+    if unsafe { SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32) } == 0 {
+        return Err(Win32Error::last());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -451,5 +687,280 @@ mod tests {
             open_for_security(Path::new(r"relative\x")).unwrap_err(),
             Win32Error::INVALID_PARAMETER
         );
+    }
+
+    #[test]
+    fn volume_guid_paths() {
+        let g = "{0a1B2c3d-0000-1111-2222-333344445555}";
+        let want = r"\\?\volume{0a1b2c3d-0000-1111-2222-333344445555}\";
+        for path in [
+            format!(r"\\?\Volume{g}\Windows\System32"),
+            format!(r"\\?\Volume{g}\"),
+            format!(r"\\?\VOLUME{g}"),
+        ] {
+            assert_eq!(volume_of_guid_path(&path).as_deref(), Some(want), "{path}");
+        }
+        for bad in [
+            r"\\?\C:\Windows",
+            r"\\?\UNC\srv\share\x",
+            r"C:\Windows",
+            r"\\?\Volume{}\x",
+            r"\\?\Volume{0a1b2c3d-0000-1111-2222-33334444555}\x",
+            r"\\?\Volume{0a1b2c3d-0000-1111-2222-3333444455555}\x",
+            r"\\?\Volume{0a1b2c3d_0000-1111-2222-333344445555}\x",
+            r"\\?\Volume{0a1b2c3d-0000-1111-2222-33334444555g}\x",
+            r"\\?\Volume0a1b2c3d-0000-1111-2222-333344445555\x",
+            "",
+        ] {
+            assert_eq!(volume_of_guid_path(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn plain_drive_spellings() {
+        let ok = |s: &str| plain_drive_path(Path::new(s)).map(|p| p.to_string_lossy().into_owned());
+        assert_eq!(
+            ok(r"C:\Program Files\Purge").unwrap(),
+            r"C:\Program Files\Purge"
+        );
+        assert_eq!(
+            ok(r"\\?\C:\Program Files\Purge").unwrap(),
+            r"C:\Program Files\Purge"
+        );
+        assert_eq!(ok(r"C:\").unwrap(), r"C:\");
+        assert_eq!(ok(r"C:\a.b\c d\...x").unwrap(), r"C:\a.b\c d\...x");
+        for bad in [
+            r"Program Files\Purge",
+            r"C:Purge",
+            r"C:",
+            r"\Purge",
+            r"\\srv\share\Purge",
+            r"\\?\UNC\srv\share\Purge",
+            r"\\.\C:\Purge",
+            r"\\?\GLOBALROOT\Device\HarddiskVolume3\Purge",
+            r"\\?\Volume{0a1b2c3d-0000-1111-2222-333344445555}\Purge",
+            r"C:\a\..\Purge",
+            r"C:\a\.\Purge",
+            r"C:\a\\Purge",
+            r"C:\Purge\",
+            r"C:\Windows.",
+            r"C:\Windows. ",
+            r"C:\Windows \x",
+            r"\\?\C:\Windows.\System32",
+            r"C:\a:b",
+            r"C:\a\b::$DATA",
+            r"C:\a/b",
+            "C:\\a\u{1}b",
+            r"C:\a*",
+            r"C:\a?",
+            "",
+        ] {
+            assert!(ok(bad).is_err(), "{bad:?}");
+            assert!(
+                matches!(
+                    trusted_install_dir(Path::new(bad)),
+                    Err(UntrustedDir::Spelling(_))
+                ),
+                "{bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_system_directories_are_trusted() {
+        let windir = crate::known_folders::system_windows_dir().unwrap();
+        let system = system_volume().unwrap();
+        assert!(system.starts_with(r"\\?\volume{"), "{system}");
+        let root = PathBuf::from(&windir.to_string_lossy()[..3]);
+        assert_eq!(volume_of(&root).unwrap(), system);
+        assert_eq!(trusted_install_dir(&windir), Ok(()));
+        assert_eq!(trusted_install_dir(&windir.join("System32")), Ok(()));
+        // The same directory in the `\\?\` form, and in another letter case.
+        let verbatim = PathBuf::from(format!(r"\\?\{}", windir.display()));
+        assert_eq!(trusted_install_dir(&verbatim), Ok(()));
+        let upper = PathBuf::from(windir.to_string_lossy().to_uppercase());
+        assert_eq!(trusted_install_dir(&upper), Ok(()));
+        // Missing: unreadable, not trusted.
+        assert!(matches!(
+            trusted_install_dir(&windir.join("purge-test-no-such-dir-4b7e")),
+            Err(UntrustedDir::Unreadable { error, .. }) if error.is_not_found()
+        ));
+    }
+
+    /// A scratch directory below the temp directory, removed on drop.
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new(name: &str) -> Scratch {
+            let dir =
+                std::env::temp_dir().join(format!("purge-win-trust-{}-{name}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            Scratch(dir)
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// M3-HARDEN win-unit: a user-writable ancestor. The temp directory is the user's; a directory
+    /// below it is refused whatever its own descriptor says.
+    #[test]
+    fn a_user_writable_ancestor_is_refused() {
+        let s = Scratch::new("ancestor");
+        let dir = s.0.join("Purge");
+        std::fs::create_dir(&dir).unwrap();
+        let on_system = volume_of(&s.0).unwrap() == system_volume().unwrap();
+        for d in [&s.0, &dir] {
+            let verdict = trusted_install_dir(d);
+            if on_system {
+                assert_eq!(verdict, Err(UntrustedDir::UserWritable), "{}", d.display());
+            } else {
+                assert!(
+                    matches!(verdict, Err(UntrustedDir::OtherVolume { .. })),
+                    "{verdict:?}"
+                );
+            }
+        }
+    }
+
+    /// M3-HARDEN win-unit: a junction on the path. A junction to the Windows directory is refused
+    /// itself and as an ancestor, although everything it reaches is trusted.
+    #[test]
+    fn a_junction_on_the_path_is_refused() {
+        let s = Scratch::new("junction");
+        let windir = crate::known_folders::system_windows_dir().unwrap();
+        let link = s.0.join("win");
+        let st = std::process::Command::new("cmd")
+            .args(["/c", "mklink", "/J"])
+            .arg(&link)
+            .arg(&windir)
+            .stdout(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(st.success(), "mklink /J failed");
+        for d in [link.clone(), link.join("System32")] {
+            assert_eq!(
+                trusted_install_dir(&d),
+                Err(UntrustedDir::ReparsePoint {
+                    path: link.clone(),
+                    tag: 0xA000_0003
+                }),
+                "{}",
+                d.display()
+            );
+        }
+    }
+
+    /// A short (8.3) name of a trusted directory names the same object under another path: refused.
+    /// Skipped where the system volume makes no short names.
+    #[test]
+    fn a_short_name_is_refused() {
+        let windir = crate::known_folders::system_windows_dir().unwrap();
+        let program_files =
+            PathBuf::from(format!(r"{}\Program Files", &windir.to_string_lossy()[..2]));
+        use std::os::windows::process::CommandExt;
+        let out = std::process::Command::new("cmd")
+            .raw_arg(format!(
+                r#"/c for %I in ("{}") do @echo %~sI"#,
+                program_files.display()
+            ))
+            .output()
+            .unwrap();
+        let short = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+        if short.is_empty() || short.eq_ignore_ascii_case(&program_files.to_string_lossy()) {
+            eprintln!("no short name for {}: skipped", program_files.display());
+            return;
+        }
+        assert_eq!(trusted_install_dir(&program_files), Ok(()));
+        assert!(
+            matches!(
+                trusted_install_dir(Path::new(&short)),
+                Err(UntrustedDir::Spelling(ref why)) if why.contains("is the object")
+            ),
+            "{short}"
+        );
+    }
+
+    /// M3-HARDEN win-unit: another volume. Any directory there is refused as `OtherVolume` before
+    /// its descriptors are looked at.
+    #[test]
+    #[ignore = "needs a second volume: set PURGE_TEST_OTHER_VOLUME_DIR to a directory on it (VM only)"]
+    fn another_volume_is_refused() {
+        let other = PathBuf::from(
+            std::env::var_os("PURGE_TEST_OTHER_VOLUME_DIR")
+                .expect("PURGE_TEST_OTHER_VOLUME_DIR is not set"),
+        );
+        let system = system_volume().unwrap();
+        assert_ne!(volume_of(&other).unwrap(), system);
+        let root = PathBuf::from(&other.to_string_lossy()[..3]);
+        for d in [&other, &root] {
+            assert!(
+                matches!(
+                    trusted_install_dir(d),
+                    Err(UntrustedDir::OtherVolume { system: ref s, .. }) if *s == system
+                ),
+                "{}",
+                d.display()
+            );
+        }
+    }
+
+    /// Set by [`dll_search_skips_the_current_directory_after_restrict`] for its child.
+    const DLL_CHILD_VAR: &str = "PURGE_TEST_DLL_SEARCH_CHILD";
+
+    /// The child half: loads a DLL by bare name from its current directory, then restricts the
+    /// search and tries again. Does nothing when run normally.
+    #[test]
+    fn dll_search_child() {
+        use windows_sys::Win32::Foundation::FreeLibrary;
+        use windows_sys::Win32::System::LibraryLoader::LoadLibraryW;
+        let Some(name) = std::env::var_os(DLL_CHILD_VAR) else {
+            return;
+        };
+        let load = || {
+            let w: Vec<u16> = name.encode_wide().chain(std::iter::once(0)).collect();
+            // SAFETY: NUL-terminated name; the module is freed right away.
+            let m = unsafe { LoadLibraryW(w.as_ptr()) };
+            if m.is_null() {
+                Err(Win32Error::last().code())
+            } else {
+                // SAFETY: `m` was just loaded by this thread and is freed once.
+                unsafe { FreeLibrary(m) };
+                Ok(())
+            }
+        };
+        println!("BEFORE={:?}", load());
+        restrict_dll_search().unwrap();
+        println!("AFTER={:?}", load());
+    }
+
+    /// M3 design 3.4, T6: after [`restrict_dll_search`] a DLL planted in the current directory is not
+    /// found by its bare name (it was before). Run in a child process, so this test process keeps
+    /// its search order.
+    #[test]
+    fn dll_search_skips_the_current_directory_after_restrict() {
+        let s = Scratch::new("dllsearch");
+        let windir = crate::known_folders::system_windows_dir().unwrap();
+        let name = format!("purge-plant-{}.dll", std::process::id());
+        std::fs::copy(windir.join(r"System32\version.dll"), s.0.join(&name)).unwrap();
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "secure::tests::dll_search_child",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .current_dir(&s.0)
+            .env(DLL_CHILD_VAR, &name)
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(out.status.success(), "{text}");
+        assert!(text.contains("BEFORE=Ok(())"), "{text}");
+        assert!(text.contains("AFTER=Err(126)"), "{text}");
     }
 }
