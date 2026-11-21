@@ -318,3 +318,25 @@ row matches `check_deps.rs`; S2 and S3 are additions to it.
   search (S4).
 - The UI side of the pipe (server pid check), M3-BROKER-CORE, M3-STDIO and M3-CONSENT, which do not exist yet;
   the bindings above are for them.
+
+## Fixes
+
+Status of every M and S finding in the `m3-r1-fixes` worktree (branch `m3-r1-fixes`, cut from `baseline`
+5201102). Nothing committed. The five DECISIONS rows are now `confirmed M3-R1` or `amended M3-R1`.
+
+| Finding | Status | What changed |
+|---|---|---|
+| M1 | **Fixed** | `bins/purge-broker/build.rs` emits `cargo:rustc-link-arg-bins=/DEPENDENTLOADFLAG:0x800` for MSVC targets. A build and `dumpbin /loadconfig` on `target\debug\purge-broker.exe` show `0800 Dependent Load Flag`. |
+| M2 | **Fixed** | `purge_plan::decide::colliding_ids` finds ids that name more than one merge target (folded owner and canonical target); `merge` drops every candidate of such an id, so no plan or `ScanDoc` can carry one id on two targets, and `plan_in::check_structure` keeps its refusal as the backstop. `pipeline::scan` reports each dropped id as a warning. `purge-plan` test `merge_drops_every_candidate_of_a_colliding_id` forces two targets onto one id. `CandidateRef` still carries the stable hash for ticks across rescans; a collision is now refused, not resolved by guessing. |
+| S1 | **Deferred** | The preferred order (`peer()` before any read) must be pinned on a VM with an identification-level client (`peer_before_any_read` asserts neither outcome), and the read loop it changes is M3-BROKER-CORE's, which does not exist yet. The amended binding is in the M3-WIN-PIPE row. |
+| S2 | **Fixed** | `RtlAcquirePrivilege` and `RtlReleasePrivilege` are in `PRIVILEGE_APIS`, with a test that names them outside `privilege.rs`. |
+| S3 | **Fixed** | The test-item filter splits `cfg(all(…))` only at nesting depth 0 (`all_names_test`), so `all(not(any(miri, test, doc)), feature = "write")` stays production code. Test `cfg_all_test_is_only_test_code_at_the_top_level`. |
+| S4 | **Fixed** | `start::restrict_dll_search` returns a `StartFailure` (exit 21) and `main` reports it; a failed `SetDefaultDllDirectories` no longer leaves the default search order. `taskdialog` loads `comctl32` with `LoadLibraryExW(.., LOAD_LIBRARY_SEARCH_SYSTEM32)`. The System32-only load still happens to be confirmed with the manifest test on the VM. |
+| S5 | **Fixed** | `ProgramId::build` refuses control characters (NUL included) in the key name and the SID; the `methods.rs` module text now says `ProgramId` is free text compared only with the broker's own inventory and fingerprint index, never used as a path or file name. The M3-RPC row carries the two bindings. |
+| S6 | **Fixed** | The primary button is disabled on `TDN_CREATED` and `TDN_NAVIGATED` when its page holds it, and armed by the first `TDN_TIMER` past a one-second delay (`TDF_CALLBACK_TIMER`); a gated primary stays with the verification box. Doc, state and flag test updated. `comctl32` v6 behaviour on a VM is still the unverified part. |
+| S7 | **Partly fixed** | The `kb` directory now passes the start directory rule. The per-file KB checks and the `is_admin_only_writable` check of `ExpectedPeer.image` are deferred to M3-BROKER-CORE: `ExpectedPeer` does not exist yet, and `install.ps1` does not deploy `Purge.exe` until the UI package. |
+| S8 | **Deferred** | This needs a design decision on build provenance (a marker file from `xtask release` versus a build-id check) and an `install.ps1` change; it is a release-process gap with no standard-user path. |
+| S9 | **Fixed** | The elevated-hardening row now says the engine withholds trust from its directories by the same rule; it does not refuse to start. |
+
+N6 is folded into the M3-WIN-PRIV row; N5 stays a note for the broker package. M1 was verified by a build;
+everything that needs a VM (S1, S4's comctl32 load, S6's dialog, S7's peer image) remains VM work.

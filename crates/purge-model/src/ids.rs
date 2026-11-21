@@ -71,12 +71,12 @@ pub(crate) use schema_id;
 pub enum ProgramIdError {
     /// Fewer than three `|`-separated fields.
     MissingField,
-    /// The hive tag is neither `HKLM` nor `HKU:<sid>` with a non-empty SID, or the SID contains `|`, `\`
-    /// or `:` or names a classes hive (`<sid>_Classes`).
+    /// The hive tag is neither `HKLM` nor `HKU:<sid>` with a non-empty SID, or the SID contains `|`, `\`,
+    /// `:` or a control character, or names a classes hive (`<sid>_Classes`).
     BadHive,
     /// The view is neither `64` nor `32`.
     BadView,
-    /// The key name is empty or contains `\`.
+    /// The key name is empty, contains `\`, or contains a control character (NUL included).
     BadKeyName,
 }
 
@@ -86,7 +86,9 @@ impl fmt::Display for ProgramIdError {
             Self::MissingField => "program id needs the form <hive>|<view>|<key name>",
             Self::BadHive => "program id hive must be HKLM or HKU:<sid>",
             Self::BadView => "program id view must be 64 or 32",
-            Self::BadKeyName => "program id key name must be non-empty and contain no backslash",
+            Self::BadKeyName => {
+                "program id key name must be non-empty, contain no backslash and no control character"
+            }
         })
     }
 }
@@ -101,7 +103,7 @@ impl std::error::Error for ProgramIdError {}
 /// - hive tag: `HKLM`, or `HKU:<sid>` for a per-user entry;
 /// - view: `64` or `32` (the registry view the key was read through);
 /// - key name: the name of the key under `…\CurrentVersion\Uninstall`, verbatim. It may contain `|`, since
-///   only the first two `|` separate fields.
+///   only the first two `|` separate fields; it holds no backslash and no control character.
 ///
 /// Examples: `HKLM|64|Git_is1`, `HKU:S-1-5-21-1-2-3-1001|64|{771FD6B0-FA20-440A-A002-3B3BAC16DC50}_is1`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -138,12 +140,17 @@ impl ProgramId {
             let cut = sid.len().saturating_sub(CLASSES_SUFFIX.len());
             sid.is_char_boundary(cut) && sid[cut..].eq_ignore_ascii_case(CLASSES_SUFFIX)
         };
-        let bad_sid =
-            |sid: &String| sid.is_empty() || sid.contains(['|', '\\', ':']) || is_classes_hive(sid);
+        let bad_sid = |sid: &String| {
+            sid.is_empty()
+                || sid.contains(['|', '\\', ':'])
+                || sid.chars().any(char::is_control)
+                || is_classes_hive(sid)
+        };
         if sid.as_ref().is_some_and(bad_sid) {
             return Err(ProgramIdError::BadHive);
         }
-        if key_name.is_empty() || key_name.contains('\\') {
+        if key_name.is_empty() || key_name.contains('\\') || key_name.chars().any(char::is_control)
+        {
             return Err(ProgramIdError::BadKeyName);
         }
         Ok(Self {
@@ -383,6 +390,9 @@ mod tests {
             ("HKLM|16|X", BadView),
             ("HKLM|64|", BadKeyName),
             ("HKLM|64|A\\B", BadKeyName),
+            ("HKLM|64|A\0B", BadKeyName),
+            ("HKLM|64|A\u{1}B", BadKeyName),
+            ("HKU:S-1-5-21-1\0|64|X", BadHive),
         ] {
             assert_eq!(text.parse::<ProgramId>(), Err(err), "{text:?}");
         }

@@ -632,11 +632,13 @@ const RESTORE_PRIVILEGE: &str = concat!("SeRestore", "Privilege");
 const RESTORE_CONSTANT: &str = "RESTORE";
 /// The APIs that enable a privilege on a token (rule 4e); built from pieces like
 /// [`RESTORE_PRIVILEGE`].
-pub const PRIVILEGE_APIS: [&str; 4] = [
+pub const PRIVILEGE_APIS: [&str; 6] = [
     concat!("Adjust", "TokenPrivileges"),
     concat!("NtAdjust", "PrivilegesToken"),
     concat!("ZwAdjust", "PrivilegesToken"),
     concat!("RtlAdjust", "Privilege"),
+    concat!("RtlAcquire", "Privilege"),
+    concat!("RtlRelease", "Privilege"),
 ];
 /// The one file that names the privilege and the adjusting APIs (purge-win's, M3-WIN-PRIV).
 const PRIVILEGE_FILE: &str = "src/privilege.rs";
@@ -674,6 +676,29 @@ struct Source {
     literals: Vec<(usize, String)>,
 }
 
+/// Whether the arguments of a `cfg(all(…))` name `test` as one of their own top-level arguments:
+/// `all(test, feature = "x")` is test code, while `all(not(any(miri, test, doc)), feature = "x")` is
+/// not (review M3-R1 S3: a plain `split(',')` read the nested `test` as an argument and blanked
+/// production code). Parentheses nest; commas at depth 0 separate the arguments.
+fn all_names_test(args: &str) -> bool {
+    let mut depth = 0u32;
+    let mut start = 0usize;
+    for (i, ch) in args.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                if args[start..i].trim() == "test" {
+                    return true;
+                }
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    args[start..].trim() == "test"
+}
+
 impl Source {
     /// The production view of `text`, and the out-of-line test modules it declares.
     fn new(krate: &str, file: &str, text: &str) -> (Source, Vec<String>) {
@@ -686,7 +711,7 @@ impl Source {
                 let all_test = t
                     .strip_prefix("#[cfg(all(")
                     .and_then(|r| r.strip_suffix("))]"))
-                    .is_some_and(|args| args.split(',').any(|a| a.trim() == "test"));
+                    .is_some_and(all_names_test);
                 if all_test {
                     let indent = &line[..line.len() - line.trim_start().len()];
                     let end = if line.ends_with("\r\n") {
@@ -2160,6 +2185,21 @@ mod tests {
         }\n\
         fn other(key: &CreatedKey) { let _ = key.set_security(\"D:\"); }\n";
 
+    /// Rule 4e's production view: `#[cfg(all(test, …))]` is test code, but a `test` nested inside
+    /// `not(any(…))` is not a top-level argument and must not blank the item (review M3-R1 S3).
+    #[test]
+    fn cfg_all_test_is_only_test_code_at_the_top_level() {
+        let prod = "#[cfg(all(not(any(miri, test, doc)), feature = \"write\"))]\nfn f() {}\n";
+        let (source, _) = Source::new(WIN, "src/x.rs", prod);
+        assert!(source.code.contains("fn f"), "{}", source.code);
+        let test = "#[cfg(all(test, feature = \"write\"))]\nfn t() {}\n";
+        let (source, _) = Source::new(WIN, "src/x.rs", test);
+        assert!(!source.code.contains("fn t"), "{}", source.code);
+        let single = "#[cfg(all(test))]\nfn t() {}\n";
+        let (source, _) = Source::new(WIN, "src/x.rs", single);
+        assert!(!source.code.contains("fn t"), "{}", source.code);
+    }
+
     /// Rule 4e as the coordinator stated it for the M3-WIN-PRIV shape: the name and the adjusting APIs
     /// only in purge-win's privilege.rs (the APIs write-gated, in the enabler); the enabler
     /// `pub(crate)` and used only by the two allowlisted methods, once each; `reopen_and_set_owner`
@@ -2315,6 +2355,20 @@ mod tests {
                  src/privilege.rs with_restore_privilege (or a #[cfg(feature = \"write\")] use of that file) \
                  may",
                 "purge-exec src/y.rs (no function) names RtlAdjustPrivilege; only purge-win \
+                 src/privilege.rs with_restore_privilege (or a #[cfg(feature = \"write\")] use of that file) \
+                 may",
+            ]
+        );
+
+        let ntdll = "extern \"system\" { fn RtlAcquirePrivilege(p: u32, n: u32, t: u8, w: *mut u8) -> i32; \
+                     fn RtlReleasePrivilege(p: u32) -> i32; }\n";
+        assert_eq!(
+            check(&[win, reg, exec, (EXEC, "src/z.rs", ntdll)]),
+            [
+                "purge-exec src/z.rs (no function) names RtlAcquirePrivilege; only purge-win \
+                 src/privilege.rs with_restore_privilege (or a #[cfg(feature = \"write\")] use of that file) \
+                 may",
+                "purge-exec src/z.rs (no function) names RtlReleasePrivilege; only purge-win \
                  src/privilege.rs with_restore_privilege (or a #[cfg(feature = \"write\")] use of that file) \
                  may",
             ]

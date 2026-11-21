@@ -3,9 +3,9 @@
 //!
 //! | Order | Check | Failure |
 //! |---|---|---|
-//! | 0 | [`restrict_dll_search`] is the first call of `main` | (none) |
+//! | 0 | [`restrict_dll_search`] is the first call of `main`; a failure is [`StartFailure::InstallUntrusted`] | [`StartFailure::InstallUntrusted`] |
 //! | 1 | The process token is elevated | [`StartFailure::NotElevated`] |
-//! | 2 | Own directory (of the running executable): plain drive path, no reparse point on it, on the system volume, every ancestor writable by administrators only (`purge_win::secure::trusted_install_dir`); the executable itself admin-only writable | [`StartFailure::InstallUntrusted`] |
+//! | 2 | Own directory (of the running executable): plain drive path, no reparse point on it, on the system volume, every ancestor writable by administrators only (`purge_win::secure::trusted_install_dir`); the executable itself admin-only writable; `<own directory>\kb` passes the directory rule too | [`StartFailure::InstallUntrusted`] |
 //! | 3 | Data root `<ProgramData>\Purge`, `ProgramData` from the machine (`purge_win::known_folders::machine_program_data`), passes the same directory rule, and `StorageRoots::check` passes on it | [`StartFailure::StoreIntegrity`] |
 //! | 4 | KB and baselines are `<own directory>\kb`; `PURGE_KB_DIR` is not read | (none) |
 //!
@@ -34,8 +34,8 @@ pub const EVENT_SOURCE: &str = "Purge";
 pub enum StartFailure {
     /// The process token is not elevated, or its elevation could not be read.
     NotElevated(String),
-    /// The broker's own directory or executable fails the directory rule, or its path could not
-    /// be read.
+    /// The broker's own directory, executable or `kb` directory fails the directory rule, its path could
+    /// not be read, or the DLL search could not be restricted to System32.
     InstallUntrusted(String),
     /// The data root could not be located, fails the directory rule, or the store's own check
     /// (`StorageRoots::check`) fails.
@@ -189,10 +189,16 @@ impl StartFacts for LiveFacts {
 }
 
 /// `SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32)`: the first call of the broker's
-/// `main`. A failure leaves the default search order; it has no failure path of its own (the
-/// imports resolved before `main` are covered by the directory check, not by this).
-pub fn restrict_dll_search() {
-    let _ = purge_win::secure::restrict_dll_search();
+/// `main`. A failure is a start failure (review M3-R1 S4): without it the elevated process keeps the
+/// default search order, in which the application directory comes before System32. The imports
+/// resolved before `main` are covered by the static-import load flag and the directory check, not by
+/// this.
+pub fn restrict_dll_search() -> Result<(), StartFailure> {
+    purge_win::secure::restrict_dll_search().map_err(|e| {
+        StartFailure::InstallUntrusted(format!(
+            "the DLL search could not be restricted to System32: {e}"
+        ))
+    })
 }
 
 /// The start checks on the live machine ([`check_with`] of [`LiveFacts`]).
@@ -229,6 +235,13 @@ pub fn check_with<F: StartFacts>(facts: &F) -> Result<Started<F::Store>, StartFa
     facts
         .trusted_file(&exe)
         .map_err(|why| untrusted(&exe, why))?;
+    // The KB sits below the checked directory. The directory rule covers its ancestors, not `kb`
+    // itself (a file or directory moved in keeps its own descriptor), so it is checked too. Each KB
+    // file the broker later loads passes the per-file check as well (M3-BROKER-CORE).
+    let kb_dir = install_dir.join("kb");
+    facts
+        .trusted_dir(&kb_dir)
+        .map_err(|why| untrusted(&kb_dir, why))?;
 
     let store = |what: &Path, why: String| {
         StartFailure::StoreIntegrity(format!("{}: {why}", what.display()))
@@ -246,7 +259,7 @@ pub fn check_with<F: StartFacts>(facts: &F) -> Result<Started<F::Store>, StartFa
         .map_err(|why| store(&data_root, why))?;
 
     Ok(Started {
-        kb_dir: install_dir.join("kb"),
+        kb_dir,
         install_dir,
         data_root,
         system_volume,
@@ -354,6 +367,7 @@ mod tests {
                 "exe".into(),
                 format!("dir {INSTALL}"),
                 format!("file {EXE}"),
+                format!("dir {INSTALL}\\kb"),
                 "program_data".into(),
                 format!("dir {ROOT}"),
                 "system_volume".into(),
@@ -410,7 +424,11 @@ mod tests {
             exe: PathBuf::from("purge-broker.exe"),
             ..Fake::passing()
         };
-        for f in [&dir, &file, &bare] {
+        let kb = Fake {
+            untrusted_dirs: vec![PathBuf::from(format!(r"{INSTALL}\kb"))],
+            ..Fake::passing()
+        };
+        for f in [&dir, &file, &bare, &kb] {
             let e = check_with(f).unwrap_err();
             assert_eq!(
                 (e.code(), e.exit_code()),
@@ -427,11 +445,18 @@ mod tests {
         }
         assert!(dir.calls().last().unwrap().starts_with("dir "));
         assert!(file.calls().last().unwrap().starts_with("file "));
+        assert!(kb.calls().last().unwrap().starts_with("dir "));
         assert!(
             check_with(&dir)
                 .unwrap_err()
                 .line()
                 .contains(r"C:\Program Files\Purge: refused by the fake")
+        );
+        assert!(
+            check_with(&kb)
+                .unwrap_err()
+                .line()
+                .contains(r"C:\Program Files\Purge\kb: refused by the fake")
         );
     }
 

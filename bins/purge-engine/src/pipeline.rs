@@ -70,7 +70,7 @@ use purge_model::{
     InventoryDoc, InventoryEntry, OsInfo, ProgramId, RawFlags, ResidueDoc, ScanMode, VerifyGone,
     View, WritableBy,
 };
-use purge_plan::decide::{DecideCtx, Limits, M1bDecide, bundle_known};
+use purge_plan::decide::{DecideCtx, Limits, M1bDecide, bundle_known, colliding_ids};
 use purge_plan::emit::{Built, build};
 use purge_scan::catalog::all_scanners;
 use purge_scan::framework::{
@@ -1323,6 +1323,20 @@ fn run_scan(
             ),
         ),
     };
+    // M3-R1 M2: an id is the client's selection key. Two different targets with one id would make a
+    // tick name either of them, so neither is served: drop every candidate of a colliding id and say
+    // so. `purge-plan::decide::merge` refuses them as well, for callers that do not come through here.
+    let colliding = colliding_ids(&candidates, &decide);
+    if !colliding.is_empty() {
+        for id in &colliding {
+            let count = candidates.iter().filter(|c| &c.id == id).count();
+            warnings.push(format!(
+                "scan: dropped {count} candidate(s) whose id {} names more than one target",
+                id.0
+            ));
+        }
+        candidates.retain(|c| !colliding.contains(&c.id));
+    }
     let built = build(app_id, candidates.clone(), &decide);
     let residue = ctx.residue_doc(&built.scan.plan_hash, &candidates, ext.take_unknown());
     step.done(&format!(

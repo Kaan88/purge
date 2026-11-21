@@ -4,10 +4,13 @@
 //! Rules for request (params) types:
 //!
 //! - Every one has `deny_unknown_fields`: an unknown member is `-32602`.
-//! - A broker request holds only id newtypes, enums, booleans and integers (B1, threat T3). No field can
+//! - A broker request holds only ids, enums, booleans and integers (B1, threat T3). No field can
 //!   carry a path, a target, a fingerprint, a scan or a plan: the broker works from its own inventory,
-//!   harvest and scan, and an id only looks up what the broker made. The ids are of a fixed form
-//!   (`s-<16 hex>` and so on), checked when read, so a path does not even read as one. The test
+//!   harvest and scan, and an id only looks up what the broker made. The ids the broker makes are of a
+//!   fixed form (`s-<16 hex>` and so on), checked when read, so a path does not read as one.
+//!   `ProgramId` is the one free-text id: it may hold any key name without a backslash or control
+//!   character, and is only ever compared with the ids of the broker's own inventory and stored-fingerprint
+//!   index, never turned into a registry path or a file name. The test
 //!   `broker_requests_hold_only_ids_enums_booleans_and_integers` walks the schema of every one.
 //!
 //! Result and notification types do not refuse unknown members, so a newer server can add one.

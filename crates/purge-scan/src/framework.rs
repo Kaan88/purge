@@ -1777,6 +1777,10 @@ fn residue_key(target: &Target) -> Option<&str> {
 /// The id of the candidate for `target`: `c-` and the 64-bit FNV-1a hash (16 hex digits) of the target's
 /// type and case-folded fields. Two scanners that find the same target produce the same id; `purge-plan`
 /// merges them.
+///
+/// The hash is not collision resistant. A scan whose candidate set holds one id on two different targets
+/// is not served: `purge-plan::decide::merge` drops every candidate of that id, and the pipeline reports
+/// them (review M3-R1 M2).
 pub fn candidate_id(target: &Target) -> CandidateId {
     let fold_path = |s: &str| prefix::fold(s.trim_end_matches(prefix::SEP));
     let parts: Vec<String> = match target {

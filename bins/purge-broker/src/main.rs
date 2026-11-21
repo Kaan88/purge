@@ -2,7 +2,10 @@
 //! (`purge_broker::start`); after them it is still a stub and exits with code 1.
 
 fn main() -> std::process::ExitCode {
-    purge_broker::start::restrict_dll_search();
+    if let Err(failure) = purge_broker::start::restrict_dll_search() {
+        failure.report();
+        return std::process::ExitCode::from(failure.exit_code());
+    }
     match purge_broker::start::check() {
         Err(failure) => {
             failure.report();
