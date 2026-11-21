@@ -1673,7 +1673,7 @@ fn ext_warnings(ext: &ScanExt) -> Vec<String> {
 }
 
 /// The canonical form of each directory; ones that do not canonicalise are dropped with a warning.
-pub(crate) fn canonical_dirs(
+pub fn canonical_dirs(
     dirs: &[String],
     guard: &GuardEnv,
     warnings: &mut Vec<String>,

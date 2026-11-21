@@ -18,6 +18,17 @@
 //!
 //! There is no cargo feature: the scripted fakes of the tests exist only under `cfg(test)`.
 
+// M3-UNDO: `history.get`, `undo.run` and the `journal.*` methods ([`undo::UndoMethods`]) over a
+// [`backend::Backend`]; [`live::LiveBackend`] is the real one.
+pub mod backend;
+pub mod history;
+pub mod live;
+pub mod live_host;
+pub mod recover;
+pub mod undo;
+#[cfg(test)]
+mod undo_tests;
+
 pub mod args;
 pub mod baseline;
 pub mod consent;

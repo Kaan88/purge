@@ -137,6 +137,8 @@ version = "0.1.0"
 dependencies = [
  "purge-engine",
  "purge-exec",
+ "purge-guard",
+ "purge-harvest",
  "purge-model",
  "purge-plan",
  "purge-rpc",

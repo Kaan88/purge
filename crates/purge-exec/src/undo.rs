@@ -76,10 +76,10 @@ use purge_guard::prefix;
 use purge_model::exec::journal::{ReconcileResult, Record, UndoConflict, UndoOutcome};
 use purge_model::exec::op::{ExecOp, FailCode, ItemOutcome, OpId, Sha256Hex};
 use purge_model::exec::session::{
-    SessionId, SessionIndex, SessionState, SessionSummary, UndoCounts, UndoItemReport, UndoReport,
-    UndoReportSchema, UndoResult,
+    JournalMark, SessionId, SessionIndex, SessionState, SessionSummary, UndoCounts, UndoItemReport,
+    UndoReport, UndoReportSchema, UndoResult,
 };
-use purge_model::{Blocker, CandidateId, FileTime, Target};
+use purge_model::{AppRef, Blocker, CandidateId, FileTime, Target};
 use serde::{Deserialize, Serialize};
 
 use crate::act_firewall::{self, FwUndoArgs, FwUndoPrepared, FwUndoResult};
@@ -94,7 +94,9 @@ use crate::journal::{
     self, JournalError, JournalState, JournalWriter, OpState, OpStatus, UndoState, UndoToken,
 };
 use crate::locked::{self, LockUndo, PendingRenames, ReconcileVerdict, StoreLadder};
+use crate::plan_in::BoundPlan;
 use crate::report;
+use crate::review;
 use crate::storage::{SessionDir, StorageError, StorageRoots, now};
 
 #[cfg(test)]
@@ -212,6 +214,13 @@ pub enum UndoError {
     /// The journal changed between reading it and opening it to append.
     #[error("the journal changed while it was being opened")]
     JournalChanged,
+    /// The session's plan cannot be bound again from its scan copy and journal.
+    #[error("the session's plan cannot be bound again: {0}")]
+    PlanUnbound(String),
+    /// The run was started with the ops and the journal mark of a preview, and they are not what the
+    /// journal says now. Nothing was done.
+    #[error("the session is not as it was when the undo was previewed; nothing was done")]
+    NotAsShown,
 }
 
 /// The schema id of [`UndoLabels`].
@@ -273,7 +282,7 @@ pub(crate) fn effective_outcome(op: &OpState) -> Option<ItemOutcome> {
 /// Whether the op left (or may have left) the system changed, so that something stands to be undone:
 /// an intent with no `done`, `Done`, `VerifyFailed`, a registered or completed boot-time move, an
 /// item reconcile could not put right. Never for an op without an intent.
-pub(crate) fn stands_changed(op: &OpState) -> bool {
+pub fn stands_changed(op: &OpState) -> bool {
     if op.intent.is_none() {
         return false;
     }
@@ -1172,12 +1181,195 @@ fn write_labels(session: &SessionDir, labels: &UndoLabels) -> Result<String, Str
     }
 }
 
+/// The run has ended, no retry of a held item is in flight, and no earlier undo run stopped short of
+/// its plan: otherwise the session needs recovery first.
+fn ready(state: &JournalState) -> Result<(), UndoError> {
+    if !state.is_finished() {
+        return Err(UndoError::NeedsRecovery(
+            "its run ended with neither commit nor aborted".to_owned(),
+        ));
+    }
+    if state.retries_in_flight().next().is_some() {
+        return Err(UndoError::NeedsRecovery(
+            "a retry of a held item was interrupted".to_owned(),
+        ));
+    }
+    // A new plan would replace the interrupted run's, and the ops that run had not reached would drop
+    // off recovery's list.
+    if !state.undo_unfinished().is_empty() {
+        return Err(UndoError::NeedsRecovery(
+            "an undo run was interrupted before it reached every op of its plan".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+/// The ops a selection reaches.
+struct Reach {
+    /// The ops the selection names.
+    requested: BTreeSet<OpId>,
+    /// The ops outside it that its restores depend on.
+    pulled_in: BTreeSet<OpId>,
+    /// The selected ops whose undo had settled before.
+    already_undone: Vec<OpId>,
+    /// The ops the run goes through: selected or pulled in, with an intent or a `done`, and not
+    /// settled. Nothing else is undone.
+    covered: BTreeSet<OpId>,
+}
+
+fn reach(state: &JournalState, selection: &UndoSelection) -> Result<Reach, UndoError> {
+    let requested = select(state, selection)?;
+    let ops: Vec<&OpState> = state.ops().collect();
+    let pulled_in = dependencies(&ops, &requested);
+    let already_undone: Vec<OpId> = ops
+        .iter()
+        .filter(|op| requested.contains(&op.op) && op.undo.is_settled())
+        .map(|op| op.op)
+        .collect();
+    let covered = ops
+        .iter()
+        .filter(|op| {
+            (requested.contains(&op.op) || pulled_in.contains(&op.op))
+                && !op.undo.is_settled()
+                && op.status() != OpStatus::Validated
+        })
+        .map(|op| op.op)
+        .collect();
+    Ok(Reach {
+        requested,
+        pulled_in,
+        already_undone,
+        covered,
+    })
+}
+
+/// What an undo run would do to the machine right now, for the dialog that asks first
+/// ([`preview`]), and the guard that makes the run do exactly that ([`undo_expecting`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UndoExpect {
+    /// The ops the run goes through, in op order: selected or pulled in, not settled, with an
+    /// intent or a `done`.
+    pub ops: Vec<OpId>,
+    /// The journal as the preview read it.
+    pub mark: JournalMark,
+}
+
+/// The result of [`preview`].
+#[derive(Debug, Clone)]
+pub struct UndoPreview {
+    /// The request that [`undo_expecting`] takes: the confirmed plan hash is the journal's, and a
+    /// partial selection names the candidate ids of the ops asked for.
+    pub request: UndoRequest,
+    /// The app id of the plan the session executed.
+    pub app: String,
+    /// The app the plan's items belong to, when the index names one.
+    pub owner: Option<AppRef>,
+    /// The session's plan, bound again from its scan copy and journal.
+    pub plan: BoundPlan,
+    /// The ops the run puts back, in the order it does: not settled, standing changed, with an
+    /// inverse. Every one is an item of `plan` whose op the journal's intent equals.
+    pub put_back: Vec<OpId>,
+    /// The ops outside the selection that the restores depend on; the run goes through them too.
+    pub pulled_in: Vec<OpId>,
+    /// The selected ops whose undo had settled before; nothing is done for them.
+    pub already_undone: Vec<OpId>,
+    /// The guard for the run.
+    pub expect: UndoExpect,
+}
+
+/// Reads a session as [`undo`] will and says what it would put back. Changes nothing. `ops` names the
+/// ops to undo (the session's own ops; an unknown one is [`UndoError::UnknownItem`]), `None` is all of
+/// them.
+///
+/// # Errors
+///
+/// The refusals of [`undo`] that come before the first write, and [`UndoError::PlanUnbound`] when the
+/// plan cannot be bound again or the journal and the plan disagree about an op.
+pub fn preview(
+    roots: &StorageRoots,
+    session: &SessionId,
+    ops: Option<&[OpId]>,
+) -> Result<UndoPreview, UndoError> {
+    let mut warnings = Vec::new();
+    roots.check()?;
+    let dir = roots.open_session(session)?;
+    let index = read_index(roots, &mut warnings)?;
+    let entry = index.as_ref().and_then(|index| index.get(session));
+    let read = journal::read_indexed(&dir, entry.and_then(|entry| entry.journal.as_ref()))?;
+    let state = &read.state;
+    ready(state)?;
+    let selection = match ops {
+        None => UndoSelection::All,
+        Some(ops) => UndoSelection::Items(
+            ops.iter()
+                .map(|op| {
+                    state
+                        .op(*op)
+                        .map(|state| state.item.clone())
+                        .ok_or_else(|| UndoError::UnknownItem(format!("op {op}")))
+                })
+                .collect::<Result<_, _>>()?,
+        ),
+    };
+    let reach = reach(state, &selection)?;
+    let plan = review::bind_session(&dir, state).map_err(UndoError::PlanUnbound)?;
+    let covered: Vec<OpId> = reach.covered.iter().copied().collect();
+    review::check_intents(&plan, state, &covered).map_err(UndoError::PlanUnbound)?;
+    let all: BTreeSet<OpId> = reach.requested.union(&reach.pulled_in).copied().collect();
+    let put_back = undo_order(&read.records, &all)
+        .into_iter()
+        .filter(|op| reach.covered.contains(op))
+        .filter(|op| state.op(*op).is_some_and(stands_changed))
+        .filter(|op| {
+            plan.item(*op)
+                .and_then(|item| item.exec_op.as_ref())
+                .is_some_and(|exec_op| !exec_op.is_irreversible())
+        })
+        .collect();
+    Ok(UndoPreview {
+        request: UndoRequest {
+            session: session.clone(),
+            selection,
+            plan_hash: Some(state.header().plan_hash),
+        },
+        app: state.header().app.clone(),
+        owner: entry.and_then(|entry| entry.owner.clone()),
+        plan,
+        put_back,
+        pulled_in: reach.pulled_in.iter().copied().collect(),
+        already_undone: reach.already_undone,
+        expect: UndoExpect {
+            ops: covered,
+            mark: state.mark(),
+        },
+    })
+}
+
+/// [`undo`], started only when the session is as [`preview`] read it: the journal is at the preview's
+/// mark and the run goes through exactly the preview's ops. Otherwise [`UndoError::NotAsShown`], before
+/// anything is written or changed.
+pub fn undo_expecting(
+    request: &UndoRequest,
+    env: UndoEnv<'_>,
+    expect: &UndoExpect,
+) -> Result<UndoOutput, UndoError> {
+    run_undo(request, env, Some(expect))
+}
+
 /// Undoes a session, or the named items of it (see the module docs for every step).
 ///
 /// `Err` means the run did not start: nothing was changed. Otherwise the result is an [`UndoOutput`]
 /// whose report lists every op an undo record was written for; conflicts and failures are results in
 /// it, never errors.
 pub fn undo(request: &UndoRequest, env: UndoEnv<'_>) -> Result<UndoOutput, UndoError> {
+    run_undo(request, env, None)
+}
+
+fn run_undo(
+    request: &UndoRequest,
+    env: UndoEnv<'_>,
+    expect: Option<&UndoExpect>,
+) -> Result<UndoOutput, UndoError> {
     let started = now();
     let mut warnings = Vec::new();
     env.roots.check()?;
@@ -1197,31 +1389,19 @@ pub fn undo(request: &UndoRequest, env: UndoEnv<'_>) -> Result<UndoOutput, UndoE
             });
         }
     }
-    if !read.state.is_finished() {
-        return Err(UndoError::NeedsRecovery(
-            "its run ended with neither commit nor aborted".to_owned(),
-        ));
+    ready(&read.state)?;
+    let Reach {
+        requested,
+        pulled_in,
+        already_undone,
+        covered,
+    } = reach(&read.state, &request.selection)?;
+    if let Some(expect) = expect {
+        let covered: Vec<OpId> = covered.iter().copied().collect();
+        if read.state.mark() != expect.mark || covered != expect.ops {
+            return Err(UndoError::NotAsShown);
+        }
     }
-    if read.state.retries_in_flight().next().is_some() {
-        return Err(UndoError::NeedsRecovery(
-            "a retry of a held item was interrupted".to_owned(),
-        ));
-    }
-    // A new plan would replace the interrupted run's, and the ops that run had not reached would drop
-    // off recovery's list.
-    if !read.state.undo_unfinished().is_empty() {
-        return Err(UndoError::NeedsRecovery(
-            "an undo run was interrupted before it reached every op of its plan".to_owned(),
-        ));
-    }
-    let requested = select(&read.state, &request.selection)?;
-    let ops: Vec<&OpState> = read.state.ops().collect();
-    let pulled_in = dependencies(&ops, &requested);
-    let already_undone: Vec<OpId> = ops
-        .iter()
-        .filter(|op| requested.contains(&op.op) && op.undo.is_settled())
-        .map(|op| op.op)
-        .collect();
 
     let mut journal = JournalWriter::open_append(&session)?;
     if journal.state().mark() != read.state.mark() {
