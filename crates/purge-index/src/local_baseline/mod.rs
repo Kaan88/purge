@@ -8,7 +8,11 @@
 //! Sources:
 //!
 //! - [`manifest`]: S1, component manifests (`WinSxS\Manifests`), with the macro table in [`macros`].
+//! - [`hive`]: S2, the default profile's hive, and S3, `HKU\.DEFAULT`.
+//! - [`appx`]: S4, inbox package manifests and the package repository's generated ProgIDs.
 
+pub mod appx;
+pub mod hive;
 pub mod macros;
 pub mod manifest;
 mod records;

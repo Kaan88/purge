@@ -369,8 +369,8 @@ pub fn inbox_reason(p: &PackageInfo, provisioned: &BTreeSet<String>) -> Option<I
     } else {
         p.family.to_ascii_lowercase()
     };
-    let microsoft = publisher_id(&family)
-        .is_some_and(|id| MICROSOFT_PUBLISHER_IDS.iter().any(|m| *m == id));
+    let microsoft =
+        publisher_id(&family).is_some_and(|id| MICROSOFT_PUBLISHER_IDS.iter().any(|m| *m == id));
     (microsoft && provisioned.contains(&family)).then_some(InboxReason::MicrosoftProvisioned)
 }
 
@@ -643,7 +643,10 @@ mod tests {
             Some("microsoft.549981c3f5f10_8wekyb3d8bbwe")
         );
         assert_eq!(family_of_full_name("A_B"), None);
-        assert_eq!(publisher_id("A_8WEKYB3D8BBWE").as_deref(), Some("8wekyb3d8bbwe"));
+        assert_eq!(
+            publisher_id("A_8WEKYB3D8BBWE").as_deref(),
+            Some("8wekyb3d8bbwe")
+        );
         assert_eq!(publisher_id("nounderscore"), None);
     }
 

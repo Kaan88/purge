@@ -28,7 +28,8 @@ use std::fmt;
 use purge_source::local_baseline::{InboxReason, LocalSources, RepositoryProgId};
 use purge_source::types::SourceResult;
 
-use super::hive::{DEFAULT_PROFILE_SID, Records};
+use super::Records;
+use super::hive::{DEFAULT_PROFILE_SID, record_count};
 
 /// The machine Classes root.
 pub const MACHINE_CLASSES: &str = r"HKLM\SOFTWARE\Classes";
@@ -123,7 +124,7 @@ pub struct InboxStats {
 /// S4: every inbox package of `src` into `out`. An error only when the package list itself could not
 /// be read.
 pub fn inbox_records(src: &dyn LocalSources, out: &mut Records) -> SourceResult<InboxStats> {
-    let before = out.len();
+    let before = record_count(out);
     let inbox = src.inbox_packages()?;
     let mut stats = InboxStats {
         packages: inbox.packages.len() as u64,
@@ -152,7 +153,7 @@ pub fn inbox_records(src: &dyn LocalSources, out: &mut Records) -> SourceResult<
             Err(e) => stats.failed.push((p.full_name.clone(), e.to_string())),
         }
     }
-    stats.records = (out.len() - before) as u64;
+    stats.records = record_count(out) - before;
     Ok(stats)
 }
 
@@ -168,7 +169,7 @@ pub fn manifest_records(
     collect(&root, None, &mut d);
 
     let mut stats = AppxStats::default();
-    let mut ok_name = |s: &str, stats: &mut AppxStats| -> Option<String> {
+    let ok_name = |s: &str, stats: &mut AppxStats| -> Option<String> {
         let s = s.trim();
         let good = !s.is_empty()
             && s.chars().count() <= 255
@@ -188,7 +189,7 @@ pub fn manifest_records(
         };
         stats.file_types += 1;
         for c in [MACHINE_CLASSES, USER_CLASSES] {
-            out.key(&format!(r"{c}\{ext}\OpenWithProgids"));
+            out.add_key(&format!(r"{c}\{ext}\OpenWithProgids"));
         }
     }
     for scheme in &d.protocols {
@@ -197,7 +198,7 @@ pub fn manifest_records(
         };
         stats.protocols += 1;
         for c in [MACHINE_CLASSES, USER_CLASSES] {
-            out.key(&format!(r"{c}\{scheme}"));
+            out.add_key(&format!(r"{c}\{scheme}"));
         }
     }
 
@@ -227,11 +228,11 @@ pub fn manifest_records(
                     ("TypeLib", "TypeLibIndex", None)
                 }
             };
-            out.key(&format!(r"{MACHINE_CLASSES}\{classes_sub}\{g}"));
+            out.add_key(&format!(r"{MACHINE_CLASSES}\{classes_sub}\{g}"));
             if let Some(p) = &package {
-                out.key(&format!(r"{PACKAGED_COM}\{index}\{g}\{p}"));
+                out.add_key(&format!(r"{PACKAGED_COM}\{index}\{g}\{p}"));
                 if let Some(sub) = package_sub {
-                    out.key(&format!(r"{PACKAGED_COM}\Package\{p}\{sub}\{g}"));
+                    out.add_key(&format!(r"{PACKAGED_COM}\Package\{p}\{sub}\{g}"));
                 }
             }
         }
@@ -242,16 +243,16 @@ pub fn manifest_records(
         };
         stats.prog_ids += 1;
         com = true;
-        out.key(&format!(r"{MACHINE_CLASSES}\{prog_id}"));
+        out.add_key(&format!(r"{MACHINE_CLASSES}\{prog_id}"));
         if clsid.as_deref().and_then(guid).is_some() {
-            out.key(&format!(r"{MACHINE_CLASSES}\{prog_id}\CLSID"));
+            out.add_key(&format!(r"{MACHINE_CLASSES}\{prog_id}\CLSID"));
         }
         if let Some(p) = &package {
-            out.key(&format!(r"{PACKAGED_COM}\ProgIdIndex\{prog_id}\{p}"));
+            out.add_key(&format!(r"{PACKAGED_COM}\ProgIdIndex\{prog_id}\{p}"));
         }
     }
     if let Some(p) = package.as_ref().filter(|_| com && d.com_server) {
-        out.key(&format!(r"{PACKAGED_COM}\Package\{p}\Server"));
+        out.add_key(&format!(r"{PACKAGED_COM}\Package\{p}\Server"));
     }
 
     for r in repository {
@@ -261,14 +262,14 @@ pub fn manifest_records(
         stats.generated_prog_ids += 1;
         let base = format!(r"{USER_CLASSES}\{prog_id}");
         for sub in ["Application", "DefaultIcon", r"Shell\open\command"] {
-            out.key(&format!(r"{base}\{sub}"));
+            out.add_key(&format!(r"{base}\{sub}"));
         }
         let mut verbs: BTreeSet<String> = BTreeSet::new();
         for ext in &r.file_types {
             let Some(ext) = ok_name(ext, &mut stats) else {
                 continue;
             };
-            out.value(
+            out.add_value(
                 &format!(r"{USER_CLASSES}\{ext}\OpenWithProgids"),
                 &prog_id,
                 REG_NONE,
@@ -283,12 +284,12 @@ pub fn manifest_records(
         }
         for verb in verbs {
             if let Some(verb) = ok_name(&verb, &mut stats) {
-                out.key(&format!(r"{base}\Shell\{verb}\command"));
+                out.add_key(&format!(r"{base}\Shell\{verb}\command"));
             }
         }
         for scheme in &r.protocols {
             if let Some(scheme) = ok_name(scheme, &mut stats) {
-                out.key(&format!(r"{USER_CLASSES}\{scheme}"));
+                out.add_key(&format!(r"{USER_CLASSES}\{scheme}"));
             }
         }
     }
@@ -717,18 +718,26 @@ mod tests {
 "#;
 
     fn keys(r: &Records) -> Vec<String> {
-        r.iter()
-            .map(|r| match r {
-                super::super::hive::Record::Key(k) => format!("K {k}"),
-                super::super::hive::Record::Value { key, name, ty } => {
-                    format!("V {key}|{name}|{ty}")
-                }
-            })
+        r.keys()
+            .map(|k| format!("K {k}"))
+            .chain(
+                r.values()
+                    .map(|v| format!("V {}|{}|{}", v.key(), v.name(), v.ty())),
+            )
             .collect()
     }
 
+    /// Records are case-folded; `line` is compared folded.
     fn has(r: &Records, line: &str) -> bool {
-        keys(r).iter().any(|k| k == line)
+        let (kind, rest) = line.split_at(2);
+        let line = format!("{kind}{}", rest.to_ascii_lowercase());
+        keys(r).contains(&line)
+    }
+
+    fn text(r: &Records) -> String {
+        let mut out = Vec::new();
+        r.write_records(&mut out).unwrap();
+        String::from_utf8(out).unwrap()
     }
 
     #[test]
@@ -790,7 +799,7 @@ mod tests {
         assert!(!has(&out, &format!(r"K {MACHINE_CLASSES}\AppXimages1")));
 
         // Through the loader: any user's classes hive, in either spelling.
-        let text = format!("#purge-baseline 1\tT\tPC\tSynthetic\t1.2\n{}", out.to_text());
+        let text = format!("#purge-baseline 1\tT\tPC\tSynthetic\t1.2\n{}", text(&out));
         let b = Baseline::from_bytes(text.as_bytes()).unwrap();
         let sid = "S-1-5-21-7-8-9-1001";
         assert!(b.has_key(&format!(r"HKU\{sid}_Classes\AppXimages1\Shell\open")));
@@ -834,14 +843,24 @@ mod tests {
         ] {
             assert!(has(&out, &k), "{k}\n{:#?}", keys(&out));
         }
-        assert!(!keys(&out).iter().any(|k| k.contains("not-a-guid") || k.contains("Bad")));
+        assert!(
+            !keys(&out)
+                .iter()
+                .any(|k| k.contains("not-a-guid") || k.contains("bad"))
+        );
         // COM is machine-wide only.
-        assert!(!keys(&out).iter().any(|k| k.contains(USER_CLASSES)));
+        assert!(
+            !keys(&out)
+                .iter()
+                .any(|k| k.contains(&USER_CLASSES.to_ascii_lowercase()))
+        );
 
-        let text = format!("#purge-baseline 1\tT\tPC\tSynthetic\t1.2\n{}", out.to_text());
+        let text = format!("#purge-baseline 1\tT\tPC\tSynthetic\t1.2\n{}", text(&out));
         let b = Baseline::from_bytes(text.as_bytes()).unwrap();
         assert!(b.has_key(r"HKCR\CLSID\{1e71da0c-e2f7-49a7-b40a-f6c5f9ea832a}"));
-        assert!(b.has_key(r"HKLM\SOFTWARE\Classes\Interface\{011FB326-F2C7-5F6B-A6A4-294A46F73788}"));
+        assert!(
+            b.has_key(r"HKLM\SOFTWARE\Classes\Interface\{011FB326-F2C7-5F6B-A6A4-294A46F73788}")
+        );
     }
 
     #[test]
@@ -905,9 +924,18 @@ mod tests {
             signature_kind: PackageSignatureKind::System,
         };
         let f = Fixture::builder()
-            .package(pkg("A.Good_1.0.0.0_x64__cw5n1h2txyewy", r"C:\Windows\SystemApps\Good"))
-            .package(pkg("A.Bad_1.0.0.0_x64__cw5n1h2txyewy", r"C:\Windows\SystemApps\Bad"))
-            .package(pkg("A.Gone_1.0.0.0_x64__cw5n1h2txyewy", r"C:\Windows\SystemApps\Gone"))
+            .package(pkg(
+                "A.Good_1.0.0.0_x64__cw5n1h2txyewy",
+                r"C:\Windows\SystemApps\Good",
+            ))
+            .package(pkg(
+                "A.Bad_1.0.0.0_x64__cw5n1h2txyewy",
+                r"C:\Windows\SystemApps\Bad",
+            ))
+            .package(pkg(
+                "A.Gone_1.0.0.0_x64__cw5n1h2txyewy",
+                r"C:\Windows\SystemApps\Gone",
+            ))
             .file_content(
                 r"C:\Windows\SystemApps\Good\AppxManifest.xml",
                 FTA_PROTOCOL.as_bytes().to_vec(),
@@ -923,7 +951,7 @@ mod tests {
         assert_eq!(s.failed.len(), 2, "{:?}", s.failed);
         assert!(!s.repository_read && !s.provisioned_read && !s.machine_wide);
         assert_eq!(s.declarations.file_types, 3);
-        assert_eq!(s.records as usize, out.len());
-        assert!(out.has_key(r"HKLM\SOFTWARE\Classes\.mp4"));
+        assert_eq!(s.records, record_count(&out));
+        assert!(out.contains_key(r"HKLM\SOFTWARE\Classes\.mp4"));
     }
 }

@@ -1484,13 +1484,16 @@ fn package_key(path: &str) -> Option<String> {
 // Local baseline sources
 // ---------------------------------------------------------------------------------------------------------
 
+/// Value names and types of one key of a [`HiveFixture`], in insertion order.
+type HiveValues = Vec<(String, u32)>;
+
 /// An offline registry hive file in memory, for [`LocalSources::default_hive`] of a fixture: key paths
 /// relative to the hive root with their value names and types. Walked depth-first in case-folded name
 /// order, a key before its values (in insertion order) and subkeys, the root (empty path) first.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HiveFixture {
     /// Folded segments -> (path as given, values).
-    keys: BTreeMap<Vec<String>, (String, Vec<(String, u32)>)>,
+    keys: BTreeMap<Vec<String>, (String, HiveValues)>,
 }
 
 impl HiveFixture {
@@ -1648,7 +1651,11 @@ mod local_tests {
     fn default_hive_path_fallback_and_errors() {
         // No `Default` value: `ProfilesDirectory\Default`.
         let f = Fixture::builder()
-            .expand_sz(PROFILE_LIST, "ProfilesDirectory", r"%SystemDrive%\Profiles\")
+            .expand_sz(
+                PROFILE_LIST,
+                "ProfilesDirectory",
+                r"%SystemDrive%\Profiles\",
+            )
             .env("SYSTEMDRIVE", "C:")
             .build();
         assert_eq!(
@@ -1677,7 +1684,10 @@ mod local_tests {
             .sz(r"HKU\.DEFAULT\Control Panel\Desktop", "Wallpaper", "")
             .key(r"HKU\.DEFAULT\Software\Secret\Deeper")
             .denied(r"HKU\.DEFAULT\Software\Secret")
-            .link(r"HKU\.DEFAULT\Software\Linked", r"\REGISTRY\MACHINE\SOFTWARE")
+            .link(
+                r"HKU\.DEFAULT\Software\Linked",
+                r"\REGISTRY\MACHINE\SOFTWARE",
+            )
             .key(r"HKU\S-1-5-21-1-2-3-1001\Software\Other")
             .build();
         let (got, walk) = entries(&f, true);
@@ -1752,9 +1762,19 @@ mod local_tests {
             .key(&format!(
                 r"{PROVISIONED_KEY}\Microsoft.Windows.Photos_1.0.0.0_neutral_~_8wekyb3d8bbwe"
             ))
-            .key(&format!(r"{PROVISIONED_KEY}\Vendor.App_1.0.0.0_neutral_~_abcdefghijklm"))
-            .value(&format!(r"{REPO}\ProgIDs\AppXphotos1"), photos, none.clone())
-            .value(&format!(r"{REPO}\ProgIDs\AppXphotos2"), photos, none.clone())
+            .key(&format!(
+                r"{PROVISIONED_KEY}\Vendor.App_1.0.0.0_neutral_~_abcdefghijklm"
+            ))
+            .value(
+                &format!(r"{REPO}\ProgIDs\AppXphotos1"),
+                photos,
+                none.clone(),
+            )
+            .value(
+                &format!(r"{REPO}\ProgIDs\AppXphotos2"),
+                photos,
+                none.clone(),
+            )
             .value(&format!(r"{REPO}\ProgIDs\AppXvendor"), vendor, none.clone())
             .value(
                 &format!(r"{REPO}\windows.fileTypeAssociation\.jpg\AppXphotos1"),
