@@ -2,7 +2,10 @@
 //!
 //! Read side (feature `read`): [`snapshot_processes`] (a Toolhelp32 process snapshot) and
 //! [`process_image_path`] (`QueryFullProcessImageNameW`). Neither creates, opens for writing or signals
-//! any process; the Live system source uses them to list running processes.
+//! any process; the Live system source uses them to list running processes. [`ProcessHandle`] is a
+//! held query handle (`PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE`) for the broker's peer check
+//! (M3 design 3.3): while it is open the pid cannot be reused, and the creation time, image path,
+//! token and exit are all read from that one handle.
 //!
 //! Run side (feature `run`, ENGINE_PLAN.md §4.4 "Launch and wait"): `JobProcess::spawn` creates the
 //! process suspended, assigns it to a fresh Job object that does **not** allow breakaway, then resumes it,
@@ -18,15 +21,22 @@ use std::mem;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::path::PathBuf;
 
-use windows_sys::Win32::Foundation::{ERROR_NO_MORE_FILES, HANDLE, INVALID_HANDLE_VALUE};
+use std::time::Duration;
+
+use windows_sys::Win32::Foundation::{
+    ERROR_NO_MORE_FILES, FILETIME, HANDLE, INVALID_HANDLE_VALUE, WAIT_OBJECT_0, WAIT_TIMEOUT,
+};
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
 };
 use windows_sys::Win32::System::Threading::{
-    GetCurrentThread, OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
-    QueryFullProcessImageNameW, SetThreadPriority, THREAD_MODE_BACKGROUND_BEGIN,
-    THREAD_MODE_BACKGROUND_END,
+    GetCurrentThread, GetProcessId, GetProcessTimes, INFINITE, OpenProcess, PROCESS_NAME_WIN32,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, QueryFullProcessImageNameW,
+    SetThreadPriority, THREAD_MODE_BACKGROUND_BEGIN, THREAD_MODE_BACKGROUND_END,
+    WaitForSingleObject,
 };
+
+use crate::os::Win32Error;
 
 #[cfg(feature = "run")]
 pub use job::{
@@ -103,18 +113,127 @@ pub fn process_image_path(pid: u32) -> io::Result<Option<PathBuf>> {
     }
     // SAFETY: we own the handle just opened.
     let h = unsafe { OwnedHandle::from_raw_handle(h as _) };
+    Ok(image_path_of(&h).ok())
+}
+
+/// `QueryFullProcessImageNameW` (Win32 form) on an open process handle.
+fn image_path_of(h: &OwnedHandle) -> Result<PathBuf, Win32Error> {
     let mut buf = vec![0u16; 32 * 1024];
     let mut len = buf.len() as u32;
     // SAFETY: `buf` holds `len` characters.
-    if unsafe {
-        QueryFullProcessImageNameW(raw(&h), PROCESS_NAME_WIN32, buf.as_mut_ptr(), &mut len)
-    } == 0
+    if unsafe { QueryFullProcessImageNameW(raw(h), PROCESS_NAME_WIN32, buf.as_mut_ptr(), &mut len) }
+        == 0
     {
-        return Ok(None);
+        return Err(Win32Error::last());
     }
-    Ok(Some(PathBuf::from(String::from_utf16_lossy(
+    Ok(PathBuf::from(String::from_utf16_lossy(
         &buf[..len as usize],
-    ))))
+    )))
+}
+
+/// A held handle to a process, opened by pid with `PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE`
+/// and nothing more (no read, write, terminate or duplicate rights).
+///
+/// A process id is not reused while any handle to the process object is open, so facts read through
+/// this handle later still describe the process that was opened. Opening by pid can still race with an
+/// exit and a reuse *before* the open; the creation time read here is what tells the two apart (the
+/// broker compares it with `--parent-ctime`).
+#[derive(Debug)]
+pub struct ProcessHandle {
+    handle: OwnedHandle,
+    pid: u32,
+}
+
+impl ProcessHandle {
+    /// Opens process `pid`. The handle's own `GetProcessId` must equal `pid`.
+    pub fn open(pid: u32) -> Result<ProcessHandle, Win32Error> {
+        // SAFETY: plain call; the handle is not inheritable.
+        let h = unsafe {
+            OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
+                0,
+                pid,
+            )
+        };
+        if h.is_null() {
+            return Err(Win32Error::last());
+        }
+        // SAFETY: we own the handle just opened.
+        let handle = unsafe { OwnedHandle::from_raw_handle(h as _) };
+        // SAFETY: valid process handle.
+        let got = unsafe { GetProcessId(raw(&handle)) };
+        if got != pid {
+            return Err(if got == 0 {
+                Win32Error::last()
+            } else {
+                Win32Error::INVALID_DATA
+            });
+        }
+        Ok(ProcessHandle { handle, pid })
+    }
+
+    /// This process.
+    pub fn current() -> Result<ProcessHandle, Win32Error> {
+        ProcessHandle::open(std::process::id())
+    }
+
+    /// The process id the handle was opened for.
+    pub fn pid(&self) -> u32 {
+        self.pid
+    }
+
+    /// Creation time as a `FILETIME` value (100 ns units since 1601-01-01 UTC), the form of
+    /// `--parent-ctime`.
+    pub fn creation_time(&self) -> Result<u64, Win32Error> {
+        let zero = FILETIME {
+            dwLowDateTime: 0,
+            dwHighDateTime: 0,
+        };
+        let (mut created, mut exited, mut kernel, mut user) = (zero, zero, zero, zero);
+        // SAFETY: valid process handle; four writable FILETIME locals.
+        if unsafe {
+            GetProcessTimes(
+                raw(&self.handle),
+                &mut created,
+                &mut exited,
+                &mut kernel,
+                &mut user,
+            )
+        } == 0
+        {
+            return Err(Win32Error::last());
+        }
+        Ok(((created.dwHighDateTime as u64) << 32) | created.dwLowDateTime as u64)
+    }
+
+    /// Full Win32 image path (`QueryFullProcessImageNameW`, `PROCESS_NAME_WIN32`).
+    pub fn image_path(&self) -> Result<PathBuf, Win32Error> {
+        image_path_of(&self.handle)
+    }
+
+    /// True once the process has exited.
+    pub fn has_exited(&self) -> Result<bool, Win32Error> {
+        self.wait_exit(Some(Duration::ZERO))
+    }
+
+    /// Waits up to `timeout` (`None`: no limit) for the process to exit; true when it has.
+    pub fn wait_exit(&self, timeout: Option<Duration>) -> Result<bool, Win32Error> {
+        let ms = timeout.map_or(INFINITE, |t| {
+            u32::try_from(t.as_millis()).map_or(INFINITE - 1, |ms| ms.min(INFINITE - 1))
+        });
+        // SAFETY: valid handle with SYNCHRONIZE.
+        match unsafe { WaitForSingleObject(raw(&self.handle), ms) } {
+            WAIT_OBJECT_0 => Ok(true),
+            WAIT_TIMEOUT => Ok(false),
+            _ => Err(Win32Error::last()),
+        }
+    }
+}
+
+impl AsRawHandle for ProcessHandle {
+    fn as_raw_handle(&self) -> std::os::windows::io::RawHandle {
+        self.handle.as_raw_handle()
+    }
 }
 
 /// Puts the **calling thread** into background mode (`on`: `THREAD_MODE_BACKGROUND_BEGIN`, which lowers
@@ -436,6 +555,40 @@ mod tests {
         })
         .join()
         .unwrap();
+    }
+
+    #[test]
+    fn process_handle_facts() {
+        let me = ProcessHandle::current().unwrap();
+        assert_eq!(me.pid(), std::process::id());
+        assert_eq!(me.image_path().unwrap(), std::env::current_exe().unwrap());
+        assert!(!me.has_exited().unwrap());
+        assert!(
+            !me.wait_exit(Some(std::time::Duration::from_millis(20)))
+                .unwrap()
+        );
+        let t = me.creation_time().unwrap();
+        // After 2020-01-01 (FILETIME 132223104000000000) and the same on every read.
+        assert!(t > 132_223_104_000_000_000, "{t}");
+        assert_eq!(
+            ProcessHandle::current().unwrap().creation_time().unwrap(),
+            t
+        );
+        assert!(ProcessHandle::open(u32::MAX - 3).is_err());
+
+        // A child that has exited: the held handle still answers and reports the exit.
+        let mut child = std::process::Command::new("cmd.exe")
+            .args(["/c", "exit", "3"])
+            .spawn()
+            .unwrap();
+        let h = ProcessHandle::open(child.id()).unwrap();
+        assert!(
+            h.wait_exit(Some(std::time::Duration::from_secs(30)))
+                .unwrap()
+        );
+        assert!(h.has_exited().unwrap());
+        assert!(h.creation_time().unwrap() >= t);
+        assert_eq!(child.wait().unwrap().code(), Some(3));
     }
 
     #[test]
