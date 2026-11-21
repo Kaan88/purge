@@ -2,6 +2,7 @@
 
 mod ambient;
 mod baseline;
+mod baseline_diff;
 mod canon;
 #[cfg(windows)]
 mod capture;
@@ -48,6 +49,9 @@ rigtool - Purge VM rig tool (contract: vm\\RIG.md)
                  --set reads <dir>/lists-*-0.json)
   rigtool convert (--clone FILE | --removed FILE --tool ut|bcu) --app ID -o plan.json
   rigtool baseline --snap snap-0.tsv.gz -o FILE.tsv.gz|DIR\\
+  rigtool baseline-diff --truth SHIPPED.tsv.gz --local LOCAL.tsv.gz [--neighbour SHIPPED.tsv.gz...]
+                        --areas kb/baselines/view.json --out report.json
+                (purge.baseline-diff/1, RIG.md §8a: per area truth keys, covered local / merged, false absent, extra)
   rigtool invdiff --inv inventory.json --lists lists-<run>-<phase>.json [--explain inventory-explain.json]
                   [--sid SID] [--json out.json] [--md out.md]     (exit 1 = unexplained differences)
   rigtool deep --scope FILE... [--sid SID] -o deep.json
@@ -255,6 +259,17 @@ fn run(argv: Vec<String>) -> Result<()> {
         "baseline" => {
             let a = Args::parse(rest, &[], &[], &["--snap", "-o"])?;
             baseline::cmd_baseline(&a.req("--snap")?, &a.req("-o")?)
+        }
+        "baseline-diff" => {
+            let a = Args::parse(rest, &[], &["--neighbour"], &["--truth", "--local", "--areas", "--out", "-o"])?;
+            let out = a.path("--out").or_else(|| a.path("-o")).with_context(|| format!("missing --out\n\n{USAGE}"))?;
+            baseline_diff::cmd_baseline_diff(&baseline_diff::DiffArgs {
+                truth: a.req("--truth")?,
+                local: a.req("--local")?,
+                neighbours: a.all("--neighbour").into_iter().map(PathBuf::from).collect(),
+                areas: a.req("--areas")?,
+                out,
+            })
         }
         "invdiff" => {
             let a = Args::parse(rest, &[], &[], &["--inv", "--lists", "--explain", "--sid", "--json", "--md"])?;

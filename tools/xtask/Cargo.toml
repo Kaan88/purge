@@ -13,6 +13,7 @@ purge-engine = { path = "../../bins/purge-engine" }
 purge-guard.workspace = true
 purge-harvest.workspace = true
 purge-identity.workspace = true
+purge-index.workspace = true
 purge-inventory.workspace = true
 purge-model.workspace = true
 purge-scan.workspace = true
