@@ -29,6 +29,8 @@ pub mod firewall;
 pub mod fs;
 #[cfg(feature = "write")]
 pub mod fs_write;
+#[cfg(feature = "read")]
+pub mod icons;
 pub mod known_folders;
 pub mod msi;
 pub mod msi_db;
