@@ -113,8 +113,6 @@ before merging (or `git stash` if you want to inspect them). Untracked and harml
 - `xtask ui-strings` (needs `PURGE_UT_STRINGS` + the reference file, not on this laptop).
 
 ### Harness notes from this session
-- Flash (deepseek-flash subagent) jobs die at ~900 s; send a follow-up with the same sessionID to continue; the
-  worktree keeps the edits. Parallel jobs: max 3 Flash, 2 Claude subagents.
 - Sonnet here is `anthropic/claude-sonnet-5-5`; the reviewer is `anthropic/claude-fable-5-2#medium`. Look model
   ids up, do not type them from memory.
 - Writers sometimes run commands in the MAIN checkout (M3-EXEC reverted its own; the M1 writer did not). Check
@@ -195,7 +193,6 @@ State: `baseline` holds M3 waves 1-2 except M3-BENCH, plus BL-RESIDUE. No VM run
   writer to `git reset --hard baseline` first.
 - Parallel writers touching crates/purge-win/Cargo.toml conflict on the one-line windows-sys feature list:
   resolve by union.
-- DeepSeek Flash jobs time out at 900 s server-side; the edits survive in the worktree, continue with `session`.
 - Don't pipe a check into `tail` before `&& git commit` (exit code lost).
 
 ## Done
