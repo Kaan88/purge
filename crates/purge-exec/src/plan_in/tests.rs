@@ -708,3 +708,84 @@ fn the_rest_of_an_interrupted_selection_is_found_by_its_hash() {
         Some(Vec::new())
     );
 }
+
+/// A fingerprint of `program` whose only content is `tasks`.
+fn fingerprint_with(program: &str, tasks: Vec<purge_model::SysTask>) -> Fingerprint {
+    let mut fp: Fingerprint = serde_json::from_value(serde_json::json!({
+        "schema": "purge.fp/0",
+        "app": {"program_id": program, "display_name": "Vendor App"},
+        "identity": {"names": [], "vendors": [], "tokens": [], "mega_vendor": false},
+        "os": {"edition": "Professional", "build": 26340, "ubr": 9882},
+        "user_sid": "S-1-5-21-1-2-3-1001"
+    }))
+    .unwrap();
+    fp.sys.tasks = tasks;
+    fp
+}
+
+fn task_record(identity: TaskIdentity) -> purge_model::SysTask {
+    purge_model::SysTask {
+        identity,
+        program: None,
+        why: purge_model::ObjectWhy::ProgramInRoot,
+    }
+}
+
+/// The session fingerprint must vouch for every selected object with the digest the plan holds: a
+/// record of another harvest (another digest), of another owner, or no record leaves the object
+/// unbound; a plan without an object is never refused by it.
+#[test]
+fn a_selected_object_must_be_vouched_for_by_the_fingerprint_with_the_plans_digest() {
+    let identity = TaskIdentity {
+        path: r"\Vendor\Update".into(),
+        actions: Vec::new(),
+    };
+    let mut task = safe(
+        "task-fp",
+        Target::Task {
+            path: identity.path.clone(),
+        },
+        Action::DeleteKey,
+    );
+    task.object_fp = Some(identity.fp());
+    let scan = scan_doc(
+        vec![
+            safe("file", path(r"C:\Vendor\a.txt"), Action::Quarantine),
+            task,
+        ],
+        Vec::new(),
+    );
+    let bound = bind(&request(&scan, Selection::Preselected)).unwrap();
+
+    let vouching = fingerprint_with("HKLM|64|VendorApp", vec![task_record(identity.clone())]);
+    assert!(unbound_objects(&bound, &vouching).is_empty());
+
+    let none = fingerprint_with("HKLM|64|VendorApp", Vec::new());
+    assert_eq!(unbound_objects(&bound, &none), vec!["task-fp".to_owned()]);
+
+    let other_owner = fingerprint_with("HKLM|64|OtherApp", vec![task_record(identity.clone())]);
+    assert_eq!(
+        unbound_objects(&bound, &other_owner),
+        vec!["task-fp".to_owned()]
+    );
+
+    // The same task path with another digest: the object was replaced between harvest and scan.
+    let mut replaced = identity;
+    replaced.actions = vec![purge_model::TaskAction::Exec {
+        path: r"C:\Evil\run.exe".into(),
+        arguments: None,
+        working_dir: None,
+    }];
+    let other_digest = fingerprint_with("HKLM|64|VendorApp", vec![task_record(replaced)]);
+    assert_eq!(
+        unbound_objects(&bound, &other_digest),
+        vec!["task-fp".to_owned()]
+    );
+
+    let files_only = scan_doc(
+        vec![safe("file", path(r"C:\Vendor\a.txt"), Action::Quarantine)],
+        Vec::new(),
+    );
+    let bound = bind(&request(&files_only, Selection::Preselected)).unwrap();
+    assert!(unbound_objects(&bound, &none).is_empty());
+}

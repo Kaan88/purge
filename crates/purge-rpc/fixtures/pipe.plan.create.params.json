@@ -1,4 +1,5 @@
 {
+  "allow_irreversible": true,
   "scan_id": "s-0123456789abcdef",
   "selected": [
     "c-5a5a000000000001",

@@ -49,7 +49,7 @@ const MEDIUM_DIR: &str = r"C:\Users\tester\AppData\Local\Purge Medium App";
 const DATA_DIR: &str = r"C:\Users\tester\AppData\Local\Purge Test App";
 
 /// A machine with the two apps and the broker app's leftover data.
-fn app_fixture() -> Fixture {
+pub(crate) fn app_fixture() -> Fixture {
     let mut fx = Fixture::builder()
         .os("Professional", 26340, 9882)
         .user_sid(ME)
@@ -130,17 +130,17 @@ fn app_fixture() -> Fixture {
     fx
 }
 
-fn broker_id() -> ProgramId {
+pub(crate) fn broker_id() -> ProgramId {
     ProgramId::machine(View::K64, BROKER_KEY).expect("program id")
 }
 
-fn medium_id() -> ProgramId {
+pub(crate) fn medium_id() -> ProgramId {
     ProgramId::machine(View::K64, MEDIUM_KEY).expect("program id")
 }
 
 /// What the scripted uninstaller reports.
 #[derive(Clone, Copy)]
-struct ScriptedRun {
+pub(crate) struct ScriptedRun {
     outcome: RunOutcome,
     exit_code: Option<u32>,
     verify: VerifyGone,
@@ -157,7 +157,7 @@ impl Default for ScriptedRun {
 }
 
 /// The fixture machine: the engine's sources, a scripted uninstaller and an in-memory fingerprint store.
-struct FixtureMachine {
+pub(crate) struct FixtureMachine {
     fixture: Fixture,
     runs: Mutex<Vec<String>>,
     scripted: Mutex<ScriptedRun>,
@@ -168,7 +168,7 @@ struct FixtureMachine {
 }
 
 impl FixtureMachine {
-    fn new(fixture: Fixture) -> Self {
+    pub(crate) fn new(fixture: Fixture) -> Self {
         FixtureMachine {
             fixture,
             runs: Mutex::new(Vec::new()),
@@ -180,11 +180,11 @@ impl FixtureMachine {
         }
     }
 
-    fn script(&self, script: ScriptedRun) {
+    pub(crate) fn script(&self, script: ScriptedRun) {
         *self.scripted.lock().unwrap() = script;
     }
 
-    fn scripted_verify(&self, verify: VerifyGone) {
+    pub(crate) fn scripted_verify(&self, verify: VerifyGone) {
         *self.verify.lock().unwrap() = Some(verify);
     }
 
@@ -192,7 +192,7 @@ impl FixtureMachine {
         self.runs.lock().unwrap().clone()
     }
 
-    fn stored(&self, program: &ProgramId) -> Option<Fingerprint> {
+    pub(crate) fn stored(&self, program: &ProgramId) -> Option<Fingerprint> {
         self.stored
             .lock()
             .unwrap()
@@ -200,7 +200,7 @@ impl FixtureMachine {
             .cloned()
     }
 
-    fn refuse_unstorable(&self, refusals: Vec<Refusal>) {
+    pub(crate) fn refuse_unstorable(&self, refusals: Vec<Refusal>) {
         *self.unstorable.lock().unwrap() = refusals;
     }
 
@@ -475,10 +475,10 @@ impl Broker {
 }
 
 /// How long a heavy request (a harvest or a scan over the shipped baseline) may take in a debug build.
-const LONG: Duration = Duration::from_secs(300);
+pub(crate) const LONG: Duration = Duration::from_secs(300);
 
 /// Sends one request and answers its response, skipping the progress notifications it sends.
-fn ask(c: &crate::testkit::Client, id: u64, method: &str, params: Value) -> Value {
+pub(crate) fn ask(c: &crate::testkit::Client, id: u64, method: &str, params: Value) -> Value {
     c.send_line(&request(id, method, &params));
     loop {
         let line = c
@@ -490,7 +490,7 @@ fn ask(c: &crate::testkit::Client, id: u64, method: &str, params: Value) -> Valu
     }
 }
 
-fn prepared(c: &crate::testkit::Client, id: u64, programs: &[ProgramId]) -> Value {
+pub(crate) fn prepared(c: &crate::testkit::Client, id: u64, programs: &[ProgramId]) -> Value {
     ask(
         c,
         id,
@@ -499,7 +499,12 @@ fn prepared(c: &crate::testkit::Client, id: u64, programs: &[ProgramId]) -> Valu
     )
 }
 
-fn scan_session(c: &crate::testkit::Client, id: u64, session: &str, forced: bool) -> Value {
+pub(crate) fn scan_session(
+    c: &crate::testkit::Client,
+    id: u64,
+    session: &str,
+    forced: bool,
+) -> Value {
     ask(
         c,
         id,
@@ -508,7 +513,12 @@ fn scan_session(c: &crate::testkit::Client, id: u64, session: &str, forced: bool
     )
 }
 
-fn create_selected(c: &crate::testkit::Client, id: u64, scan: &str, selected: &[&str]) -> Value {
+pub(crate) fn create_selected(
+    c: &crate::testkit::Client,
+    id: u64,
+    scan: &str,
+    selected: &[&str],
+) -> Value {
     ask(
         c,
         id,
@@ -517,14 +527,14 @@ fn create_selected(c: &crate::testkit::Client, id: u64, scan: &str, selected: &[
     )
 }
 
-fn created_id(reply: &Value) -> String {
+pub(crate) fn created_id(reply: &Value) -> String {
     reply["result"]["plan_id"]
         .as_str()
         .unwrap_or_else(|| panic!("no plan id in {reply}"))
         .to_owned()
 }
 
-fn candidate_id(reply: &Value, index: usize) -> String {
+pub(crate) fn candidate_id(reply: &Value, index: usize) -> String {
     reply["result"]["items"][index]["candidate_id"]
         .as_str()
         .unwrap_or_else(|| panic!("no candidate at {index} in {reply}"))
@@ -541,7 +551,7 @@ fn refusal_ids(reply: &Value) -> Vec<String> {
 }
 
 /// The first top-level item a plan can select.
-fn first_selectable(scan: &crate::scan::Scan) -> &Candidate {
+pub(crate) fn first_selectable(scan: &crate::scan::Scan) -> &Candidate {
     scan.doc
         .items
         .iter()
@@ -778,6 +788,83 @@ fn observed_answers_the_brokers_own_verify_gone() {
     b.exit(SECS);
 }
 
+/// The medium engine's report of its own run (`outcome`): a failure makes the scan `forced` with
+/// nothing preselected even though the broker's verify-gone passes; a success is never believed alone
+/// (a failed verify-gone is forced whatever the client says); an absent report keeps the old rule; and
+/// a success with a passing verify-gone is `post`. The report can only make the scan safer.
+#[test]
+fn observed_outcome_can_only_make_the_scan_safer() {
+    let gone = VerifyGone::new(true, true, true);
+    let still_there = VerifyGone::new(true, true, false);
+    for (outcome, verify, expected) in [
+        (Some("Failed"), gone, "forced"),
+        (Some("Cancelled"), gone, "forced"),
+        (Some("TimedOut"), gone, "forced"),
+        (Some("Success"), still_there, "forced"),
+        (None, still_there, "forced"),
+        (Some("Success"), gone, "post"),
+        (Some("SuccessReboot"), gone, "post"),
+        (None, gone, "post"),
+    ] {
+        let mut b = Broker::start(FixtureMachine::new(app_fixture()));
+        b.machine.scripted_verify(verify);
+        let c = b.client();
+        let prepare = prepared(&c, 2, &[medium_id()]);
+        let session = prepare["result"]["programs"][0]["session_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let params = match outcome {
+            Some(outcome) => json!({ "session_id": session, "outcome": outcome }),
+            None => json!({ "session_id": session }),
+        };
+        let reply = ask(&c, 3, "uninstall.observed", params);
+        assert!(reply["result"]["verify_gone"].is_object(), "{reply}");
+        let scan = scan_session(&c, 4, &session, false);
+        if expected == "post" {
+            // The broker did not run this uninstaller, so the fingerprint has no uninstall window and the
+            // pipeline refuses `post` itself (see the notes): what matters is that the mode asked for
+            // was `post`, not `forced`.
+            let asked_post = scan["result"]["mode"] == "post"
+                || scan["error"]["data"]["message"]
+                    .as_str()
+                    .is_some_and(|m| m.contains("--mode post needs a fingerprint"));
+            assert!(asked_post, "{outcome:?}: {scan}");
+        } else {
+            assert_eq!(scan["result"]["mode"], expected, "{outcome:?}: {scan}");
+        }
+        if expected == "forced" {
+            assert_eq!(
+                scan["result"]["counts"]["preselected"], 0,
+                "{outcome:?}: nothing is preselected in the forced mode: {scan}"
+            );
+        }
+        c.close();
+        b.exit(SECS);
+    }
+}
+
+/// An outcome the engine cannot have produced is refused, and so is a field the request does not have.
+#[test]
+fn observed_refuses_an_outcome_it_does_not_know() {
+    let mut b = Broker::start(FixtureMachine::new(app_fixture()));
+    let c = b.client();
+    let prepare = prepared(&c, 2, &[medium_id()]);
+    let session = prepare["result"]["programs"][0]["session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    for params in [
+        json!({ "session_id": session, "outcome": "great" }),
+        json!({ "session_id": session, "outcome": 0 }),
+        json!({ "session_id": session, "exit_code": 0 }),
+    ] {
+        let reply = ask(&c, 3, "uninstall.observed", params);
+        assert!(reply.get("error").is_some(), "{reply}");
+    }
+    c.close();
+    b.exit(SECS);
+}
 // ---------------------------------------------------------------------------------------------------
 // leftovers.stored and a scan from a stored fingerprint
 // ---------------------------------------------------------------------------------------------------

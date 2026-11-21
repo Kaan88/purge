@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use purge_exec::plan_in::{self, BoundPlan, ExecRequest, ExecSettings, PlanRefusal, Selection};
 use purge_model::exec::op::Sha256Hex;
-use purge_model::{Band, Candidate, CandidateId};
+use purge_model::{Band, Candidate, CandidateId, Fingerprint};
 use purge_rpc::error::{ErrorData, ErrorObject, Refusal};
 use purge_rpc::methods::{
     AttentionItem, AttentionReason, CandidateRef, ConfirmCode, PlanCounts, PlanCreateParams,
@@ -47,6 +47,10 @@ pub struct Plan {
     pub session: Option<UninstallSessionId>,
     /// The executor settings the broker decided when the plan was made (the account, the program roots).
     pub settings: ExecSettings,
+    /// The program's name as the scan's fingerprint has it, for the dialog.
+    pub app_name: String,
+    /// The scan's fingerprint, frozen with the plan: the object binding of the run.
+    pub fingerprint: Arc<Fingerprint>,
     /// The frozen plan: the same object the dialog is drawn from and the executor runs.
     pub bound: Arc<BoundPlan>,
     /// The short code of the confirm hash, `A1B2-C3D4`.
@@ -83,7 +87,7 @@ pub(crate) fn create<H: crate::uninstall::FlowHandler>(
     ctx: &Ctx<'_, H>,
     params: PlanCreateParams,
 ) -> Result<Value, ErrorObject> {
-    let (scan_id, selection) = match params {
+    let (scan_id, selection, allow_irreversible) = match params {
         PlanCreateParams::Selected(params) => (
             params.scan_id,
             Selection::Ids(
@@ -94,8 +98,10 @@ pub(crate) fn create<H: crate::uninstall::FlowHandler>(
                     .map(|id| CandidateId(id.to_string()))
                     .collect(),
             ),
+            params.allow_irreversible,
         ),
-        PlanCreateParams::Preselected(params) => (params.scan_id, Selection::Preselected),
+        // The scan's preselection never holds a removal without an undo, so there is nothing to offer.
+        PlanCreateParams::Preselected(params) => (params.scan_id, Selection::Preselected, false),
     };
     let slot = ctx.tables().scans.get(scan_id)?;
     let scan = &slot.scan;
@@ -169,7 +175,7 @@ pub(crate) fn create<H: crate::uninstall::FlowHandler>(
             scan: scan.doc.clone(),
             confirm: plan_in::confirm_hash(plan_hash, selection_hash).to_string(),
             selection: Selection::Ids(current.clone()),
-            allow_irreversible: false,
+            allow_irreversible,
             settings: settings.clone(),
         };
         match plan_in::bind(&request) {
@@ -196,6 +202,22 @@ pub(crate) fn create<H: crate::uninstall::FlowHandler>(
     };
     if !refused.is_empty() {
         return Err(plan_refused(refused));
+    }
+
+    // The scan's own fingerprint must vouch for every system object the plan removes: the same check
+    // execute_bound makes, so a plan the executor would refuse is never offered.
+    let unbound = plan_in::unbound_objects(&bound, &scan.fingerprint);
+    if !unbound.is_empty() {
+        return Err(plan_refused(
+            unbound
+                .into_iter()
+                .map(|id| Refusal {
+                    candidate_id: CandidateRef::try_from(&CandidateId(id)).ok(),
+                    reason: "the fingerprint of this scan does not record this system object as the program's, with the digest the scan saw"
+                        .into(),
+                })
+                .collect(),
+        ));
     }
 
     // Items the executor cannot quarantine, and a plan that would pass a volume's cap, are refused
@@ -244,6 +266,8 @@ pub(crate) fn create<H: crate::uninstall::FlowHandler>(
         scan_id,
         session: scan.session,
         settings,
+        app_name: scan.app_name.clone(),
+        fingerprint: scan.fingerprint.clone(),
         bound: Arc::new(bound),
         code,
         counts,

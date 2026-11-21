@@ -41,6 +41,10 @@
       "description": "`plan.create` with the user's selection: `{scan_id, selected[]}`.",
       "type": "object",
       "properties": {
+        "allow_irreversible": {
+          "description": "Offer the removals that cannot be put back (packages) to the consent dialog. Off (the default),\nthe dialog lists them as \"Leave alone\". On, the dialog names each of them, warns that it cannot\nbe put back and gates its button behind the verification box: the dialog is the acknowledgement,\nthis flag only lets it be asked.",
+          "type": "boolean"
+        },
         "scan_id": {
           "description": "The scan.",
           "$ref": "#/$defs/ScanId"

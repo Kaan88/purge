@@ -15,10 +15,13 @@
 //! served), every candidate id must have the wire form `c-<16 hex>` and name exactly one candidate
 //! (review M3-R1 M2). A scan that fails is refused with `plan_refused`; it is never served.
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use purge_engine::pipeline;
-use purge_model::{Action, Band, BaselineTrust, Candidate, CandidateId, ScanMode, Target};
+use purge_model::{
+    Action, Band, BaselineTrust, Candidate, CandidateId, Fingerprint, ScanMode, Target,
+};
 use purge_policy::explain;
 use purge_rpc::error::{ErrorData, ErrorObject, IdKind, Refusal};
 use purge_rpc::methods::{
@@ -52,6 +55,10 @@ pub struct Scan {
     pub program_roots: Vec<String>,
     /// The checked account the scan ran for, for the plan's executor settings.
     pub user_sid: String,
+    /// The fingerprint the scan ran with: the broker's own harvest of the session (or its stored copy).
+    /// Every plan made from this scan carries it, and the executor checks the plan's system objects
+    /// against it (purge_exec::plan_in::unbound_objects).
+    pub fingerprint: Arc<Fingerprint>,
     /// The one live plan of this scan, as raw [`purge_rpc::methods::PlanId`] bits (`0`: none). A second
     /// `plan.create` of the same scan is refused until the plan is taken
     /// ([`crate::plan::Plan::release`]).
@@ -59,6 +66,32 @@ pub struct Scan {
 }
 
 impl Scan {
+    /// A scan over `doc` and `fingerprint` for a test that seeds the tables.
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        doc: purge_plan::emit::ScanDoc,
+        fingerprint: Fingerprint,
+        user_sid: &str,
+    ) -> Scan {
+        Scan {
+            program_roots: fingerprint
+                .roots
+                .iter()
+                .map(|root| root.path.clone())
+                .collect(),
+            app_name: fingerprint.app.display_name.clone(),
+            doc,
+            mode: ScanMode::Post,
+            counts: BandCounts::default(),
+            warnings: Vec::new(),
+            baseline_trust: BaselineTrust::None,
+            session: None,
+            user_sid: user_sid.to_owned(),
+            fingerprint: Arc::new(fingerprint),
+            live_plan: AtomicU64::new(0),
+        }
+    }
+
     /// Claims the scan for `plan`, unless another live plan holds it.
     pub fn claim(&self, plan: purge_rpc::methods::PlanId) -> bool {
         self.live_plan
@@ -176,6 +209,7 @@ pub(crate) fn handle<H: FlowHandler>(
         app_name: fingerprint.app.display_name.clone(),
         program_roots,
         user_sid: ctx.user_sid().to_owned(),
+        fingerprint: Arc::new(fingerprint),
         live_plan: AtomicU64::new(0),
     };
     let scan_id = ctx.add_scan(scan)?;

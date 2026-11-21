@@ -802,6 +802,11 @@ fn run<H: FlowHandler>(
 }
 
 /// `uninstall.observed`: the broker's own verify-gone after a medium-route run.
+///
+/// The medium engine may report how its run ended (`params.outcome`). A run it reports as failed,
+/// cancelled or timed out is a failed uninstaller whatever the broker finds: the scan is `forced` with
+/// nothing preselected, as after a failed run of the broker's own. A reported success is never taken
+/// as one: the broker's verify-gone still has to pass. So the report can only make the scan safer.
 fn observed<H: FlowHandler>(
     flow: &Flow,
     ctx: &Ctx<'_, H>,
@@ -819,7 +824,8 @@ fn observed<H: FlowHandler>(
         let _ = machine.write_fingerprint(&session.program, &fingerprint);
         verify
     };
-    session.set_ran(verify.is_passed());
+    let reported_ok = params.outcome.is_none_or(|outcome| outcome.is_success());
+    session.set_ran(reported_ok && verify.is_passed());
     session.set_verify(verify);
     serde_json::to_value(ObservedResult {
         verify_gone: verify,

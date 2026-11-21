@@ -510,7 +510,10 @@ mod api_tests {
             );
             put(
                 "pipe.uninstall.observed.params",
-                v(ObservedParams { session_id: uid() }),
+                v(ObservedParams {
+                    session_id: uid(),
+                    outcome: Some(purge_model::RunOutcome::Failed),
+                }),
             );
             put(
                 "pipe.leftovers.stored.params",
@@ -551,6 +554,7 @@ mod api_tests {
                 v(PlanCreateParams::Selected(PlanSelectedParams {
                     scan_id: scan(),
                     selected: ne(vec![cand(1), cand(2)]),
+                    allow_irreversible: true,
                 })),
             );
             put(

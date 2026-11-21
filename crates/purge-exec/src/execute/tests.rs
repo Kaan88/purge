@@ -776,6 +776,103 @@ fn a_mixed_run_ends_with_a_report_that_matches_the_journal() {
     journal::read_indexed(&session, Some(mark)).unwrap();
 }
 
+fn run_shape(report: &ExecReport) -> String {
+    let items: Vec<String> = report
+        .items
+        .iter()
+        .map(|item| format!("{} {} {:?}", item.item.0, item.op.0, item.outcome))
+        .collect();
+    format!(
+        "{:?} {:?} {:?} {} {} {:?}",
+        report.state,
+        report.counts,
+        report.restore_point,
+        report.pending_reboot,
+        report.warnings.len(),
+        items
+    )
+}
+
+fn empty_fingerprint() -> purge_model::Fingerprint {
+    serde_json::from_value(serde_json::json!({
+        "schema": "purge.fp/0",
+        "app": {"program_id": "HKLM|64|VendorApp", "display_name": "Vendor App"},
+        "identity": {"names": [], "vendors": [], "tokens": [], "mega_vendor": false},
+        "os": {"edition": "Professional", "build": 26340, "ubr": 9882},
+        "user_sid": "S-1-5-21-1-2-3-1001"
+    }))
+    .unwrap()
+}
+
+/// `execute_bound` runs the object `bind` made and gives the report `execute` gives for the request
+/// that object was bound from: the same items, outcomes, counts and state on the M2 mixed fixture, run
+/// twice on two stores (a run consumes its files).
+#[test]
+fn execute_and_execute_bound_give_equal_reports() {
+    let mut by_request = Rig::new("eq-request");
+    let k1 = TestKey::new();
+    let (items, absorbed) = mixed_plan(&by_request.s, &k1);
+    let first = by_request.run(preselected(items, absorbed));
+
+    let mut by_object = Rig::new("eq-bound");
+    let k2 = TestKey::new();
+    let (items, absorbed) = mixed_plan(&by_object.s, &k2);
+    let request = preselected(items, absorbed);
+    let bound = std::sync::Arc::new(crate::plan_in::bind(&request).unwrap());
+    let restore = FakeRestore(by_object.restore_calls.clone());
+    let second = execute_bound(
+        bound.clone(),
+        request.settings.clone(),
+        &empty_fingerprint(),
+        by_object.env(None),
+        restore,
+    )
+    .unwrap();
+
+    assert_eq!(first.report.state, SessionState::Committed);
+    assert_eq!(run_shape(&first.report), run_shape(&second.report));
+    assert!(second.closed && second.report_written && second.index_updated);
+    // The journal names the plan object that was handed over, not one derived again.
+    let read = by_object.journal(&second.session);
+    assert_eq!(read.state.header().plan_hash, bound.plan_hash());
+    assert_eq!(read.state.header().selection_hash, bound.selection_hash());
+    assert_report_is_the_journal(&second.report, &read);
+}
+
+/// `execute_bound` refuses a plan whose objects the fingerprint does not vouch for before any session
+/// exists; the same plan through `execute` (the rig path, no fingerprint) is not asked.
+#[test]
+fn execute_bound_refuses_an_unvouched_object_before_a_session_exists() {
+    let mut rig = Rig::new("unvouched");
+    let identity = purge_model::TaskIdentity {
+        path: r"\Vendor\Update".into(),
+        actions: Vec::new(),
+    };
+    let mut task = safe(
+        "c-task",
+        Target::Task {
+            path: identity.path.clone(),
+        },
+        Action::DeleteKey,
+    );
+    task.object_fp = Some(identity.fp());
+    let request = preselected(vec![task], Vec::new());
+    let bound = std::sync::Arc::new(crate::plan_in::bind(&request).unwrap());
+    let restore = FakeRestore(rig.restore_calls.clone());
+    let result = execute_bound(
+        bound,
+        request.settings.clone(),
+        &empty_fingerprint(),
+        rig.env(None),
+        restore,
+    );
+    assert!(
+        matches!(&result, Err(ExecError::ObjectsUnbound(ids)) if ids == &["c-task".to_owned()]),
+        "{result:?}"
+    );
+    assert!(rig.sessions().is_empty(), "no session was created");
+}
+
 #[test]
 fn a_second_run_of_the_same_plan_finds_everything_vanished() {
     let mut rig = Rig::new("again");

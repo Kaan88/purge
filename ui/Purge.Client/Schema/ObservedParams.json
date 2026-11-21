@@ -4,6 +4,17 @@
   "description": "`uninstall.observed {session_id}`.",
   "type": "object",
   "properties": {
+    "outcome": {
+      "description": "How the medium engine's run ended, when it reports it. A failure (or a cancel, or a time-out)\nmakes the scan `forced` with nothing preselected even when the program is gone; a success is\nnever believed on its own: the broker's own verify-gone still decides. It can only make the\nscan safer.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RunOutcome"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "session_id": {
       "description": "The uninstall session from `uninstall.prepare`.",
       "$ref": "#/$defs/UninstallSessionId"
@@ -14,6 +25,41 @@
     "session_id"
   ],
   "$defs": {
+    "RunOutcome": {
+      "description": "How the uninstaller ended (§4.4 \"Exit codes\").",
+      "oneOf": [
+        {
+          "description": "Exit code 0. A success *candidate*: [`VerifyGone`] decides whether the app is really gone.",
+          "type": "string",
+          "const": "Success"
+        },
+        {
+          "description": "Exit code 1605: the product was not installed any more.",
+          "type": "string",
+          "const": "AlreadyGone"
+        },
+        {
+          "description": "Exit code 1641 or 3010: success, a restart is needed.",
+          "type": "string",
+          "const": "SuccessReboot"
+        },
+        {
+          "description": "Exit code 1602: the user cancelled.",
+          "type": "string",
+          "const": "Cancelled"
+        },
+        {
+          "description": "Any other exit code, or the command could not be started.",
+          "type": "string",
+          "const": "Failed"
+        },
+        {
+          "description": "The wait for the process tree gave up.",
+          "type": "string",
+          "const": "TimedOut"
+        }
+      ]
+    },
     "UninstallSessionId": {
       "type": "string",
       "pattern": "^u-[0-9a-f]{16}$"

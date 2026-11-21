@@ -558,6 +558,12 @@ pub struct RunParams {
 pub struct ObservedParams {
     /// The uninstall session from `uninstall.prepare`.
     pub session_id: UninstallSessionId,
+    /// How the medium engine's run ended, when it reports it. A failure (or a cancel, or a time-out)
+    /// makes the scan `forced` with nothing preselected even when the program is gone; a success is
+    /// never believed on its own: the broker's own verify-gone still decides. It can only make the
+    /// scan safer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<RunOutcome>,
 }
 
 /// `leftovers.scan` after an uninstall of this broker: `{session_id, forced?}`.
@@ -619,6 +625,12 @@ pub struct PlanSelectedParams {
     pub scan_id: ScanId,
     /// The selected candidates, at least one.
     pub selected: NonEmpty<CandidateRef>,
+    /// Offer the removals that cannot be put back (packages) to the consent dialog. Off (the default),
+    /// the dialog lists them as "Leave alone". On, the dialog names each of them, warns that it cannot
+    /// be put back and gates its button behind the verification box: the dialog is the acknowledgement,
+    /// this flag only lets it be asked.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_irreversible: bool,
 }
 
 /// `plan.create` with the scan's preselection: `{scan_id, preselected: true}`.
