@@ -2,3 +2,6 @@
 # Shell scripts run under bash; CRLF breaks them.
 *.sh text eol=lf
 *.tsv.gz binary
+# xtask gen-dto writes LF and --check compares bytes.
+ui/Purge.Client/Schema/*.json text eol=lf
+ui/Purge.Client/Generated/*.cs text eol=lf
