@@ -19,9 +19,9 @@ use purge_exec::journal::{self, JournalRead};
 use purge_exec::locked::MemoryPendingRenames;
 use purge_exec::plan_in::{ExecRequest, ExecSettings, Selection, confirm_hash, selection_hash};
 use purge_exec::prepare::{LockerQuery, RestorePointBackend, RestorePointSetting};
-use purge_exec::recover::{RecoverEnv, RecoverOutput};
+use purge_exec::recover::{RecoverEnv, RecoverOutput, Want};
 use purge_exec::storage::{SessionDir, StorageRoots};
-use purge_exec::undo::{UndoEnv, UndoOutput, UndoRequest, UndoSelection, undo};
+use purge_exec::undo::{UndoEnv, UndoOutput, UndoSelection};
 use purge_guard::canon::{GuardEnv, ProfileEnv};
 use purge_guard::deny::DenyList;
 use purge_model::exec::op::{Inverse, ItemOutcome, OpId};
@@ -709,13 +709,45 @@ impl Rig {
         }
     }
 
+    /// Undoes through the path the broker takes (M3-UNDO): [`purge_exec::undo::preview`] says what the
+    /// dialog would show, and the run is started only against that preview. Every fidelity fixture
+    /// that undoes through this therefore also checks that the dialog's op set is the one that ran:
+    /// an op restored is an op the preview put back, and the ops a run goes through beyond it change
+    /// nothing.
     pub fn undo(&mut self, session: &SessionId, selection: UndoSelection) -> UndoOutput {
-        let request = UndoRequest {
-            session: session.clone(),
-            selection,
-            plan_hash: None,
+        let ops: Option<Vec<OpId>> = match &selection {
+            UndoSelection::All => None,
+            UndoSelection::Items(ids) => {
+                let read = self.journal(session);
+                Some(
+                    ids.iter()
+                        .map(|id| read.state.ops().find(|op| &op.item == id).unwrap().op)
+                        .collect(),
+                )
+            }
         };
-        undo(&request, self.undo_env()).unwrap()
+        let preview = purge_exec::undo::preview(&self.roots, session, ops.as_deref()).unwrap();
+        let out =
+            purge_exec::undo::undo_expecting(&preview.request, self.undo_env(), &preview.expect)
+                .unwrap();
+        let ran: Vec<OpId> = out.report.items.iter().map(|item| item.op).collect();
+        for op in &preview.put_back {
+            assert!(ran.contains(op), "op {op} was shown and not gone through");
+        }
+        for item in &out.report.items {
+            let restored = matches!(
+                item.result,
+                purge_model::exec::session::UndoResult::Finished {
+                    outcome: purge_model::exec::journal::UndoOutcome::Restored
+                }
+            );
+            assert!(
+                !restored || preview.put_back.contains(&item.op),
+                "op {} was put back and the dialog did not show it",
+                item.op
+            );
+        }
+        out
     }
 
     pub fn undo_all(&mut self, session: &SessionId) -> UndoOutput {
@@ -742,11 +774,65 @@ impl Rig {
     }
 
     pub fn resume(&mut self, session: &SessionId) -> RecoverOutput {
-        purge_exec::recover::resume(session, self.recover_env()).unwrap()
+        self.recovered(session, Want::Resume)
     }
 
     pub fn rollback(&mut self, session: &SessionId) -> RecoverOutput {
-        purge_exec::recover::rollback(session, self.recover_env()).unwrap()
+        self.recovered(session, Want::Rollback)
+    }
+
+    /// Recovers through the path the broker takes (M3-UNDO): [`purge_exec::recover::preview`] says
+    /// what the dialog would show, the recovery is started only against that preview's journal mark,
+    /// and every op whose standing it changed must be one the preview named. A session the preview
+    /// refuses (a second, idempotent call; nothing to recover) is recovered the plain way.
+    fn recovered(&mut self, session: &SessionId, want: Want) -> RecoverOutput {
+        use purge_exec::recover;
+        type Standing = (Option<ItemOutcome>, journal::UndoState, bool);
+        let standing = |read: &JournalRead| -> std::collections::HashMap<OpId, Standing> {
+            read.state
+                .ops()
+                .map(|op| {
+                    (
+                        op.op,
+                        (op.outcome.clone(), op.undo.clone(), op.intent.is_some()),
+                    )
+                })
+                .collect()
+        };
+        let Ok(preview) = recover::preview(&self.roots, session, want) else {
+            return match want {
+                Want::Resume => recover::resume(session, self.recover_env()).unwrap(),
+                _ => recover::rollback(session, self.recover_env()).unwrap(),
+            };
+        };
+        let before = journal::read(&self.session(session))
+            .ok()
+            .map(|read| standing(&read));
+        let out = match want {
+            Want::Resume => recover::resume_expecting(session, self.recover_env(), &preview.mark),
+            _ => recover::rollback_expecting(session, self.recover_env(), &preview.mark),
+        }
+        .unwrap();
+        if let (Some(before), Ok(after)) = (before, journal::read(&self.session(session))) {
+            // A package removal has no inverse, so a rollback only settles its journal record.
+            let no_inverse = |op: &OpId| {
+                preview.plan.as_ref().is_some_and(|plan| {
+                    plan.item(*op)
+                        .and_then(|item| item.exec_op.as_ref())
+                        .is_some_and(|exec_op| exec_op.is_irreversible())
+                })
+            };
+            for (op, now) in standing(&after) {
+                assert!(
+                    before.get(&op) == Some(&now)
+                        || preview.ops.contains(&op)
+                        || (want == Want::Rollback && no_inverse(&op)),
+                    "recovery changed op {op}, which the preview ({:?}) did not name",
+                    preview.ops
+                );
+            }
+        }
+        out
     }
 
     pub fn sessions(&self) -> Vec<SessionId> {

@@ -3236,3 +3236,371 @@ fn a_done_detail_is_cut_at_a_fixed_length() {
     assert!(cut.ends_with(" [...]"));
     assert!(long.starts_with(cut.trim_end_matches(" [...]")));
 }
+
+// ---------------------------------------------------------------------------------------------------
+// M3-UNDO: what a dialog is shown before an undo or a recovery, and the runs that must do exactly that
+// ---------------------------------------------------------------------------------------------------
+
+fn undo_env(rig: &mut Rig) -> crate::undo::UndoEnv<'_> {
+    crate::undo::UndoEnv {
+        retry: Retry::with(RETRY_DELAYS.to_vec(), |_| {}),
+        ..crate::undo::UndoEnv::new(&rig.roots, &rig.deny, &mut rig.pending)
+    }
+}
+
+fn op_of(read: &JournalRead, item: &str) -> OpId {
+    read.state
+        .ops()
+        .find(|op| op.item == cid(item))
+        .unwrap_or_else(|| panic!("no op for {item}"))
+        .op
+}
+
+/// A finished session over `app\sub\{a,b}.txt`, `other\c.txt`, the directory `sub` and the directory
+/// `app`, in that order.
+fn directory_session(rig: &mut Rig) -> (SessionId, [String; 4]) {
+    let a = rig.s.file(r"app\sub\a.txt", b"aaa");
+    let b = rig.s.file(r"app\sub\b.txt", b"bbb");
+    let other = rig.s.file(r"other\c.txt", b"ccc");
+    let sub = rig.s.path(r"app\sub");
+    let app = rig.s.path("app");
+    let request = preselected(
+        vec![
+            quarantine("c-a", &a),
+            quarantine("c-b", &b),
+            quarantine("c-other", &other),
+            safe("c-sub", path(&sub), Action::RemoveDirIfEmpty),
+            safe("c-app", path(&app), Action::RemoveDirIfEmpty),
+        ],
+        Vec::new(),
+    );
+    let id = rig.run(request).session;
+    (id, [a, b, other, app])
+}
+
+#[test]
+fn an_undo_preview_names_the_ops_the_run_then_puts_back() {
+    let mut rig = Rig::new("m3undo-preview");
+    let (id, [a, b, other, app]) = directory_session(&mut rig);
+    let read = rig.journal(&id);
+    let op = |item: &str| op_of(&read, item);
+    assert!(!exists(&a) && !exists(&app));
+
+    let preview = crate::undo::preview(&rig.roots, &id, Some(&[op("c-a")])).unwrap();
+    assert_eq!(preview.put_back, [op("c-app"), op("c-sub"), op("c-a")]);
+    assert_eq!(preview.pulled_in, [op("c-sub"), op("c-app")]);
+    assert!(preview.already_undone.is_empty());
+    assert_eq!(
+        preview.expect.ops,
+        [op("c-a"), op("c-sub"), op("c-app")],
+        "op order"
+    );
+    assert_eq!(preview.expect.mark, read.state.mark());
+    assert_eq!(preview.plan.plan_hash(), read.state.header().plan_hash);
+    assert_eq!(
+        preview.request.plan_hash,
+        Some(read.state.header().plan_hash)
+    );
+    // A preview changes nothing.
+    assert!(!exists(&a) && !exists(&app));
+    assert_eq!(rig.journal(&id).state.mark(), read.state.mark());
+
+    let done =
+        crate::undo::undo_expecting(&preview.request, undo_env(&mut rig), &preview.expect).unwrap();
+    let ran: Vec<OpId> = done.report.items.iter().map(|item| item.op).collect();
+    assert_eq!(ran, preview.put_back, "the run goes through what was shown");
+    assert!(exists(&a) && exists(&app));
+    assert!(!exists(&b) && !exists(&other));
+
+    // Everything is put back or settled: nothing is left to show.
+    let all = crate::undo::preview(&rig.roots, &id, None).unwrap();
+    assert_eq!(all.put_back, [op("c-other"), op("c-b")]);
+    assert_eq!(all.already_undone, [op("c-a"), op("c-sub"), op("c-app")]);
+}
+
+#[test]
+fn an_undo_that_is_not_what_the_preview_read_is_refused_before_it_changes_anything() {
+    let mut rig = Rig::new("m3undo-notasshown");
+    let (id, [a, b, _other, app]) = directory_session(&mut rig);
+    let read = rig.journal(&id);
+    let op = |item: &str| op_of(&read, item);
+    let for_a = crate::undo::preview(&rig.roots, &id, Some(&[op("c-a")])).unwrap();
+    let for_b = crate::undo::preview(&rig.roots, &id, Some(&[op("c-b")])).unwrap();
+
+    // The shown ops are another selection's: the journal is the same, the run would not be.
+    let err =
+        crate::undo::undo_expecting(&for_b.request, undo_env(&mut rig), &for_a.expect).unwrap_err();
+    assert!(matches!(err, crate::undo::UndoError::NotAsShown), "{err}");
+    assert!(!exists(&a) && !exists(&b) && !exists(&app));
+    assert_eq!(rig.journal(&id).state.mark(), read.state.mark());
+
+    // Someone else's undo changed the journal after the preview.
+    let other = crate::undo::UndoRequest {
+        session: id.clone(),
+        selection: crate::undo::UndoSelection::Items(vec![cid("c-other")]),
+        plan_hash: None,
+    };
+    crate::undo::undo(&other, undo_env(&mut rig)).unwrap();
+    let changed = rig.journal(&id).state.mark();
+    assert_ne!(changed, read.state.mark());
+    let err =
+        crate::undo::undo_expecting(&for_a.request, undo_env(&mut rig), &for_a.expect).unwrap_err();
+    assert!(matches!(err, crate::undo::UndoError::NotAsShown), "{err}");
+    assert!(!exists(&a) && !exists(&app));
+    assert_eq!(rig.journal(&id).state.mark(), changed);
+}
+
+#[test]
+fn an_undo_preview_refuses_what_the_run_refuses() {
+    let mut rig = Rig::new("m3undo-refused");
+    let (id, _) = directory_session(&mut rig);
+    let err = crate::undo::preview(&rig.roots, &id, Some(&[OpId(99)])).unwrap_err();
+    assert!(
+        matches!(err, crate::undo::UndoError::UnknownItem(_)),
+        "{err}"
+    );
+    let stranger = SessionId::new(purge_model::FileTime(1), 7);
+    assert!(crate::undo::preview(&rig.roots, &stranger, None).is_err());
+
+    // A run that did not end is recovery's.
+    let files: Vec<String> = (1..=3)
+        .map(|n| rig.s.file(&format!(r"crash\f{n}.txt"), b"data"))
+        .collect();
+    let request = preselected(
+        files
+            .iter()
+            .enumerate()
+            .map(|(n, file)| quarantine(&format!("c-{}", n + 1), file))
+            .collect(),
+        Vec::new(),
+    );
+    let (open, _) = crash_after_the_first_intent(&mut rig, request);
+    let err = crate::undo::preview(&rig.roots, &open, None).unwrap_err();
+    assert!(
+        matches!(err, crate::undo::UndoError::NeedsRecovery(_)),
+        "{err}"
+    );
+}
+
+#[test]
+fn the_ops_a_run_goes_through_beyond_the_preview_change_nothing() {
+    let mut rig = Rig::new("m3undo-nochange");
+    let real = rig.s.file(r"app\real.txt", b"real");
+    let gone = rig.s.path(r"app\gone.txt");
+    let request = preselected(
+        vec![quarantine("c-gone", &gone), quarantine("c-real", &real)],
+        Vec::new(),
+    );
+    let id = rig.run(request).session;
+    let read = rig.journal(&id);
+    let preview = crate::undo::preview(&rig.roots, &id, None).unwrap();
+    assert_eq!(preview.put_back, [op_of(&read, "c-real")]);
+    assert_eq!(
+        preview.expect.ops,
+        [op_of(&read, "c-gone"), op_of(&read, "c-real")]
+    );
+    let done =
+        crate::undo::undo_expecting(&preview.request, undo_env(&mut rig), &preview.expect).unwrap();
+    let outcome_of = |item: &str| {
+        let op = op_of(&read, item);
+        done.report
+            .items
+            .iter()
+            .find(|i| i.op == op)
+            .unwrap()
+            .result
+            .clone()
+    };
+    assert_eq!(
+        outcome_of("c-gone"),
+        purge_model::exec::session::UndoResult::Finished {
+            outcome: purge_model::exec::journal::UndoOutcome::NothingToUndo
+        }
+    );
+    assert!(exists(&real));
+}
+
+/// A session of three files whose run stopped after the first intent.
+fn crashed_session(rig: &mut Rig) -> (SessionId, [String; 3]) {
+    let files = [1, 2, 3].map(|n| rig.s.file(&format!(r"app\f{n}.txt"), b"data"));
+    let request = crash_request(&rig.s);
+    let (id, _) = crash_after_the_first_intent(rig, request);
+    (id, files)
+}
+
+#[test]
+fn a_resume_preview_lists_what_is_still_to_do_and_the_run_is_bound_to_the_journal_it_read() {
+    use crate::recover::{self, PendingKind, Want};
+    let mut rig = Rig::new("m3undo-resume");
+    let (id, files) = crashed_session(&mut rig);
+    let preview = recover::preview(&rig.roots, &id, Want::Resume).unwrap();
+    assert_eq!(preview.kind, Some(PendingKind::Run));
+    assert_eq!(preview.effective, Want::Resume);
+    assert_eq!(preview.ops, [OpId(1), OpId(2), OpId(3)]);
+    assert_eq!((preview.done, preview.total), (0, 3));
+    assert!(preview.plan.is_some());
+    assert_eq!(preview.mark, rig.journal(&id).state.mark());
+
+    // The journal moved on after the preview: the run is not started.
+    let stale = recover::preview(&rig.roots, &id, Want::Resume).unwrap();
+    recover::rollback(&id, rig.recover_env()).unwrap();
+    let err = recover::resume_expecting(&id, rig.recover_env(), &stale.mark).unwrap_err();
+    assert!(matches!(err, recover::RecoverError::NotAsShown), "{err}");
+    assert!(
+        files.iter().all(|f| exists(f)),
+        "the rollback put them back"
+    );
+
+    let (id, files) = {
+        let files = [1, 2, 3].map(|n| rig.s.file(&format!(r"again\f{n}.txt"), b"data"));
+        let request = preselected(
+            files
+                .iter()
+                .enumerate()
+                .map(|(n, file)| quarantine(&format!("c-{}", n + 1), file))
+                .collect(),
+            Vec::new(),
+        );
+        let (id, _) = crash_after_the_first_intent(&mut rig, request);
+        (id, files)
+    };
+    let preview = recover::preview(&rig.roots, &id, Want::Resume).unwrap();
+    let out = recover::resume_expecting(&id, rig.recover_env(), &preview.mark).unwrap();
+    assert_eq!(out.state, Some(SessionState::Committed));
+    assert!(files.iter().all(|f| !exists(f)));
+    // Nothing is left to recover.
+    let err = recover::preview(&rig.roots, &id, Want::Resume).unwrap_err();
+    assert!(matches!(err, recover::RecoverError::Refused(_)), "{err}");
+}
+
+#[test]
+fn a_rollback_preview_lists_the_ops_that_stand_changed_and_the_run_puts_them_back() {
+    use crate::recover::{self, Want};
+    let mut rig = Rig::new("m3undo-rollback");
+    let (id, files) = crashed_session(&mut rig);
+    let preview = recover::preview(&rig.roots, &id, Want::Rollback).unwrap();
+    assert_eq!(preview.effective, Want::Rollback);
+    assert_eq!(preview.ops, [OpId(1)], "only the op with an intent");
+    let out = recover::rollback_expecting(&id, rig.recover_env(), &preview.mark).unwrap();
+    assert_eq!(out.state, Some(SessionState::Undone));
+    let undone: Vec<OpId> = out.undone.iter().map(|item| item.op).collect();
+    assert_eq!(undone, preview.ops);
+    assert!(files.iter().all(|f| exists(f)));
+}
+
+#[test]
+fn an_interrupted_undo_is_previewed_as_a_put_back_of_the_ops_it_had_not_reached() {
+    use crate::recover::{self, PendingKind, Want};
+    let mut rig = Rig::new("m3undo-undo-open");
+    let (id, [a, b, other, _app]) = directory_session(&mut rig);
+    let read = rig.journal(&id);
+    {
+        let session = rig.session(&id);
+        let mut journal = JournalWriter::open_append(&session).unwrap();
+        journal
+            .undo_plan(
+                crate::storage::now(),
+                vec![op_of(&read, "c-other"), op_of(&read, "c-b")],
+            )
+            .unwrap();
+    }
+    for want in [Want::Resume, Want::Rollback] {
+        let preview = recover::preview(&rig.roots, &id, want).unwrap();
+        assert_eq!(preview.kind, Some(PendingKind::Undo));
+        assert_eq!(
+            preview.effective,
+            Want::Rollback,
+            "an undo is put-back work"
+        );
+        assert_eq!(preview.ops, [op_of(&read, "c-other"), op_of(&read, "c-b")]);
+    }
+    let preview = recover::preview(&rig.roots, &id, Want::Resume).unwrap();
+    let out = recover::resume_expecting(&id, rig.recover_env(), &preview.mark).unwrap();
+    let undone: Vec<OpId> = out.undone.iter().map(|item| item.op).collect();
+    assert_eq!(undone, preview.ops);
+    assert!(exists(&other) && !exists(&a));
+    //  lies in a directory this undo never put back: a conflict, nothing is put below it.
+    assert!(!exists(&b));
+    assert!(matches!(
+        out.undone[1].result,
+        purge_model::exec::session::UndoResult::Conflict { .. }
+    ));
+}
+
+#[test]
+fn a_retry_preview_names_the_held_items_and_waits_for_recovery_first() {
+    use crate::recover::{self, Want};
+    let mut rig = Rig::new("m3undo-retry");
+    let busy = rig.s.file(r"app\busy.dll", b"in use");
+    let other = rig.s.file(r"app\other.txt", b"o");
+    rig.rm
+        .holders
+        .borrow_mut()
+        .push(holder(4242, "Vendor Tray"));
+    let request = preselected(
+        vec![quarantine("c-busy", &busy), quarantine("c-other", &other)],
+        Vec::new(),
+    );
+    let (id, _) = crash_after_the_first_intent(&mut rig, request);
+
+    // The run did not end: a retry has to wait.
+    let err = recover::preview(&rig.roots, &id, Want::RetryHeld).unwrap_err();
+    assert!(
+        matches!(err, recover::RecoverError::NeedsRecovery(_)),
+        "{err}"
+    );
+
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(1)
+        .open(ext(&busy))
+        .unwrap();
+    recover::resume(&id, rig.recover_env()).unwrap();
+    let read = rig.journal(&id);
+    assert_eq!(read.state.held_retry().count(), 1);
+    let preview = recover::preview(&rig.roots, &id, Want::RetryHeld).unwrap();
+    assert_eq!(preview.kind, None);
+    assert_eq!(preview.effective, Want::RetryHeld);
+    assert_eq!(preview.ops, [op_of(&read, "c-busy")]);
+    assert!(preview.plan.is_some());
+
+    drop(lock);
+    let out = recover::retry_held_expecting(&id, rig.recover_env(), &preview.mark).unwrap();
+    assert_eq!(out.retried.len(), 1);
+    assert!(!exists(&busy));
+    let err = recover::retry_held_expecting(&id, rig.recover_env(), &preview.mark).unwrap_err();
+    assert!(matches!(err, recover::RecoverError::NotAsShown), "{err}");
+    let none = recover::preview(&rig.roots, &id, Want::RetryHeld).unwrap();
+    assert!(none.ops.is_empty());
+}
+
+#[test]
+fn an_undo_never_overwrites_what_stands_in_an_items_place_and_says_so() {
+    let mut rig = Rig::new("m3undo-conflict");
+    let (id, [_a, _b, other, _app]) = directory_session(&mut rig);
+    let read = rig.journal(&id);
+    // Something new stands where the quarantined file was.
+    std::fs::write(ext(&other), b"new data").unwrap();
+    let preview = crate::undo::preview(&rig.roots, &id, None).unwrap();
+    assert!(preview.put_back.contains(&op_of(&read, "c-other")));
+    let done =
+        crate::undo::undo_expecting(&preview.request, undo_env(&mut rig), &preview.expect).unwrap();
+    let result = done
+        .report
+        .items
+        .iter()
+        .find(|item| item.op == op_of(&read, "c-other"))
+        .unwrap();
+    assert!(
+        matches!(
+            result.result,
+            purge_model::exec::session::UndoResult::Conflict {
+                conflict: UndoConflict::DestinationExists,
+                ..
+            }
+        ),
+        "{result:?}"
+    );
+    assert_eq!(std::fs::read(ext(&other)).unwrap(), b"new data");
+    assert_eq!(done.report.counts.conflicts, 1);
+}

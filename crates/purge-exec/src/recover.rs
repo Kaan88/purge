@@ -112,10 +112,12 @@ use std::collections::BTreeSet;
 
 use purge_guard::deny::DenyList;
 use purge_guard::prefix;
-use purge_model::FileTime;
 use purge_model::exec::journal::{AbortReason, Intent, ItemFacts};
 use purge_model::exec::op::{ExecOp, FailCode, Inverse, ItemOutcome, OpId, SkipReason};
-use purge_model::exec::session::{ExecReport, SessionId, SessionState, UndoItemReport};
+use purge_model::exec::session::{
+    ExecReport, JournalMark, SessionId, SessionState, UndoItemReport,
+};
+use purge_model::{AppRef, FileTime};
 use purge_win::fs_write::FsError;
 
 use crate::act_fs::{self, Retry};
@@ -129,9 +131,11 @@ use crate::journal::{
     sha256_bytes,
 };
 use crate::locked::{self, PendingRenames};
+use crate::plan_in::BoundPlan;
 use crate::prepare::LockerQuery;
 use crate::regbackup::TreeState;
 use crate::report::{self, RunNotes};
+use crate::review;
 use crate::storage::{SessionDir, StorageError, StorageRoots, now};
 use crate::undo::{self, CtxError, Driver, standing, undo_order};
 
@@ -223,6 +227,19 @@ pub enum RecoverError {
     /// The op is not part of the session.
     #[error("op {0} is not part of the session")]
     UnknownOp(OpId),
+    /// The request is not one this session can be given (see [`preview`]).
+    #[error("{0}")]
+    Refused(String),
+    /// The session was interrupted and must be recovered before this request.
+    #[error("{0}")]
+    NeedsRecovery(String),
+    /// The session's plan cannot be bound again, or the journal and the plan disagree about an op.
+    #[error("the session's plan cannot be bound again: {0}")]
+    PlanUnbound(String),
+    /// The recovery was started with the journal mark of a preview and the journal is not at it.
+    /// Nothing was done.
+    #[error("the session is not as it was when the recovery was previewed; nothing was done")]
+    NotAsShown,
 }
 
 impl From<CtxError> for RecoverError {
@@ -851,13 +868,234 @@ pub struct RecoverOutput {
 /// Continues an interrupted session to the end its run would have reached (`journal resume`; see the
 /// module's table). A second call changes nothing.
 pub fn resume(session: &SessionId, env: RecoverEnv<'_>) -> Result<RecoverOutput, RecoverError> {
-    recover(session, env, RecoverMode::Resume)
+    recover(session, env, RecoverMode::Resume, None)
 }
 
 /// Brings an interrupted session back to where its run started (`journal rollback`; see the module's
 /// table). A second call changes nothing.
 pub fn rollback(session: &SessionId, env: RecoverEnv<'_>) -> Result<RecoverOutput, RecoverError> {
-    recover(session, env, RecoverMode::Rollback)
+    recover(session, env, RecoverMode::Rollback, None)
+}
+
+/// [`resume`], started only when the journal is at `mark` (the one [`preview`] read); otherwise
+/// [`RecoverError::NotAsShown`], before anything is written or changed.
+pub fn resume_expecting(
+    session: &SessionId,
+    env: RecoverEnv<'_>,
+    mark: &JournalMark,
+) -> Result<RecoverOutput, RecoverError> {
+    recover(session, env, RecoverMode::Resume, Some(mark))
+}
+
+/// [`rollback`], started only when the journal is at `mark`; see [`resume_expecting`].
+pub fn rollback_expecting(
+    session: &SessionId,
+    env: RecoverEnv<'_>,
+    mark: &JournalMark,
+) -> Result<RecoverOutput, RecoverError> {
+    recover(session, env, RecoverMode::Rollback, Some(mark))
+}
+
+/// What a recovery request asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Want {
+    /// [`resume`].
+    Resume,
+    /// [`rollback`].
+    Rollback,
+    /// [`retry_held`].
+    RetryHeld,
+}
+
+/// The result of [`preview`].
+#[derive(Debug, Clone)]
+pub struct RecoverPreview {
+    /// The session.
+    pub session: SessionId,
+    /// Why the session needs recovery; `None` for a finished, indexed and reported session (only
+    /// [`Want::RetryHeld`] is for it).
+    pub kind: Option<PendingKind>,
+    /// What recovery will do. It is `want`, except that a resume of a run that was being rolled back
+    /// continues the rollback, a resume or rollback of a finished session whose undo was interrupted
+    /// finishes the undo (both put items back: [`Want::Rollback`]), and one of an interrupted retry of
+    /// a held item ends the retry ([`Want::RetryHeld`]).
+    pub effective: Want,
+    /// The app id of the plan.
+    pub app: String,
+    /// The app the plan's items belong to, when the index names one.
+    pub owner: Option<AppRef>,
+    /// When the run started.
+    pub started: FileTime,
+    /// Ops with a `done` record.
+    pub done: u32,
+    /// Ops in the plan.
+    pub total: u32,
+    /// The session's plan, bound again. `None` only when no op changes (`ops` is empty) and the plan
+    /// cannot be bound.
+    pub plan: Option<BoundPlan>,
+    /// The ops the recovery can change, in the order it does: for a resume those without a `done` and
+    /// the registry ops no flush vouched for, for a rollback or a finished undo those that stand
+    /// changed and have an inverse, for a retry the held ones. Every one is an item of `plan` whose
+    /// op the journal's intent equals. Empty: the recovery only writes Purge's own records.
+    pub ops: Vec<OpId>,
+    /// The journal as the preview read it; pass it to the `*_expecting` function.
+    pub mark: JournalMark,
+}
+
+/// Reads a session as recovery will and says what it can change. Changes nothing.
+///
+/// # Errors
+///
+/// [`RecoverError::NeedsRecovery`] for [`Want::RetryHeld`] on a session that needs recovery first;
+/// [`RecoverError::Refused`] for a resume or rollback of a session that needs none or never started;
+/// [`RecoverError::PlanUnbound`] when the ops cannot be drawn from the plan; the store's and journal's
+/// errors otherwise (a damaged journal among them).
+pub fn preview(
+    roots: &StorageRoots,
+    id: &SessionId,
+    want: Want,
+) -> Result<RecoverPreview, RecoverError> {
+    let mut warnings = Vec::new();
+    roots.check()?;
+    let dir = roots.open_session(id)?;
+    let index = undo::read_index(roots, &mut warnings)?;
+    let entry = index.as_ref().and_then(|index| index.get(id));
+    let read = match journal::read_indexed(&dir, entry.and_then(|entry| entry.journal.as_ref())) {
+        Ok(read) => read,
+        Err(e) if journal_missing(&e) => {
+            return Err(RecoverError::Refused(
+                "the session never started; there is nothing to recover".to_owned(),
+            ));
+        }
+        Err(e) => return Err(e.into()),
+    };
+    let state = &read.state;
+    let header = state.header();
+    let validated = state.validated_count() == header.items;
+    let ids = |ops: &mut dyn Iterator<Item = &OpState>| ops.map(|op| op.op).collect::<Vec<_>>();
+    let mut undoing = ids(&mut state.undo_in_progress());
+    for op in state.undo_unfinished() {
+        if !undoing.contains(&op) {
+            undoing.push(op);
+        }
+    }
+    let retrying = ids(&mut state.retries_in_flight());
+    let kind = if !state.is_finished() {
+        Some(PendingKind::Run)
+    } else if !undoing.is_empty() {
+        Some(PendingKind::Undo)
+    } else if !retrying.is_empty() {
+        Some(PendingKind::Retry)
+    } else if (index.is_some() && entry.is_none())
+        || report::has_report(&dir).is_ok_and(|found| !found)
+    {
+        Some(PendingKind::Unindexed)
+    } else {
+        None
+    };
+    // What recovery does, and the ops it can change before the plan's say on them.
+    let rollback_set = |only: Option<&[OpId]>| -> Vec<OpId> {
+        let set: BTreeSet<OpId> = state
+            .ops()
+            .filter(|op| op.intent.is_some() && !op.undo.is_settled() && undo::stands_changed(op))
+            .filter(|op| only.is_none_or(|only| only.contains(&op.op)))
+            .map(|op| op.op)
+            .collect();
+        undo_order(&read.records, &set)
+    };
+    let plan = review::bind_session(&dir, state);
+    let (effective, ops) = match (kind, want) {
+        (Some(PendingKind::Run), Want::Resume | Want::Rollback) => {
+            let rolling_back = state.ops().any(|op| op.undo != UndoState::NotStarted);
+            if want == Want::Rollback || rolling_back {
+                (
+                    Want::Rollback,
+                    if validated {
+                        rollback_set(None)
+                    } else {
+                        Vec::new()
+                    },
+                )
+            } else if state.settings().is_none() && !validated {
+                (Want::Resume, Vec::new())
+            } else {
+                let Ok(bound) = &plan else {
+                    return Err(RecoverError::PlanUnbound(plan.map(|_| ()).unwrap_err()));
+                };
+                let mut to_do: BTreeSet<OpId> = bound
+                    .items()
+                    .iter()
+                    .map(|item| item.op)
+                    .filter(|op| state.op(*op).is_none_or(|op| op.outcome.is_none()))
+                    .collect();
+                to_do.extend(state.unconfirmed().map(|op| op.op));
+                (Want::Resume, to_do.into_iter().collect())
+            }
+        }
+        (Some(PendingKind::Undo), Want::Resume | Want::Rollback) => {
+            (Want::Rollback, rollback_set(Some(&undoing)))
+        }
+        (Some(PendingKind::Retry), Want::Resume | Want::Rollback) => {
+            (Want::RetryHeld, retrying.clone())
+        }
+        (Some(PendingKind::Unindexed), Want::Resume | Want::Rollback) => (want, Vec::new()),
+        (None, Want::Resume | Want::Rollback) => {
+            return Err(RecoverError::Refused(
+                "the session needs no recovery".to_owned(),
+            ));
+        }
+        (None | Some(PendingKind::Unindexed), Want::RetryHeld) => {
+            (Want::RetryHeld, ids(&mut state.held_retry()))
+        }
+        (Some(other), Want::RetryHeld) => {
+            return Err(RecoverError::NeedsRecovery(format!(
+                "the session was interrupted ({other:?}); recover it first"
+            )));
+        }
+        (Some(PendingKind::Unstarted | PendingKind::Damaged), _) => {
+            unreachable!("a journal that was read is neither unstarted nor damaged")
+        }
+    };
+    let plan = match plan {
+        Ok(plan) => Some(plan),
+        Err(why) if ops.is_empty() => {
+            let _ = why;
+            None
+        }
+        Err(why) => return Err(RecoverError::PlanUnbound(why)),
+    };
+    let ops = match &plan {
+        Some(plan) => {
+            let ops: Vec<OpId> = if effective == Want::Rollback {
+                ops.into_iter()
+                    .filter(|op| {
+                        plan.item(*op)
+                            .and_then(|item| item.exec_op.as_ref())
+                            .is_some_and(|exec_op| !exec_op.is_irreversible())
+                    })
+                    .collect()
+            } else {
+                ops
+            };
+            review::check_intents(plan, state, &ops).map_err(RecoverError::PlanUnbound)?;
+            ops
+        }
+        None => ops,
+    };
+    Ok(RecoverPreview {
+        session: id.clone(),
+        kind,
+        effective,
+        app: header.app.clone(),
+        owner: entry.and_then(|entry| entry.owner.clone()),
+        started: header.created,
+        done: u32::try_from(state.ops().filter(|op| op.outcome.is_some()).count())
+            .unwrap_or(u32::MAX),
+        total: header.items,
+        plan,
+        ops,
+        mark: state.mark(),
+    })
 }
 
 /// The executor's environment for the part of recovery that goes through [`Run`]: the same store,
@@ -879,6 +1117,7 @@ fn recover(
     id: &SessionId,
     mut env: RecoverEnv<'_>,
     mode: RecoverMode,
+    expect: Option<&JournalMark>,
 ) -> Result<RecoverOutput, RecoverError> {
     let mut out = RecoverOutput {
         session: id.clone(),
@@ -912,6 +1151,9 @@ fn recover(
         }
         Err(e) => return Err(e.into()),
     };
+    if expect.is_some_and(|mark| read.state.mark() != *mark) {
+        return Err(RecoverError::NotAsShown);
+    }
     if !read.state.is_finished() {
         let state = &read.state;
         let validated = state.validated_count() == state.header().items;
@@ -1315,6 +1557,24 @@ pub struct RetryOutput {
 /// Recovery never retries: a session whose run is unfinished, or that holds an interrupted retry, is
 /// left as it is (with a warning) until [`resume`] or [`rollback`] has run.
 pub fn retry_held(session: &SessionId, env: RecoverEnv<'_>) -> Result<RetryOutput, RecoverError> {
+    retry(session, env, None)
+}
+
+/// [`retry_held`], started only when the journal is at `mark` (the one [`preview`] read); otherwise
+/// [`RecoverError::NotAsShown`], before anything is written or changed.
+pub fn retry_held_expecting(
+    session: &SessionId,
+    env: RecoverEnv<'_>,
+    mark: &JournalMark,
+) -> Result<RetryOutput, RecoverError> {
+    retry(session, env, Some(mark))
+}
+
+fn retry(
+    session: &SessionId,
+    env: RecoverEnv<'_>,
+    expect: Option<&JournalMark>,
+) -> Result<RetryOutput, RecoverError> {
     let mut out = RetryOutput {
         session: session.clone(),
         retried: Vec::new(),
@@ -1329,6 +1589,9 @@ pub fn retry_held(session: &SessionId, env: RecoverEnv<'_>) -> Result<RetryOutpu
         .and_then(|index| index.get(session))
         .and_then(|entry| entry.journal.as_ref());
     let read = journal::read_indexed(&dir, mark)?;
+    if expect.is_some_and(|mark| read.state.mark() != *mark) {
+        return Err(RecoverError::NotAsShown);
+    }
     if !read.state.is_finished() {
         out.warnings
             .push("the session's run is unfinished; recover it first (journal resume)".to_owned());
