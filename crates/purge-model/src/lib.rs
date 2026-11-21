@@ -67,4 +67,4 @@ pub use plan::{Band, Category, Plan, PlanItem, PlanSchema, ScanMode, Tool};
 pub use root::{Root, RootKind, RootSource, SourceTrust};
 pub use run::{ProcessSeen, RunDoc, RunOutcome, RunSchema, VerifyGone};
 pub use scope::{Scope, ScopeSet};
-pub use target::{Hive, RegKind, Target, TypedTarget, TypedTargetError, View};
+pub use target::{Hive, RegKind, Target, TypedTarget, TypedTargetError, View, has_classes_hive};

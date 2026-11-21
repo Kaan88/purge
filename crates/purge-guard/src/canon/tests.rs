@@ -503,6 +503,83 @@ fn views_are_explicit() {
     );
 }
 
+/// The in-place and the canonical spelling of a key below a user's `Software\Classes` are one key: the
+/// `_Classes` hive for a user, the key where it is for a hive without a classes hive (`.DEFAULT` and the
+/// service accounts, [`purge_model::has_classes_hive`]). The same table as `purge-source`'s
+/// `canonical_and_in_place_classes_spellings_open_the_same_key` and the harvest's
+/// `source_key_agrees_with_the_canonical_form`.
+#[test]
+fn classes_spellings_agree() {
+    let env = env();
+    let k = |input: &str, view| canon_key(input, view, &env, Some(SID)).unwrap();
+    // (in place, canonical)
+    let mut rows: Vec<(String, String)> = vec![
+        (
+            format!(r"HKU\{SID}\Software\Classes\Vendor.Doc\shell"),
+            format!(r"HKU\{SID}_Classes\Vendor.Doc\shell"),
+        ),
+        (
+            format!(r"HKU\{SID}\Software\Classes\WOW6432Node\CLSID\{{X}}"),
+            format!(r"HKU\{SID}_Classes\WOW6432Node\CLSID\{{X}}"),
+        ),
+    ];
+    for sid in [".DEFAULT", "S-1-5-18", "S-1-5-19", "S-1-5-20"] {
+        for tail in [r"Vendor.Doc\shell", r"WOW6432Node\CLSID\{X}"] {
+            let key = format!(r"HKU\{sid}\Software\Classes\{tail}");
+            rows.push((key.clone(), key));
+        }
+    }
+    for (in_place, canonical) in &rows {
+        assert_eq!(key(in_place).as_ref(), Ok(canonical), "{in_place}");
+        assert_eq!(key(canonical).as_ref(), Ok(canonical), "{canonical}");
+        assert_eq!(k(in_place, None), k(canonical, None), "{in_place}");
+        // The model reads the canonical spelling back as the same (hive, view, path).
+        let canon = k(in_place, None);
+        assert_eq!(
+            TypedTarget::parse_key_path(canonical).unwrap(),
+            (canon.hive.clone(), canon.view, canon.path.clone()),
+            "{canonical}"
+        );
+    }
+
+    // A hive without a classes hive: an ordinary key of the user hive, in the 64-bit view whatever the
+    // caller's view, in any letter case of the hive name and of `Software\Classes`.
+    for (input, sid, path) in [
+        (
+            r"HKU\.default\SOFTWARE\CLASSES\x",
+            ".DEFAULT",
+            r"Software\CLASSES\x",
+        ),
+        (
+            r"HKEY_USERS\s-1-5-18\Software\Classes",
+            "S-1-5-18",
+            r"Software\Classes",
+        ),
+        (
+            r"\Registry\User\S-1-5-19\Software\Classes\CLSID\{X}",
+            "S-1-5-19",
+            r"Software\Classes\CLSID\{X}",
+        ),
+        (
+            r"HKU\S-1-5-20\Software\Classes\WOW6432Node\CLSID\{X}",
+            "S-1-5-20",
+            r"Software\Classes\WOW6432Node\CLSID\{X}",
+        ),
+    ] {
+        for view in [None, Some(View::K32), Some(View::K64)] {
+            let canon = k(input, view);
+            assert_eq!(canon.hive, Hive::Hku(sid.into()), "{input}");
+            assert_eq!(canon.view, View::K64, "{input}");
+            assert_eq!(canon.path, path, "{input}");
+        }
+    }
+    // Only the exact names: a longer SID is a user and has a classes hive.
+    assert_eq!(
+        k(r"HKU\S-1-5-18-1\Software\Classes\x", None).hive,
+        Hive::HkuClasses("S-1-5-18-1".into())
+    );
+}
+
 #[test]
 fn canon_key_agrees_with_typed_target() {
     let env = env();

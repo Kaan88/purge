@@ -17,7 +17,9 @@
 //! [`purge_model::TypedTarget`]: `HKEY_*` and short root names map to `HKLM` or `HKU\<SID>`; `HKCU` needs
 //! the SID it is bound to; `HKCR` is rejected (it is a merged view, never a physical location).
 //! `HKLM\SYSTEM\CurrentControlSet` becomes `ControlSet00N` and `HKU\<SID>\Software\Classes` becomes
-//! `HKU\<SID>_Classes`: the only two links resolved lexically. The WOW64 view is explicit: a
+//! `HKU\<SID>_Classes`: the only two links resolved lexically. The second only where the hive has a
+//! classes hive ([`purge_model::has_classes_hive`]): below `.DEFAULT` and the three service accounts
+//! `Software\Classes` is an ordinary key and stays where it is. The WOW64 view is explicit: a
 //! `WOW6432Node` spelling (including the `HKLM\SOFTWARE\Classes\WOW6432Node` alias) or a caller-supplied
 //! view both yield [`View::K32`]. Case is preserved except for the root, the SID, and the well-known
 //! segments this module rewrites (`SOFTWARE`, `SYSTEM`, `Software`, `Classes`, `ControlSet00N`); compare
@@ -655,7 +657,15 @@ fn user_key(sid: &str, rest: &[&str], wants_32: bool) -> Result<CanonKey, CanonE
 
     let mut rest = rest;
     let mut in_classes = classes_hive;
-    if !classes_hive && rest.len() >= 2 && eq_ci(rest[0], "Software") && eq_ci(rest[1], "Classes") {
+    // Only where `Software\Classes` is the link to a classes hive. `.DEFAULT` and the service accounts
+    // have none: a key below their `Software\Classes` is canonical where it is, as the Live source reads
+    // it.
+    if !classes_hive
+        && purge_model::has_classes_hive(&sid)
+        && rest.len() >= 2
+        && eq_ci(rest[0], "Software")
+        && eq_ci(rest[1], "Classes")
+    {
         in_classes = true;
         rest = &rest[2..];
     }

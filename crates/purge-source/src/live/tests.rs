@@ -176,6 +176,66 @@ fn links_are_reported_and_only_g1_links_resolved() {
     ));
 }
 
+/// `.DEFAULT` and the service accounts have no classes hive: `Software\Classes` is an ordinary key and a
+/// key below it is read where it is. That spelling is also the canonical one (`purge-model` renders it
+/// unchanged, `purge-guard` leaves it alone), so the key a caller holds in place and the key a target
+/// carries are read as one key. `HKU\<name>_Classes` names no hive.
+#[test]
+fn classes_of_a_hive_without_a_classes_hive_are_read_in_place() {
+    let live = LiveRegistry::new();
+    let mut read = 0;
+    for sid in [".DEFAULT", "S-1-5-18", "S-1-5-19", "S-1-5-20"] {
+        assert!(!purge_model::has_classes_hive(sid));
+        let in_place = format!(r"HKU\{sid}\Software\Classes");
+        // A service account's key may be closed to an unelevated run.
+        let Ok(direct) = Key::open(
+            RegRoot::Hku,
+            &format!(r"{sid}\Software\Classes"),
+            RegView::K64,
+        ) else {
+            continue;
+        };
+        let info = live.key_info(&in_place).unwrap();
+        assert!(!info.is_link, "{in_place}: {info:?}");
+        let names = direct.subkey_names().unwrap();
+        assert_eq!(live.subkeys(&in_place).unwrap(), names, "{in_place}");
+        assert_eq!(
+            live.key_exists(&format!(r"HKU\{sid}_Classes")),
+            ExistsState::Absent,
+            "{sid}"
+        );
+        for name in names.iter().take(8) {
+            let key = format!(r"{in_place}\{name}");
+            let (hive, view, path) = purge_model::TypedTarget::parse_key_path(&key).unwrap();
+            let canonical =
+                purge_model::TypedTarget::new(hive, view, path, purge_model::RegKind::Key)
+                    .key_path();
+            assert_eq!(canonical, key);
+            let Ok(sub) = direct.open_subkey(name) else {
+                continue;
+            };
+            let want = sub.info().unwrap();
+            for spelling in [&key, &canonical] {
+                let got = live.key_info(spelling).unwrap();
+                assert_eq!(got.n_subkeys, want.n_subkeys, "{spelling}");
+                assert_eq!(got.lwt.0, want.last_write_time, "{spelling}");
+                assert_eq!(
+                    live.key_exists(spelling),
+                    ExistsState::Present,
+                    "{spelling}"
+                );
+            }
+            assert_eq!(
+                live.key_exists(&format!(r"HKU\{sid}_Classes\{name}")),
+                ExistsState::Absent,
+                "{sid} {name}"
+            );
+            read += 1;
+        }
+    }
+    println!("classes keys read in place: {read}");
+}
+
 /// `KeyInfo` without the field a walker leaves out.
 fn walk_facts(info: &crate::types::KeyInfo) -> (u64, u32, u32, bool, Option<String>) {
     (
