@@ -34,6 +34,33 @@ verify after the bounded passes). Every line of output starts with `install:`.
 The script never downloads anything, never changes Defender or System Restore settings, and signs
 nothing (signing stays out of M2, decision Q7).
 
+## Release build
+
+A release is two separate builds, run from the repository root, then the dependency check:
+
+```
+cargo build --release -p purge-engine
+cargo build --release -p purge-broker
+cargo xtask check-deps
+```
+
+- Two commands, never one. `cargo build -p purge-engine -p purge-broker`, `--workspace` and
+  `--all-features` unify features across everything they build, so `purge-engine.exe` would get
+  purge-win's `write` (the broker's) and any feature another member switches on. Built on its own, the
+  engine links no executor and has no `write` (check-deps rule 4c).
+- No `--features`. The engine's `rig-exec` and `inject-view` are for the VM rig and for tests; the
+  broker has no feature at all (rule 4b).
+- No `RUSTFLAGS` in the environment. It replaces the `crt-static` flags of `.cargo/config.toml`, and a
+  `--cfg feature="..."` in it would switch on feature-gated code that no dependency tree shows.
+- `purge-broker.exe` is the only release binary that links the executor (`purge-exec`); it links the
+  engine's library with the release engine's features. The second build compiles only that library, so
+  the `purge-engine.exe` of the first build stays as it was.
+- `cargo xtask check-deps` checks the trees these two commands build (rule 4 in
+  `tools/xtask/src/check_deps.rs`). Do not ship a build that fails it.
+
+`-Engine` takes the `purge-engine.exe` of the first build. Deploying `purge-broker.exe` beside it comes
+with the M3 `install.ps1` additions.
+
 ## Layout
 
 ```
