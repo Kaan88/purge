@@ -7,6 +7,7 @@
 //! | 1 | The process token is elevated | [`StartFailure::NotElevated`] |
 //! | 2 | Own directory (of the running executable): plain drive path, no reparse point on it, on the system volume, every ancestor writable by administrators only (`purge_win::secure::trusted_install_dir`); the executable itself admin-only writable; `<own directory>\kb` passes the directory rule too | [`StartFailure::InstallUntrusted`] |
 //! | 3 | Data root `<ProgramData>\Purge`, `ProgramData` from the machine (`purge_win::known_folders::machine_program_data`), passes the same directory rule, and `StorageRoots::check` passes on it | [`StartFailure::StoreIntegrity`] |
+//! | 2b | The client image `<own directory>\Purge.exe` (what the pipe peer check compares with, design 3.3) is admin-only writable, and so is every file directly in `<own directory>\kb\baselines` (review M3-R1 S7: a file moved into a checked directory keeps its own descriptor) | [`StartFailure::InstallUntrusted`] |
 //! | 4 | KB and baselines are `<own directory>\kb`; `PURGE_KB_DIR` is not read | (none) |
 //!
 //! No directory comes from the environment: the own directory is the running image's path, and
@@ -91,6 +92,13 @@ impl StartFailure {
     }
 }
 
+/// Writes `line` to the Application event log (event id = `code`) and to stderr: the report of an
+/// exit that is not a [`StartFailure`] (`lifetime::codes`). Failures to write are ignored.
+pub fn report_exit(code: u8, line: &str) {
+    let _ = purge_win::eventlog::report_error(EVENT_SOURCE, u32::from(code), line);
+    eprintln!("{line}");
+}
+
 /// What the start checks established; everything the broker later reads from disk is below these
 /// directories.
 #[derive(Debug, Clone)]
@@ -99,6 +107,8 @@ pub struct Started<S> {
     pub install_dir: PathBuf,
     /// `<install_dir>\kb`, the knowledge base; its `baselines` subdirectory holds the baselines.
     pub kb_dir: PathBuf,
+    /// `<install_dir>\Purge.exe`, the only image the pipe client may have (checked admin-only writable).
+    pub client_image: PathBuf,
     /// `<ProgramData>\Purge` (checked).
     pub data_root: PathBuf,
     /// The system volume (`\\?\volume{…}\`) the checks compared against.
@@ -137,6 +147,8 @@ pub trait StartFacts {
     fn trusted_dir(&self, dir: &Path) -> Result<(), String>;
     /// Whether only administrators can write the file and every ancestor.
     fn trusted_file(&self, file: &Path) -> Result<(), String>;
+    /// The files directly in `<kb>\baselines`, or none when that directory does not exist.
+    fn kb_files(&self, kb_dir: &Path) -> Result<Vec<PathBuf>, String>;
     /// The machine's `ProgramData`, not from the environment.
     fn program_data(&self) -> Result<PathBuf, String>;
     /// The system volume.
@@ -170,6 +182,21 @@ impl StartFacts for LiveFacts {
             Ok(false) => Err("a non-administrator can write it".into()),
             Err(e) => Err(format!("its protection could not be read: {e}")),
         }
+    }
+
+    fn kb_files(&self, kb_dir: &Path) -> Result<Vec<PathBuf>, String> {
+        let dir = kb_dir.join("baselines");
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(format!("{}: {e}", dir.display())),
+        };
+        let mut files = Vec::new();
+        for entry in entries {
+            let entry = entry.map_err(|e| format!("{}: {e}", dir.display()))?;
+            files.push(entry.path());
+        }
+        Ok(files)
     }
 
     fn program_data(&self) -> Result<PathBuf, String> {
@@ -236,12 +263,30 @@ pub fn check_with<F: StartFacts>(facts: &F) -> Result<Started<F::Store>, StartFa
         .trusted_file(&exe)
         .map_err(|why| untrusted(&exe, why))?;
     // The KB sits below the checked directory. The directory rule covers its ancestors, not `kb`
-    // itself (a file or directory moved in keeps its own descriptor), so it is checked too. Each KB
-    // file the broker later loads passes the per-file check as well (M3-BROKER-CORE).
+    // itself (a file or directory moved in keeps its own descriptor), so it is checked too, and so
+    // are the client image and each file the broker will load from it (review M3-R1 S7).
     let kb_dir = install_dir.join("kb");
     facts
         .trusted_dir(&kb_dir)
         .map_err(|why| untrusted(&kb_dir, why))?;
+    let client_image = install_dir.join("Purge.exe");
+    facts
+        .trusted_file(&client_image)
+        .map_err(|why| untrusted(&client_image, why))?;
+    let baselines = kb_dir.join("baselines");
+    let files = facts
+        .kb_files(&kb_dir)
+        .map_err(StartFailure::InstallUntrusted)?;
+    if !files.is_empty() {
+        facts
+            .trusted_dir(&baselines)
+            .map_err(|why| untrusted(&baselines, why))?;
+    }
+    for file in &files {
+        facts
+            .trusted_file(file)
+            .map_err(|why| untrusted(file, why))?;
+    }
 
     let store = |what: &Path, why: String| {
         StartFailure::StoreIntegrity(format!("{}: {why}", what.display()))
@@ -260,6 +305,7 @@ pub fn check_with<F: StartFacts>(facts: &F) -> Result<Started<F::Store>, StartFa
 
     Ok(Started {
         kb_dir,
+        client_image,
         install_dir,
         data_root,
         system_volume,
@@ -278,6 +324,7 @@ mod tests {
         exe: PathBuf,
         untrusted_dirs: Vec<PathBuf>,
         untrusted_files: Vec<PathBuf>,
+        kb_files: Result<Vec<PathBuf>, String>,
         program_data: Result<PathBuf, String>,
         store: Result<(), String>,
         calls: RefCell<Vec<String>>,
@@ -290,6 +337,7 @@ mod tests {
                 exe: PathBuf::from(r"C:\Program Files\Purge\purge-broker.exe"),
                 untrusted_dirs: Vec::new(),
                 untrusted_files: Vec::new(),
+                kb_files: Ok(Vec::new()),
                 program_data: Ok(PathBuf::from(r"C:\ProgramData")),
                 store: Ok(()),
                 calls: RefCell::new(Vec::new()),
@@ -336,6 +384,11 @@ mod tests {
             }
         }
 
+        fn kb_files(&self, kb_dir: &Path) -> Result<Vec<PathBuf>, String> {
+            self.note(format!("kb_files {}", kb_dir.display()));
+            self.kb_files.clone()
+        }
+
         fn program_data(&self) -> Result<PathBuf, String> {
             self.note("program_data".into());
             self.program_data.clone()
@@ -368,6 +421,8 @@ mod tests {
                 format!("dir {INSTALL}"),
                 format!("file {EXE}"),
                 format!("dir {INSTALL}\\kb"),
+                format!("file {INSTALL}\\Purge.exe"),
+                format!("kb_files {INSTALL}\\kb"),
                 "program_data".into(),
                 format!("dir {ROOT}"),
                 "system_volume".into(),
@@ -376,6 +431,10 @@ mod tests {
         );
         assert_eq!(started.install_dir, Path::new(INSTALL));
         assert_eq!(started.kb_dir, Path::new(r"C:\Program Files\Purge\kb"));
+        assert_eq!(
+            started.client_image,
+            Path::new(r"C:\Program Files\Purge\Purge.exe")
+        );
         assert_eq!(started.data_root, Path::new(ROOT));
         assert_eq!(started.store, Path::new(ROOT));
 
@@ -458,6 +517,55 @@ mod tests {
                 .line()
                 .contains(r"C:\Program Files\Purge\kb: refused by the fake")
         );
+    }
+
+    /// S7: the client image and every KB file are judged on their own, and a user-writable one
+    /// refuses the start before the store is located.
+    #[test]
+    fn the_client_image_and_every_kb_file_are_judged() {
+        let baselines = format!(r"{INSTALL}\kb\baselines");
+        let a = PathBuf::from(format!(r"{baselines}\a.tsv.gz"));
+        let b = PathBuf::from(format!(r"{baselines}\b.tsv.gz"));
+        let image = PathBuf::from(format!(r"{INSTALL}\Purge.exe"));
+        let image_bad = Fake {
+            untrusted_files: vec![image.clone()],
+            ..Fake::passing()
+        };
+        let file_bad = Fake {
+            kb_files: Ok(vec![a.clone(), b.clone()]),
+            untrusted_files: vec![b.clone()],
+            ..Fake::passing()
+        };
+        let dir_bad = Fake {
+            kb_files: Ok(vec![a.clone()]),
+            untrusted_dirs: vec![PathBuf::from(&baselines)],
+            ..Fake::passing()
+        };
+        let unreadable = Fake {
+            kb_files: Err("access denied".into()),
+            ..Fake::passing()
+        };
+        for (f, what) in [
+            (&image_bad, "Purge.exe"),
+            (&file_bad, "b.tsv.gz"),
+            (&dir_bad, "baselines"),
+            (&unreadable, "access denied"),
+        ] {
+            let e = check_with(f).unwrap_err();
+            assert_eq!(e.code(), "install_untrusted", "{what}: {e:?}");
+            assert!(e.line().contains(what), "{what}: {}", e.line());
+            assert!(!f.calls().iter().any(|c| c == "program_data"));
+        }
+        // Both files are looked at, in order, when the first passes.
+        let ok = Fake {
+            kb_files: Ok(vec![a.clone(), b.clone()]),
+            ..Fake::passing()
+        };
+        check_with(&ok).unwrap();
+        let calls = ok.calls();
+        let at = |s: String| calls.iter().position(|c| *c == s).unwrap();
+        assert!(at(format!("file {}", a.display())) < at(format!("file {}", b.display())));
+        assert!(at(format!("dir {baselines}")) < at(format!("file {}", a.display())));
     }
 
     #[test]

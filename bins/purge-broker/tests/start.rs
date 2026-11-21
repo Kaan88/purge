@@ -124,15 +124,21 @@ fn elevated_copies_are_judged_by_their_directory() {
         purge_win::known_folders::known_folder(purge_win::known_folders::KnownFolder::ProgramFiles)
             .unwrap();
     let dir = program_files.join(format!("purge-m3-harden-test-{}", std::process::id()));
-    std::fs::create_dir(&dir).unwrap();
+    std::fs::create_dir_all(dir.join("kb")).unwrap();
     let copy = dir.join("purge-broker.exe");
     std::fs::copy(&broker, &copy).unwrap();
+    // No `Purge.exe` beside it: the client image cannot be judged, so the start is refused (M3-R1 S7).
+    let out = run(&copy, &plant.0);
+    let err = stderr_without(&out, &plant.0);
+    assert_eq!(out.status.code(), Some(21), "{err}");
+    assert!(err.contains("Purge.exe"), "{err}");
+    std::fs::write(dir.join("Purge.exe"), b"not a UI").unwrap();
     let out = run(&copy, &plant.0);
     let _ = std::fs::remove_dir_all(&dir);
     let err = stderr_without(&out, &plant.0);
     match out.status.code() {
-        // Every check passed: the stub stops after them.
-        Some(1) => assert!(err.contains("start checks passed"), "{err}"),
+        // Every start check passed; the command line (none was given) is refused.
+        Some(23) => assert!(err.contains("--pipe is missing"), "{err}"),
         // No install.ps1 data root on this machine: the machine's one was judged.
         Some(22) => {
             let root = purge_win::known_folders::machine_program_data()

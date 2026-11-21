@@ -137,8 +137,11 @@ version = "0.1.0"
 dependencies = [
  "purge-engine",
  "purge-exec",
+ "purge-model",
  "purge-rpc",
+ "purge-source",
  "purge-win",
+ "serde_json",
 ]
 
 [[package]]
