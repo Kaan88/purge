@@ -10,3 +10,4 @@
 pub mod cli;
 pub mod icons;
 pub mod pipeline;
+pub mod uninstall_rpc;

@@ -63,6 +63,7 @@ use purge_index::ownership::{
     CacheKey, DiskTableCache, MemTableCache, OwnershipLimits, TableCache,
 };
 use purge_inventory::arp::Inventory;
+use purge_inventory::quiet::{QuietCommand, quiet_command};
 use purge_inventory::runner::{ProcessHost, RunError, RunOptions, RunReport, RunRequest};
 use purge_inventory::verify_gone::{self, VerifyTarget};
 use purge_model::{
@@ -77,6 +78,7 @@ use purge_scan::framework::{
     AppIdentityView, OtherApp, OtherApps, ScanCtx, ScanExt, ScanLimits, inventory_lists_product,
     product_known_in,
 };
+use purge_source::filesystem::FileSystemSource;
 use purge_source::registry::RegistrySource;
 use purge_source::sysobj::MsiTables;
 use purge_win::env::{EnvMap, expand_with};
@@ -650,6 +652,108 @@ fn baseline_loaded(name: &str, n: RecordCounts, timing: bool) -> String {
 }
 
 // ---------------------------------------------------------------------------------------------------------
+// Route
+// ---------------------------------------------------------------------------------------------------------
+
+/// The commands an entry's Uninstall key names, expanded with the interactive user's environment.
+///
+/// `command` is the interactive `UninstallString`; `quiet` is the quiet form [`quiet_command`] resolves
+/// (`QuietUninstallString`, or the generated form). Either is `None` when the entry does not give a
+/// usable command. The engine shows these strings and runs the chosen one verbatim: `uninstall.route`
+/// answers with them and `uninstall.run_user` passes the matching [`QuietCommand`] to
+/// [`uninstall_with_command`], so the command shown is the command run.
+#[derive(Debug, Clone, Default)]
+pub struct UninstallCommands {
+    /// The interactive command, expanded.
+    pub command: Option<QuietCommand>,
+    /// The quiet command, expanded.
+    pub quiet: Option<QuietCommand>,
+}
+
+impl UninstallCommands {
+    /// The interactive command line, as it would be started.
+    pub fn command_line(&self) -> Option<String> {
+        self.command.as_ref().map(QuietCommand::to_command_line)
+    }
+
+    /// The quiet command line, as it would be started.
+    pub fn quiet_command_line(&self) -> Option<String> {
+        self.quiet.as_ref().map(QuietCommand::to_command_line)
+    }
+}
+
+/// Resolves both commands of `entry` and expands `%NAME%` references with `env` (the interactive
+/// user's environment, [`purge_win::env::expand_with`]).
+pub fn uninstall_commands(
+    entry: &InventoryEntry,
+    env: &BTreeMap<String, String>,
+) -> UninstallCommands {
+    let map: EnvMap = env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    let expanded = |command: QuietCommand| QuietCommand {
+        exe: expand_with(&command.exe, &map),
+        args: expand_with(&command.args, &map),
+        ..command
+    };
+    let command = entry
+        .uninstall_string
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .and_then(|s| purge_win::cmdline::split(s).ok())
+        .map(|split| QuietCommand {
+            exe: split.exe,
+            args: split.args,
+            generated: false,
+            kind: entry.installer_kind,
+        })
+        .map(expanded);
+    let quiet = quiet_command(entry).ok().map(expanded);
+    UninstallCommands { command, quiet }
+}
+
+/// Where the uninstaller of `entry` runs (M3 design 3.2, ENGINE_PLAN §4.4): the broker for a
+/// machine-scope entry whose uninstaller path has admin-only ancestors, medium otherwise.
+///
+/// The medium engine and the broker both call this with their own inventory: the route is never taken
+/// from the other side. A per-user entry (an `HKU` key or a user-writable Uninstall key) is always
+/// medium, whatever its path; that is the rule that keeps Purge from being an elevation vehicle for a
+/// command a standard user can replace. A machine-scope entry is broker only when **every** command the
+/// entry names (the interactive and the quiet one) is writable by administrators alone; a path that
+/// cannot be read or does not exist is not provably admin-only and therefore stays medium.
+pub fn route(
+    entry: &InventoryEntry,
+    fs: &dyn FileSystemSource,
+    env: &BTreeMap<String, String>,
+) -> purge_rpc::methods::Route {
+    let per_user = entry.hive_sid.is_some() || entry.writable_by == WritableBy::User;
+    if per_user {
+        return purge_rpc::methods::Route::Medium;
+    }
+    let commands = uninstall_commands(entry, env);
+    let mut exes: Vec<&str> = Vec::new();
+    for command in [commands.command.as_ref(), commands.quiet.as_ref()]
+        .into_iter()
+        .flatten()
+    {
+        if !exes.iter().any(|e| e.eq_ignore_ascii_case(&command.exe)) {
+            exes.push(&command.exe);
+        }
+    }
+    if exes.is_empty() {
+        // Nothing to run, and nothing that proves the path admin-only.
+        return purge_rpc::methods::Route::Medium;
+    }
+    if exes
+        .iter()
+        .all(|exe| fs.is_admin_only_writable(exe) == Ok(true))
+    {
+        purge_rpc::methods::Route::Broker
+    } else {
+        purge_rpc::methods::Route::Medium
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------
 // Uninstall
 // ---------------------------------------------------------------------------------------------------------
 
@@ -686,6 +790,43 @@ pub fn uninstall(
     program_id: &str,
     fp: Option<&mut Fingerprint>,
     options: &RunOptions,
+    progress: Progress<'_>,
+) -> Result<Uninstalled, PipelineError> {
+    uninstall_in(sources, host, program_id, fp, options, None, progress)
+}
+
+/// [`uninstall`], but runs `command` instead of resolving the entry's quiet command.
+///
+/// The command is passed exactly as it came from [`uninstall_commands`], so the engine's
+/// `uninstall.run_user` runs the string `uninstall.route` showed (the quiet or the interactive one).
+pub fn uninstall_with_command(
+    sources: Sources<'_>,
+    host: &mut dyn ProcessHost,
+    program_id: &str,
+    fp: Option<&mut Fingerprint>,
+    options: &RunOptions,
+    command: &QuietCommand,
+    progress: Progress<'_>,
+) -> Result<Uninstalled, PipelineError> {
+    uninstall_in(
+        sources,
+        host,
+        program_id,
+        fp,
+        options,
+        Some(command),
+        progress,
+    )
+}
+
+/// [`uninstall`]; `command`: the exact command to run instead of the entry's quiet one.
+fn uninstall_in(
+    sources: Sources<'_>,
+    host: &mut dyn ProcessHost,
+    program_id: &str,
+    fp: Option<&mut Fingerprint>,
+    options: &RunOptions,
+    command: Option<&QuietCommand>,
     mut progress: Progress<'_>,
 ) -> Result<Uninstalled, PipelineError> {
     let mut step = Step::new(&mut progress);
@@ -751,6 +892,7 @@ pub fn uninstall(
         main_exes: &main_exes,
         roots: &roots,
         before: Some(&before.doc.entries),
+        command,
     };
     let report = purge_inventory::runner::run_uninstall(
         host,
