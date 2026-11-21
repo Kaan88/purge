@@ -1,3 +1,9 @@
+// Built for the Windows subsystem (M3-R2 S7, ruling on flagged point 4): a console binary gets a
+// console window from `runas`, and the start-up show command applies to the process's first window,
+// which is the consent TaskDialog. Failures still reach the UI through the exit code and the event
+// log; stderr is written only while it is still open, and `close_std_handles` clears it afterwards.
+#![windows_subsystem = "windows"]
+
 //! `purge-broker` entry point (M3 design 3.3, 3.4, package M3-BROKER-CORE).
 //!
 //! Order: the DLL search is restricted to System32; the start checks run (elevation first, then the
