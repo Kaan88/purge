@@ -85,6 +85,9 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::filesystem::{FileSystemSource, join_file_path, split_file_path};
+use crate::local_baseline::{
+    self, HiveEntry, HiveWalk, InboxPackages, LocalSources, ManifestIter, SYSTEM_DEFAULT_KEY,
+};
 use crate::registry::{RegistrySource, is_registry_path, map_current_control_set, split_key};
 use crate::snapfixture::SnapStats;
 use crate::sysobj::{MsiTables, TaskInfo, limited_tasks};
@@ -528,6 +531,8 @@ pub struct Fixture {
     base_dir: Option<PathBuf>,
     overlay_dir: Option<PathBuf>,
     pub(crate) snap_stats: Option<SnapStats>,
+    /// Offline hive files by [`package_key`] of their path (the S2 local source).
+    offline_hives: BTreeMap<String, HiveFixture>,
 }
 
 impl Default for Fixture {
@@ -566,6 +571,15 @@ impl Fixture {
             base_dir: None,
             overlay_dir: None,
             snap_stats: None,
+            offline_hives: BTreeMap::new(),
+        }
+    }
+
+    /// Places an offline hive file at `path` (not in the filesystem tree: only
+    /// [`LocalSources::default_hive`] reads it). Replaces an earlier one at the same path.
+    pub fn set_offline_hive(&mut self, path: &str, hive: HiveFixture) {
+        if let Some(k) = package_key(path) {
+            self.offline_hives.insert(k, hive);
         }
     }
 
@@ -1464,6 +1478,371 @@ impl SystemSource for Fixture {
 /// The look-up key of a `LocalPackage` path: the file-path segments, case-folded, `/` read as `\`.
 fn package_key(path: &str) -> Option<String> {
     folded_segments(path, false, 0).map(|segs| join_file_path(&segs))
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Local baseline sources
+// ---------------------------------------------------------------------------------------------------------
+
+/// An offline registry hive file in memory, for [`LocalSources::default_hive`] of a fixture: key paths
+/// relative to the hive root with their value names and types. Walked depth-first in case-folded name
+/// order, a key before its values (in insertion order) and subkeys, the root (empty path) first.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HiveFixture {
+    /// Folded segments -> (path as given, values).
+    keys: BTreeMap<Vec<String>, (String, Vec<(String, u32)>)>,
+}
+
+impl HiveFixture {
+    /// An empty hive (the root key only).
+    pub fn new() -> Self {
+        let mut h = Self::default();
+        h.keys.insert(Vec::new(), (String::new(), Vec::new()));
+        h
+    }
+
+    /// Adds `path` and its ancestors.
+    pub fn key(mut self, path: &str) -> Self {
+        self.add_key(path);
+        self
+    }
+
+    /// Adds value `name` of type `kind` to `path` (created with its ancestors).
+    pub fn value(mut self, path: &str, name: &str, kind: u32) -> Self {
+        let segs = self.add_key(path);
+        let values = &mut self.keys.get_mut(&segs).expect("just added").1;
+        values.retain(|(n, _)| !n.eq_ignore_ascii_case(name));
+        values.push((name.to_owned(), kind));
+        self
+    }
+
+    /// Number of keys, the root included.
+    pub fn key_count(&self) -> usize {
+        self.keys.len()
+    }
+
+    fn add_key(&mut self, path: &str) -> Vec<String> {
+        let parts = split_key(path);
+        for n in 0..=parts.len() {
+            self.keys
+                .entry(parts[..n].iter().map(|s| fold(s)).collect())
+                .or_insert_with(|| (parts[..n].join("\\"), Vec::new()));
+        }
+        parts.iter().map(|s| fold(s)).collect()
+    }
+
+    fn walk(&self, origin: &str, visit: &mut dyn FnMut(HiveEntry<'_>)) -> HiveWalk {
+        let mut walk = HiveWalk {
+            origin: origin.to_owned(),
+            ..HiveWalk::default()
+        };
+        // Lexicographic order of the folded segment lists is a pre-order walk.
+        for (path, values) in self.keys.values() {
+            visit(HiveEntry::Key { path });
+            walk.keys += 1;
+            for (name, kind) in values {
+                visit(HiveEntry::Value {
+                    key: path,
+                    name,
+                    kind: *kind,
+                });
+                walk.values += 1;
+            }
+        }
+        walk
+    }
+}
+
+/// The local sources of the fixture machine, read with the same code as the Live ones: S1 lists
+/// `%SystemRoot%\WinSxS\Manifests` in the fixture filesystem, S2 walks the [`HiveFixture`] placed at the
+/// path `ProfileList` names ([`Fixture::set_offline_hive`]; none there is [`SourceError::NotFound`]), S3
+/// walks the fixture registry's `HKU\.DEFAULT`, S4 reads the fixture's packages, files and registry.
+impl LocalSources for Fixture {
+    fn manifests(&self) -> SourceResult<ManifestIter<'_>> {
+        local_baseline::list_manifests(self, self)
+    }
+
+    fn default_hive(&self, visit: &mut dyn FnMut(HiveEntry<'_>)) -> SourceResult<HiveWalk> {
+        let path = local_baseline::default_hive_path(self, self)?;
+        let hive = package_key(&path)
+            .and_then(|k| self.offline_hives.get(&k))
+            .ok_or(SourceError::NotFound)?;
+        Ok(hive.walk(&path, visit))
+    }
+
+    fn system_default(&self, visit: &mut dyn FnMut(HiveEntry<'_>)) -> SourceResult<HiveWalk> {
+        local_baseline::walk_registry(self, SYSTEM_DEFAULT_KEY, visit)
+    }
+
+    fn inbox_packages(&self) -> SourceResult<InboxPackages> {
+        local_baseline::collect_inbox_packages(self, self, self)
+    }
+}
+
+#[cfg(test)]
+mod local_tests {
+    use super::*;
+    use crate::local_baseline::{InboxReason, PROFILE_LIST, PROVISIONED_KEY, RepositoryProgId};
+    use crate::types::PackageSignatureKind;
+
+    const REPO: &str = local_baseline::REPOSITORY_EXTENSIONS_KEY;
+
+    fn hive() -> HiveFixture {
+        HiveFixture::new()
+            .value(r"Software\Microsoft\Windows\CurrentVersion\Run", "x", 1)
+            .key(r"Control Panel\Desktop")
+            .value(r"Control Panel\Desktop", "Wallpaper", REG_SZ)
+            .value(r"control panel\desktop", "", REG_SZ)
+    }
+
+    fn entries(f: &Fixture, s3: bool) -> (Vec<String>, HiveWalk) {
+        let mut out = Vec::new();
+        let mut visit = |e: HiveEntry<'_>| match e {
+            HiveEntry::Key { path } => out.push(format!("K {path}")),
+            HiveEntry::Value { key, name, kind } => out.push(format!("V {key}|{name}|{kind}")),
+        };
+        let walk = if s3 {
+            f.system_default(&mut visit)
+        } else {
+            f.default_hive(&mut visit)
+        }
+        .unwrap();
+        (out, walk)
+    }
+
+    #[test]
+    fn default_hive_at_the_profile_list_path() {
+        let mut f = Fixture::builder()
+            .expand_sz(PROFILE_LIST, "Default", r"%SystemDrive%\Users\Default")
+            .env("SystemDrive", "D:")
+            .build();
+        // Nothing at the named path yet.
+        assert_eq!(
+            f.default_hive(&mut |_| {}).unwrap_err(),
+            SourceError::NotFound
+        );
+        f.set_offline_hive(r"d:\users\default\ntuser.dat", hive());
+        let (got, walk) = entries(&f, false);
+        assert_eq!(
+            got,
+            [
+                "K ",
+                "K Control Panel",
+                r"K Control Panel\Desktop",
+                r"V Control Panel\Desktop|Wallpaper|1",
+                r"V Control Panel\Desktop||1",
+                "K Software",
+                r"K Software\Microsoft",
+                r"K Software\Microsoft\Windows",
+                r"K Software\Microsoft\Windows\CurrentVersion",
+                r"K Software\Microsoft\Windows\CurrentVersion\Run",
+                r"V Software\Microsoft\Windows\CurrentVersion\Run|x|1",
+            ]
+        );
+        assert_eq!((walk.keys, walk.values), (8, 3));
+        assert!(walk.is_complete());
+        assert_eq!(walk.origin, r"D:\Users\Default\NTUSER.DAT");
+    }
+
+    #[test]
+    fn default_hive_path_fallback_and_errors() {
+        // No `Default` value: `ProfilesDirectory\Default`.
+        let f = Fixture::builder()
+            .expand_sz(PROFILE_LIST, "ProfilesDirectory", r"%SystemDrive%\Profiles\")
+            .env("SYSTEMDRIVE", "C:")
+            .build();
+        assert_eq!(
+            local_baseline::default_hive_path(&f, &f).unwrap(),
+            r"C:\Profiles\Default\NTUSER.DAT"
+        );
+        // A reference that cannot be expanded is an error, not a guess.
+        let f = Fixture::builder()
+            .expand_sz(PROFILE_LIST, "Default", r"%NoSuchVar%\Default")
+            .build();
+        assert!(matches!(
+            local_baseline::default_hive_path(&f, &f),
+            Err(SourceError::InvalidPath(_))
+        ));
+        // Neither value: not found; no hard-coded C:\Users\Default.
+        let f = Fixture::builder().key(PROFILE_LIST).build();
+        assert_eq!(
+            local_baseline::default_hive_path(&f, &f),
+            Err(SourceError::NotFound)
+        );
+    }
+
+    #[test]
+    fn system_default_walk() {
+        let f = Fixture::builder()
+            .sz(r"HKU\.DEFAULT\Control Panel\Desktop", "Wallpaper", "")
+            .key(r"HKU\.DEFAULT\Software\Secret\Deeper")
+            .denied(r"HKU\.DEFAULT\Software\Secret")
+            .link(r"HKU\.DEFAULT\Software\Linked", r"\REGISTRY\MACHINE\SOFTWARE")
+            .key(r"HKU\S-1-5-21-1-2-3-1001\Software\Other")
+            .build();
+        let (got, walk) = entries(&f, true);
+        assert_eq!(
+            got,
+            [
+                "K ",
+                "K Control Panel",
+                r"K Control Panel\Desktop",
+                r"V Control Panel\Desktop|Wallpaper|1",
+                "K Software",
+                r"K Software\Linked",
+                r"V Software\Linked|SymbolicLinkValue|6",
+                r"K Software\Secret",
+            ]
+        );
+        assert_eq!((walk.keys, walk.links, walk.unreadable), (6, 1, 1));
+        assert!(!walk.is_complete());
+        // Not there at all: an error.
+        let empty = Fixture::new();
+        assert_eq!(
+            empty.system_default(&mut |_| {}).unwrap_err(),
+            SourceError::NotFound
+        );
+    }
+
+    #[test]
+    fn manifests_listing() {
+        let dir = r"C:\Windows\WinSxS\Manifests";
+        let f = Fixture::builder()
+            .env("SystemRoot", r"C:\Windows")
+            .file_content(&format!(r"{dir}\b.manifest"), b"<assembly/>".to_vec())
+            .file_content(&format!(r"{dir}\A.MANIFEST"), b"DCM\x01PA30".to_vec())
+            .file_content(&format!(r"{dir}\x.cat"), b"cat".to_vec())
+            .file(&format!(r"{dir}\c.manifest"), 3)
+            .dir(&format!(r"{dir}\sub.manifest"))
+            .build();
+        let got: Vec<(String, SourceResult<Vec<u8>>)> = f.manifests().unwrap().collect();
+        assert_eq!(
+            got,
+            vec![
+                ("A.MANIFEST".to_string(), Ok(b"DCM\x01PA30".to_vec())),
+                ("b.manifest".to_string(), Ok(b"<assembly/>".to_vec())),
+                ("c.manifest".to_string(), Err(SourceError::NotCaptured)),
+            ]
+        );
+        assert!(Fixture::new().manifests().is_err());
+    }
+
+    fn package(full: &str, kind: PackageSignatureKind, dir: Option<&str>) -> PackageInfo {
+        PackageInfo {
+            full_name: full.into(),
+            family: local_baseline::family_of_full_name(full).unwrap(),
+            install_location: dir.map(String::from),
+            external_location: None,
+            sparse: false,
+            users: Vec::new(),
+            is_framework: false,
+            is_resource: false,
+            signature_kind: kind,
+        }
+    }
+
+    #[test]
+    fn inbox_packages_selection_manifests_and_repository() {
+        let photos = "Microsoft.Windows.Photos_1.0.0.0_x64__8wekyb3d8bbwe";
+        let shell = "Microsoft.Windows.ShellExperienceHost_10.0.1.0_neutral_neutral_cw5n1h2txyewy";
+        let vendor = "Vendor.App_1.0.0.0_x64__abcdefghijklm";
+        let none = RegData::new(0, Vec::new());
+        let f = Fixture::builder()
+            .elevated(true)
+            .key(&format!(
+                r"{PROVISIONED_KEY}\Microsoft.Windows.Photos_1.0.0.0_neutral_~_8wekyb3d8bbwe"
+            ))
+            .key(&format!(r"{PROVISIONED_KEY}\Vendor.App_1.0.0.0_neutral_~_abcdefghijklm"))
+            .value(&format!(r"{REPO}\ProgIDs\AppXphotos1"), photos, none.clone())
+            .value(&format!(r"{REPO}\ProgIDs\AppXphotos2"), photos, none.clone())
+            .value(&format!(r"{REPO}\ProgIDs\AppXvendor"), vendor, none.clone())
+            .value(
+                &format!(r"{REPO}\windows.fileTypeAssociation\.jpg\AppXphotos1"),
+                photos,
+                none.clone(),
+            )
+            .value(
+                &format!(r"{REPO}\windows.fileTypeAssociation\.png\AppXphotos1"),
+                photos,
+                none.clone(),
+            )
+            .value(
+                &format!(r"{REPO}\windows.protocol\ms-photos\AppXphotos2"),
+                photos,
+                none.clone(),
+            )
+            .package(package(
+                photos,
+                PackageSignatureKind::Store,
+                Some(r"C:\Program Files\WindowsApps\Photos"),
+            ))
+            .package(package(
+                shell,
+                PackageSignatureKind::System,
+                Some(r"C:\Windows\SystemApps\Shell\"),
+            ))
+            .package(package(
+                vendor,
+                PackageSignatureKind::Store,
+                Some(r"C:\Program Files\WindowsApps\Vendor"),
+            ))
+            .file_content(
+                r"C:\Program Files\WindowsApps\Photos\AppxManifest.xml",
+                b"\xEF\xBB\xBF<Package/>".to_vec(),
+            )
+            .file_content(
+                r"C:\Program Files\WindowsApps\Vendor\AppxManifest.xml",
+                b"<Package/>".to_vec(),
+            )
+            .build();
+        let s4 = f.inbox_packages().unwrap();
+        assert!(s4.machine_wide);
+        assert_eq!(s4.not_inbox, 1);
+        assert_eq!(s4.provisioned, Ok(2));
+        assert_eq!(s4.repository, Ok(()));
+        let names: Vec<(&str, InboxReason)> = s4
+            .packages
+            .iter()
+            .map(|p| (p.full_name.as_str(), p.reason))
+            .collect();
+        assert_eq!(
+            names,
+            [
+                (photos, InboxReason::MicrosoftProvisioned),
+                (shell, InboxReason::System)
+            ]
+        );
+        assert_eq!(s4.packages[0].manifest.as_deref(), Ok("<Package/>"));
+        // The System package's manifest is not in the fixture: counted by the caller, not fatal.
+        assert!(s4.packages[1].manifest.is_err());
+        assert_eq!(
+            s4.packages[0].repository_prog_ids,
+            [
+                RepositoryProgId {
+                    prog_id: "AppXphotos1".into(),
+                    file_types: vec![".jpg".into(), ".png".into()],
+                    protocols: vec![],
+                },
+                RepositoryProgId {
+                    prog_id: "AppXphotos2".into(),
+                    file_types: vec![],
+                    protocols: vec!["ms-photos".into()],
+                },
+            ]
+        );
+        assert!(s4.packages[1].repository_prog_ids.is_empty());
+
+        // No repository and no provisioned list: still a result, with the gaps reported.
+        let f = Fixture::builder()
+            .package(package(photos, PackageSignatureKind::Store, None))
+            .package(package(shell, PackageSignatureKind::System, None))
+            .build();
+        let s4 = f.inbox_packages().unwrap();
+        assert_eq!(s4.packages.len(), 1);
+        assert_eq!(s4.not_inbox, 1);
+        assert!(s4.provisioned.is_err() && s4.repository.is_err() && !s4.machine_wide);
+        assert_eq!(s4.packages[0].manifest, Err(SourceError::NotFound));
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------------

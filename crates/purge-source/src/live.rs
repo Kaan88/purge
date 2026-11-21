@@ -35,6 +35,7 @@
 
 mod errors;
 mod filesystem;
+mod local_baseline;
 mod registry;
 mod regpath;
 mod shortcut;
@@ -47,6 +48,7 @@ mod test_ffi;
 mod tests;
 
 pub use filesystem::LiveFileSystem;
+pub use local_baseline::LiveLocal;
 pub use registry::LiveRegistry;
 pub use system::LiveSystem;
 
