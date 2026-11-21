@@ -32,7 +32,10 @@ const KB_DIR_VAR: &str = "PURGE_KB_DIR";
 /// The engine's settings from the process: baselines from `%PURGE_KB_DIR%\baselines`, else from
 /// `<exe dir>\kb\baselines`; Purge's own directories are the exe's directory and
 /// `%ProgramData%\Purge`; the MSI table cache is `%ProgramData%\Purge\fp\msitables`
-/// (`pipeline::table_cache` decides whether it is used).
+/// (`pipeline::table_cache` decides whether it is used) and the local baseline cache is
+/// `%ProgramData%\Purge\baseline` (`pipeline::local_cache` decides). The sources are the live machine,
+/// so an elevated engine uses the baseline directory only when it is admin-only writable
+/// (`Settings::check_shipped_dir`), also when it comes from `PURGE_KB_DIR`.
 fn settings() -> Settings {
     let exe_dir = std::env::current_exe()
         .ok()
@@ -46,15 +49,20 @@ fn settings() -> Settings {
         purge_dirs.push(dir.to_owned());
     }
     let mut msi_table_dir = None;
+    let mut local_baseline_dir = None;
     if let Some(data) = std::env::var_os("ProgramData").and_then(|v| v.into_string().ok()) {
         let root = format!("{}\\Purge", data.trim_end_matches('\\'));
         msi_table_dir = Some(PathBuf::from(format!("{root}\\fp\\msitables")));
+        local_baseline_dir = Some(PathBuf::from(format!("{root}\\baseline")));
         purge_dirs.push(root);
     }
     Settings {
         baseline_dir,
         purge_dirs,
         msi_table_dir,
+        local_baseline_dir,
+        check_shipped_dir: true,
+        local_build: None,
     }
 }
 

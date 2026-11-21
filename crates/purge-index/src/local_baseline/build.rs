@@ -23,6 +23,7 @@
 use std::collections::BTreeMap;
 use std::io;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -40,7 +41,7 @@ use sha2::{Digest, Sha256};
 use super::Records;
 use super::appx::{self, InboxStats};
 use super::file::{
-    LocalHeader, LocalSource, SourceLine, SourceStatus, encode, fact_value, seal_reasons,
+    LocalHeader, LocalSource, SourceLine, SourceStatus, encode_owned, fact_value, seal_reasons,
 };
 use super::hive::{self, HiveStats};
 use super::manifest::{self, ManifestStats, Skipped};
@@ -196,6 +197,57 @@ pub struct BuildOptions {
     pub floors: SealFloors,
 }
 
+/// Lets another thread steer a running build (design §5 "Budget", W4 as restated 2026-11-21): a scan
+/// that is waiting for the build raises its priority, so the build's threads leave background mode
+/// (each at its next manifest or source) and stop yielding to every other I/O on the machine.
+#[derive(Debug, Default)]
+pub struct BuildControl {
+    raised: AtomicBool,
+}
+
+impl BuildControl {
+    /// A control that has raised nothing.
+    pub fn new() -> BuildControl {
+        BuildControl::default()
+    }
+
+    /// Asks the build's threads to leave background mode. Never undone.
+    pub fn raise_priority(&self) {
+        self.raised.store(true, Ordering::Relaxed);
+    }
+
+    /// Whether [`BuildControl::raise_priority`] was called.
+    pub fn raised(&self) -> bool {
+        self.raised.load(Ordering::Relaxed)
+    }
+}
+
+/// The background mode of one build thread: entered at its start when the build asks for it, left
+/// once when the control says so.
+struct ThreadMode<'c> {
+    background: bool,
+    control: &'c BuildControl,
+}
+
+impl<'c> ThreadMode<'c> {
+    fn enter(background: bool, control: &'c BuildControl) -> ThreadMode<'c> {
+        let background = background && !control.raised();
+        enter_background(background);
+        ThreadMode {
+            background,
+            control,
+        }
+    }
+
+    /// Leaves background mode if the control was raised since.
+    fn sync(&mut self) {
+        if self.background && self.control.raised() {
+            let _ = purge_win::process::set_thread_background(false);
+            self.background = false;
+        }
+    }
+}
+
 /// Time spent per phase (`baseline.local.*`, design §5 "Budget").
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct BuildTimings {
@@ -316,20 +368,23 @@ pub fn build(
     opts: &BuildOptions,
 ) -> io::Result<LocalBaselineFile> {
     let started = Instant::now();
-    let threads = match opts.threads {
-        0 => std::thread::available_parallelism().map_or(2, |n| n.get()),
-        n => n,
-    }
-    .clamp(1, 64);
+    let threads = thread_count(opts);
     let floors = &opts.floors;
+    let control = &BuildControl::new();
 
     // Everything runs on scoped threads, so the caller's thread mode is never changed.
     let (s1, others) = std::thread::scope(|scope| {
         let others = scope.spawn(|| {
-            enter_background(opts.background);
-            read_others(src)
+            let mut mode = ThreadMode::enter(opts.background, control);
+            read_others(src, &mut mode)
         });
-        let s1 = read_s1(src, opts.base.as_ref().ok(), threads, opts.background);
+        let s1 = read_s1(
+            src,
+            opts.base.as_ref().ok(),
+            threads,
+            opts.background,
+            control,
+        );
         let others = others.join().unwrap_or_else(|_| Others::panicked());
         (s1, others)
     });
@@ -360,8 +415,8 @@ pub fn build(
     };
     let write_started = Instant::now();
     let counts = records.counts();
-    let encoded = encode(&header, &sources, &records)?;
-    drop(records);
+    // The records are consumed as they are written, so the text sets shrink while the file grows.
+    let encoded = encode_owned(&header, &sources, records)?;
     let write = write_started.elapsed();
 
     Ok(LocalBaselineFile {
@@ -387,6 +442,158 @@ pub fn build(
         },
         threads,
     })
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Parts (BL-CACHE)
+
+/// One part of the local baseline as the cache stores it: the records of **one** source, in the local
+/// baseline file format, with that source's one `#src` line and the part's own id in the header's
+/// source-id field. Read alone it is an incomplete local baseline (three sources have no line), so a
+/// part that is taken for a whole file is good for presence only.
+#[derive(Debug, Clone)]
+pub struct LocalPartFile {
+    /// The source the part holds.
+    pub source: LocalSource,
+    /// The header written.
+    pub header: LocalHeader,
+    /// The source's `#src` line.
+    pub line: SourceLine,
+    /// Records of each type.
+    pub counts: RecordCounts,
+    /// Record lines, as `#end` says.
+    pub record_count: u64,
+    /// The `#end` hash.
+    pub sha256: String,
+    /// The file (gzip).
+    pub bytes: Vec<u8>,
+    /// Time per phase; only the phases of this source are set.
+    pub timings: BuildTimings,
+    /// S1 worker threads used.
+    pub threads: usize,
+}
+
+/// Builds the part of one source: S1, S2 or S4 (S3 is never a part: it is read when a view loads,
+/// [`read_s3`]). `part_id` goes into the header; `opts.stamps` is not used. Like [`build`], a source
+/// that cannot be read gives a `failed` line, not an error. `control` can take the build's threads
+/// out of background mode while it runs.
+pub fn build_part(
+    src: &dyn LocalSources,
+    os: &OsInfo,
+    opts: &BuildOptions,
+    source: LocalSource,
+    part_id: &str,
+    control: &BuildControl,
+) -> io::Result<LocalPartFile> {
+    let started = Instant::now();
+    let threads = thread_count(opts);
+    let floors = &opts.floors;
+    let mut timings = BuildTimings::default();
+    let (line, records) = match source {
+        LocalSource::S1 => {
+            let s1 = read_s1(
+                src,
+                opts.base.as_ref().ok(),
+                threads,
+                opts.background,
+                control,
+            );
+            timings.list = s1.list_time;
+            timings.read = s1.read_time;
+            timings.expand = s1.expand_time;
+            timings.parse = s1.parse_time;
+            timings.s1 = s1.wall;
+            timings.merge = s1.merge_time;
+            let line = s1_line(&s1, &opts.base, floors);
+            (line, s1.records)
+        }
+        LocalSource::S2 | LocalSource::S4 => {
+            // On its own thread, so the caller's thread mode is never changed.
+            let t = Instant::now();
+            let read = std::thread::scope(|scope| {
+                scope
+                    .spawn(|| {
+                        let _mode = ThreadMode::enter(opts.background, control);
+                        let mut records = Records::new();
+                        let line = if source == LocalSource::S2 {
+                            let s2 = hive::default_hive_records(src, &mut records)
+                                .map_err(|e| e.to_string());
+                            hive_line(LocalSource::S2, &s2, floors)
+                        } else {
+                            let s4 = src
+                                .inbox_packages()
+                                .map(|inbox| appx::packages_records(&inbox, &mut records))
+                                .map_err(|e| e.to_string());
+                            s4_line(&s4, floors)
+                        };
+                        (line, records)
+                    })
+                    .join()
+            });
+            if source == LocalSource::S2 {
+                timings.hive = t.elapsed();
+            } else {
+                timings.appx = t.elapsed();
+            }
+            read.unwrap_or_else(|_| {
+                let why = "the reading thread panicked".to_owned();
+                let line = if source == LocalSource::S2 {
+                    hive_line(LocalSource::S2, &Err(why), floors)
+                } else {
+                    s4_line(&Err(why), floors)
+                };
+                (line, Records::new())
+            })
+        }
+        LocalSource::S3 | LocalSource::S5 => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{source} is not a part of the local baseline cache"),
+            ));
+        }
+    };
+    let header = LocalHeader {
+        built_at: opts.built_at.clone(),
+        computer: opts.computer.clone(),
+        edition: os.edition.clone(),
+        build: os.build,
+        ubr: os.ubr,
+        builder_version: BUILDER_VERSION.to_owned(),
+        source_id: part_id.to_owned(),
+    };
+    let write_started = Instant::now();
+    let counts = records.counts();
+    let encoded = encode_owned(&header, std::slice::from_ref(&line), records)?;
+    timings.write = write_started.elapsed();
+    timings.total = started.elapsed();
+    Ok(LocalPartFile {
+        source,
+        header,
+        line,
+        counts,
+        record_count: encoded.record_count,
+        sha256: encoded.sha256,
+        bytes: encoded.bytes,
+        timings,
+        threads,
+    })
+}
+
+/// S3 as it is now: `HKU\.DEFAULT` walked on the caller's thread, its `#src` line (the seal of
+/// design §3.4 with `floors`) and its records. The cache never stores S3: nothing it could be keyed
+/// by says that the live hive changed (review BL-RM S1), so every view reads it again.
+pub fn read_s3(src: &dyn LocalSources, floors: &SealFloors) -> (SourceLine, Records) {
+    let mut records = Records::new();
+    let s3 = hive::system_default_records(src, &mut records).map_err(|e| e.to_string());
+    (hive_line(LocalSource::S3, &s3, floors), records)
+}
+
+fn thread_count(opts: &BuildOptions) -> usize {
+    match opts.threads {
+        0 => std::thread::available_parallelism().map_or(2, |n| n.get()),
+        n => n,
+    }
+    .clamp(1, 64)
 }
 
 fn enter_background(on: bool) {
@@ -488,13 +695,19 @@ fn add_skipped(to: &mut Skipped, s: &Skipped) {
     to.values_of_skipped_keys += s.values_of_skipped_keys;
 }
 
-fn read_s1(src: &dyn LocalSources, base: Option<&SxsBase>, threads: usize, background: bool) -> S1 {
+fn read_s1(
+    src: &dyn LocalSources,
+    base: Option<&SxsBase>,
+    threads: usize,
+    background: bool,
+    control: &BuildControl,
+) -> S1 {
     let started = Instant::now();
     let listing = std::thread::scope(|scope| {
         // The listing runs on a background thread as well.
         scope
             .spawn(|| {
-                enter_background(background);
+                let _mode = ThreadMode::enter(background, control);
                 src.manifests()
             })
             .join()
@@ -525,8 +738,8 @@ fn read_s1(src: &dyn LocalSources, base: Option<&SxsBase>, threads: usize, backg
         let workers: Vec<_> = (0..threads)
             .map(|_| {
                 scope.spawn(|| {
-                    enter_background(background);
-                    s1_worker(&queue, &shared, base)
+                    let mut mode = ThreadMode::enter(background, control);
+                    s1_worker(&queue, &shared, base, &mut mode)
                 })
             })
             .collect();
@@ -565,7 +778,7 @@ fn read_s1(src: &dyn LocalSources, base: Option<&SxsBase>, threads: usize, backg
 }
 
 /// Records a worker collects before it merges them into the shared set (when the set is free).
-const FLUSH_RECORDS: u64 = 32 * 1024;
+const FLUSH_RECORDS: u64 = 4 * 1024;
 
 /// Merges `part.records` into `shared`: always when `force`, else only past [`FLUSH_RECORDS`] and when
 /// no other worker holds the set (past four times as many it waits). Keeps the threads' copies of the
@@ -595,11 +808,13 @@ fn s1_worker(
     queue: &Mutex<ManifestIter<'_>>,
     shared: &Mutex<Records>,
     base: Option<&SxsBase>,
+    mode: &mut ThreadMode<'_>,
 ) -> S1 {
     let mut part = S1::default();
     // `expand` reads the base only for a `DCM` file, which never reaches it without one.
     let no_base = SxsBase::from_bytes(Vec::new(), PathBuf::new());
     loop {
+        mode.sync();
         let t = Instant::now();
         // Only the next name is taken under the lock; the file is read outside it, so the workers
         // read at the same time.
@@ -827,13 +1042,15 @@ impl Others {
     }
 }
 
-fn read_others(src: &dyn LocalSources) -> Others {
+fn read_others(src: &dyn LocalSources, mode: &mut ThreadMode<'_>) -> Others {
     let t = Instant::now();
     let mut s2_records = Records::new();
     let s2 = hive::default_hive_records(src, &mut s2_records).map_err(|e| e.to_string());
+    mode.sync();
     let mut s3_records = Records::new();
     let s3 = hive::system_default_records(src, &mut s3_records).map_err(|e| e.to_string());
     let hive_time = t.elapsed();
+    mode.sync();
     let t = Instant::now();
     let mut s4_records = Records::new();
     let (s4, package_names) = match src.inbox_packages() {
@@ -1048,7 +1265,7 @@ fn sorted(list: &[(String, String)]) -> Vec<(String, String)> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::io::Read;
 
     use purge_model::FileTime;
@@ -1061,7 +1278,7 @@ mod tests {
 
     const MANIFESTS: &str = r"C:\Windows\WinSxS\Manifests";
     const HIVE: &str = r"C:\Users\Default\NTUSER.DAT";
-    const SHELL: &str =
+    pub(crate) const SHELL: &str =
         "Microsoft.Windows.ShellExperienceHost_10.0.1.0_neutral_neutral_cw5n1h2txyewy";
 
     fn fixture_manifest(name: &str) -> Vec<u8> {
@@ -1094,7 +1311,7 @@ mod tests {
 "#;
 
     /// A machine whose four sources all pass [`floors`] once [`with_hive`] adds the default hive.
-    fn machine() -> FixtureBuilder {
+    pub(crate) fn machine() -> FixtureBuilder {
         let write = FileTimes {
             modified: Some(FileTime(133_000_000_000_000_000)),
             ..FileTimes::default()
@@ -1148,7 +1365,7 @@ mod tests {
         b
     }
 
-    fn with_hive(mut f: Fixture) -> Fixture {
+    pub(crate) fn with_hive(mut f: Fixture) -> Fixture {
         f.set_offline_hive(
             HIVE,
             HiveFixture::new()
@@ -1174,7 +1391,7 @@ mod tests {
         }
     }
 
-    fn os() -> OsInfo {
+    pub(crate) fn os() -> OsInfo {
         OsInfo {
             edition: "Professional".into(),
             build: 26100,
@@ -1182,7 +1399,7 @@ mod tests {
         }
     }
 
-    fn options(f: &Fixture) -> BuildOptions {
+    pub(crate) fn options(f: &Fixture) -> BuildOptions {
         BuildOptions {
             built_at: iso_utc(1_763_683_200),
             computer: "TEST-PC".into(),

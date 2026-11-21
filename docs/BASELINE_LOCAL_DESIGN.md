@@ -311,22 +311,56 @@ Exact when their `os` matches a shipped baseline and as None otherwise, which is
 - **Where.** `%ProgramData%\Purge\baseline\`. Accepted only when the directory and every ancestor pass
   the check `DiskTableCache::open` uses (`is_admin_only_writable`: owner SYSTEM, Administrators or
   TrustedInstaller; no write, delete, DACL or owner right for anyone else; no reparse point). Created
-  only when elevated and only under a data root that already passes (`install/install.ps1`).
+  only when elevated and only under a data root that already passes (`install/install.ps1`). As built, the
+  directory must also be a plain directory on the engine's own file system: a link or junction in its place
+  is refused whatever the file system source says about the path.
 - **Who builds.** Only an elevated engine (the broker). An unelevated engine reads an accepted cache and
   never writes; without a cache it has trust None and says so in a warning. The broker never takes a
-  baseline computed at medium integrity.
+  baseline computed at medium integrity. As built: the data root of `install.ps1` grants Users traverse
+  only, so an engine that is not elevated cannot read the directory's protection there and gets no cache
+  (seen on the host 2026-11-21); it then has the shipped neighbours only. That is the safe side, and nothing
+  a standard user can read can be held open against the elevated engine's writes.
 - **Why a standard user cannot plant or poison it.** A removed line could make a Windows key look
   absent, so the file must not be writable below admin. The directory rule gives that; the `#end` line
   only detects truncation. Writes go to a temporary name in the same directory and are renamed.
-- **Key and invalidation.** The file is used only when its header equals the host's (edition, build,
-  ubr), the builder version, and the *source id*: the SHA-256 over the count, total size and newest
-  write time of `WinSxS\Manifests`, the size and write time of the default hive, and the sorted full
-  names of the S4 packages. A new UBR, a servicing change without a new UBR, an inbox package update or
-  a new builder version each give another id: the old file is a miss and is deleted after the new one
-  is written (at most two files are kept).
+- **Key and invalidation** (as built in BL-CACHE, `purge_index::local_baseline::cache`; DECISIONS 2026-11-21,
+  review BL-RM S1 and S7). The cache holds one text file **per source**, each in the format of §3.5 with that
+  source's one `#src` line: `local-<EditionID>-<build>.<ubr>-s1-<id>.tsv.gz` (S1; id over the count, total size
+  and newest write time of `WinSxS\Manifests`), `…-s2-<id>.tsv.gz` (S2; size and write time of the default hive)
+  and `…-s4-<id>.tsv.gz` (S4; the sorted full names of the inbox packages of every user). Every id also covers
+  the builder version. A part is used only when its name, header and `#src` line agree with the host and the id
+  asked for and its `#end` holds. A new UBR, a servicing change, an inbox package update or a new builder
+  version is a miss for the parts it touches and only for those: an inbox Store app update rebuilds S4 in under
+  a second and keeps S1. After a store the two newest files of that source are kept. The loaded local baseline
+  is the union of the parts; its source id (the fingerprint's `local_id`) is made from the ids of the parts
+  used. The one-file form of §3.5 is still what `baseline build --out` writes for the rig.
+- **S3 is never cached.** Nothing an id could be made from says that the live `HKU\.DEFAULT` changed, so
+  every load of the view reads it again through the registry source (about 0.3 s) and judges its seal then.
+  An engine that is not elevated cannot read all of it and cannot list every user's packages (it takes the
+  newest S4 part unchecked), so its local baseline is always incomplete: trust None, presence from all it has.
+- **Derived form.** Parsing the S1 text takes about 3 s. Beside it the cache keeps `…-s1-<id>.sets`: the hashed
+  sets as binary, with `HashedSets::scheme()`, the SHA-256 of the text file's bytes and its own SHA-256. A load
+  hashes the text file and takes the sets only when the scheme and both hashes match; header and `#src` line
+  are always read from the text. Anything else: the text is parsed and (elevated) the derived file is written
+  again. The shipped neighbours get the same form (`shipped-<EditionID>-<build>.<ubr>.sets`, bound to the
+  shipped file's bytes). The text files stay the source of truth.
+- **Build.** `pipeline::start_local_build` runs once per engine start (the CLI: `harvest`, `uninstall`, `scan`;
+  the broker in M3), never at logon. It returns at once; a thread builds the missing parts at background
+  priority, the cheap ones first. A scan never waits: it runs with what exists, tells the build that it is
+  waiting (the build's threads leave background priority) and warns that a later scan uses the result. The
+  state (`none`, `checking`, `building`, `done` with `rescan`, `failed`) is in `engine.hello`
+  (`baseline_build`, beside `baseline_trust` and `baseline_view`). The CLI process stays until the build it
+  started has ended.
 - **The shipped directory.** When the engine is elevated, `kb\baselines` (also when it comes from
   `PURGE_KB_DIR`) must pass the same admin-only check, or no shipped baseline is used at all. This closes
-  a gap that exists today and that this feature would widen.
+  a gap that exists today and that this feature would widen. The live engine sets
+  `Settings::check_shipped_dir`; fixtures and replays do not, because their file system source describes
+  another machine than the one the baseline directory is on. As built, the exact baseline's file and
+  `view.json` are judged themselves too (a file moved into the directory keeps its old owner and grants; a
+  hard link shares them); one that fails is not used and the view is built without it. Open before BL-GATE
+  (question 5 of §11, not checked on the VMs): the rig's `C:\cr\bin\kb\baselines` is made by `mkdir` below
+  the drive root and so inherits its grant for Authenticated Users; unless the rig protects `C:\cr\bin`, its
+  elevated engine uses no shipped baseline and the exact runs become values-only.
 - **Budget** (`PURGE_TIMING` phases `baseline.local.*`; `read` is the workers' time taking the next manifest and
   reading it, outside the listing lock since gate M round 2): cold build at background I/O and CPU priority,
   in parallel over the manifests: at most 30 s on the 591-program host, at most 120 s on a 2-vCPU VM;

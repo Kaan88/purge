@@ -31,8 +31,9 @@
 //!   products: their `InstallLocation`, the files their `UninstallString` and `DisplayIcon` name, their
 //!   own Uninstall key and the exe name of their icon. Directories the guard refuses as roots (Program
 //!   Files itself, a profile, …) are left out, so one bad `InstallLocation` cannot block a whole drive;
-//! - the clean-Windows baseline of exactly this (edition, build.ubr), when the baseline directory holds
-//!   one; otherwise none, and the scan works values-only.
+//! - the baseline view ([`baseline`]): the clean-Windows baseline of exactly this (edition, build.ubr)
+//!   when the baseline directory holds one; otherwise the cached local baseline and the neighbouring
+//!   shipped baselines, which only ever say "this is Windows' own" (BASELINE_LOCAL_DESIGN.md).
 //!
 //! Nothing here fails because a fact could not be read: what is missing becomes a warning line and the
 //! pipeline goes on with less. Only a broken precondition (an unknown program id, a fingerprint of another
@@ -77,6 +78,10 @@ use purge_source::sysobj::MsiTables;
 use purge_win::env::{EnvMap, expand_with};
 
 pub use purge_harvest::harvest::Sources;
+
+pub mod baseline;
+
+pub use baseline::{LocalBuild, PipelineBaseline, local_cache, start_local_build};
 
 /// Receives one progress line at a time (the CLI writes them to stderr).
 pub type Progress<'a> = &'a mut dyn FnMut(&str);
@@ -125,6 +130,18 @@ pub struct Settings {
     /// The directory of the on-disk MSI table cache, `<ProgramData>\Purge\fp\msitables` (D17). `None`:
     /// the cache is in memory for the run. See [`table_cache`] for when the directory is used.
     pub msi_table_dir: Option<PathBuf>,
+    /// The directory of the local baseline cache, `<ProgramData>\Purge\baseline`
+    /// (BASELINE_LOCAL_DESIGN.md §5). `None`: no local baseline is read or built. See
+    /// [`baseline::local_cache`] for when the directory is used.
+    pub local_baseline_dir: Option<PathBuf>,
+    /// The sources describe the machine the baseline directory is on (the live engine): when the
+    /// engine is elevated, [`Settings::baseline_dir`] is used only if administrators and the system
+    /// alone can write it (design §5 "The shipped directory"). Off for fixtures and replays, whose
+    /// file system knows nothing about the directory the engine reads its baselines from.
+    pub check_shipped_dir: bool,
+    /// The background build of the local baseline that this engine process started
+    /// ([`baseline::start_local_build`]); `None` when it started none.
+    pub local_build: Option<LocalBuild>,
 }
 
 /// Which MSI table cache an engine call uses ([`table_cache`]).
@@ -410,7 +427,8 @@ pub fn harvest(
         table_cache: Some(&cache),
         shared: None,
     };
-    let mut report = harvest_report_with(entry, &inv.doc, sources, baseline.as_ref(), kb, &opts);
+    // BL-FRAMEWORK: the harvest takes `&baseline.view`.
+    let mut report = harvest_report_with(entry, &inv.doc, sources, baseline.exact(), kb, &opts);
     cache.report(cache_kind, settings);
     if !sources.sys.elevated() {
         let w = not_elevated_warning("harvest");
@@ -427,30 +445,40 @@ pub fn harvest(
     Ok(Harvested { report, warnings })
 }
 
-/// Loads the baseline for the Windows the sources describe, with progress.
+/// Loads the baseline view for the Windows the sources describe ([`baseline::load`]), with progress.
+/// With an exact shipped baseline the lines are the ones the engine printed before the view.
 fn baseline_for(
     sources: Sources<'_>,
     settings: &Settings,
     warnings: &mut Vec<String>,
     step: &mut Step<'_, '_>,
-) -> Option<Baseline> {
-    settings.baseline_dir.as_ref()?;
+) -> PipelineBaseline {
+    if settings.baseline_dir.is_none() {
+        return PipelineBaseline::unconfigured();
+    }
     let os = match sources.sys.os_info() {
         Ok(os) => os,
         Err(e) => {
             warnings.push(format!(
                 "baseline: the Windows edition and build could not be read ({e}); no baseline is used"
             ));
-            return None;
+            return PipelineBaseline::unconfigured();
         }
     };
     step.say(&format!("loading the baseline {}", os.baseline_name()));
-    let baseline = load_baseline(settings.baseline_dir.as_deref(), &os, warnings);
-    if let Some(b) = &baseline {
-        let timing = purge_source::metered::installed().is_some();
-        step.done(&baseline_loaded(&os.baseline_name(), b.counts(), timing));
+    let loaded = baseline::load(sources, settings, &os, warnings);
+    match loaded.exact() {
+        Some(b) => {
+            let timing = purge_source::metered::installed().is_some();
+            step.done(&baseline_loaded(&os.baseline_name(), b.counts(), timing));
+        }
+        None => step.done(&format!(
+            "baseline view {} loaded: trust {}",
+            loaded.view.name(),
+            loaded.view.trust()
+        )),
     }
-    baseline
+    loaded
 }
 
 /// The progress line of a loaded baseline: its record counts only when `PURGE_TIMING` is on, so the
@@ -1015,7 +1043,8 @@ fn run_scan(
         fs: sources.fs,
         sys: sources.sys,
         fp,
-        baseline: baseline.as_ref(),
+        // BL-FRAMEWORK: the scan takes `&baseline.view`.
+        baseline: baseline.exact(),
         mode,
         verify_gone,
         env: &env,
@@ -1074,16 +1103,15 @@ fn run_scan(
         limits: Limits::default(),
         // The M1b exemption lists, from the fingerprint and fresh queries only (R2a S9).
         m1b: m1b_lists(sources, fp, &inv),
-        // P-BL-1 (BL-POLICY). The scan uses a baseline only on an exact match, so its own trust is
-        // Exact or None and caps nothing; a fingerprint that records an inferred view caps its keys.
-        baseline_trust: {
-            let scan = if baseline.is_some() {
-                BaselineTrust::Exact
-            } else {
-                BaselineTrust::None
-            };
-            BaselineTrust::for_policy(scan, fp.harvest_trust(baseline.is_some()))
-        },
+        // P-BL-1 (BL-POLICY): the trust of this scan's view, or of the view the fingerprint was
+        // harvested with when that one is inferred (not the plain minimum, see `for_policy`).
+        // BL-FRAMEWORK: the scan side becomes `ScanCtx::absence_trust()`. Until then it is the
+        // view's trust, which caps a Merged or Local view although this scan asks only the exact
+        // baseline about absence (the stricter of the two readings).
+        baseline_trust: BaselineTrust::for_policy(
+            baseline.trust(),
+            fp.harvest_trust(baseline.exact().is_some()),
+        ),
     };
     let built = build(app_id, candidates.clone(), &decide);
     step.done(&format!(
