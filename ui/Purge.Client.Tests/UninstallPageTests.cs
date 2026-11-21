@@ -207,6 +207,71 @@ public sealed class UninstallPageTests
         Assert.Null(controller.CompletedOutcome);
     }
 
+    // ---- the broker's own dialog (review M3-R2 M1) ------------------------------------------------------------
+
+    [Fact]
+    public async Task While_the_brokers_dialog_is_open_the_run_step_waits_and_says_nothing_has_run()
+    {
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var broker = new ScriptedBroker { PreparedProgram = PreparedFor(Route.Broker), RunGate = gate };
+        var controller = Controller(Started(broker), new ScriptedMedium());
+        var asked = new ConfirmationQueue(controller);
+
+        var begin = controller.BeginAsync(Target);
+        await asked.NextAsync();
+        await controller.AnswerAsync(new UninstallAnswer(true, Quiet: true, RestorePoint.Always));
+        await WaitUntilAsync(() => broker.RunCalls == 1);
+
+        Assert.Equal(StepState.Active, controller.StateOf(UninstallStep.Run));
+        Assert.Contains("Waiting for the Purge security prompt", controller.DetailOf(UninstallStep.Run),
+            StringComparison.Ordinal);
+        Assert.Contains("Nothing has run yet", controller.DetailOf(UninstallStep.Run), StringComparison.Ordinal);
+        Assert.Equal(RestorePoint.Always, broker.RunRestorePoint);
+
+        broker.RaiseConsentShown("A1B2-C3D4");
+        Assert.Contains("A1B2-C3D4", controller.DetailOf(UninstallStep.Run), StringComparison.Ordinal);
+        Assert.Contains("Nothing has run yet", controller.DetailOf(UninstallStep.Run), StringComparison.Ordinal);
+        Assert.Null(controller.CompletedOutcome);
+
+        gate.SetResult();
+        await begin.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(StepState.Done, controller.StateOf(UninstallStep.Run));
+        Assert.NotNull(controller.CompletedOutcome);
+    }
+
+    [Fact]
+    public async Task A_declined_broker_dialog_runs_nothing_and_Retry_asks_again()
+    {
+        var broker = new ScriptedBroker
+        {
+            PreparedProgram = PreparedFor(Route.Broker),
+            FirstRunThrows = new BrokerRpcException(-32000, "consent_declined", "consent_declined",
+                new ErrorData { Kind = "consent_declined" }),
+        };
+        var controller = Controller(Started(broker), new ScriptedMedium());
+        var asked = new ConfirmationQueue(controller);
+
+        var begin = controller.BeginAsync(Target);
+        await asked.NextAsync();
+        await controller.AnswerAsync(new UninstallAnswer(true, Quiet: true, RestorePoint.HighRisk));
+        await begin.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var notice = Assert.Single(controller.Notices);
+        Assert.Equal(UninstallNoticeKind.Info, notice.Kind);
+        Assert.Contains("declined", notice.Title, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Nothing was run", notice.Message, StringComparison.Ordinal);
+        Assert.True(notice.CanRetry);
+        Assert.False(notice.CanForce, "nothing ran, so there is nothing to force");
+        Assert.Equal(StepState.Warning, controller.StateOf(UninstallStep.Run));
+        Assert.Equal(0, broker.ObservedCalls);
+        Assert.Equal(0, broker.ScanCalls);
+        Assert.Null(controller.CompletedOutcome);
+
+        await controller.RetryAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(2, broker.RunCalls);
+        Assert.NotNull(controller.CompletedOutcome);
+    }
+
     // ---- a failed uninstaller, with forced offered ----------------------------------------------------------
 
     [Fact]
@@ -410,6 +475,16 @@ public sealed class UninstallPageTests
     private static UninstallLaunch Started(IUninstallBroker broker) =>
         new(UninstallLaunchState.Started, broker, "");
 
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (!condition())
+        {
+            Assert.True(DateTime.UtcNow < deadline, "the condition did not come true");
+            await Task.Delay(10);
+        }
+    }
+
     private static Prepared PreparedFor(Route route, string? quiet = @"""C:\Program Files\App\unins000.exe"" /S")
     {
         var command = @"""C:\Program Files\App\unins000.exe""";
@@ -504,12 +579,28 @@ public sealed class UninstallPageTests
             return Task.FromResult(new PrepareResult { Programs = [PreparedProgram] });
         }
 
-        public Task<RunResult> RunAsync(string sessionId, bool quiet, Action<Progress>? progress, CancellationToken ct)
+        public event Action<ConsentShown>? ConsentShown;
+
+        /// <summary>When set, <c>uninstall.run</c> waits for it: the broker's dialog is open.</summary>
+        public TaskCompletionSource? RunGate { get; init; }
+
+        /// <summary>Thrown by the first run only; the next one succeeds.</summary>
+        public Exception? FirstRunThrows { get; init; }
+
+        public RestorePoint? RunRestorePoint { get; private set; }
+
+        public void RaiseConsentShown(string code) => ConsentShown?.Invoke(new ConsentShown { Code = code });
+
+        public async Task<RunResult> RunAsync(string sessionId, bool quiet, RestorePoint restorePoint,
+            Action<Progress>? progress, CancellationToken ct)
         {
             RunCalls++;
             RunQuiet = quiet;
-            if (RunThrows is { } error) return Task.FromException<RunResult>(error);
-            return Task.FromResult(Run);
+            RunRestorePoint = restorePoint;
+            if (RunGate is { } gate) await gate.Task.WaitAsync(ct);
+            if (RunCalls == 1 && FirstRunThrows is { } first) throw first;
+            if (RunThrows is { } error) throw error;
+            return Run;
         }
 
         public Task<ObservedResult> ObservedAsync(string sessionId, RunOutcome? outcome, CancellationToken ct)

@@ -5,21 +5,22 @@ use purge_exec::expiry::{ExpiringBackup, ExpiringItem, ExpiryId};
 use purge_exec::plan_in::{
     BoundPlan, ExecRequest, ExecSettings, Selection, bind, confirm_hash, selection_hash,
 };
+use purge_inventory::quiet::QuietCommand;
 use purge_model::exec::op::OpId;
 use purge_model::{
     Action, AppRef, Band, Blocker, Candidate, CandidateId, Category, Decision, FileTime, Harm,
-    Origin, Reversibility, ScanMode, Target, Tool,
+    InstallerKind, Origin, Reversibility, ScanMode, Target, Tool,
 };
 use purge_plan::emit::{ScanDoc, ScanSchema};
-use purge_rpc::methods::ConfirmCode;
+use purge_rpc::methods::{ConfirmCode, RestorePoint};
 use purge_win::taskdialog::{self, Icon as DialogIcon};
 
 use super::dialog::{self, PRIMARY};
 use super::text::{LINE_COST, Stamp};
 use super::view::{
     ConflictKind, ConsentView, Facts, OTHER_SHOWN, PAGE_CHARS, PAGE_ENTRIES, PurgeUnit, Reason,
-    RecoverFacts, RecoverKind, RestoreFacts, Variant, ViewError, split_purge, view, view_purge,
-    view_purge_user_data, view_recover, view_restore,
+    RecoverFacts, RecoverKind, RestoreFacts, UninstallFacts, Variant, ViewError, split_purge, view,
+    view_purge, view_purge_user_data, view_recover, view_restore, view_uninstall,
 };
 
 // ---------------------------------------------------------------------------------------------------
@@ -1422,4 +1423,190 @@ fn purge_names_cannot_mislead_either() {
     );
     assert!(v.attention[1].text.contains(r"a\u{200b}b\u{a}.json"));
     assert!(v.summary.iter().any(|l| l.contains("look-alike")));
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Uninstall (review M3-R2 M1)
+// ---------------------------------------------------------------------------------------------------
+
+fn quiet_command(exe: &str, args: &str) -> QuietCommand {
+    QuietCommand {
+        exe: exe.to_owned(),
+        args: args.to_owned(),
+        generated: false,
+        kind: InstallerKind::Inno,
+    }
+}
+
+fn uninstall_facts(command: QuietCommand, quiet: bool) -> UninstallFacts {
+    UninstallFacts {
+        app_name: "Vendor App".to_owned(),
+        program_id: "HKLM|64|VendorApp".to_owned(),
+        command,
+        quiet,
+        signer: Some("Vendor Ltd".to_owned()),
+        restore_point: Some(RestorePoint::HighRisk),
+    }
+}
+
+const VENDOR_EXE: &str = r"C:\Program Files\Vendor\unins000.exe";
+
+#[test]
+fn uninstall_shows_name_command_signer_mode_and_restore_point() {
+    let command = quiet_command(VENDOR_EXE, "/VERYSILENT /NORESTART");
+    let v = view_uninstall(&uninstall_facts(command.clone(), true)).unwrap();
+    assert_eq!(v.variant, Variant::Uninstall);
+    assert_eq!(v.icon, super::view::Icon::Warning);
+    assert_eq!(
+        v.instruction,
+        "Run the uninstaller of \"Vendor App\" as administrator?"
+    );
+    assert_eq!(v.button, "Run the uninstaller");
+    assert_eq!(
+        v.summary[..4],
+        [
+            format!("Starts: \"{VENDOR_EXE}\""),
+            "Arguments: \"/VERYSILENT /NORESTART\"".to_owned(),
+            "Signed by: \"Vendor Ltd\"".to_owned(),
+            "Mode: quiet. The uninstaller shows no window of its own.".to_owned(),
+        ]
+    );
+    assert!(
+        v.summary[4].contains("only when it is high-risk"),
+        "{:?}",
+        v.summary
+    );
+    assert!(v.attention.is_empty() && v.verification.is_none());
+    assert!(v.footer.contains(&v.code.to_string()));
+    assert!(v.describes_uninstall(&command, true));
+    for line in every_line(&v) {
+        assert_clean(line);
+    }
+    let pages = dialog::pages(&v);
+    assert_eq!(pages.len(), 1);
+    assert_eq!(pages[0].buttons.len(), 1);
+    assert_eq!(pages[0].buttons[0].id, PRIMARY);
+    assert_eq!(pages[0].default_button, None, "Cancel is the default");
+    assert_eq!(pages[0].gated_button, None);
+    taskdialog::check(&pages, PRIMARY).unwrap();
+}
+
+#[test]
+fn uninstall_says_when_it_is_interactive_has_no_arguments_and_no_signer() {
+    let command = quiet_command(VENDOR_EXE, "");
+    let facts = UninstallFacts {
+        signer: None,
+        restore_point: None,
+        ..uninstall_facts(command.clone(), false)
+    };
+    let v = view_uninstall(&facts).unwrap();
+    assert!(v.summary.iter().any(|l| l == "Arguments: none"));
+    assert!(v.summary.iter().any(|l| l == "Signed by: no signer known"));
+    assert!(v.summary.iter().any(|l| l.starts_with("Mode: interactive")));
+    assert!(
+        v.summary
+            .iter()
+            .any(|l| l.starts_with("Restore point: not asked for here"))
+    );
+    assert!(v.describes_uninstall(&command, false));
+    assert!(
+        !v.describes_uninstall(&command, true),
+        "the mode is part of what was drawn"
+    );
+}
+
+#[test]
+fn uninstall_dialog_describes_only_the_command_it_was_drawn_from() {
+    let command = quiet_command(VENDOR_EXE, "/S");
+    let v = view_uninstall(&uninstall_facts(command.clone(), true)).unwrap();
+    assert!(v.describes_uninstall(&command, true));
+    for other in [
+        quiet_command(r"C:\Program Files\Vendor\unins001.exe", "/S"),
+        quiet_command(VENDOR_EXE, "/S /X"),
+        QuietCommand {
+            generated: true,
+            ..command.clone()
+        },
+        QuietCommand {
+            kind: InstallerKind::Msi,
+            ..command.clone()
+        },
+    ] {
+        assert!(!v.describes_uninstall(&other, true), "{other:?}");
+    }
+    let other_variant = view_purge_user_data(PurgeUnit::Item(&expiring_item(1, r"C:\a", true)));
+    assert!(!other_variant.unwrap().describes_uninstall(&command, true));
+}
+
+#[test]
+fn uninstall_code_follows_the_program_mode_and_command() {
+    let command = quiet_command(VENDOR_EXE, "/S");
+    let base = view_uninstall(&uninstall_facts(command.clone(), true)).unwrap();
+    assert_eq!(
+        base.code,
+        view_uninstall(&uninstall_facts(command.clone(), true))
+            .unwrap()
+            .code
+    );
+    let other_mode = view_uninstall(&uninstall_facts(command.clone(), false)).unwrap();
+    let other_args =
+        view_uninstall(&uninstall_facts(quiet_command(VENDOR_EXE, "/Q"), true)).unwrap();
+    let other_program = view_uninstall(&UninstallFacts {
+        program_id: "HKLM|64|Other".to_owned(),
+        ..uninstall_facts(command, true)
+    })
+    .unwrap();
+    for other in [other_mode, other_args, other_program] {
+        assert_ne!(base.code, other.code);
+    }
+}
+
+#[test]
+fn uninstall_names_that_could_mislead_are_escaped_and_need_the_box() {
+    let command = quiet_command(
+        "C:\\Program Files\\Vendor\\unins\u{202e}gpj.exe",
+        "/S \"C:\\x\"\n/Y",
+    );
+    let facts = UninstallFacts {
+        app_name: "Mozill\u{430} Firefox".to_owned(),
+        signer: Some("Vendor\u{200b} Ltd".to_owned()),
+        ..uninstall_facts(command, true)
+    };
+    let v = view_uninstall(&facts).unwrap();
+    for line in every_line(&v) {
+        assert_clean(line);
+    }
+    assert!(
+        v.instruction.contains(r"Mozill\u{430}"),
+        "{}",
+        v.instruction
+    );
+    assert_eq!(ids(&v.attention), ["program", "exe", "args", "signer"]);
+    assert!(v.attention[1].text.contains(r"unins\u{202e}gpj.exe"));
+    assert!(v.attention[2].text.contains(r"\u{22}C:\x\u{22}\u{a}/Y"));
+    assert!(v.summary.iter().any(|l| l.contains("hidden or look-alike")));
+    assert!(v.verification.is_some());
+    let pages = dialog::pages(&v);
+    let last = pages.last().unwrap();
+    assert_eq!(last.gated_button, Some(PRIMARY));
+    taskdialog::check(&pages, PRIMARY).unwrap();
+}
+
+#[test]
+fn uninstall_cut_command_is_attention_not_quietly_shortened() {
+    let args = format!("/S {}", "x".repeat(900));
+    let v = view_uninstall(&uninstall_facts(quiet_command(VENDOR_EXE, &args), true)).unwrap();
+    assert_eq!(ids(&v.attention), ["args"]);
+    assert!(v.attention[0].reasons.contains(&Reason::ShortenedName));
+    assert!(v.verification.is_some());
+}
+
+#[test]
+fn uninstall_refuses_a_command_without_a_program() {
+    for exe in ["", "   "] {
+        assert_eq!(
+            view_uninstall(&uninstall_facts(quiet_command(exe, "/S"), true)),
+            Err(ViewError::NoCommand)
+        );
+    }
 }

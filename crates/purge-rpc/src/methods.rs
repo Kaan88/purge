@@ -542,7 +542,8 @@ pub struct RunUserParams {
     pub quiet: bool,
 }
 
-/// `uninstall.run {session_id, quiet}`.
+/// `uninstall.run {session_id, quiet, restore_point?}`. The broker asks in its own consent dialog
+/// before it starts the session's command (review M3-R2 M1).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RunParams {
@@ -550,6 +551,10 @@ pub struct RunParams {
     pub session_id: UninstallSessionId,
     /// Run the quiet uninstall command.
     pub quiet: bool,
+    /// The restore-point choice for the leftover cleanup that follows, for the dialog to show; the
+    /// run itself makes none, and `plan.execute` takes the setting it acts on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restore_point: Option<RestorePoint>,
 }
 
 /// `uninstall.observed {session_id}`.

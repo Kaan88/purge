@@ -24,10 +24,11 @@ use purge_rpc::error::{ErrorData, ErrorObject, Refusal};
 use purge_rpc::methods::{CandidateRef, PipeCall, PlanId, UninstallSessionId};
 use purge_source::fixture::Fixture;
 use purge_source::types::{ExistsState, RegData};
+use purge_win::taskdialog::{Outcome as Answer, Page};
 use serde_json::{Value, json};
 
 use crate::baseline::BuildHandle;
-use crate::lifetime::Exit;
+use crate::lifetime::{Exit, ExitReason};
 use crate::serve::{Ctx, Handler, Wiring};
 use crate::testkit::{
     FakeBuild, FakeClock, FakeHost, FakeParent, HELLO, ME, SECS, ScriptedConsent, expected, kind,
@@ -373,6 +374,8 @@ fn shipped_settings() -> Settings {
 struct Broker {
     net: crate::testkit::MemNet,
     build: Arc<FakeBuild>,
+    consent: Arc<ScriptedConsent>,
+    parent: Arc<FakeParent>,
     machine: Arc<FixtureMachine>,
     plans: Arc<Mutex<Vec<Arc<crate::plan::Plan>>>>,
     scans: Arc<Mutex<Vec<Arc<crate::session::ScanSlot<crate::scan::Scan>>>>>,
@@ -437,6 +440,8 @@ impl Broker {
         Broker {
             net,
             build,
+            consent,
+            parent,
             machine,
             plans,
             scans,
@@ -661,17 +666,242 @@ fn run_runs_the_command_prepare_showed() {
     let program = &prepare["result"]["programs"][0];
     let session = program["session_id"].as_str().unwrap().to_owned();
     let shown = program["quiet_command"].as_str().unwrap().to_owned();
+    let reply = run_approved(&b, &c, 3, &session, true);
+    assert_eq!(reply["result"]["outcome"], "Success", "{reply}");
+    assert_eq!(reply["result"]["verify_gone"]["passed"], true, "{reply}");
+    assert_eq!(b.machine.runs(), vec![shown]);
+    c.close();
+    b.exit(SECS);
+}
+
+/// Everything the dialog says, in one string.
+fn dialog_text(pages: &[Page]) -> String {
+    let mut out = String::new();
+    for page in pages {
+        out.push_str(&page.instruction);
+        out.push('\n');
+        out.push_str(&page.content);
+        out.push('\n');
+        for extra in [&page.expanded, &page.footer, &page.verification] {
+            out.push_str(extra.as_deref().unwrap_or_default());
+            out.push('\n');
+        }
+        for button in &page.buttons {
+            out.push('\n');
+            out.push_str(&button.label);
+        }
+    }
+    out
+}
+
+/// The reply with `id`, skipping notifications.
+fn reply_to(c: &crate::testkit::Client, id: u64) -> Value {
+    loop {
+        let line = c.recv(LONG).expect("an answer");
+        if line.get("id").and_then(Value::as_u64) == Some(id) {
+            return line;
+        }
+    }
+}
+
+/// Sends `uninstall.run`, waits for the broker's dialog, answers it and returns the reply.
+fn run_answering(
+    b: &Broker,
+    c: &crate::testkit::Client,
+    id: u64,
+    session: &str,
+    quiet: bool,
+    answer: Answer,
+) -> Value {
+    c.send_line(&request(
+        id,
+        "uninstall.run",
+        &json!({ "session_id": session, "quiet": quiet, "restore_point": "high_risk" }),
+    ));
+    assert!(b.consent.wait_open(SECS), "the dialog did not open");
+    b.consent.answer(answer);
+    reply_to(c, id)
+}
+
+fn run_approved(
+    b: &Broker,
+    c: &crate::testkit::Client,
+    id: u64,
+    session: &str,
+    quiet: bool,
+) -> Value {
+    run_answering(b, c, id, session, quiet, Answer::Approved)
+}
+
+/// `uninstall.run` asks the broker's own dialog first (review M3-R2 M1): drawn from the session's frozen
+/// command, with nothing started while it is open, and that exact command started after the approval.
+#[test]
+fn run_asks_a_dialog_drawn_from_the_frozen_command_before_it_starts_anything() {
+    let mut b = Broker::start(FixtureMachine::new(app_fixture()));
+    b.consent.announce_shown();
+    let c = b.client();
+    let prepare = prepared(&c, 2, &[broker_id()]);
+    let program = &prepare["result"]["programs"][0];
+    let session = program["session_id"].as_str().unwrap().to_owned();
+    let frozen = program["quiet_command"].as_str().unwrap().to_owned();
+
+    c.send_line(&request(
+        3,
+        "uninstall.run",
+        &json!({ "session_id": session, "quiet": true, "restore_point": "always" }),
+    ));
+    assert!(b.consent.wait_open(SECS), "the dialog did not open");
+    assert!(
+        b.machine.runs().is_empty(),
+        "nothing starts while it is open"
+    );
+
+    let pages = b.consent.pages();
+    let text = dialog_text(&pages);
+    assert!(text.contains(BROKER_NAME), "{text}");
+    assert!(
+        text.contains(&format!(r"{BROKER_DIR}\unins000.exe")),
+        "{text}"
+    );
+    assert!(text.contains(r#"Arguments: "/S""#), "{text}");
+    assert!(text.contains("Mode: quiet"), "{text}");
+    assert!(
+        text.contains("Restore point for the leftover cleanup that follows: always"),
+        "{text}"
+    );
+    assert!(text.contains("Signed by:"), "{text}");
+    assert_eq!(b.consent.primary(), 100);
+    let last = pages.last().unwrap();
+    assert_eq!(last.buttons.len(), 1);
+    assert_eq!(last.default_button, None, "Cancel is the default");
+
+    let shown = c.reply();
+    assert_eq!(shown["method"], "consent.shown", "{shown}");
+    assert_eq!(shown["params"]["request"], 3);
+    let code = shown["params"]["code"].as_str().unwrap().to_owned();
+    assert!(pages[0].footer.as_deref().unwrap().contains(&code));
+
+    b.consent.answer(Answer::Approved);
+    let reply = reply_to(&c, 3);
+    assert_eq!(reply["result"]["outcome"], "Success", "{reply}");
+    assert_eq!(b.machine.runs(), vec![frozen]);
+    c.close();
+    b.exit(SECS);
+}
+
+/// The interactive command is shown as interactive, and it is the one that runs.
+#[test]
+fn the_interactive_dialog_shows_the_interactive_command() {
+    let mut b = Broker::start(FixtureMachine::new(app_fixture()));
+    let c = b.client();
+    let prepare = prepared(&c, 2, &[broker_id()]);
+    let program = &prepare["result"]["programs"][0];
+    let session = program["session_id"].as_str().unwrap().to_owned();
+    let frozen = program["command"].as_str().unwrap().to_owned();
+    c.send_line(&request(
+        3,
+        "uninstall.run",
+        &json!({ "session_id": session, "quiet": false }),
+    ));
+    assert!(b.consent.wait_open(SECS));
+    let text = dialog_text(&b.consent.pages());
+    assert!(text.contains("Mode: interactive"), "{text}");
+    assert!(text.contains("Arguments: none"), "{text}");
+    assert!(text.contains("Restore point: not asked for here"), "{text}");
+    b.consent.answer(Answer::Approved);
+    let reply = reply_to(&c, 3);
+    assert_eq!(reply["result"]["outcome"], "Success", "{reply}");
+    assert_eq!(b.machine.runs(), vec![frozen]);
+    c.close();
+    b.exit(SECS);
+}
+
+/// A declined dialog starts nothing and answers `consent_declined`; the session is not spent.
+#[test]
+fn a_declined_dialog_starts_nothing_and_the_session_stays_usable() {
+    let mut b = Broker::start(FixtureMachine::new(app_fixture()));
+    let c = b.client();
+    let prepare = prepared(&c, 2, &[broker_id()]);
+    let session = prepare["result"]["programs"][0]["session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let declined = run_answering(&b, &c, 3, &session, true, Answer::Declined);
+    assert_eq!(kind(&declined), "consent_declined", "{declined}");
+    assert!(b.machine.runs().is_empty(), "nothing may start");
+
+    let again = run_approved(&b, &c, 4, &session, true);
+    assert_eq!(again["result"]["outcome"], "Success", "{again}");
+    assert_eq!(b.machine.runs().len(), 1);
+    c.close();
+    b.exit(SECS);
+}
+
+/// No dialog is asked for a request the broker refuses before it.
+#[test]
+fn a_refusal_before_the_dialog_asks_nothing() {
+    let mut b = Broker::start(FixtureMachine::new(app_fixture()));
+    let c = b.client();
+    let prepare = prepared(&c, 2, &[medium_id()]);
+    let session = prepare["result"]["programs"][0]["session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     let reply = ask(
         &c,
         3,
         "uninstall.run",
         json!({ "session_id": session, "quiet": true }),
     );
-    assert_eq!(reply["result"]["outcome"], "Success", "{reply}");
-    assert_eq!(reply["result"]["verify_gone"]["passed"], true, "{reply}");
-    assert_eq!(b.machine.runs(), vec![shown]);
+    assert_eq!(kind(&reply), "wrong_route", "{reply}");
+    assert!(!b.consent.wait_open(Duration::from_millis(100)));
+    assert!(b.machine.runs().is_empty());
     c.close();
     b.exit(SECS);
+}
+
+/// A pipe lost while the dialog is open closes it as Cancel: nothing starts.
+#[test]
+fn the_loss_of_the_pipe_while_the_dialog_is_open_starts_nothing() {
+    let mut b = Broker::start(FixtureMachine::new(app_fixture()));
+    let c = b.client();
+    let prepare = prepared(&c, 2, &[broker_id()]);
+    let session = prepare["result"]["programs"][0]["session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    c.send_line(&request(
+        3,
+        "uninstall.run",
+        &json!({ "session_id": session, "quiet": true }),
+    ));
+    assert!(b.consent.wait_open(SECS));
+    c.close();
+    assert_eq!(b.exit(SECS).reason, ExitReason::PipeLost);
+    assert!(b.consent.closed_by_broker());
+    assert!(b.machine.runs().is_empty());
+}
+
+/// A parent lost while the dialog is open closes it as Cancel: nothing starts.
+#[test]
+fn the_loss_of_the_parent_while_the_dialog_is_open_starts_nothing() {
+    let mut b = Broker::start(FixtureMachine::new(app_fixture()));
+    let c = b.client();
+    let prepare = prepared(&c, 2, &[broker_id()]);
+    let session = prepare["result"]["programs"][0]["session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    c.send_line(&request(
+        3,
+        "uninstall.run",
+        &json!({ "session_id": session, "quiet": true }),
+    ));
+    assert!(b.consent.wait_open(SECS));
+    b.parent.exit();
+    assert_eq!(b.exit(SECS).reason, ExitReason::ParentLost);
+    assert!(b.consent.closed_by_broker());
+    assert!(b.machine.runs().is_empty());
 }
 
 /// A failed uninstaller is `uninstall_failed`, and the next scan is forced with nothing preselected.
@@ -689,12 +919,7 @@ fn a_failed_uninstaller_offers_a_forced_scan_with_nothing_preselected() {
         .as_str()
         .unwrap()
         .to_owned();
-    let reply = ask(
-        &c,
-        3,
-        "uninstall.run",
-        json!({ "session_id": session, "quiet": true }),
-    );
+    let reply = run_approved(&b, &c, 3, &session, true);
     assert_eq!(kind(&reply), "uninstall_failed", "{reply}");
     assert_eq!(reply["error"]["data"]["exit_code"], 1603, "{reply}");
     assert_eq!(reply["error"]["data"]["forced_offered"], true, "{reply}");
@@ -721,12 +946,7 @@ fn a_failed_uninstaller_is_forced_even_when_the_program_is_gone() {
         .as_str()
         .unwrap()
         .to_owned();
-    let run = ask(
-        &c,
-        3,
-        "uninstall.run",
-        json!({ "session_id": session, "quiet": true }),
-    );
+    let run = run_approved(&b, &c, 3, &session, true);
     assert_eq!(kind(&run), "uninstall_failed", "{run}");
     let scan = scan_session(&c, 4, &session, false);
     assert_eq!(scan["result"]["mode"], "forced", "{scan}");
@@ -837,12 +1057,7 @@ fn observed_cannot_raise_a_failed_broker_run() {
         .as_str()
         .unwrap()
         .to_owned();
-    let run = ask(
-        &c,
-        3,
-        "uninstall.run",
-        json!({ "session_id": session, "quiet": true }),
-    );
+    let run = run_approved(&b, &c, 3, &session, true);
     assert_eq!(kind(&run), "uninstall_failed", "{run}");
     let observed = ask(
         &c,
@@ -914,12 +1129,7 @@ fn a_successful_run_scans_post_and_forced_lowers_it() {
         .as_str()
         .unwrap()
         .to_owned();
-    let run = ask(
-        &c,
-        3,
-        "uninstall.run",
-        json!({ "session_id": session, "quiet": true }),
-    );
+    let run = run_approved(&b, &c, 3, &session, true);
     assert_eq!(run["result"]["outcome"], "Success", "{run}");
 
     let post = scan_session(&c, 4, &session, false);
@@ -1337,12 +1547,7 @@ fn plan_create_preselected_follows_the_scan() {
         .as_str()
         .unwrap()
         .to_owned();
-    let run = ask(
-        &c,
-        3,
-        "uninstall.run",
-        json!({ "session_id": session, "quiet": true }),
-    );
+    let run = run_approved(&b, &c, 3, &session, true);
     assert_eq!(run["result"]["outcome"], "Success", "{run}");
     let scan = scan_session(&c, 4, &session, false);
     assert_eq!(scan["result"]["mode"], "post", "{scan}");

@@ -2,9 +2,9 @@
 //! a purge, the broker's own expiry listing) and the broker's own facts, and from nothing else. Pure:
 //! it reads nothing and changes nothing; [`super::dialog`] only draws it.
 //!
-//! Four variants: [`view`] (quarantine, `plan.execute`), [`view_restore`] (`undo.run`),
-//! [`view_recover`] (`journal.resume`, `.rollback`, `.retry_held`) and [`view_purge`] with
-//! [`view_purge_user_data`] (`quarantine.purge`).
+//! Five variants: [`view`] (quarantine, `plan.execute`), [`view_restore`] (`undo.run`),
+//! [`view_recover`] (`journal.resume`, `.rollback`, `.retry_held`), [`view_purge`] with
+//! [`view_purge_user_data`] (`quarantine.purge`) and [`view_uninstall`] (`uninstall.run`).
 //!
 //! # What the dialog shows is what will run
 //!
@@ -29,11 +29,14 @@ use std::fmt;
 
 use purge_exec::expiry::{ExpiringBackup, ExpiringItem, ExpiryId};
 use purge_exec::plan_in::{BoundItem, BoundPlan, confirm_hash, selection_hash};
+use purge_inventory::quiet::QuietCommand;
 use purge_model::exec::op::{ExecOp, OpId, Sha256Hex};
 use purge_model::{Band, Candidate, CandidateId, Category, Target};
-use purge_rpc::methods::ConfirmCode;
+use purge_rpc::methods::{ConfirmCode, RestorePoint};
 
-use super::text::{BULLET, Flags, MARK, SEP, Shown, Stamp, count, grouped, quote, shown, size};
+use super::text::{
+    BULLET, Flags, MARK, SEP, Shown, Stamp, count, grouped, quote, quote_line, shown, size,
+};
 
 /// Entries on one page of the attention list.
 pub const PAGE_ENTRIES: usize = 40;
@@ -57,6 +60,8 @@ pub enum Variant {
     Recover(RecoverKind),
     /// `quarantine.purge`: delete expired items for good.
     Purge,
+    /// `uninstall.run`: start a program's own uninstaller as administrator.
+    Uninstall,
 }
 
 /// What a recovery does.
@@ -261,9 +266,30 @@ pub struct ConsentView {
     pub plan_hash: Option<Sha256Hex>,
     /// The hash of the selection that is shown.
     pub selection_hash: Option<Sha256Hex>,
+    /// The command an uninstall dialog was drawn from (`uninstall.run`).
+    pub uninstall: Option<UninstallDrawn>,
+}
+
+/// What an uninstall dialog was drawn from: the command exactly as the session froze it, and the mode.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UninstallDrawn {
+    /// The frozen command; the dialog shows its program and its arguments.
+    pub command: QuietCommand,
+    /// Whether the quiet command was asked for.
+    pub quiet: bool,
 }
 
 impl ConsentView {
+    /// Whether this is an uninstall dialog drawn from exactly `command` and `quiet`. The handler asks
+    /// right before it starts the command it is about to run, and again after the answer.
+    pub fn describes_uninstall(&self, command: &QuietCommand, quiet: bool) -> bool {
+        self.variant == Variant::Uninstall
+            && self
+                .uninstall
+                .as_ref()
+                .is_some_and(|d| d.quiet == quiet && d.command == *command)
+    }
+
     /// The attention entries in pages: at most [`PAGE_ENTRIES`] each and at most [`PAGE_CHARS`]
     /// characters (an entry always fits a page alone). No entry is left out.
     pub fn attention_pages(&self) -> Vec<&[Entry]> {
@@ -313,6 +339,8 @@ pub enum ViewError {
     DuplicateUnit(String),
     /// A backup unit that names no file.
     NoFiles(String),
+    /// An uninstall command that names no program.
+    NoCommand,
 }
 
 impl fmt::Display for ViewError {
@@ -328,6 +356,7 @@ impl fmt::Display for ViewError {
             }
             ViewError::DuplicateUnit(id) => write!(f, "{id} is named twice"),
             ViewError::NoFiles(id) => write!(f, "{id} names no backup file"),
+            ViewError::NoCommand => f.write_str("the uninstall command names no program"),
         }
     }
 }
@@ -933,6 +962,7 @@ fn assemble(head: Head, counts: Counts, rows: Vec<Row>) -> ConsentView {
         counts,
         plan_hash: head.hashes.map(|h| h.0),
         selection_hash: head.hashes.map(|h| h.1),
+        uninstall: None,
     }
 }
 
@@ -1371,6 +1401,7 @@ fn purge_view(
         counts,
         plan_hash: None,
         selection_hash: None,
+        uninstall: None,
     })
 }
 
@@ -1404,6 +1435,130 @@ pub fn view_purge_user_data(unit: PurgeUnit<'_>) -> Result<ConsentView, ViewErro
         "Delete 1 item for good".to_owned(),
         true,
     )
+}
+
+/// What the broker knows for an uninstall dialog (`uninstall.run`, review M3-R2 M1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UninstallFacts {
+    /// The program, as the broker's own inventory names it.
+    pub app_name: String,
+    /// The program id, text of the session's key; only the code reads it.
+    pub program_id: String,
+    /// The command the session froze at `uninstall.prepare` and the run will start, unchanged.
+    pub command: QuietCommand,
+    /// Whether this is the session's quiet command.
+    pub quiet: bool,
+    /// The signer of the program file, when the broker read one.
+    pub signer: Option<String>,
+    /// The restore-point choice the client reports for the leftover cleanup that follows; `None` when
+    /// it did not say.
+    pub restore_point: Option<RestorePoint>,
+}
+
+/// The uninstall dialog of `uninstall.run`: the program, the exact command (program file and
+/// arguments, each through [`shown`]), its signer, quiet or interactive, and the restore-point choice.
+/// A program, command or signer that is shown with escapes or a cut is an attention entry, and brings the
+/// verification box.
+pub fn view_uninstall(facts: &UninstallFacts) -> Result<ConsentView, ViewError> {
+    let command = &facts.command;
+    if command.exe.trim().is_empty() {
+        return Err(ViewError::NoCommand);
+    }
+    let name = quote(&facts.app_name);
+    let mut summary = Vec::new();
+    let mut attention = Vec::new();
+    let mut flags = Flags::default();
+    let mut field = |id: &str, label: &str, text: Shown| {
+        flags.merge(text.flags);
+        if text.flags.is_plain() && !text.flags.look_alike {
+            summary.push(format!("{label}: {}", text.text));
+        } else {
+            let mut reasons = Vec::new();
+            name_reasons(text.flags, &mut reasons);
+            attention.push(Entry {
+                id: id.to_owned(),
+                text: line(MARK, label, &text.text, None, None, 0, &reasons),
+                reasons,
+            });
+        }
+    };
+    if !name.flags.is_plain() || name.flags.look_alike {
+        field("program", "Program", name.clone());
+    }
+    field("exe", "Starts", quote(&command.exe));
+    if command.args.is_empty() {
+        field(
+            "args",
+            "Arguments",
+            Shown {
+                text: "none".to_owned(),
+                flags: Flags::default(),
+            },
+        );
+    } else {
+        field("args", "Arguments", quote_line(&command.args));
+    }
+    match &facts.signer {
+        Some(signer) => field("signer", "Signed by", quote_line(signer)),
+        None => field(
+            "signer",
+            "Signed by",
+            Shown {
+                text: "no signer known".to_owned(),
+                flags: Flags::default(),
+            },
+        ),
+    }
+    summary.push(if facts.quiet {
+        "Mode: quiet. The uninstaller shows no window of its own.".to_owned()
+    } else {
+        "Mode: interactive. The uninstaller may show windows and ask questions.".to_owned()
+    });
+    summary.push(match facts.restore_point {
+        Some(RestorePoint::Off) => {
+            "Restore point for the leftover cleanup that follows: off.".to_owned()
+        }
+        Some(RestorePoint::HighRisk) => {
+            "Restore point for the leftover cleanup that follows: only when it is high-risk."
+                .to_owned()
+        }
+        Some(RestorePoint::Always) => {
+            "Restore point for the leftover cleanup that follows: always.".to_owned()
+        }
+        None => "Restore point: not asked for here; the leftover cleanup asks for it.".to_owned(),
+    });
+    summary.push(
+        "The program's own uninstaller runs as administrator. Purge cannot undo what it does. \
+         Nothing has been started yet."
+            .to_owned(),
+    );
+    if !flags.is_plain() || flags.look_alike {
+        summary.push(LEGEND.to_owned());
+    }
+    let code = ConfirmCode::of(&selection_hash(&[CandidateId(format!(
+        "uninstall\n{}\n{}\n{}\n{}",
+        facts.program_id, facts.quiet, command.exe, command.args
+    ))]));
+    Ok(ConsentView {
+        variant: Variant::Uninstall,
+        code,
+        icon: Icon::Warning,
+        instruction: format!("Run the uninstaller of {} as administrator?", name.text),
+        summary,
+        verification: verification(attention.len()),
+        attention,
+        others: Vec::new(),
+        others_more: None,
+        button: "Run the uninstaller".to_owned(),
+        footer: footer(code),
+        counts: Counts::default(),
+        plan_hash: None,
+        selection_hash: None,
+        uninstall: Some(UninstallDrawn {
+            command: command.clone(),
+            quiet: facts.quiet,
+        }),
+    })
 }
 
 /// Splits an expiry listing into the units one bulk dialog may name and the user-data units that each

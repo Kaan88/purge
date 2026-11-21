@@ -119,7 +119,7 @@ method_table! {
     /// `uninstall.prepare` ⇢ `prepare.progress`: harvest in the broker.
     UninstallPrepare => "uninstall.prepare", Execute, Pipe, cancel: true, consent: false;
     /// `uninstall.run` ⇢ `uninstall.progress`: a broker-route uninstaller.
-    UninstallRun => "uninstall.run", Execute, Pipe, cancel: false, consent: false;
+    UninstallRun => "uninstall.run", Execute, Pipe, cancel: false, consent: true;
     /// `uninstall.observed`: the broker's own verify-gone after a medium-route run.
     UninstallObserved => "uninstall.observed", Execute, Pipe, cancel: false, consent: false;
     /// `leftovers.stored`: which programs have a stored fingerprint.

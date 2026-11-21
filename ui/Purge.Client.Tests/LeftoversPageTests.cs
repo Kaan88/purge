@@ -528,6 +528,12 @@ public sealed class LeftoversPageTests
     {
         public int ScanCalls { get; private set; }
 
+        public event Action<ConsentShown>? ConsentShown
+        {
+            add { }
+            remove { }
+        }
+
         public Task<PrepareResult> PrepareAsync(IReadOnlyList<string> programIds, Action<Progress>? progress, CancellationToken ct) =>
             Task.FromResult(new PrepareResult
             {
@@ -547,7 +553,8 @@ public sealed class LeftoversPageTests
                 ],
             });
 
-        public Task<RunResult> RunAsync(string sessionId, bool quiet, Action<Progress>? progress, CancellationToken ct) =>
+        public Task<RunResult> RunAsync(string sessionId, bool quiet, RestorePoint restorePoint, Action<Progress>? progress,
+            CancellationToken ct) =>
             Task.FromResult(new RunResult
             {
                 ExitCode = 0,

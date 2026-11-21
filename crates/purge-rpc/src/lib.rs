@@ -506,6 +506,7 @@ mod api_tests {
                 v(RunParams {
                     session_id: uid(),
                     quiet: true,
+                    restore_point: Some(RestorePoint::HighRisk),
                 }),
             );
             put(
