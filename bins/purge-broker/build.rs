@@ -9,5 +9,9 @@ fn main() {
         println!("cargo:rustc-link-arg-bins=/MANIFEST:EMBED");
         println!("cargo:rustc-link-arg-bins=/MANIFESTINPUT:{dir}\\purge-broker.manifest");
         println!("cargo:rustc-link-arg-bins=/MANIFESTUAC:NO");
+        // M3-R1 M1: the loader resolves the static imports before `main` runs, so the application
+        // directory is searched for every import that is not a KnownDLL. This flag makes that search
+        // System32 only, which also covers a copy of the broker outside the checked install directory.
+        println!("cargo:rustc-link-arg-bins=/DEPENDENTLOADFLAG:0x800");
     }
 }

@@ -402,7 +402,7 @@ mod tests {
         assert_eq!(verdict(&out.top[1]), (Band::Blocked, false));
 
         // A child that belongs to another app: the parent is Blocked.
-        let mut foreign = owned_path("child", r"C:\Program Files\App\plugin");
+        let mut foreign = owned_path("foreign", r"C:\Program Files\App\plugin");
         foreign.blockers.push(Blocker::InsideOtherApp {
             app: "Other App".into(),
         });

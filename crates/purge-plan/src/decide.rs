@@ -41,15 +41,15 @@
 //! spelling onto `CurrentControlSet` itself (vm/rigtool `canon.rs`), so plans are emitted in canonical
 //! form.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use purge_guard::canon::{GuardEnv, canon_key, canon_target};
 use purge_guard::deny::{DenyList, Exemptions, ObjectGuardFacts};
 use purge_guard::{containers, prefix};
 use purge_model::{
-    Action, Band, BaselineTrust, Blocker, Candidate, Category, Evidence, EvidenceKind, Fingerprint,
-    Hive, InventoryEntry, MsiContext, ObjectKind, Origin, ProgramId, Reversibility, ScanMode,
-    Scope, SourceTrust, Target, Tier, VerifyGone,
+    Action, Band, BaselineTrust, Blocker, Candidate, CandidateId, Category, Evidence, EvidenceKind,
+    Fingerprint, Hive, InventoryEntry, MsiContext, ObjectKind, Origin, ProgramId, Reversibility,
+    ScanMode, Scope, SourceTrust, Target, Tier, VerifyGone,
 };
 use purge_policy::band::{self, PolicyCtx, TargetScope};
 use purge_policy::score::effective_weight;
@@ -810,17 +810,49 @@ fn merge_key(candidate: &Candidate, ctx: &DecideCtx<'_>) -> Vec<String> {
     parts
 }
 
+/// The candidate ids that name more than one merge target (folded owner and canonical target, as
+/// [`merge_key`]): an id collision in a scan (review M3-R1 M2).
+///
+/// Two candidates of one id on the same target are one item and merge; on different targets the id
+/// cannot select exactly one of them, so [`merge`] drops all of that id's candidates. The pipeline
+/// reports each dropped id as a warning.
+#[must_use]
+pub fn colliding_ids(candidates: &[Candidate], ctx: &DecideCtx<'_>) -> BTreeSet<CandidateId> {
+    let mut first: HashMap<&CandidateId, Vec<String>> = HashMap::new();
+    let mut out = BTreeSet::new();
+    for candidate in candidates {
+        let key = merge_key(candidate, ctx);
+        match first.get(&candidate.id) {
+            Some(seen) if *seen != key => {
+                out.insert(candidate.id.clone());
+            }
+            Some(_) => {}
+            None => {
+                first.insert(&candidate.id, key);
+            }
+        }
+    }
+    out
+}
+
 /// Step 1 of the module docs: folds candidates on the same target into one, in order of first appearance.
 /// Stored decisions and any `EmptyAfterPlan` evidence are dropped.
 ///
 /// A typed object (service, task, firewall rule) keeps the `object_fp` of the first candidate. When the
 /// candidates of its group do not all carry the same one (absent included), it gets the hard blocker
 /// `ObjectChangedSinceHarvest`. Its children are cleared, whoever listed them.
+///
+/// A candidate whose id names more than one target ([`colliding_ids`]) is dropped, all of that id: an id
+/// that cannot select exactly one target is not a usable key (review M3-R1 M2).
 #[must_use]
 pub fn merge(candidates: Vec<Candidate>, ctx: &DecideCtx<'_>) -> Vec<Candidate> {
+    let colliding = colliding_ids(&candidates, ctx);
     let mut groups: Vec<Vec<Candidate>> = Vec::new();
     let mut index: HashMap<Vec<String>, usize> = HashMap::new();
     for mut candidate in candidates {
+        if colliding.contains(&candidate.id) {
+            continue;
+        }
         candidate.decision = None;
         candidate
             .evidence
@@ -1775,9 +1807,38 @@ mod tests {
         // Different owners never merge.
         let a = owned_path("a", r"C:\Program Files\App\a.dll");
         let mut b = a.clone();
+        b.id = purge_model::CandidateId("b".into());
         b.owner.program_id =
             purge_model::ProgramId::machine(purge_model::View::K64, "Other").unwrap();
         assert_eq!(decide(vec![a, b], &ctx).len(), 2);
+    }
+
+    #[test]
+    fn merge_drops_every_candidate_of_a_colliding_id() {
+        let deny = deny();
+        let ctx = ctx(&deny);
+        // Two different targets, one id: neither can be selected by that id. Both go (M3-R1 M2).
+        let a = cand(
+            "c-0000000000000001",
+            key(r"HKLM\SOFTWARE\A"),
+            "REG-SOFTWARE",
+        );
+        let b = cand(
+            "c-0000000000000001",
+            key(r"HKLM\SOFTWARE\B"),
+            "REG-SOFTWARE",
+        );
+        assert_eq!(
+            colliding_ids(&[a.clone(), b.clone()], &ctx),
+            BTreeSet::from([CandidateId("c-0000000000000001".into())])
+        );
+        assert!(merge(vec![a.clone(), b.clone()], &ctx).is_empty());
+        // A second scanner on the same target is not a collision: it is the item it merges into.
+        let same = cand("c-0000000000000001", key(r"HKLM\SOFTWARE\A"), "REF-ANY");
+        assert!(colliding_ids(&[a.clone(), same.clone()], &ctx).is_empty());
+        let out = merge(vec![a, same], &ctx);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].id.0, "c-0000000000000001");
     }
 
     #[test]

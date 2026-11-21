@@ -5,10 +5,12 @@
 //! buttons with ids at or above [`MIN_BUTTON_ID`]; Cancel is always present, is the default unless the page
 //! says otherwise, and is what Esc, Alt+F4 and the close box return.
 //!
-//! Rules kept here: no hyperlinks, no command links, no radio buttons, no owner window, no timer (so no timeout
-//! answer). [`Outcome::Approved`] is returned only for the primary id, and when that button is gated by the
-//! verification box, only if the box was ticked. Every other end, including a close from another thread, is
-//! [`Outcome::Declined`]; a failure to show is an `Err` that the caller treats the same way.
+//! Rules kept here: no hyperlinks, no command links, no radio buttons, no owner window, no timeout
+//! answer. The primary button is armed about a second after its page shows, so a click aimed at another
+//! window cannot land on it. [`Outcome::Approved`] is returned only for the primary id, and when that
+//! button is gated by the verification box, only if the box was ticked. Every other end, including a
+//! close from another thread, is [`Outcome::Declined`]; a failure to show is an `Err` that the caller
+//! treats the same way.
 //!
 //! `comctl32` v6 is needed for `TaskDialogIndirect`; the binary carries a manifest for it
 //! (`bins/purge-broker/purge-broker.manifest`). The function is looked up at run time, so a process without the
@@ -22,10 +24,12 @@ use std::io;
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, WPARAM};
-use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
+use windows_sys::Win32::System::LibraryLoader::{
+    GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW,
+};
 use windows_sys::Win32::UI::Controls::{TASKDIALOG_BUTTON, TASKDIALOGCONFIG};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     FLASHW_ALL, FLASHW_TIMERNOFG, FLASHWINFO, FlashWindowEx, PostMessageW, SendMessageW,
@@ -42,7 +46,12 @@ const ID_CANCEL: i32 = 2;
 
 const TDCBF_CANCEL_BUTTON: i32 = 0x8;
 const TDF_ALLOW_DIALOG_CANCELLATION: i32 = 0x8;
+const TDF_CALLBACK_TIMER: i32 = 0x0000_0800;
 const TDF_SIZE_TO_CONTENT: i32 = 0x0100_0000;
+
+/// How long the primary button stays disabled after its page shows (review M3-R1 S6): an approving
+/// click cannot land on the instant the dialog appears under the user's cursor.
+const ARM_DELAY: Duration = Duration::from_secs(1);
 
 const WM_USER: u32 = 0x400;
 const TDM_NAVIGATE_PAGE: u32 = WM_USER + 101;
@@ -52,6 +61,7 @@ const TDM_ENABLE_BUTTON: u32 = WM_USER + 111;
 const TDN_CREATED: u32 = 0;
 const TDN_NAVIGATED: u32 = 1;
 const TDN_BUTTON_CLICKED: u32 = 2;
+const TDN_TIMER: u32 = 4;
 const TDN_DESTROYED: u32 = 5;
 const TDN_VERIFICATION_CLICKED: u32 = 8;
 
@@ -226,7 +236,7 @@ fn build_page(page: &Page, index: usize, count: usize) -> io::Result<Built> {
 
     let mut config = TASKDIALOGCONFIG {
         cbSize: size_of::<TASKDIALOGCONFIG>() as u32,
-        dwFlags: TDF_ALLOW_DIALOG_CANCELLATION | TDF_SIZE_TO_CONTENT,
+        dwFlags: TDF_ALLOW_DIALOG_CANCELLATION | TDF_SIZE_TO_CONTENT | TDF_CALLBACK_TIMER,
         dwCommonButtons: TDCBF_CANCEL_BUTTON,
         pszWindowTitle: title,
         pszMainInstruction: instruction,
@@ -296,6 +306,8 @@ struct State {
     primary: i32,
     verified: bool,
     clicked: i32,
+    /// When the primary button of the current page may be enabled; `None` when there is nothing to arm.
+    arm_at: Option<Instant>,
     shared: Arc<Shared>,
 }
 
@@ -325,6 +337,7 @@ unsafe extern "system" fn callback(
                 }
             }
             apply_gate(st, hwnd);
+            delay_primary(st, hwnd);
             if let Ok(mut c) = st.shared.created.lock() {
                 *c = true;
                 st.shared.created_cv.notify_all();
@@ -336,10 +349,12 @@ unsafe extern "system" fn callback(
         TDN_NAVIGATED => {
             st.verified = false;
             apply_gate(st, hwnd);
+            delay_primary(st, hwnd);
             if st.shared.close_requested.load(Ordering::SeqCst) {
                 st.shared.click_cancel();
             }
         }
+        TDN_TIMER => arm_primary(st, hwnd),
         TDN_VERIFICATION_CLICKED => {
             st.verified = wparam != 0;
             if let Some(g) = st.pages[st.current].gated {
@@ -396,13 +411,49 @@ fn apply_gate(st: &State, hwnd: HWND) {
     }
 }
 
+/// Disables the primary button of the current page and starts its arming delay. The primary is only on
+/// the last page (`validate`); on any other page there is nothing to delay.
+fn delay_primary(st: &mut State, hwnd: HWND) {
+    if !st.pages[st.current].button_ids.contains(&st.primary) {
+        st.arm_at = None;
+        return;
+    }
+    // SAFETY: message to the dialog window.
+    unsafe { SendMessageW(hwnd, TDM_ENABLE_BUTTON, st.primary as WPARAM, 0) };
+    st.arm_at = Some(Instant::now() + ARM_DELAY);
+}
+
+/// Enables the primary button once [`ARM_DELAY`] has passed on the page that holds it. A gated primary
+/// stays disabled: the verification box enables it. A timer that only enables a button is not a
+/// timeout answer (review M3-R1 S6).
+fn arm_primary(st: &mut State, hwnd: HWND) {
+    let Some(at) = st.arm_at else {
+        return;
+    };
+    if Instant::now() < at {
+        return;
+    }
+    st.arm_at = None;
+    if st.pages[st.current].gated != Some(st.primary) {
+        // SAFETY: message to the dialog window.
+        unsafe { SendMessageW(hwnd, TDM_ENABLE_BUTTON, st.primary as WPARAM, 1) };
+    }
+}
+
 type TaskDialogIndirectFn =
     unsafe extern "system" fn(*const TASKDIALOGCONFIG, *mut i32, *mut i32, *mut BOOL) -> HRESULT;
 
 fn load_task_dialog() -> io::Result<TaskDialogIndirectFn> {
     let name: Vec<u16> = "comctl32.dll\0".encode_utf16().collect();
-    // SAFETY: NUL-terminated name; the module stays loaded for the process.
-    let module = unsafe { LoadLibraryW(name.as_ptr()) };
+    // SAFETY: NUL-terminated name; System32 only (the activation-context redirect to v6 still applies
+    // to a bare name); the module stays loaded for the process.
+    let module = unsafe {
+        LoadLibraryExW(
+            name.as_ptr(),
+            std::ptr::null_mut(),
+            LOAD_LIBRARY_SEARCH_SYSTEM32,
+        )
+    };
     if module.is_null() {
         return Err(io::Error::last_os_error());
     }
@@ -428,6 +479,7 @@ fn run(pages: Vec<Built>, primary: i32, shared: Arc<Shared>) -> io::Result<Outco
         primary,
         verified: false,
         clicked: 0,
+        arm_at: None,
         shared,
     });
     let st_ptr: *mut State = &mut *st;
@@ -581,9 +633,10 @@ mod tests {
             assert_eq!(common, TDCBF_CANCEL_BUTTON);
             assert_eq!(default, ID_CANCEL);
             assert_ne!(flags & TDF_ALLOW_DIALOG_CANCELLATION, 0);
+            assert_ne!(flags & TDF_CALLBACK_TIMER, 0);
             // No hyperlinks, command links, radio buttons.
             assert_eq!(
-                flags & !(TDF_ALLOW_DIALOG_CANCELLATION | TDF_SIZE_TO_CONTENT),
+                flags & !(TDF_ALLOW_DIALOG_CANCELLATION | TDF_SIZE_TO_CONTENT | TDF_CALLBACK_TIMER),
                 0
             );
             let radio = c.cRadioButtons;
