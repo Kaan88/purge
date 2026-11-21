@@ -3,8 +3,8 @@
 //! [`run_uninstall`] runs one inventory entry's quiet uninstall command and records what happened as a
 //! `purge.run/0` [`RunDoc`]. The sequence:
 //!
-//! 1. Resolve the quiet command ([`crate::quiet::quiet_command`]) and expand it with the interactive user's
-//!    environment.
+//! 1. Resolve the quiet command ([`crate::quiet::quiet_command`]; or use [`RunRequest::command`]
+//!    when the caller showed another one) and expand it with the interactive user's environment.
 //! 2. Record the Authenticode signer CN of the uninstaller exe, and the routing facts of §4.4
 //!    ([`Routing`]: how the engine runs and whether the entry should run at medium integrity). The routing
 //!    rule is **recorded, not enforced** in M1a: the CLI runs the command with its own token.
@@ -154,6 +154,10 @@ pub struct RunRequest<'a> {
     /// The inventory entries before the run; when given, entries that disappeared with the target are
     /// reported as co-removed.
     pub before: Option<&'a [InventoryEntry]>,
+    /// The exact command to run instead of the entry's quiet uninstall command. The engine's
+    /// `uninstall.run_user` uses it to run the quiet or the interactive command that
+    /// `uninstall.route` showed; `None` keeps the quiet-command rule of [`quiet_command`].
+    pub command: Option<&'a QuietCommand>,
 }
 
 /// Everything one run produced.
@@ -387,7 +391,11 @@ pub fn run_uninstall(
             .push(format!("cannot read the environment: {e}"));
         BTreeMap::new()
     });
-    let command = quiet_command(entry)?.expand(&env);
+    let command = match req.command {
+        Some(command) => command.clone(),
+        None => quiet_command(entry)?,
+    }
+    .expand(&env);
     let cmd = command.to_command_line();
 
     let signer = match fs.signer_cn(&command.exe) {
@@ -827,6 +835,7 @@ mod tests {
                 main_exes: &exes,
                 roots: &roots,
                 before,
+                command: None,
             };
             run_uninstall(
                 &mut self.host,
@@ -1026,6 +1035,7 @@ mod tests {
             main_exes: &[],
             roots: &[],
             before: None,
+            command: None,
         };
         let err = run_uninstall(&mut c.host, reg, reg, reg, &req, &c.opts).unwrap_err();
         assert!(matches!(
@@ -1110,6 +1120,7 @@ mod tests {
             main_exes: &[],
             roots: &[],
             before: None,
+            command: None,
         };
         let r = run_uninstall(&mut host, &f, &f, &f, &req, &opts).unwrap();
         assert_eq!(r.doc.cmd, "cmd /c exit 1605");
