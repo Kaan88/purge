@@ -530,6 +530,80 @@ fn e2e_service_task_firewall_owned_and_traps() {
     }
 }
 
+/// The scan output names the object and its program for the UI (M3-ENGINE-OUT): a service's
+/// `DisplayName` and `ImagePath` file, a firewall rule's `Name=` and `App=` file, and a task's action
+/// file. The fields are display only: the plan hash is the one of the same plan without them.
+#[test]
+fn e2e_system_objects_carry_display_name_and_owner_program() {
+    let before = tool();
+    let fp = harvest(&before, "Tool");
+    let mut after = before.clone();
+    assert!(after.remove_key(&format!(r"{}\Tool", shapes::UNINSTALL)));
+    assert!(after.remove_path(TOOL_DIR));
+    let scanned = scan_post(&after, &uninstalled(fp));
+
+    let service = candidate(
+        &scanned,
+        &Target::Service {
+            name: "ToolUpdater".into(),
+        },
+    )
+    .expect("the app's service is offered");
+    assert_eq!(service.display_name.as_deref(), Some("ToolUpdater"));
+    assert_eq!(
+        service.owner_program.as_deref(),
+        Some(r"C:\Program Files\Tool\update.exe")
+    );
+
+    let rule = candidate(
+        &scanned,
+        &Target::FirewallRule {
+            id: OUR_RULE.into(),
+        },
+    )
+    .expect("the app's firewall rule is offered");
+    assert_eq!(rule.display_name.as_deref(), Some("Tool"));
+    assert_eq!(
+        rule.owner_program.as_deref(),
+        Some(r"C:\Program Files\Tool\tool.exe")
+    );
+
+    let task = candidate(
+        &scanned,
+        &Target::Task {
+            path: r"\Tool\Update".into(),
+        },
+    )
+    .expect("the app's task is offered");
+    assert_eq!(task.display_name, None, "a task has no name but its path");
+    assert_eq!(
+        task.owner_program.as_deref(),
+        Some(r"C:\Program Files\Tool\update.exe")
+    );
+
+    // Display only: the same items without the two fields have the same plan hash.
+    let stripped: Vec<Candidate> = scanned
+        .built
+        .scan
+        .items
+        .iter()
+        .cloned()
+        .map(|mut c| {
+            c.display_name = None;
+            c.owner_program = None;
+            c
+        })
+        .collect();
+    assert_eq!(
+        purge_plan::hash::plan_hash(
+            &stripped,
+            &scanned.built.scan.policy_version,
+            scanned.built.scan.mode
+        ),
+        scanned.built.scan.plan_hash
+    );
+}
+
 // ---------------------------------------------------------------------------------------------------------
 // COM
 // ---------------------------------------------------------------------------------------------------------

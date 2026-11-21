@@ -61,6 +61,8 @@ pub(crate) fn candidate(
         child_count: None,
         item_fp: None,
         object_fp: None,
+        display_name: None,
+        owner_program: None,
         decision: Some(Decision {
             band,
             preselected,

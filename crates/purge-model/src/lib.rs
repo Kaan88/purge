@@ -40,6 +40,7 @@ mod root;
 mod run;
 mod scope;
 mod target;
+mod warning;
 
 pub use appref::AppRef;
 pub use blocker::Blocker;
@@ -79,3 +80,4 @@ pub use root::{Root, RootKind, RootSource, SourceTrust};
 pub use run::{ProcessSeen, RunDoc, RunOutcome, RunSchema, VerifyGone};
 pub use scope::{Scope, ScopeSet};
 pub use target::{Hive, RegKind, Target, TypedTarget, TypedTargetError, View, has_classes_hive};
+pub use warning::{ScanWarning, WarningKind};

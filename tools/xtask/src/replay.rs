@@ -396,9 +396,9 @@ pub fn replay_case(case: &Case<'_>) -> Result<(Replayed, Scanned)> {
 
     let Some(after) = case.after else {
         eprintln!("replay: live: scanning phase 1 (the app is still installed), no uninstall step");
-        let mut scanned =
+        let scanned =
             scan(before, &fp, ScanMode::External).map_err(|e| anyhow!("scan at phase 1: {e}"))?;
-        warnings.append(&mut scanned.warnings);
+        warnings.extend(scanned.warnings.iter().map(ToString::to_string));
         let replayed = Replayed {
             plan: scanned.built.plan.clone(),
             warnings,
@@ -443,9 +443,8 @@ pub fn replay_case(case: &Case<'_>) -> Result<(Replayed, Scanned)> {
         report.co_candidates.len()
     );
 
-    let mut scanned =
-        scan(after, &fp, ScanMode::Post).map_err(|e| anyhow!("scan at phase 2: {e}"))?;
-    warnings.append(&mut scanned.warnings);
+    let scanned = scan(after, &fp, ScanMode::Post).map_err(|e| anyhow!("scan at phase 2: {e}"))?;
+    warnings.extend(scanned.warnings.iter().map(ToString::to_string));
     let replayed = Replayed {
         plan: scanned.built.plan.clone(),
         warnings,

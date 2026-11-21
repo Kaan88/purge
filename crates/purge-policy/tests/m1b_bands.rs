@@ -56,6 +56,8 @@ fn cand(target: Target, action: Action, category: Category, evidence: Vec<Eviden
         decision: None,
         item_fp: None,
         object_fp: None,
+        display_name: None,
+        owner_program: None,
     }
 }
 
