@@ -309,7 +309,7 @@
 
             <!-- Details card. -->
             <Border Grid.Column="1" Style="{StaticResource Card}" VerticalAlignment="Top">
-                <ScrollViewer x:Name="Details" Padding="18" Visibility="Collapsed">
+                <ScrollViewer x:Name="Details" x:Load="False" Padding="18" Visibility="Collapsed">
                     <StackPanel Spacing="12">
                         <Grid ColumnSpacing="12">
                             <Grid.ColumnDefinitions>

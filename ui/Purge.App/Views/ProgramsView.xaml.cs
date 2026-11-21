@@ -38,7 +38,9 @@ public sealed partial class ProgramsView : UserControl
 
     public ProgramsView()
     {
+        LaunchMarkers.Mark("programs_enter");
         InitializeComponent();
+        LaunchMarkers.Mark("programs_xaml");
         _tabs =
         [
             (TabApps, TabAppsSel, TabAppsLabel, TabAppsCount, ProgramTab.Apps),
@@ -48,7 +50,13 @@ public sealed partial class ProgramsView : UserControl
             (TabRecent, TabRecentSel, TabRecentLabel, TabRecentCount, ProgramTab.Recent),
         ];
         UpdateSortHeaders();
+        ProgramList.ContainerContentChanging += (_, _) =>
+        {
+            if (!_firstRowSeen) { _firstRowSeen = true; LaunchMarkers.Mark("first_row"); }
+        };
     }
+
+    private bool _firstRowSeen;
 
     /// <summary>All rows, for the command box in the title bar.</summary>
     public IReadOnlyList<ProgramRow> All => _all;
@@ -97,6 +105,8 @@ public sealed partial class ProgramsView : UserControl
         // Sample: in M3 this group comes from inventory.changes (programs removed outside Purge).
         FindName(nameof(Attention));
         foreach (var r in _all) r.Extras = true;
+        // The details pane is created here, not for the first frame (§9.2 step 3).
+        ShowDetails(_current);
         UpdateSummary();
         _ = LoadForecastsAsync();
     }
@@ -336,7 +346,15 @@ public sealed partial class ProgramsView : UserControl
 
     private void ShowDetails(ProgramRow? row)
     {
-        if (row is null) { Details.Visibility = Visibility.Collapsed; return; }
+        // The details pane is created on first use after the first Rendering tick, not for the first frame
+        // (§9.2 step 3). Before the tick the row is only remembered in _current and shown by OnFirstTick.
+        if (!_firstTickDone) return;
+        if (row is null)
+        {
+            if (Details is not null) Details.Visibility = Visibility.Collapsed;
+            return;
+        }
+        FindName(nameof(Details));
         Details.Visibility = Visibility.Visible;
         var e = row.Entry;
         DTile.Background = row.TileBrush;

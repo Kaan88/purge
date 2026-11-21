@@ -20,14 +20,32 @@ public sealed class FakeEngineClient : IEngineClient
             BaselineAvailable: true,
             PolicyVersion: "0"));
 
-    public Task<InventoryDoc> ListProgramsAsync(CancellationToken ct = default)
+    /// <summary>Launch bench stub (M3 design 9.3): when above zero, <c>programs.list</c> answers after 20 ms with this many rows.</summary>
+    public int BenchRows { get; init; }
+
+    public async Task<InventoryDoc> ListProgramsAsync(CancellationToken ct = default)
+    {
+        var doc = LoadSample();
+        // An empty sample has nothing to repeat; answer with what it has instead of dividing by zero.
+        if (BenchRows <= 0 || doc.Entries.Count == 0) return doc;
+        await Task.Delay(20, ct).ConfigureAwait(false);
+        var rows = new List<InventoryEntry>(BenchRows);
+        for (var i = 0; i < BenchRows; i++)
+        {
+            var src = doc.Entries[i % doc.Entries.Count];
+            rows.Add(i < doc.Entries.Count ? src : src with { ProgramId = $"{src.ProgramId}-{i}", DisplayName = $"{src.DisplayName} {i}" });
+        }
+        return doc with { Entries = rows };
+    }
+
+    private static InventoryDoc LoadSample()
     {
         using var s = Open("Purge.Client.sample-inventory.json");
         var doc = JsonSerializer.Deserialize(s, PurgeJsonContext.Default.InventoryDoc)
                   ?? throw new InvalidDataException("empty inventory");
         if (doc.Schema != InventoryDoc.SchemaId)
             throw new InvalidDataException($"unexpected schema {doc.Schema}");
-        return Task.FromResult(doc);
+        return doc;
     }
 
     public Task<IReadOnlyDictionary<string, long>> GetSizesAsync(CancellationToken ct = default)
