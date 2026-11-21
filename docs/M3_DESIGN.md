@@ -113,31 +113,37 @@ Others: stdio server and inventory streaming; per-user runner; icon batches; DTO
 markers; bench-launch and the S1 skeleton bench; S1; S2; S3; S4; S7; UI automation harness; VM rig modes (UAC on,
 clean Windows start, SendInput test); install.ps1 update; engine output additions the UI alpha asked for.
 
-## 7. Open questions for the user (found so far)
+## 7. Open questions for the user (1-6 answered 2026-11-21)
 
 1. **Per-user apps and elevation.** N5 says the broker must not trust a harvest made at medium integrity. The plan
    says per-user apps need no UAC. Either the UAC prompt also appears for a per-user uninstall (harvest in the
    broker, full evidence), or the per-user harvest stays at medium and its evidence is capped (nothing from it
    reaches Safe or preselection). Which one?
+   **Answer (user 2026-11-21):** UAC for every uninstall, per-user included: the harvest runs in the broker, so no medium-made evidence is used.
 2. **The release engine links the executor.** The broker needs it, so the 2026-11-15 rule "the release engine
    contains no path into the executor" ends. Keep one executable (as the plan says; the medium `--stdio` process
    then carries executor code it never reaches), or split the broker into its own binary so the medium engine stays
    executor-free?
+   **Answer (user 2026-11-21):** A separate broker binary holds the executor; the medium engine stays executor-free and check-deps keeps a rule for it.
 3. **Standard-user accounts (over-the-shoulder elevation).** Support in M3 (the broker runs as another account and
    cleans the caller's profile through `HKU\<SID>`), or refuse with a clear message and defer to M4, where the plan
    already has the trap?
+   **Answer (user 2026-11-21):** Refuse with a clear message (needs an administrator account) and defer to M4.
 4. **Code signing route** (ENGINE_PLAN 11.3 item 4) is still open. It decides whether the caller check can verify
    a signature instead of only a path, and it affects the first-launch gate under Smart App Control.
+   **Answer (user 2026-11-21):** Path check now (caller must run from the admin-only install directory); signature check added once a certificate exists.
 5. **Closing apps and Explorer.** M2 never closes, stops or restarts anything and never chooses a boot-time
    delete. S2 and S7 show "Close running apps" and "Restart Explorer". Does M3 turn these on (each with consent), or
    ship them report-only and move them later?
+   **Answer (user 2026-11-21):** Report-only in M3: the UI names what is locked and what to close; Purge closes, restarts and schedules nothing.
 6. **`SeRestorePrivilege` for undo's owner restore (R8b M1).** The plan says Purge never raises its own access for
    deletes. Allow the privilege for the one undo step that puts an owner back, or keep the known limit?
+   **Answer (user 2026-11-21):** Allow `SeRestorePrivilege` in the broker only around the owner-set call of undo, dropped right after.
 7. **Reuse of the stopgap UI.** Not yet assessed; may become a question once both branches are read.
 
 ## 8. Decisions added to DECISIONS.md
 
-None yet.
+2026-11-21 (user): answers to open questions 1-6, one row.
 
 ## 9. For the resuming session
 
