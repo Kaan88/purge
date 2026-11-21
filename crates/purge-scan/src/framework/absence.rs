@@ -33,7 +33,10 @@
 //! # The carrier and the seal (defence in depth)
 //!
 //! The machinery of the trust cap is here all the same, so that a site wired to inferred absence
-//! by mistake, or on purpose once the cap is lifted (§8.5), cannot reach Safe or preselection:
+//! by mistake, or on purpose once the cap is lifted (§8.5), cannot reach Safe or preselection with
+//! the evidence forms the seal knows ([`claims_absence`]). These two are the live layers: the
+//! third, the policy backstop P-BL-1, is handed trust None below Exact
+//! ([`ScanCtx::absence_trust`]) and so does not act in production.
 //!
 //! - [`CandidateBuilder::absence`] is the carrier: for [`Absence::Inferred`] it adds the soft blocker
 //!   `BaselineInferred` and the detail facts `baseline`, `baseline_trust`, `baseline_neighbours` and
@@ -158,8 +161,11 @@ impl ScanCtx<'_> {
 ///   `baseline=none`, which is how their sites mark the Tier B form made without an absence answer.
 ///
 /// Key-scope `InstallerManifest(Msi | Burn)` and `ChainedRef` are not in the list: their sites never
-/// ask the baseline, with or without one, so they claim nothing about it. (The policy backstop
-/// P-BL-1 still caps them when it is handed an inferred trust.)
+/// ask the baseline, with or without one, so they claim nothing about it. Nothing else caps them
+/// today: the policy backstop P-BL-1 would, if it were handed an inferred trust, and in production
+/// it never is ([`ScanCtx::absence_trust`] is None below Exact, and the fingerprint records None).
+/// The cap has two live layers, the carrier and this seal (review BL-R1 S1; BASELINE_LOCAL_DESIGN.md
+/// §4.3 "as built", §8.5).
 pub fn claims_absence(evidence: &Evidence, target: &Target) -> bool {
     if !evidence.is_absence_dependent(target) {
         return false;

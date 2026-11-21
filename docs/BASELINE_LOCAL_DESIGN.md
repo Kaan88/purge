@@ -286,7 +286,18 @@ nothing, so those fingerprints are byte-identical to the M1b gate's. `cargo xtas
 table (every call, its class, what it does below Exact) and fails on an unlisted call, on `key_absent` outside the
 two capped files, on a capped file without the `Inferred => Unknown` arm, and on a negated presence call.
 
-### 4.4 Where the cap is applied (three layers)
+**The cap as built has two live layers, not three (review BL-R1 S1; DECISIONS 2026-11-21).** Of the three layers
+of §4.4 the carrier and the seal act below Exact. The policy backstop P-BL-1 is inert in production under a Merged
+or Local view: the scan hands the policy `ScanCtx::absence_trust()`, which is `trust().presence_only()`, so None
+below Exact, and the fingerprint records None too; `is_capped` then acts only on evidence that carries the
+carrier's own fact. A site wired to inferred absence by mistake is therefore stopped by the capped path itself
+(it never sees `Inferred`), by `baseline-sites`, and by the seal for the evidence forms the seal knows; key-scope
+MSI and Burn records and key-scope `ChainedRef` are outside the seal and would not be stopped by the policy either.
+Handing the policy the view's own trust would close that, and would cap the MSI and Burn key records a no-baseline
+scan preselects today: a recall loss with no safety gain while no site consumes inferred absence. So the code
+stays, and §8.5 carries the condition.
+
+### 4.4 Where the cap is applied (three layers; two of them live while presence-only, see §4.3 "as built")
 
 1. **Scanner layer, the carrier.** `CandidateBuilder` gets `absence(&mut self, a: Absence)`. For
    `Inferred(t)` it adds the detail facts `baseline=<view name>`, `baseline_trust=merged|local` to the
@@ -544,6 +555,11 @@ An area may let inferred absence support Safe only after a user decision and onl
 **zero** false-absent keys of any shape in that area on at least three leave-one-out pairs, two of them
 with a build distance at least as large as the one trusted. That needs more shipped baselines, which is
 what automated release-build baseline packs would provide.
+
+The first A site wired below Exact, capped or not, comes in the same change with `baseline.view.trust()` as the
+scan side of `BaselineTrust::for_policy` in the pipeline, so that the policy backstop P-BL-1 is live again
+(review BL-R1 S1: while presence-only the policy is handed None below Exact, §4.3 "as built"), and with the
+seal's list of evidence forms reviewed for the kinds that site can emit.
 
 ## 9. Packages
 
