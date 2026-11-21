@@ -220,16 +220,35 @@ fn programs_list_sends_raw_rows_first_then_patches() {
         first_batch.as_millis() < 50,
         "the first batch took {first_batch:?}"
     );
+    // The reply comes after every raw batch and before every patch: the UI paints from it, so the
+    // slow AppX-backed patches must not hold it back.
+    let reply_at = lines
+        .iter()
+        .position(|line| line["id"] == json!(1))
+        .expect("no programs.list reply");
+    assert!(
+        lines[..reply_at]
+            .iter()
+            .all(|line| line["method"] == "programs.batch"),
+        "the reply must follow the raw batches: {lines:#?}"
+    );
+    let first_patch = lines
+        .iter()
+        .position(|line| line["method"] == "programs.patch")
+        .expect("no programs.patch");
+    assert!(
+        first_patch > reply_at,
+        "a patch arrived before the list reply: {lines:#?}"
+    );
+    assert!(
+        lines[reply_at + 1..]
+            .iter()
+            .all(|line| line["method"] == "programs.patch"),
+        "only patches may follow the list reply: {lines:#?}"
+    );
     let methods = request_methods(&lines);
     assert_eq!(methods.first(), Some(&"programs.batch"));
-    assert_eq!(methods.get(1), Some(&"programs.patch"));
-    // No patch precedes a raw batch.
-    let first_patch = methods.iter().position(|m| *m == "programs.patch").unwrap();
-    assert!(
-        methods[..first_patch]
-            .iter()
-            .all(|m| *m == "programs.batch")
-    );
+    assert_eq!(methods.last(), Some(&"programs.patch"));
 
     let rows: Vec<&Value> = lines
         .iter()
@@ -551,6 +570,16 @@ fn the_same_stream_over_anonymous_pipes() {
             .map(|line| serde_json::from_str(line).unwrap())
             .collect();
         assert_eq!(lines[0]["method"], "programs.batch");
+        // The reply is written before the patches of the same request.
+        let reply_at = lines
+            .iter()
+            .position(|line| line["id"] == json!(1))
+            .unwrap();
+        let first_patch = lines
+            .iter()
+            .position(|line| line["method"] == "programs.patch")
+            .unwrap();
+        assert!(first_patch > reply_at, "{lines:#?}");
         assert_eq!(response(&lines, 2)["result"]["name"], "Alpha App");
         assert_eq!(response(&lines, 1)["result"]["count"], 5);
     });
