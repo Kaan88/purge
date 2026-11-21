@@ -67,8 +67,8 @@ use purge_inventory::runner::{ProcessHost, RunError, RunOptions, RunReport, RunR
 use purge_inventory::verify_gone::{self, VerifyTarget};
 use purge_model::{
     AnchorKind, AnchorRef, BaselineTrust, Candidate, Fingerprint, InstallScope, InstallerKind,
-    InventoryDoc, InventoryEntry, OsInfo, ProgramId, RawFlags, ScanMode, VerifyGone, View,
-    WritableBy,
+    InventoryDoc, InventoryEntry, OsInfo, ProgramId, RawFlags, ResidueDoc, ScanMode, VerifyGone,
+    View, WritableBy,
 };
 use purge_plan::decide::{DecideCtx, Limits, M1bDecide, bundle_known};
 use purge_plan::emit::{Built, build};
@@ -760,6 +760,9 @@ pub struct Scanned {
     pub built: Built,
     /// The number of candidates each scanner emitted, in catalog order.
     pub per_scanner: Vec<(&'static str, usize)>,
+    /// The residue (`purge.residue/1`): what the baseline could not answer, for the advisory model
+    /// (BASELINE_LOCAL_DESIGN.md §7).
+    pub residue: ResidueDoc,
     /// Warnings of the pipeline.
     pub warnings: Vec<String>,
 }
@@ -1260,6 +1263,7 @@ fn run_scan(
         ),
     };
     let built = build(app_id, candidates.clone(), &decide);
+    let residue = ctx.residue_doc(&built.scan.plan_hash, &candidates, ext.take_unknown());
     step.done(&format!(
         "scan: plan with {} item(s), hash {}",
         built.plan.items.len(),
@@ -1269,6 +1273,7 @@ fn run_scan(
         candidates,
         built,
         per_scanner,
+        residue,
         warnings,
     })
 }

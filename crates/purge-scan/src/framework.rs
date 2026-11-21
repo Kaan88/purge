@@ -45,8 +45,10 @@ use purge_model::exec::op::FileIdHex;
 use purge_model::{
     Action, AnchorKind, AnchorRef, AppRef, BaselineTrust, Blocker, Candidate, CandidateId,
     Category, Evidence, EvidenceKind, Facts, FileTime, Fingerprint, Harm, InnoRecord,
-    InnoRecordKind, ManifestKind, Origin, RefSnapEntry, Reversibility, Root, RootKind, RootSource,
-    ScanMode, Scope, SourceTrust, Target, Tier, VerifyGone,
+    InnoRecordKind, MAX_NEIGHBOURS, MAX_RESIDUE_ITEMS, ManifestKind, Origin, RefSnapEntry,
+    ResidueBaselineView, ResidueDoc, ResidueItem, ResidueOwner, ResidueSchema, ResidueShape,
+    ResidueWhy, ResidueWritten, Reversibility, Root, RootKind, RootSource, ScanMode, Scope,
+    SourceTrust, Target, Tier, VerifyGone, item_fp_text,
 };
 use purge_source::filesystem::FileSystemSource;
 use purge_source::registry::RegistrySource;
@@ -697,7 +699,9 @@ impl<'a> ScanCtx<'a> {
     /// whose evidence claims baseline absence without the `BaselineInferred` blocker is dropped as a
     /// scanner fault ([`ScanCtx::baseline_cap_missing`]).
     pub fn run(&self, scanner: &dyn Scanner, app: &AppIdentityView) -> Vec<Candidate> {
+        self.ext.begin_site(scanner.id());
         let found = scanner.scan(self, app);
+        self.ext.end_site();
         let mut sealed = Vec::with_capacity(found.len());
         // Compiled once per run, and only when a system object needs the guard's object rules.
         let deny = std::cell::OnceCell::new();
@@ -763,6 +767,134 @@ impl<'a> ScanCtx<'a> {
             && let (Some(file_id), Some(volume_serial)) = (meta.file_id, meta.volume_serial)
         {
             candidate.set_item_fp(FileIdHex(file_id.to_le_bytes()), volume_serial);
+        }
+    }
+
+    /// Builds the residue of this scan (BASELINE_LOCAL_DESIGN.md §7): the candidates that carry
+    /// [`Blocker::BaselineInferred`], plus every `Unknown` answer A sites gave (`answers` from
+    /// [`ScanExt::take_unknown`]), each with why and a value-free shape.
+    ///
+    /// Items are unique by (scanner, case-folded key), sorted by that pair, and capped at
+    /// [`MAX_RESIDUE_ITEMS`]; the rest is counted in [`ResidueDoc::omitted`]. A candidate's id and
+    /// `item_fp` are kept; a key with no candidate gets the id its candidate would have
+    /// ([`candidate_id`]) and an empty `item_fp`.
+    #[must_use]
+    pub fn residue_doc(
+        &self,
+        scan_id: &str,
+        candidates: &[Candidate],
+        answers: Vec<(String, String, ResidueWhy)>,
+    ) -> ResidueDoc {
+        use std::collections::btree_map::Entry;
+        let mut items: BTreeMap<(String, String), ResidueItem> = BTreeMap::new();
+        for candidate in candidates
+            .iter()
+            .filter(|c| c.blockers.contains(&Blocker::BaselineInferred))
+        {
+            let Some(key) = residue_key(&candidate.target) else {
+                continue;
+            };
+            let folded = prefix::fold(key);
+            if let Entry::Vacant(slot) = items.entry((candidate.scanner.clone(), folded)) {
+                let shape = self.residue_shape(key);
+                slot.insert(ResidueItem {
+                    id: candidate.id.0.clone(),
+                    item_fp: item_fp_text(candidate.item_fp.as_ref()),
+                    key: key.to_owned(),
+                    area: self.baseline.area_of(key).map(str::to_owned),
+                    why: ResidueWhy::InferredAbsent,
+                    site: candidate.scanner.clone(),
+                    shape,
+                });
+            }
+        }
+        for (site, key, why) in answers {
+            let folded = prefix::fold(&key);
+            if let Entry::Vacant(slot) = items.entry((site.clone(), folded)) {
+                let shape = self.residue_shape(&key);
+                slot.insert(ResidueItem {
+                    id: candidate_id(&Target::RegKey { path: key.clone() }).0,
+                    item_fp: String::new(),
+                    area: self.baseline.area_of(&key).map(str::to_owned),
+                    key,
+                    why,
+                    site,
+                    shape,
+                });
+            }
+        }
+        let total = items.len();
+        let mut items: Vec<ResidueItem> = items.into_values().collect();
+        items.truncate(MAX_RESIDUE_ITEMS);
+        ResidueDoc {
+            schema: ResidueSchema,
+            scan_id: scan_id.to_owned(),
+            baseline_view: ResidueBaselineView {
+                name: self.baseline.name(),
+                trust: self.baseline.trust(),
+            },
+            omitted: u32::try_from(total.saturating_sub(items.len())).unwrap_or(u32::MAX),
+            items,
+        }
+    }
+
+    /// What the scan could read about a residue key without its values: counts, owner, last-write time
+    /// against the uninstall window, and the parent's and siblings' presence in the view. `in_local` and
+    /// `in_neighbours` are `false` throughout: a set that held the key would have answered `Present`.
+    fn residue_shape(&self, key: &str) -> ResidueShape {
+        let info = self.reg.key_info(key).ok();
+        let values = info.as_ref().map_or(0, |i| i.n_values);
+        let subkeys = info.as_ref().map_or(0, |i| i.n_subkeys);
+        let owner = match info.as_ref().and_then(|i| i.ti_owned) {
+            Some(true) => ResidueOwner::Ti,
+            Some(false) | None => ResidueOwner::Other,
+        };
+        let written = self.residue_written(info.as_ref().map(|i| i.lwt));
+        let parent_in_view =
+            prefix::parent(key).is_some_and(|parent| self.baseline.has_key(parent));
+        let siblings_in_view = if subkeys == 0 {
+            0
+        } else {
+            let base = key.trim_end_matches(prefix::SEP);
+            self.reg
+                .subkeys(key)
+                .map(|names| {
+                    names
+                        .iter()
+                        .filter(|name| self.baseline.has_key(&format!("{base}\\{name}")))
+                        .count()
+                })
+                .unwrap_or(0)
+                .try_into()
+                .unwrap_or(u32::MAX)
+        };
+        ResidueShape {
+            values,
+            subkeys,
+            owner,
+            written,
+            parent_in_view,
+            siblings_in_view,
+            siblings: subkeys,
+            in_local: false,
+            in_neighbours: vec![false; self.baseline.neighbour_names().len().min(MAX_NEIGHBOURS)],
+        }
+    }
+
+    /// When `lwt` falls against the fingerprint's uninstall window.
+    fn residue_written(&self, lwt: Option<FileTime>) -> ResidueWritten {
+        let window = &self.fp.window;
+        match (lwt, window.install_time, window.t_end) {
+            (Some(when), Some(install), Some(end)) if when.0 != 0 => {
+                if when < install {
+                    ResidueWritten::BeforeInstall
+                } else if when <= end {
+                    ResidueWritten::InWindow
+                } else {
+                    ResidueWritten::AfterUninstall
+                }
+            }
+            _ => ResidueWritten::Unknown,
         }
     }
 
@@ -1623,6 +1755,22 @@ pub fn anchor_trust(fp: &Fingerprint, anchor: &AnchorRef) -> SourceTrust {
         AnchorKind::ProgId | AnchorKind::Clsid | AnchorKind::Aumid | AnchorKind::Token => {
             app_trust(fp)
         }
+    }
+}
+
+/// The registry key a residue item speaks about: a key, value or list segment target's key. `None` for
+/// every other target (a residue is about registry keys).
+fn residue_key(target: &Target) -> Option<&str> {
+    match target {
+        Target::RegKey { path }
+        | Target::RegValue { path, .. }
+        | Target::RegValueChanged { path, .. }
+        | Target::RegMultiSzSegment { path, .. } => Some(path),
+        Target::Path { .. }
+        | Target::Service { .. }
+        | Target::Task { .. }
+        | Target::FirewallRule { .. }
+        | Target::AppxPackage { .. } => None,
     }
 }
 
@@ -2815,6 +2963,7 @@ mod tests {
     use super::testkit::*;
     use super::*;
     use purge_model::{HarvestedToken, InnoRecordKind, RefCarrier, SubtreeBaseline, View};
+    use purge_model::{MAX_RESIDUE_ITEMS, ResidueWhy};
     use purge_source::fixture::Fixture;
 
     const SID: &str = GuardEnv::SAMPLE_SID;
@@ -3361,6 +3510,8 @@ mod tests {
                     // Stated through the by-value M1b constructor
                     // `CandidateBuilder::owned_system_object` (tested in `framework::m1b`).
                     | EvidenceKind::OwnedSystemObject
+                    // Made by the advice mapping of `purge-model`, never by a scanner.
+                    | EvidenceKind::Ai
             );
             assert_eq!(seen.contains(&kind), expected, "{kind:?}");
         }
@@ -4802,6 +4953,153 @@ mod tests {
                     && f.contains("trust merged")
                     && f.contains("without the BaselineInferred cap")),
             "{faults:?}"
+        );
+    }
+
+    /// Asks `key_absence` for each key and emits nothing. The answer is only recorded for the residue
+    /// while `ScanCtx::run` attributes the calls to this scanner.
+    struct AskKeys(Vec<String>);
+
+    impl Scanner for AskKeys {
+        fn id(&self) -> &'static str {
+            "TEST-RESIDUE"
+        }
+
+        fn captured_roots(&self) -> &[RootSpec] {
+            &[]
+        }
+
+        fn scan(&self, ctx: &ScanCtx<'_>, _app: &AppIdentityView) -> Vec<Candidate> {
+            for key in &self.0 {
+                let _ = ctx.key_absence(key);
+            }
+            Vec::new()
+        }
+    }
+
+    /// Design §7: every `Unknown` an A site gets is in the residue once, with the site and the reason;
+    /// the output is capped and the rest is counted.
+    #[test]
+    fn residue_collects_unknown_answers_per_site_and_caps_them() {
+        let mut world = World::new(uninstalled());
+        world.baseline = None;
+        let app = AppIdentityView::from_fingerprint(&world.fp, &world.env);
+        let ext = ScanExt::new(
+            purge_index::ownership::OwnershipIndex::default(),
+            purge_index::sysobj::SysObjectIndex::default(),
+        );
+        let ctx = ScanCtx {
+            ext: &ext,
+            ..world.ctx()
+        };
+        let keys = vec![
+            SH_AUTO.to_owned(),
+            r"HKLM\SOFTWARE\GitForWindows".to_owned(),
+        ];
+        ctx.run(&AskKeys(keys.clone()), &app);
+        ctx.run(&AskKeys(keys), &app);
+        let doc = ctx.residue_doc("scan-1", &[], ext.take_unknown());
+        doc.validate().unwrap();
+        assert_eq!(doc.scan_id, "scan-1");
+        assert_eq!(doc.items.len(), 2, "{doc:#?}");
+        assert_eq!(doc.omitted, 0);
+        for item in &doc.items {
+            assert_eq!(item.site, "TEST-RESIDUE");
+            assert_eq!(item.why, ResidueWhy::NoView);
+            assert!(item.id.starts_with("c-"), "{item:?}");
+            assert!(item.item_fp.is_empty());
+            assert!(!item.shape.in_local);
+            assert!(item.shape.in_neighbours.is_empty());
+        }
+
+        let many: Vec<(String, String, ResidueWhy)> = (0..MAX_RESIDUE_ITEMS + 5)
+            .map(|i| {
+                (
+                    "TEST-RESIDUE".to_owned(),
+                    format!(r"HKLM\SOFTWARE\Vendor{i}"),
+                    ResidueWhy::OutOfScope,
+                )
+            })
+            .collect();
+        let doc = ctx.residue_doc("scan-1", &[], many);
+        assert_eq!(doc.items.len(), MAX_RESIDUE_ITEMS);
+        assert_eq!(doc.omitted, 5);
+    }
+
+    /// The four reasons of design §7 are told apart at the one door.
+    #[test]
+    fn residue_why_distinguishes_no_view_scope_area_and_inference() {
+        let ask = |world: &World, key: &'static str| {
+            let ext = ScanExt::new(
+                purge_index::ownership::OwnershipIndex::default(),
+                purge_index::sysobj::SysObjectIndex::default(),
+            );
+            let app = AppIdentityView::from_fingerprint(&world.fp, &world.env);
+            let ctx = ScanCtx {
+                ext: &ext,
+                ..world.ctx()
+            };
+            let scanner = AskKeys(vec![key.to_owned()]);
+            ctx.run(&scanner, &app);
+            let doc = ctx.residue_doc("s", &[], ext.take_unknown());
+            doc.items.first().map(|item| item.why)
+        };
+
+        let mut world = World::new(uninstalled());
+        world.baseline = None;
+        assert_eq!(ask(&world, SH_AUTO), Some(ResidueWhy::NoView));
+
+        world.baseline = Some(merged_view(&[], &[]));
+        assert_eq!(ask(&world, SH_AUTO), Some(ResidueWhy::InferredAbsent));
+        assert_eq!(
+            ask(&world, r"HKLM\HARDWARE\X"),
+            Some(ResidueWhy::OutOfScope)
+        );
+        world.baseline = Some(baseline(EDITION, &[]));
+        assert_eq!(ask(&world, SH_AUTO), None, "Proven is no residue");
+        world.baseline = Some(baseline("EnterpriseS", &[]));
+        assert_eq!(ask(&world, SH_AUTO), Some(ResidueWhy::NoView));
+    }
+
+    /// A candidate that carries `BaselineInferred` is in the residue even when no site asked, with its
+    /// own id and `item_fp`; a key no site asked about keeps its reason.
+    #[test]
+    fn residue_lists_baseline_inferred_candidates() {
+        let world = World::new(uninstalled());
+        let ctx = world.ctx();
+        let mut b = ctx.candidate(
+            "TEST",
+            key(SH_AUTO),
+            Action::DeleteKey,
+            Category::Registration,
+        );
+        b.blocker(Blocker::BaselineInferred);
+        let candidate = b.build();
+        let doc = ctx.residue_doc(
+            "s",
+            std::slice::from_ref(&candidate),
+            vec![(
+                "TEST".to_owned(),
+                r"HKLM\SOFTWARE\Other".to_owned(),
+                ResidueWhy::AreaNotAccepted,
+            )],
+        );
+        assert_eq!(doc.items.len(), 2);
+        let carried = doc
+            .items
+            .iter()
+            .find(|item| item.id == candidate.id.0)
+            .expect("the candidate is listed");
+        assert_eq!(carried.why, ResidueWhy::InferredAbsent);
+        assert_eq!(
+            carried.key.to_lowercase(),
+            SH_AUTO.to_lowercase(),
+            "{carried:?}"
+        );
+        assert!(
+            doc.items
+                .iter()
+                .any(|item| item.why == ResidueWhy::AreaNotAccepted)
         );
     }
 }
