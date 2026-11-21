@@ -44,6 +44,14 @@ so the work can be continued from any harness: read it, then `git log --oneline 
   `PURGE_KB_DIR`/ProgramData taken from env) and the N notes (N5 fingerprints made at medium integrity, N6
   unelevated gets no local cache under the install.ps1 root).
 
+## Started in parallel: milestone M3 (UI + broker), user's request 2026-11-21
+- Design first (Fable): worktree `.claude/worktrees/m3-design`, branch `m3-design`, delivering
+  `docs/M3_DESIGN.{md,json}` in the BASELINE_LOCAL/M2 design schema, plus DECISIONS rows and open user questions.
+  Inputs: ENGINE_PLAN 3, 7, 9, 11; M2_GATE 8; M1B_GATE (R8b M1); HANDOFF-m1b M3 notes; BL-R1 S4/N5/N6; prior-art
+  stopgap shell on `origin/worktree-agent-a7c285be2b9791f54` (0d9c008).
+- Toolchain: .NET SDK 10.0.404 is installed at `C:\Program Files\dotnet` but not on PATH in agent shells.
+- BL-GATE (wave 6) is not a prerequisite for M3 code that does not touch the baseline; the M3 gate runs after it.
+
 ## Next
 1. Wave 6: BL-RESIDUE (medium), BL-GATE (R3 replay with `--baseline-view` + `--l5-against`, R4 campaign with the
    exact baseline hidden; S1-S5, W1-W5; writes `docs/BASELINE_LOCAL_GATE.md`). First run of the rig must confirm M1
