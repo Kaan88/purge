@@ -5,6 +5,9 @@
 #   powershell.exe -NoProfile -ExecutionPolicy Bypass -File install\install.ps1 -WhatIf
 #   powershell.exe -NoProfile -ExecutionPolicy Bypass -File install\install.ps1 -Check
 #   powershell.exe -NoProfile -ExecutionPolicy Bypass -File install\install.ps1 -Uninstall
+#   powershell.exe -NoProfile -ExecutionPolicy Bypass -File install\install.ps1 -ProtectOnly -DataRootOnly -SkipBuild
+#       (Inno Setup's post-install step: the setup copied the payload; this protects it, creates the
+#        data root and registers the event-log source. -Check then verifies the whole layout.)
 #
 # What it does (contract and the SDDL constants: install\README.md, the single documented source):
 #   1. Builds the release artifacts: cargo build --release -p purge-engine, then
@@ -47,6 +50,15 @@ param(
     [string]$Kb = '',
     # Use the artifacts as they are; run neither cargo nor dotnet.
     [switch]$SkipBuild,
+    # Inno Setup mode: the setup has already copied the payload into the program-files directory.
+    # Create (or verify) only the data root and the event-log source; no build, no payload copy, no
+    # shortcut (the setup's [Icons] entry makes it). Install mode only.
+    [switch]$DataRootOnly,
+    # Inno Setup mode: give the payload an installer already put in the program-files directory the
+    # ProgramFiles descriptor (install only; the setup creates it with the Program Files inheritance,
+    # which grants Users no write but is not the exact constant -Check compares against). Install mode
+    # only.
+    [switch]$ProtectOnly,
     # Legacy M1b/M2 rig mode: deploy purge-engine.exe and kb\ plus the data root, nothing else (no
     # broker, no UI, no event-log source, no shortcut). -Check and -Uninstall honour it too.
     [switch]$EngineOnly,
@@ -243,6 +255,28 @@ function Get-PurgeDataLayout {
 function Get-PurgeProgramFilesLayout {
     $t = Get-PurgeSddlTable
     @([pscustomobject]@{ Rel = ''; Kind = 'dir'; Sddl = $t.ProgramFiles; Content = $null })
+}
+
+# Whether an existing directory is exactly the layout root: a protected DACL and the same canonical
+# SDDL (owner included). Unlike Test-ObjectFacts this does not judge the ACEs by principal, so it also
+# holds for a tree whose descriptor was built with a test's accepted-owner list; the root of an install
+# tree must be the constant itself, not merely a descriptor the broker's rule accepts.
+function Test-TreeRoot($Facts, [string]$Sddl) {
+    $r = New-Object System.Collections.Generic.List[string]
+    if (-not $Facts.Exists) { $r.Add('does not exist'); return , $r }
+    if (-not $Facts.AttributesKnown) { $r.Add("attributes unreadable (Win32 error $($Facts.Error))"); return , $r }
+    if ($Facts.IsReparsePoint) { $r.Add('is a reparse point'); return , $r }
+    if (-not $Facts.IsDirectory) { $r.Add('is a file, expected a directory'); return , $r }
+    if (-not $Facts.Sddl) { $r.Add("security descriptor unreadable (Win32 error $($Facts.Error))"); return , $r }
+    try { $raw = New-Object System.Security.AccessControl.RawSecurityDescriptor $Facts.Sddl }
+    catch { $r.Add("unparseable SDDL '$($Facts.Sddl)'"); return , $r }
+    if (-not [bool]($raw.ControlFlags -band [System.Security.AccessControl.ControlFlags]::DiscretionaryAclProtected)) {
+        $r.Add('DACL is not protected')
+    }
+    $actual = ConvertTo-CanonicalSddl $Facts.Sddl
+    $expected = ConvertTo-CanonicalSddl $Sddl
+    if ($actual -ne $expected) { $r.Add("SDDL '$actual' differs from '$expected'") }
+    , $r
 }
 
 # Integrity findings for one existing object against its layout entry. Facts are a plain object
@@ -725,6 +759,32 @@ function Copy-FileTree([string]$SourceDir, [string]$DestDir, [string]$Label) {
     , $out
 }
 
+# Applies the install tree's descriptor (owner Administrators, protected DACL, Users read and execute) to
+# $Dir and to every object below it that does not already pass the broker's per-object rule. The root is
+# judged exactly, not by that rule: a directory another program created (an Inno Setup file copy)
+# inherits the parent's DACL, which grants Users no write but is not the constant -Check compares
+# against, so the root always ends up with the layout descriptor itself.
+function Protect-Tree([string]$Dir, [string]$Sddl, [string[]]$AdminSids = $script:AdminSids) {
+    $reprotected = New-Object System.Collections.Generic.List[string]
+    if ($script:DryRun) {
+        Write-InstallLog "what-if: protect $Dir and every object below it with '$Sddl'"
+        return
+    }
+    if (-not (Get-ObjectFacts $Dir).Exists) { throw "payload: $Dir does not exist; nothing to protect" }
+    $targets = @($Dir) + @((Get-ObjectTree $Dir) | ForEach-Object { $_.Path })
+    foreach ($path in $targets) {
+        $f = Get-ObjectFacts $path
+        if ($f.IsReparsePoint) { throw "payload: $path is a reparse point; refusing to follow it" }
+        $why = if ($path -eq $Dir) { Test-TreeRoot $f $Sddl } else { Test-AdminOnlyWritable $f $AdminSids }
+        if ($why.Count -eq 0) { continue }
+        $e = [PurgeInstall.Native]::SetSddl($path, $Sddl)
+        if ($e -ne 0) { throw "payload: cannot protect ${path}: $(Format-Win32Error $e)" }
+        $reprotected.Add($path)
+        Write-InstallLog "payload: re-protected $path ($($why -join '; '))"
+    }
+    $reprotected
+}
+
 # Engine, broker, the UI publish folder and kb into the verified Program Files tree. New files and
 # subdirectories inherit the root's protected DACL; every deployed object is then checked with the
 # broker's rule and re-protected (owner + protected DACL) when it does not pass (a replaced binary, a
@@ -751,23 +811,11 @@ function Copy-Payload([string]$Dir, [string]$EnginePath, [string]$BrokerPath, [s
 
     # Protection: the broker judges purge-broker.exe, Purge.exe and every file in kb\baselines on their
     # own, and trusts kb only as a directory. Nothing in the deployed tree may be a reparse point.
-    $reprotected = New-Object System.Collections.Generic.List[string]
-    if (-not $script:DryRun) {
-        foreach ($o in (Get-ObjectTree $Dir)) {
-            if ($o.IsReparsePoint) { throw "payload: $($o.Path) is a reparse point; refusing to follow it" }
-            $f = Get-ObjectFacts $o.Path
-            $why = Test-AdminOnlyWritable $f $AdminSids
-            if ($why.Count -eq 0) { continue }
-            $e = [PurgeInstall.Native]::SetSddl($o.Path, $Sddl)
-            if ($e -ne 0) { throw "payload: cannot protect $($o.Path): $(Format-Win32Error $e)" }
-            $reprotected.Add($o.Path)
-            Write-InstallLog "payload: re-protected $($o.Path) ($($why -join '; '))"
-        }
-    }
+    $reprotected = @(Protect-Tree $Dir $Sddl $AdminSids)
 
     foreach ($o in $out) { if ($o.action -ne 'unchanged') { Write-InstallLog "payload: $($o.action) $($o.file)" } }
     $fileList = $out.ToArray()
-    $protList = $reprotected.ToArray()
+    $protList = @($reprotected)
     $changedFiles = @($fileList | Where-Object { $_.action -eq 'copied' -or $_.action -eq 'updated' }).Count
     $changed = ($changedFiles -gt 0) -or ($protList.Count -gt 0)
     [ordered]@{
@@ -994,6 +1042,11 @@ function Invoke-PurgeInstall {
         if (-not $script:DryRun -and -not (Test-Elevated)) { throw 'run elevated (as administrator)' }
         if ($script:DryRun) { Write-InstallLog 'what-if: dry run; the machine will not be changed and elevation is not needed' }
         if ($EngineOnly) { Write-InstallLog 'engine-only mode: purge-engine.exe, kb\ and the data root; no broker, UI, event-log source or shortcut' }
+        if ($DataRootOnly -or $ProtectOnly) {
+            if ($mode -ne 'install') { throw '-DataRootOnly and -ProtectOnly are install-mode switches; -Check verifies the whole layout and -Uninstall removes it' }
+            if ($EngineOnly) { throw '-DataRootOnly and -ProtectOnly cannot be combined with -EngineOnly' }
+            Write-InstallLog 'setup mode: the setup copied the payload; fewer steps than a full install'
+        }
         Initialize-PurgeNative
         $repo = Split-Path -Parent $PSScriptRoot
         $pf = if ($ProgramFilesDir) { $ProgramFilesDir } else { Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'Purge' }
@@ -1056,6 +1109,35 @@ function Invoke-PurgeInstall {
                     Write-InstallLog "uninstall: removed $pf (data root $dr left in place)"
                     $changed = $true
                 }
+                $report.changed = $changed
+                $report.ok = $true
+            }
+        } elseif ($DataRootOnly -or $ProtectOnly) {
+            # Inno Setup mode: the setup copied the payload into $pf before this step runs, so there is
+            # nothing to build or copy. Protect that tree with the ProgramFiles descriptor (the setup
+            # creates it with the Program Files inheritance, which grants Users no write but is not the
+            # exact constant -Check compares against), create the data root and register the event-log
+            # source. The shortcut is the setup's [Icons] entry, not this script's.
+            Write-InstallLog "setup mode: the payload in $pf is already installed by the setup; no build, no payload copy, no shortcut"
+            Assert-SystemVolume $pf $windowsDir
+            if ($script:DryRun) {
+                if ($ProtectOnly) { Write-InstallLog "what-if: protect $pf and every object below it with the ProgramFiles descriptor" }
+                if ($DataRootOnly) {
+                    Write-InstallLog "what-if: install the data-root tree $dr (sessions, Quarantine, fp, kb, sessions\index.json)"
+                    Write-InstallLog "what-if: register the Application event-log source '$($script:EventLogSource)'"
+                }
+                $report.ok = $true
+            } else {
+                $reprotected = @()
+                if ($ProtectOnly) { $reprotected = @(Protect-Tree $pf (Get-PurgeSddlTable).ProgramFiles) }
+                $changed = ($reprotected.Count -gt 0)
+                if ($DataRootOnly) {
+                    $b = Install-Tree $dr (Get-PurgeDataLayout) 'data-root'
+                    $report.data_root = $b
+                    if ($b.changed) { $changed = $true }
+                    if (Install-EventLogSource) { $changed = $true }
+                }
+                $report.reprotected = $reprotected
                 $report.changed = $changed
                 $report.ok = $true
             }

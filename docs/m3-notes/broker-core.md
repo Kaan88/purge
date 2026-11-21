@@ -114,9 +114,9 @@ progress is not interrupted). No cargo feature anywhere.
 - A real `Purge.exe` as the client image against the broker's image check (path case, install under `-ProgramFilesDir`).
 - The TaskDialog closed as Cancel by `Closer` on parent/pipe loss (`TaskDialogConsent`), and closing from the dialog's
   thread under UAC.
-- A broker started with a console: the manifest is `asInvoker` and the binary is a console program, so `runas` shows
-  a console window until `close_std_handles` (it does not close the console); a `windows` subsystem build is an
-  open point.
+- A broker started through `runas` (first real elevated run): no console window appears (the binary is built for
+  the Windows subsystem, `#![windows_subsystem = "windows"]`), and the consent TaskDialog is visible and in front
+  (the launcher passes `SW_SHOWNORMAL`). S7 was found by reading; this is where it is confirmed.
 - Local-baseline build started in the elevated broker and stopped by an exit in its middle (cache directory afterwards
   has no `.tmp` of a live build and no partial part).
 

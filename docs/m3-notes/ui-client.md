@@ -34,7 +34,8 @@ same newline framing and the same `RpcJsonContext` DTOs.
 4. **Account pre-check.** `TokenElevationType` `Limited` (split administrator) or an elevated `Full`/`Default`
    token may launch; a non-elevated `Default` token is `NotAdministrator` and starts nothing.
 5. **UAC.** `ShellExecuteExW("runas")` runs on a dedicated STA thread with `SEE_MASK_NOCLOSEPROCESS |
-   SEE_MASK_NOASYNC`, owner = the caller's window, `SW_HIDE`. Error 1223 is `BrokerLaunchStatus.Cancelled`, which
+   SEE_MASK_NOASYNC`, owner = the caller's window, `SW_SHOWNORMAL` (the broker has no window of its own, so
+   nothing appears apart from its dialogs; S7). Error 1223 is `BrokerLaunchStatus.Cancelled`, which
    feeds `Purge.App/Shell/ElevationPrompts.CancelledBar`; the launcher shows nothing itself.
 6. **Exit before the pipe.** The connect loop polls for 10 s; if the process has exited, the result carries its exit
    code and the text says so. Other connect errors carry the Windows error and its message.
@@ -62,5 +63,6 @@ same newline framing and the same `RpcJsonContext` DTOs.
   review/session state to restore.
 - The stdio client's notification surface is still the one M3-STDIO wrote; if the flow package needs more stdio
   notifications, it belongs with the M3-UI-S1 move onto `Rpc/`.
-- `purge-broker.exe` is a console binary; `SW_HIDE` is used, but the console-window question stays the broker
-  package's open point.
+- `purge-broker.exe` was a console binary; it is now built for the Windows subsystem and the launcher passes
+  `SW_SHOWNORMAL`, so no console appears and the consent dialog is the first window (S7; verify on the first
+  elevated run that the dialog is visible and in front).

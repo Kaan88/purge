@@ -119,7 +119,9 @@ public static partial class BrokerLauncher
 
     private const uint SeeMaskNoCloseProcess = 0x00000040;
     private const uint SeeMaskNoAsync = 0x00000100;
-    private const int SwHide = 0;
+    // The broker has no window of its own: the show command reaches the first window it creates, the consent
+    // dialog, so it must be a normal one (M3-R2 S7).
+    private const int SwShowNormal = 1;
     private const int ErrorCancelled = 1223;
     private const int ErrorFileNotFound = 2;
     private const int ErrorPipeBusy = 231;
@@ -322,7 +324,7 @@ public static partial class BrokerLauncher
                 lpFile = file,
                 lpParameters = parameters,
                 lpDirectory = workDirectory,
-                nShow = SwHide,
+                nShow = SwShowNormal,
             };
             if (!ShellExecuteEx(&info))
                 return new ShellLaunch(false, Marshal.GetLastWin32Error(), 0);
