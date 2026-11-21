@@ -8,12 +8,18 @@ using Purge.Client.Rpc;
 namespace Purge.Client.Broker;
 
 /// <summary>The broker answered with a JSON-RPC error (<c>error.data.kind</c> says which).</summary>
-public sealed class BrokerRpcException(int code, string? kind, string message) : Exception(message)
+public sealed class BrokerRpcException(int code, string? kind, string message, ErrorData? data = null) : Exception(message)
 {
     public int Code { get; } = code;
 
     /// <summary><c>error.data.kind</c> (for example <c>runtime</c> or <c>gone</c>), when the broker gave one.</summary>
     public string? Kind { get; } = kind;
+
+    /// <summary>
+    /// The whole <c>error.data</c> object: <c>exit_code</c> and <c>forced_offered</c> of an
+    /// <c>uninstall_failed</c>, or the route of a <c>wrong_route</c>. Null when the broker sent none.
+    /// </summary>
+    public ErrorData? Details { get; } = data;
 }
 
 /// <summary>The link to the broker broke: it could not be written to, or it ended.</summary>
@@ -241,7 +247,8 @@ public sealed class BrokerRpcClient : IAsyncDisposable
         var code = objectError?.Code ?? 0;
         var data = objectError?.Data;
         var message = data?.Message ?? objectError?.Message;
-        return new BrokerRpcException(code, data?.Kind, message is { Length: > 0 } ? message : "The administrator part reported an error.");
+        return new BrokerRpcException(code, data?.Kind, message is { Length: > 0 } ? message : "The administrator part reported an error.",
+            data);
     }
 
     private void Fail(string reason)

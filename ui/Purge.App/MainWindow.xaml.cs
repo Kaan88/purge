@@ -102,6 +102,16 @@ public sealed partial class MainWindow : Window
         return (ReviewView)_views["leftovers"];
     }
 
+    /// <summary>S2, built on first use; the Uninstall click on Programs starts its pipeline.</summary>
+    public UninstallView OpenUninstall()
+    {
+        Navigate("queue");
+        return (UninstallView)_views["queue"];
+    }
+
+    /// <summary>The XamlRoot a dialog of a page uses (null before the window is loaded).</summary>
+    public XamlRoot? DialogRoot => Root.XamlRoot;
+
     private void OnFirstRendering(object? sender, object e)
     {
         if (_firstTickSeen) return;
@@ -152,7 +162,7 @@ public sealed partial class MainWindow : Window
         {
             view = key switch
             {
-                "queue" => new QueueView(),
+                "queue" => new UninstallView(),
                 "leftovers" => new ReviewView(),
                 "vault" => new VaultView(),
                 "history" => new HistoryView(),

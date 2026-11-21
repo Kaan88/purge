@@ -121,6 +121,13 @@ public sealed class FakeEngineClient : IEngineClient
             ],
         });
 
+    /// <summary>Sample data has no uninstaller to route: the click is disabled before this is reached.</summary>
+    public Task<Rpc.RouteInfo> GetUninstallRouteAsync(string programId, CancellationToken ct = default) => NotLive<Rpc.RouteInfo>();
+
+    /// <summary>Sample data never runs an uninstaller.</summary>
+    public Task<Rpc.RunUserResult> RunUserUninstallAsync(string programId, bool quiet, Action<Rpc.Progress>? progress = null,
+        CancellationToken ct = default) => NotLive<Rpc.RunUserResult>();
+
     private List<LeftoverForecast>? _forecasts;
 
     public async Task<IReadOnlyList<LeftoverForecast>> GetForecastsAsync(IReadOnlyList<string> programIds, CancellationToken ct = default)

@@ -271,11 +271,12 @@ public sealed class ProgramsPageTests
     }
 
     [Fact]
-    public async Task The_stdio_client_cannot_change_the_pc_and_says_so()
+    public async Task The_stdio_client_can_start_an_uninstall_through_the_broker()
     {
         using var engine = ScriptedEngine.Healthy();
         await using var client = engine.Client;
-        Assert.False(client.CanChangePc);
+        // The engine is live, so the Uninstall click is enabled: it starts the broker, not the sample preview.
+        Assert.True(client.CanChangePc);
         var scan = await Assert.ThrowsAsync<InvalidOperationException>(() => client.ScanAsync("x", "x", ScanKind.ScanOnly));
         Assert.Contains("only lists programs", scan.Message);
     }
