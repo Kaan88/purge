@@ -9,7 +9,8 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-purge-engine = { path = "../../bins/purge-engine" }
+# `inject-view`: `replay --baseline-view` hands the engine a view it built (replay.rs).
+purge-engine = { path = "../../bins/purge-engine", features = ["inject-view"] }
 purge-guard.workspace = true
 purge-harvest.workspace = true
 purge-identity.workspace = true

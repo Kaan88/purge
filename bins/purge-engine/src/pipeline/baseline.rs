@@ -85,6 +85,21 @@ impl PipelineBaseline {
         }
     }
 
+    /// A view the caller built, in place of the one [`load`] would give: for the offline replay
+    /// (`cargo xtask replay --baseline-view`, design §8.1 run R3) and tests, through
+    /// [`super::harvest_with_view`] and [`super::scan_with_view`]. No directory is read, no cache is
+    /// opened and nothing is built. Only with the `inject-view` feature: the CLI and the RPC server
+    /// have no way to make one.
+    #[cfg(any(test, feature = "inject-view"))]
+    pub fn injected(view: BaselineView) -> PipelineBaseline {
+        PipelineBaseline {
+            view,
+            exact_counts: None,
+            configured: true,
+            parts: None,
+        }
+    }
+
     /// The record counts of the exact shipped baseline, when the view is Exact.
     pub fn exact_counts(&self) -> Option<RecordCounts> {
         self.exact_counts

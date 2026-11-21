@@ -29,11 +29,17 @@
 //! plans sit in the run's `plans` directory, which the scorer reads).
 //!
 //! `--baseline-view exact|merged|local|none` (docs/BASELINE_LOCAL_DESIGN.md §8.1, run R3) picks the baseline view
-//! the replay scans with: `exact` (the default) is today's exact-match selection from `--baselines`; `none` scans
-//! with no baseline at all (the values-only path, the reference of invariant L5). `merged` (`--local <file>` and one
-//! to three `--neighbour <shipped file>`) and `local` (`--local <file>` only) check their inputs (the local file's
-//! `#end` line and seal, each neighbour's header, leave-one-out) and then stop: the engine takes an injected view
-//! only from BL-VIEW and BL-FRAMEWORK on (wave 5), which complete them. [`ViewArgs`] holds the flags.
+//! the replay **harvests and scans** with: `exact` (the default) is today's exact-match selection from
+//! `--baselines`; `none` works with no baseline at all (the values-only path, the reference of invariant L5).
+//! `merged` (`--local <file>` and one to three `--neighbour <shipped file>`) and `local` (`--local <file>` only)
+//! check their inputs (the local file's `#end` line and seal, each neighbour's header, leave-one-out), put the
+//! view together for the snap's Windows and hand it to the engine in place of the one it would load
+//! (`pipeline::harvest_with_view`, `pipeline::scan_with_view`; purge-engine's `inject-view` feature, which
+//! only this tool and tests use). No cache is opened and no directory is checked. The areas and the neighbour
+//! rule come from the repository's `kb/baselines/view.json`. A view that does not come out with the trust the
+//! flag names, or that leaves a given neighbour out, ends the replay with the reason. `none` with `--local`
+//! and/or `--neighbour` is the view of trust None that still answers presence from those parts.
+//! [`ViewArgs`] holds the flags, [`l5_violations`] is invariant L5 over two plans.
 //!
 //! `replay-all` replays the frozen M0 runs [`M0_RUNS`] into `vm/runs/<id>/plans/purge-replay.json` (the
 //! runs directory is git-ignored; the plan is a new file next to the other tools' plans) and then, when
@@ -44,16 +50,18 @@ use std::process::Command;
 
 use anyhow::{Context, Result, anyhow, bail};
 use purge_engine::cli::output;
-use purge_engine::pipeline::{self, Settings, Sources};
+use purge_engine::pipeline::{self, PipelineBaseline, Scanned, Settings, Sources};
 use purge_guard::prefix;
 use purge_harvest::coproducts;
 use purge_identity::kbdata::Kb;
 use purge_index::baseline::Baseline;
+use purge_index::baseline_view::{BaselineView, HostOs, Neighbour, ViewRules};
 use purge_index::local_baseline::LocalBaseline;
 use purge_inventory::verify_gone::{self, VerifyTarget};
-use purge_model::{Band, FileTime, InventoryEntry, ScanMode};
+use purge_model::{Band, BaselineTrust, FileTime, InventoryEntry, OsInfo, ScanMode, Target};
 use purge_source::fixture::Fixture;
 use purge_source::snapfixture::parse_iso8601;
+use purge_source::system::SystemSource;
 use serde::Deserialize;
 
 /// The frozen M0 runs `replay-all` replays (directory name = truth id).
@@ -177,6 +185,9 @@ pub struct ReplayOpts {
     pub sidecar: bool,
     /// Scan the still-installed app (phase 1, `external` mode) instead of the state after the uninstall.
     pub live: bool,
+    /// The parts of a baseline view to harvest and scan with in place of the one the engine loads from
+    /// `baselines` (`--baseline-view merged|local`, and `none` with `--local` or `--neighbour`).
+    pub view: Option<ViewInputs>,
 }
 
 /// A replay's result, for the summary.
@@ -195,6 +206,8 @@ pub struct Replayed {
     /// The fingerprint's roots read from MSI component paths (`RootSource::MsiComponent`), for
     /// `replay-diff`'s reason `msi_root_added`.
     pub msi_roots: Vec<String>,
+    /// The fingerprint the scan ran with.
+    pub fingerprint: purge_model::Fingerprint,
 }
 
 /// The fingerprint's roots that come from MSI component paths.
@@ -284,37 +297,68 @@ fn limits(before: &Fixture, after: Option<&Fixture>, overlay: Option<&Path>) -> 
     out
 }
 
-/// Replays one rig run and writes its plan.
-pub fn replay(opts: &ReplayOpts) -> Result<Replayed> {
-    let run_json = opts.run_dir.join("run.json");
-    let text = std::fs::read_to_string(&run_json)
-        .with_context(|| format!("reading {}", run_json.display()))?;
-    let info = parse_run_json(&text).with_context(|| format!("in {}", run_json.display()))?;
-    let overlay = opts.overlay.as_deref();
+/// One replay over two machines that are already in memory: what [`replay`] does after it has read the run
+/// directory, and what a test runs over fixture machines.
+#[derive(Clone, Copy)]
+pub struct Case<'a> {
+    /// The machine with the app installed (phase 1).
+    pub before: &'a Fixture,
+    /// The machine after the uninstaller (phase 2); `None`: scan `before` in `external` mode (`--live`).
+    pub after: Option<&'a Fixture>,
+    /// The app's Uninstall key.
+    pub main_key: &'a str,
+    /// The uninstall window.
+    pub window: (FileTime, FileTime),
+    /// The plan's `app` field.
+    pub app: &'a str,
+    /// The baseline directory the engine loads from; not read when `view` is set.
+    pub baselines: Option<&'a Path>,
+    /// A recorded fingerprint to scan with instead of the harvested one.
+    pub fp: Option<&'a Path>,
+    /// The overlay the machines were loaded with (for the limits lines only).
+    pub overlay: Option<&'a Path>,
+    /// The baseline view to harvest **and** scan with, in place of the one the engine loads.
+    pub view: Option<&'a PipelineBaseline>,
+}
+
+/// Runs the engine pipeline over the two machines of `case`: harvest at `before`, the stand-in for the
+/// uninstall step, scan at `after`. With [`Case::view`] both the harvest and the scan work with that view
+/// (`pipeline::harvest_with_view`, `pipeline::scan_with_view`).
+pub fn replay_case(case: &Case<'_>) -> Result<(Replayed, Scanned)> {
     let settings = Settings {
-        baseline_dir: opts.baselines.clone(),
+        baseline_dir: case.baselines.map(Path::to_path_buf),
         purge_dirs: Vec::new(),
         msi_table_dir: None,
         ..Settings::default()
     };
     let mut progress = |line: &str| eprintln!("replay: {line}");
+    let before = case.before;
 
-    let before = load_phase(&opts.run_dir, &info.run, 1, overlay)?;
-    let inv1 = pipeline::inventory(Sources::of(&before));
-    let entry = entry_for(&inv1.doc.entries, &info.main_key)?;
+    let inv1 = pipeline::inventory(Sources::of(before));
+    let entry = entry_for(&inv1.doc.entries, case.main_key)?;
     let program_id = entry.program_id.to_string();
-    let harvested = pipeline::harvest(
-        Sources::of(&before),
-        &program_id,
-        Kb::shipped(),
-        &settings,
-        &mut progress,
-    )
+    let harvested = match case.view {
+        Some(view) => pipeline::harvest_with_view(
+            Sources::of(before),
+            &program_id,
+            Kb::shipped(),
+            &settings,
+            view,
+            &mut progress,
+        ),
+        None => pipeline::harvest(
+            Sources::of(before),
+            &program_id,
+            Kb::shipped(),
+            &settings,
+            &mut progress,
+        ),
+    }
     .map_err(|e| anyhow!("harvest at phase 1: {e}"))?;
     let mut warnings = harvested.warnings;
     let report = harvested.report;
     let mut fp = report.fingerprint;
-    if let Some(path) = &opts.fp {
+    if let Some(path) = case.fp {
         fp = output::read_json(path).map_err(|e| anyhow!("fingerprint {e}"))?;
         fp.window.t_start = None;
         fp.window.t_end = None;
@@ -322,35 +366,48 @@ pub fn replay(opts: &ReplayOpts) -> Result<Replayed> {
         fp.co_removed.clear();
         progress(&format!("fingerprint from {}", path.display()));
     }
+    let mut scan =
+        |machine: &Fixture, fp: &purge_model::Fingerprint, mode: ScanMode| match case.view {
+            Some(view) => pipeline::scan_with_view(
+                Sources::of(machine),
+                fp,
+                mode,
+                Some(case.app),
+                &settings,
+                view,
+                &mut progress,
+            ),
+            None => pipeline::scan(
+                Sources::of(machine),
+                fp,
+                mode,
+                Some(case.app),
+                &settings,
+                &mut progress,
+            ),
+        };
 
-    if opts.live {
-        progress("live: scanning phase 1 (the app is still installed), no uninstall step");
-        let scanned = pipeline::scan(
-            Sources::of(&before),
-            &fp,
-            ScanMode::External,
-            Some(&opts.app),
-            &settings,
-            &mut progress,
-        )
-        .map_err(|e| anyhow!("scan at phase 1: {e}"))?;
-        warnings.extend(scanned.warnings);
-        write_plan(opts, &scanned.built.plan, &scanned.built.scan)?;
-        return Ok(Replayed {
-            plan: scanned.built.plan,
+    let Some(after) = case.after else {
+        eprintln!("replay: live: scanning phase 1 (the app is still installed), no uninstall step");
+        let mut scanned =
+            scan(before, &fp, ScanMode::External).map_err(|e| anyhow!("scan at phase 1: {e}"))?;
+        warnings.append(&mut scanned.warnings);
+        let replayed = Replayed {
+            plan: scanned.built.plan.clone(),
             warnings,
-            limits: limits(&before, None, overlay),
+            limits: limits(before, None, case.overlay),
             verify_passed: false,
             co_removed: 0,
             msi_roots: msi_roots(&fp),
-        });
-    }
+            fingerprint: fp,
+        };
+        return Ok((replayed, scanned));
+    };
 
-    let after = load_phase(&opts.run_dir, &info.run, 2, overlay)?;
     let verify = verify_gone::check(
-        &after,
-        &after,
-        &after,
+        after,
+        after,
+        after,
         &VerifyTarget {
             arp_key: entry.key_path.clone(),
             product_code: entry.product_code.clone(),
@@ -358,13 +415,13 @@ pub fn replay(opts: &ReplayOpts) -> Result<Replayed> {
         },
     )
     .result;
-    let disappeared = verify_gone::disappeared(&after, &inv1.doc.entries, &entry.program_id);
-    fp.window.t_start = Some(info.t_start);
-    fp.window.t_end = Some(info.t_end);
+    let disappeared = verify_gone::disappeared(after, &inv1.doc.entries, &entry.program_id);
+    fp.window.t_start = Some(case.window.0);
+    fp.window.t_end = Some(case.window.1);
     fp.verify_gone = Some(verify);
     fp.co_removed = coproducts::co_removed(&report.co_candidates, &disappeared);
-    progress(&format!(
-        "uninstall window from run.json; verify-gone at phase 2 {} (ARP key gone: {}, MSI unknown: {}, \
+    eprintln!(
+        "replay: uninstall window from run.json; verify-gone at phase 2 {} (ARP key gone: {}, MSI unknown: {}, \
          main exes gone: {}); {} co-removed of {} candidate(s)",
         if verify.is_passed() {
             "passed"
@@ -376,30 +433,167 @@ pub fn replay(opts: &ReplayOpts) -> Result<Replayed> {
         verify.main_exes_gone,
         fp.co_removed.len(),
         report.co_candidates.len()
-    ));
+    );
 
-    let scanned = pipeline::scan(
-        Sources::of(&after),
-        &fp,
-        ScanMode::Post,
-        Some(&opts.app),
-        &settings,
-        &mut progress,
-    )
-    .map_err(|e| anyhow!("scan at phase 2: {e}"))?;
-    warnings.extend(scanned.warnings);
-
-    write_plan(opts, &scanned.built.plan, &scanned.built.scan)?;
-    Ok(Replayed {
-        plan: scanned.built.plan,
+    let mut scanned =
+        scan(after, &fp, ScanMode::Post).map_err(|e| anyhow!("scan at phase 2: {e}"))?;
+    warnings.append(&mut scanned.warnings);
+    let replayed = Replayed {
+        plan: scanned.built.plan.clone(),
         warnings,
-        limits: limits(&before, Some(&after), overlay),
+        limits: limits(before, Some(after), case.overlay),
         verify_passed: verify.is_passed(),
         co_removed: fp.co_removed.len(),
         msi_roots: msi_roots(&fp),
-    })
+        fingerprint: fp,
+    };
+    Ok((replayed, scanned))
 }
 
+/// Replays one rig run and writes its plan.
+pub fn replay(opts: &ReplayOpts) -> Result<Replayed> {
+    let run_json = opts.run_dir.join("run.json");
+    let text = std::fs::read_to_string(&run_json)
+        .with_context(|| format!("reading {}", run_json.display()))?;
+    let info = parse_run_json(&text).with_context(|| format!("in {}", run_json.display()))?;
+    let overlay = opts.overlay.as_deref();
+
+    let before = load_phase(&opts.run_dir, &info.run, 1, overlay)?;
+    // The view is put together for the snap's Windows before anything is harvested: a view that does not
+    // have the trust the flag names ends the replay here.
+    let view = match &opts.view {
+        Some(inputs) => {
+            let os = SystemSource::os_info(&before)
+                .map_err(|e| anyhow!("the snap's Windows edition and build are unknown ({e})"))?;
+            let view = inputs.view(&os)?;
+            eprintln!(
+                "replay: baseline view {} (trust {}) for harvest and scan",
+                view.name(),
+                view.trust()
+            );
+            Some(PipelineBaseline::injected(view))
+        }
+        None => None,
+    };
+    let after = if opts.live {
+        None
+    } else {
+        Some(load_phase(&opts.run_dir, &info.run, 2, overlay)?)
+    };
+    let (replayed, scanned) = replay_case(&Case {
+        before: &before,
+        after: after.as_ref(),
+        main_key: &info.main_key,
+        window: (info.t_start, info.t_end),
+        app: &opts.app,
+        baselines: opts.baselines.as_deref(),
+        fp: opts.fp.as_deref(),
+        overlay,
+        view: view.as_ref(),
+    })?;
+    write_plan(opts, &scanned.built.plan, &scanned.built.scan)?;
+    Ok(replayed)
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Invariant L5 at plan level (BASELINE_LOCAL_DESIGN.md §2 L5, §8.3 S4)
+// ---------------------------------------------------------------------------------------------------------
+
+/// How strongly a plan offers an item: Blocked 1, Weak 2, Likely 3, Safe 4. A target the plan does not list
+/// has 0.
+pub fn band_rank(band: Band) -> u8 {
+    match band {
+        Band::Blocked => 1,
+        Band::Weak => 2,
+        Band::Likely => 3,
+        Band::Safe => 4,
+    }
+}
+
+/// The registry key a registry target is or lies in.
+fn target_reg_key(target: &Target) -> Option<&str> {
+    match target {
+        Target::RegKey { path }
+        | Target::RegValue { path, .. }
+        | Target::RegValueChanged { path, .. }
+        | Target::RegMultiSzSegment { path, .. } => Some(path),
+        _ => None,
+    }
+}
+
+/// Whether removing `outer` removes `inner` too: the same target (names compare without case), a registry
+/// key with a key at or below it or with a value (or a segment of a value) of such a key, or a directory with
+/// a path at or below it.
+pub fn covers(outer: &Target, inner: &Target) -> bool {
+    let same = |a: &Target, b: &Target| {
+        let key = |t: &Target| {
+            serde_json::to_string(t)
+                .unwrap_or_else(|_| format!("{t:?}"))
+                .to_lowercase()
+        };
+        key(a) == key(b)
+    };
+    match (outer, inner) {
+        (Target::RegKey { path: outer }, inner) if target_reg_key(inner).is_some() => {
+            target_reg_key(inner).is_some_and(|key| prefix::is_same_or_inside(key, outer))
+        }
+        (Target::Path { path: outer }, Target::Path { path: inner }) => {
+            prefix::is_same_or_inside(inner, outer)
+        }
+        _ => same(outer, inner),
+    }
+}
+
+/// Invariant L5 for two plans of the same app and machines: `none` made without any baseline, `below` made
+/// with a view below Exact in the harvest and in the scan. The local baseline is presence-only, so a view
+/// below Exact may only take away: **what `below` offers, `none` offers at least as strongly.** For every
+/// item of `below` there is an item of `none` that
+///
+/// 1. [`covers`] it: the same target, or a key (a directory) that contains it. Nothing new is offered, not
+///    even as Blocked. The containing case is the one named exception to "the same target": a scanner that
+///    is told a key is Windows' own no longer offers the key and offers the app's values in it instead,
+///    which removes less;
+/// 2. has a band at least as high ([`band_rank`]);
+/// 3. is preselected if the item of `below` is.
+///
+/// A target `none` lists and `below` does not is fine (a scanner may withhold what Windows owns). Returns
+/// one line per violation; empty means the invariant holds.
+pub fn l5_violations(none: &purge_model::Plan, below: &purge_model::Plan) -> Vec<String> {
+    let mut out = Vec::new();
+    for item in &below.items {
+        let what = format!("{} {:?}", item.scanner, item.target);
+        let rank = band_rank(item.band);
+        let covering: Vec<&purge_model::PlanItem> = none
+            .items
+            .iter()
+            .filter(|n| covers(&n.target, &item.target))
+            .collect();
+        if covering.is_empty() {
+            out.push(format!(
+                "new item below Exact ({:?}{}): {what}",
+                item.band,
+                if item.preselected {
+                    ", preselected"
+                } else {
+                    ""
+                }
+            ));
+        } else if !covering.iter().any(|n| band_rank(n.band) >= rank) {
+            out.push(format!(
+                "band raised below Exact (to {:?}, over {:?}): {what}",
+                item.band,
+                covering.iter().map(|n| n.band).collect::<Vec<_>>()
+            ));
+        } else if item.preselected
+            && !covering
+                .iter()
+                .any(|n| n.preselected && band_rank(n.band) >= rank)
+        {
+            out.push(format!("preselected below Exact only: {what}"));
+        }
+    }
+    out
+}
 fn summary(r: &Replayed) -> String {
     let count = |band| r.plan.items.iter().filter(|i| i.band == band).count();
     format!(
@@ -479,16 +673,101 @@ pub struct ViewArgs {
     pub neighbours: Vec<PathBuf>,
 }
 
+/// What the baseline-view flags resolve to ([`ViewArgs::resolve`]).
+#[derive(Debug, Clone)]
+pub struct ViewChoice {
+    /// The baseline directory the engine loads from: `--baselines` for `exact`, none otherwise.
+    pub baselines: Option<PathBuf>,
+    /// The parts of the view the replay injects; `None` for `exact`, and for `none` without parts.
+    pub inject: Option<ViewInputs>,
+}
+
+/// The loaded parts of an injected view (`merged`, `local`, or `none` with parts). The view itself is put
+/// together for the snap's Windows ([`ViewInputs::view`]).
+#[derive(Clone)]
+pub struct ViewInputs {
+    /// The trust the view must come out with: Merged, Local or None.
+    pub mode: ViewMode,
+    /// `--local`.
+    pub local: Option<LocalBaseline>,
+    /// `--neighbour`, in the order given.
+    pub neighbours: Vec<Neighbour>,
+    /// The areas and the neighbour rule (`view.json`).
+    pub rules: ViewRules,
+}
+
+impl std::fmt::Debug for ViewInputs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ViewInputs")
+            .field("mode", &self.mode)
+            .field(
+                "local",
+                &self.local.as_ref().map(|l| {
+                    let h = l.header();
+                    format!("{}-{}.{}", h.edition, h.build, h.ubr)
+                }),
+            )
+            .field(
+                "neighbours",
+                &self
+                    .neighbours
+                    .iter()
+                    .map(Neighbour::name)
+                    .collect::<Vec<_>>(),
+            )
+            .finish_non_exhaustive()
+    }
+}
+
+impl ViewInputs {
+    /// The view for the Windows `os` (the snap's). An error when the parts do not give the trust the mode
+    /// names for that Windows (a local baseline of another Windows, a neighbour beyond the rule's distance),
+    /// or when a neighbour is left out: the replay would then measure another view than the one asked for.
+    pub fn view(&self, os: &OsInfo) -> Result<BaselineView> {
+        let host = HostOs::from(os);
+        let (local, neighbours) = (self.local.clone(), self.neighbours.clone());
+        let (want, view) = match self.mode {
+            ViewMode::Merged => (
+                BaselineTrust::Merged,
+                BaselineView::assemble(&host, local, neighbours, &self.rules),
+            ),
+            ViewMode::Local => (
+                BaselineTrust::Local,
+                BaselineView::assemble(&host, local, neighbours, &self.rules),
+            ),
+            ViewMode::None => (
+                BaselineTrust::None,
+                BaselineView::none(&host, local, neighbours, &self.rules),
+            ),
+            ViewMode::Exact => bail!("--baseline-view exact injects no view"),
+        };
+        let mode = self.mode.name();
+        if view.trust() != want {
+            bail!(
+                "--baseline-view {mode}: for the snap's Windows {} the parts give the view {} of trust {}, not \
+                 {want}: {}",
+                host.name(),
+                view.name(),
+                view.trust(),
+                view.warnings().join("; ")
+            );
+        }
+        if view.neighbour_names().len() != self.neighbours.len() {
+            bail!(
+                "--baseline-view {mode}: for the snap's Windows {} a neighbour is left out: {}",
+                host.name(),
+                view.warnings().join("; ")
+            );
+        }
+        Ok(view)
+    }
+}
+
 impl ViewArgs {
-    /// Checks the flags and their files, and returns the baseline directory the replay scans with: `baselines` for
-    /// `exact`, none for `none`. `merged` and `local` end in an error after their inputs are checked, until the
-    /// engine takes an injected view (BL-VIEW, BL-FRAMEWORK). `baselines_given`: `--baselines` was on the command
-    /// line (it contradicts every mode but `exact`).
-    pub fn baseline_dir(
-        &self,
-        baselines: Option<PathBuf>,
-        baselines_given: bool,
-    ) -> Result<Option<PathBuf>> {
+    /// Checks the flags and loads their files. `baselines`: the baseline directory (`--baselines`, or the
+    /// repository's `kb/baselines`); `exact` scans with it, the injected modes read only its `view.json`.
+    /// `baselines_given`: `--baselines` was on the command line (it contradicts every mode but `exact`).
+    pub fn resolve(&self, baselines: Option<PathBuf>, baselines_given: bool) -> Result<ViewChoice> {
         let mode = self.mode.name();
         if self.mode != ViewMode::Exact && baselines_given {
             bail!(
@@ -496,21 +775,19 @@ impl ViewArgs {
             );
         }
         match self.mode {
-            ViewMode::Exact | ViewMode::None => {
+            ViewMode::Exact => {
                 if self.local.is_some() || !self.neighbours.is_empty() {
-                    bail!(
-                        "--baseline-view {mode} takes no --local or --neighbour{}",
-                        if self.mode == ViewMode::None {
-                            " yet (presence from neighbours at trust None comes with BL-FRAMEWORK)"
-                        } else {
-                            ""
-                        }
-                    );
+                    bail!("--baseline-view {mode} takes no --local or --neighbour");
                 }
-                return Ok(if self.mode == ViewMode::Exact {
-                    baselines
-                } else {
-                    None
+                return Ok(ViewChoice {
+                    baselines,
+                    inject: None,
+                });
+            }
+            ViewMode::None if self.local.is_none() && self.neighbours.is_empty() => {
+                return Ok(ViewChoice {
+                    baselines: None,
+                    inject: None,
                 });
             }
             ViewMode::Local if !self.neighbours.is_empty() => {
@@ -519,17 +796,23 @@ impl ViewArgs {
             ViewMode::Merged if self.neighbours.is_empty() => {
                 bail!("--baseline-view merged needs at least one --neighbour <shipped baseline>")
             }
-            ViewMode::Merged if self.neighbours.len() > MAX_NEIGHBOURS => {
-                bail!("--baseline-view merged takes at most {MAX_NEIGHBOURS} --neighbour files")
+            ViewMode::Merged | ViewMode::None if self.neighbours.len() > MAX_NEIGHBOURS => {
+                bail!("--baseline-view {mode} takes at most {MAX_NEIGHBOURS} --neighbour files")
             }
-            ViewMode::Local | ViewMode::Merged => {}
+            ViewMode::Local | ViewMode::Merged | ViewMode::None => {}
         }
-        let path = self.local.as_ref().with_context(|| {
-            format!("--baseline-view {mode} needs --local <local baseline file>")
-        })?;
-        let local =
-            LocalBaseline::load(path).map_err(|e| anyhow!("--local {}: {e}", path.display()))?;
-        if !local.complete() {
+        let local = match &self.local {
+            Some(path) => Some(
+                LocalBaseline::load(path)
+                    .map_err(|e| anyhow!("--local {}: {e}", path.display()))?,
+            ),
+            None if self.mode == ViewMode::None => None,
+            None => bail!("--baseline-view {mode} needs --local <local baseline file>"),
+        };
+        if let (Some(local), Some(path)) = (&local, &self.local)
+            && self.mode != ViewMode::None
+            && !local.complete()
+        {
             bail!(
                 "--local {}: the local baseline is incomplete ({}); an incomplete local baseline gives trust None \
                  (design L2): use --baseline-view none",
@@ -537,33 +820,42 @@ impl ViewArgs {
                 local.incomplete_reasons().join("; ")
             );
         }
-        let h = local.header();
-        let mut names = Vec::new();
+        let mut neighbours = Vec::new();
         for n in &self.neighbours {
             let b = Baseline::load(n).map_err(|e| anyhow!("--neighbour {}: {e}", n.display()))?;
-            if b.is_for(&h.edition, h.build, h.ubr) {
+            if let Some(h) = local.as_ref().map(LocalBaseline::header)
+                && b.is_for(&h.edition, h.build, h.ubr)
+            {
                 bail!(
-                    "--neighbour {}: it is the exact baseline of the local file's Windows ({} {}.{}); a merged view \
-                     leaves it out",
+                    "--neighbour {}: it is the exact baseline of the local file's Windows ({} {}.{}); a view below \
+                     Exact leaves it out",
                     n.display(),
                     h.edition,
                     h.build,
                     h.ubr
                 );
             }
-            names.push(format!("{}-{}.{}", b.edition(), b.build(), b.ubr()));
+            neighbours.push(Neighbour::from_baseline(b));
         }
-        bail!(
-            "--baseline-view {mode}: inputs checked (local {} {}.{}, complete; neighbours [{}]), but the engine \
-             cannot scan with an injected baseline view yet: BL-VIEW and BL-FRAMEWORK (wave 5) complete this flag",
-            h.edition,
-            h.build,
-            h.ubr,
-            names.join(", ")
-        )
+        let mut warnings = Vec::new();
+        let rules = match &baselines {
+            Some(dir) => ViewRules::load_or_closed(dir, &mut warnings),
+            None => ViewRules::closed(),
+        };
+        for w in warnings {
+            eprintln!("replay: warning: {w}");
+        }
+        Ok(ViewChoice {
+            baselines: None,
+            inject: Some(ViewInputs {
+                mode: self.mode,
+                local,
+                neighbours,
+                rules,
+            }),
+        })
     }
 }
-
 // ---------------------------------------------------------------------------------------------------------
 // Commands
 // ---------------------------------------------------------------------------------------------------------
@@ -654,7 +946,7 @@ pub fn run_one(root: &Path, args: &[String]) -> Result<bool> {
             .map(PathBuf::from)
             .collect(),
     };
-    let baselines = view.baseline_dir(
+    let choice = view.resolve(
         f.get(&["--baselines"])
             .map(PathBuf::from)
             .or_else(|| default_baselines(root)),
@@ -674,10 +966,11 @@ pub fn run_one(root: &Path, args: &[String]) -> Result<bool> {
         app: app.to_owned(),
         out: PathBuf::from(out),
         overlay: f.get(&["--overlay"]).map(PathBuf::from),
-        baselines,
+        baselines: choice.baselines,
         fp: f.get(&["--fp"]).map(PathBuf::from),
         sidecar: true,
         live: f.has("--live"),
+        view: choice.inject,
     };
     let r = replay(&opts)?;
     report(app, &opts.out, &r);
@@ -730,6 +1023,7 @@ pub fn run_all(root: &Path, args: &[String]) -> Result<bool> {
             fp: None,
             sidecar: false,
             live: false,
+            view: None,
         };
         match replay(&opts) {
             Ok(r) => {
@@ -915,29 +1209,41 @@ mod tests {
         p
     }
 
+    fn os(edition: &str, build: u32, ubr: u32) -> OsInfo {
+        OsInfo {
+            edition: edition.into(),
+            build,
+            ubr,
+        }
+    }
+
     #[test]
     fn baseline_view_flags() {
         let dir = std::env::temp_dir().join(format!("purge-xtask-view-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let kb = Some(PathBuf::from("kb/baselines"));
-        let err = |v: &ViewArgs, given: bool| {
-            format!("{:#}", v.baseline_dir(kb.clone(), given).unwrap_err())
-        };
+        let kb = default_baselines(&crate::workspace_root());
+        assert!(kb.is_some(), "kb/baselines with its view.json");
+        let err =
+            |v: &ViewArgs, given: bool| format!("{:#}", v.resolve(kb.clone(), given).unwrap_err());
         assert_eq!(ViewMode::parse("merged").unwrap(), ViewMode::Merged);
         assert!(ViewMode::parse("exactly").is_err());
-        // exact: today's directory; none: no baseline.
-        let exact = view(ViewMode::Exact, None, &[]);
-        assert_eq!(exact.baseline_dir(kb.clone(), true).unwrap(), kb);
+        // exact: today's directory; none: no baseline, nothing injected.
+        let exact = view(ViewMode::Exact, None, &[])
+            .resolve(kb.clone(), true)
+            .unwrap();
+        assert_eq!(exact.baselines, kb);
+        assert!(exact.inject.is_none());
         let none = view(ViewMode::None, None, &[]);
-        assert_eq!(none.baseline_dir(kb.clone(), false).unwrap(), None);
+        let plain = none.resolve(kb.clone(), false).unwrap();
+        assert!(plain.baselines.is_none() && plain.inject.is_none());
         assert!(err(&none, true).contains("--baselines does not go"));
         let full = local_file(&dir, true);
         let part = local_file(&dir, false);
-        let nb = shipped_file(&dir, "EnterpriseSEval", "26100.1742");
+        let nb = shipped_file(&dir, "Professional", "26340.9000");
+        let far = shipped_file(&dir, "Professional", "22000.1");
         let same = shipped_file(&dir, "Professional", "26340.9882");
         let e = |m, l: Option<&Path>, n: &[&Path]| err(&view(m, l, n), false);
         assert!(e(ViewMode::Exact, Some(&full), &[]).contains("takes no --local"));
-        assert!(e(ViewMode::None, None, &[&nb]).contains("BL-FRAMEWORK"));
         assert!(e(ViewMode::Merged, Some(&full), &[]).contains("at least one --neighbour"));
         assert!(e(ViewMode::Merged, None, &[&nb]).contains("needs --local"));
         assert!(e(ViewMode::Local, Some(&full), &[&nb]).contains("takes no --neighbour"));
@@ -946,15 +1252,390 @@ mod tests {
         assert!(e(ViewMode::Merged, Some(&full), &[&same]).contains("leaves it out"));
         // A shipped file is no local baseline (L6).
         assert!(e(ViewMode::Local, Some(&nb), &[]).starts_with("--local"));
-        let m = e(ViewMode::Merged, Some(&full), &[&nb]);
-        assert!(
-            m.contains("inputs checked")
-                && m.contains("EnterpriseSEval-26100.1742")
-                && m.contains("BL-FRAMEWORK"),
-            "{m}"
+
+        // The injected modes: no baseline directory for the engine, the parts for the view.
+        let host = os("Professional", 26340, 9882);
+        let inputs = |m, l: Option<&Path>, n: &[&Path]| {
+            let choice = view(m, l, n).resolve(kb.clone(), false).unwrap();
+            assert!(choice.baselines.is_none());
+            choice.inject.expect("a view to inject")
+        };
+        let merged = inputs(ViewMode::Merged, Some(&full), &[&nb]);
+        let v = merged.view(&host).unwrap();
+        assert_eq!(v.trust(), BaselineTrust::Merged);
+        assert_eq!(v.neighbour_names(), ["Professional-26340.9000"]);
+        assert!(v.has_key(r"HKLM\SOFTWARE\A"));
+        let local = inputs(ViewMode::Local, Some(&full), &[]);
+        assert_eq!(local.view(&host).unwrap().trust(), BaselineTrust::Local);
+        // `none` with parts: presence from them, trust None, also from an incomplete local baseline.
+        let presence = inputs(ViewMode::None, Some(&part), &[&nb]);
+        let v = presence.view(&host).unwrap();
+        assert_eq!(v.trust(), BaselineTrust::None);
+        assert!(v.has_key(r"HKLM\SOFTWARE\A") && !v.holds_nothing());
+        let only_nb = inputs(ViewMode::None, None, &[&nb]);
+        assert_eq!(only_nb.view(&host).unwrap().trust(), BaselineTrust::None);
+
+        // A snap of another Windows than the local file's: the view is not the one asked for.
+        let other = format!(
+            "{:#}",
+            merged.view(&os("Professional", 26100, 1)).unwrap_err()
         );
-        assert!(e(ViewMode::Local, Some(&full), &[]).contains("inputs checked"));
+        assert!(other.contains("not merged"), "{other}");
+        // A neighbour the rule does not take.
+        let dropped = inputs(ViewMode::Merged, Some(&full), &[&nb, &far]);
+        let why = format!("{:#}", dropped.view(&host).unwrap_err());
+        assert!(why.contains("left out"), "{why}");
+        // The neighbour is the exact baseline of the snap's Windows (no local file to tell beforehand).
+        let exact_nb = inputs(ViewMode::None, None, &[&same]);
+        let why = format!("{:#}", exact_nb.view(&host).unwrap_err());
+        assert!(why.contains("left out"), "{why}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // -----------------------------------------------------------------------------------------------------
+    // Invariant L5 at plan level, with the view injected into harvest and scan
+    // -----------------------------------------------------------------------------------------------------
+
+    fn plan_item(path: &str, band: Band, preselected: bool) -> purge_model::PlanItem {
+        purge_model::PlanItem {
+            target: purge_model::Target::RegKey { path: path.into() },
+            band,
+            preselected,
+            scanner: "REG-SOFTWARE".into(),
+            category: purge_model::Category::Registration,
+        }
+    }
+
+    fn plan_of(items: Vec<purge_model::PlanItem>) -> purge_model::Plan {
+        purge_model::Plan {
+            schema: purge_model::PlanSchema,
+            app: "x".into(),
+            tool: purge_model::Tool::Purge,
+            mode: ScanMode::Post,
+            items,
+        }
+    }
+
+    #[test]
+    fn l5_violations_names_new_raised_and_preselected_items() {
+        let none = plan_of(vec![
+            plan_item(r"HKLM\SOFTWARE\A", Band::Safe, true),
+            plan_item(r"HKLM\SOFTWARE\B", Band::Likely, false),
+            plan_item(r"HKLM\SOFTWARE\C", Band::Blocked, false),
+            plan_item(r"HKLM\SOFTWARE\D", Band::Weak, false),
+        ]);
+        assert!(l5_violations(&none, &none).is_empty());
+        // Taking away: lower bands, no tick, items gone; the letter case of a target does not matter.
+        let less = plan_of(vec![
+            plan_item(r"hklm\software\a", Band::Safe, false),
+            plan_item(r"HKLM\SOFTWARE\B", Band::Blocked, false),
+        ]);
+        assert_eq!(l5_violations(&none, &less), Vec::<String>::new());
+        assert!(l5_violations(&none, &plan_of(Vec::new())).is_empty());
+        let one = |item| l5_violations(&none, &plan_of(vec![item]));
+        let v = one(plan_item(r"HKLM\SOFTWARE\E", Band::Blocked, false));
+        assert!(v.len() == 1 && v[0].starts_with("new item"), "{v:?}");
+        let v = one(plan_item(r"HKLM\SOFTWARE\C", Band::Weak, false));
+        assert!(v.len() == 1 && v[0].starts_with("band raised"), "{v:?}");
+        let v = one(plan_item(r"HKLM\SOFTWARE\B", Band::Safe, false));
+        assert!(v.len() == 1 && v[0].starts_with("band raised"), "{v:?}");
+        let v = one(plan_item(r"HKLM\SOFTWARE\B", Band::Likely, true));
+        assert!(v.len() == 1 && v[0].starts_with("preselected"), "{v:?}");
+        // What lies in an offered key or directory is covered by it, up to its band and its tick.
+        let value = |key: &str, band, preselected| purge_model::PlanItem {
+            target: Target::RegValue {
+                path: key.into(),
+                name: "v".into(),
+            },
+            ..plan_item("", band, preselected)
+        };
+        assert!(one(value(r"HKLM\SOFTWARE\A", Band::Safe, true)).is_empty());
+        assert!(one(value(r"hklm\software\a\Sub", Band::Likely, false)).is_empty());
+        assert!(one(plan_item(r"HKLM\SOFTWARE\A\Sub", Band::Safe, true)).is_empty());
+        let v = one(value(r"HKLM\SOFTWARE\B", Band::Safe, false));
+        assert!(v.len() == 1 && v[0].starts_with("band raised"), "{v:?}");
+        let v = one(value(r"HKLM\SOFTWARE\B", Band::Likely, true));
+        assert!(v.len() == 1 && v[0].starts_with("preselected"), "{v:?}");
+        // Not the other way round, and not a name that only starts alike.
+        let v = one(plan_item(r"HKLM\SOFTWARE", Band::Blocked, false));
+        assert!(v.len() == 1 && v[0].starts_with("new item"), "{v:?}");
+        let v = one(plan_item(r"HKLM\SOFTWARE\AB", Band::Blocked, false));
+        assert!(v.len() == 1 && v[0].starts_with("new item"), "{v:?}");
+        let path = |p: &str| Target::Path { path: p.into() };
+        assert!(covers(&path(r"C:\App"), &path(r"c:\app\bin\x.dll")));
+        assert!(!covers(&path(r"C:\App\bin"), &path(r"C:\App")));
+        assert!(!covers(&path(r"C:\App"), &path(r"C:\Apple")));
+        assert!(!covers(
+            &value(r"HKLM\SOFTWARE\A", Band::Safe, true).target,
+            &plan_item(r"HKLM\SOFTWARE\A", Band::Safe, true).target
+        ));
+    }
+
+    /// The registry keys and the directories and files a replay named: every string of the plan's targets
+    /// and of the fingerprint that is spelled as a key (`HKLM\…`, `HKU\…`) or as a drive path, each key
+    /// with its ancestors down to depth 3. What a view below Exact can be told Windows owns.
+    fn named(replayed: &Replayed) -> Vec<String> {
+        fn walk(v: &serde_json::Value, out: &mut std::collections::BTreeSet<String>) {
+            match v {
+                serde_json::Value::String(s) => {
+                    let upper = s.to_ascii_uppercase();
+                    let b = s.as_bytes();
+                    if upper.starts_with("HKLM\\") || upper.starts_with("HKU\\") {
+                        let segs: Vec<&str> = s.split('\\').filter(|p| !p.is_empty()).collect();
+                        for depth in 3..=segs.len() {
+                            out.insert(segs[..depth].join("\\"));
+                        }
+                    } else if b.len() > 3
+                        && b[0].is_ascii_alphabetic()
+                        && b[1] == b':'
+                        && b[2] == b'\\'
+                        && !s.contains(['"', '*', '?', '<', '>', '|'])
+                    {
+                        out.insert(s.trim_end_matches('\\').to_owned());
+                    }
+                }
+                serde_json::Value::Array(items) => items.iter().for_each(|i| walk(i, out)),
+                serde_json::Value::Object(map) => map.values().for_each(|i| walk(i, out)),
+                _ => {}
+            }
+        }
+        let mut out = std::collections::BTreeSet::new();
+        walk(&serde_json::to_value(&replayed.plan).unwrap(), &mut out);
+        walk(
+            &serde_json::to_value(&replayed.fingerprint).unwrap(),
+            &mut out,
+        );
+        out.into_iter().collect()
+    }
+
+    /// What the harvest found, without what it says about how it ran (its warnings, the view it names).
+    fn harvest_facts(fp: &purge_model::Fingerprint) -> serde_json::Value {
+        let mut v = serde_json::to_value(fp).unwrap();
+        let map = v.as_object_mut().unwrap();
+        map.remove("warnings");
+        map.remove("baseline_view");
+        v
+    }
+
+    /// xorshift64*: deterministic subsets.
+    struct Rng(u64);
+
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 >> 12;
+            self.0 ^= self.0 << 25;
+            self.0 ^= self.0 >> 27;
+            self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
+        }
+    }
+
+    /// What one case showed.
+    #[derive(Debug, Default)]
+    struct L5Seen {
+        none_items: usize,
+        none_preselected: usize,
+        views: usize,
+        /// Views whose plan differs from the no-baseline plan.
+        changed: usize,
+        /// Views whose fingerprint differs from the no-baseline fingerprint.
+        fingerprint_changed: usize,
+    }
+
+    /// Invariant L5 for one case, end to end: the no-baseline replay against replays whose harvest **and**
+    /// scan run with an injected view below Exact.
+    ///
+    /// 1. A Merged, a Local and a None view that hold nothing give the no-baseline fingerprint and plan.
+    /// 2. Views that say "Windows has it" of what the no-baseline replay names (all of it, each single
+    ///    name when there are few, `draws` seeded random subsets), as a Merged view through its local
+    ///    baseline, as a Merged view through its neighbour, as a Local view and as a None view with a
+    ///    neighbour: [`l5_violations`] is empty.
+    fn check_l5(what: &str, case: &Case<'_>, draws: usize) -> L5Seen {
+        use purge_index::baseline_view::fixture;
+        assert!(case.view.is_none() && case.baselines.is_none());
+        let (none, _) = replay_case(case).unwrap();
+        let os = SystemSource::os_info(case.before).unwrap();
+        let with = |view: BaselineView| {
+            let injected = PipelineBaseline::injected(view);
+            replay_case(&Case {
+                view: Some(&injected),
+                ..*case
+            })
+            .unwrap()
+            .0
+        };
+        let mut seen = L5Seen {
+            none_items: none.plan.items.len(),
+            none_preselected: none.plan.items.iter().filter(|i| i.preselected).count(),
+            ..L5Seen::default()
+        };
+
+        for which in 1..fixture::BELOW_EXACT {
+            let view = fixture::below_exact(which, &os).unwrap();
+            let trust = view.trust();
+            let below = with(view);
+            assert_eq!(
+                below.plan, none.plan,
+                "{what}: a {trust} view that holds nothing changes the plan"
+            );
+            assert_eq!(
+                harvest_facts(&below.fingerprint),
+                harvest_facts(&none.fingerprint),
+                "{what}: a {trust} view that holds nothing changes the harvest"
+            );
+        }
+
+        let names = named(&none);
+        let mut sets: Vec<(String, Vec<&str>)> = vec![(
+            "everything".to_owned(),
+            names.iter().map(String::as_str).collect(),
+        )];
+        if names.len() <= 80 {
+            sets.extend(
+                names
+                    .iter()
+                    .map(|n| (format!("only {n}"), vec![n.as_str()])),
+            );
+        }
+        let mut rng = Rng(0x9E37_79B9_7F4A_7C15 ^ names.len() as u64);
+        for draw in 0..draws {
+            // A third, a half or two thirds of the names.
+            let (num, den) = [(1, 3), (1, 2), (2, 3)][draw % 3];
+            let subset: Vec<&str> = names
+                .iter()
+                .filter(|_| rng.next() % den < num)
+                .map(String::as_str)
+                .collect();
+            sets.push((format!("draw {draw} ({} names)", subset.len()), subset));
+        }
+        let (e, b, u) = (os.edition.as_str(), os.build, os.ubr);
+        for (i, (label, keys)) in sets.iter().enumerate() {
+            // Every shape of view for the full set; the shapes in turn for the others.
+            let shapes: Vec<usize> = if i == 0 {
+                vec![0, 1, 2, 3]
+            } else {
+                vec![i % 4]
+            };
+            for shape in shapes {
+                let (name, view) = match shape {
+                    0 => (
+                        "merged, local has",
+                        fixture::merged_view(e, b, u, keys, &[]),
+                    ),
+                    1 => (
+                        "merged, neighbour has",
+                        fixture::merged_view(e, b, u, &[], keys),
+                    ),
+                    2 => ("local", fixture::local_view(e, b, u, keys)),
+                    _ => ("none with a neighbour", fixture::none_view(e, b, u, keys)),
+                };
+                let below = with(view);
+                let violations = l5_violations(&none.plan, &below.plan);
+                assert!(
+                    violations.is_empty(),
+                    "{what}: L5 broken under the view {name} holding {label}:\n{}",
+                    violations.join("\n")
+                );
+                seen.views += 1;
+                seen.changed += usize::from(below.plan != none.plan);
+                seen.fingerprint_changed += usize::from(
+                    harvest_facts(&below.fingerprint) != harvest_facts(&none.fingerprint),
+                );
+            }
+        }
+        eprintln!("L5 {what}: {seen:?}");
+        seen
+    }
+
+    /// The Tidy Notes machine of the engine's tests (`bins/purge-engine/tests/fixtures/inno.*.json`):
+    /// before, and after its uninstaller ran. Without the Inno uninstall log, as a snapshot without an
+    /// overlay has none.
+    fn tidy_notes() -> (Fixture, Fixture) {
+        #[derive(Deserialize)]
+        struct Delta {
+            remove_keys: Vec<String>,
+            #[serde(default)]
+            remove_values: Vec<(String, String)>,
+            remove_paths: Vec<String>,
+        }
+        let dir = crate::workspace_root()
+            .join("bins")
+            .join("purge-engine")
+            .join("tests")
+            .join("fixtures");
+        let before = Fixture::from_json_file(&dir.join("inno.before.json")).unwrap();
+        let text = std::fs::read_to_string(dir.join("inno.uninstall.json")).unwrap();
+        let delta: Delta = serde_json::from_str(&text).unwrap();
+        let mut after = before.clone();
+        for key in &delta.remove_keys {
+            assert!(after.remove_key(key), "no key {key}");
+        }
+        for (key, value) in &delta.remove_values {
+            assert!(after.remove_value(key, value), "no value {key} : {value}");
+        }
+        for path in &delta.remove_paths {
+            // The engine's test adds the Inno log (`unins000.dat`) the delta names; this machine has none.
+            let _ = after.remove_path(path);
+        }
+        (before, after)
+    }
+
+    /// A replay case with a view below Exact injected into harvest and scan: the plan is the no-baseline
+    /// plan with things taken away, never with anything added, raised or newly ticked (L5).
+    #[test]
+    fn l5_holds_for_a_replay_with_an_injected_view() {
+        let (before, after) = tidy_notes();
+        let t0 = parse_iso8601("2026-11-08T10:00:00Z").unwrap();
+        let case = Case {
+            before: &before,
+            after: Some(&after),
+            main_key: r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{6F1B2C3D-4E5F-4A6B-8C7D-9E0F1A2B3C4D}_is1",
+            window: (t0, FileTime(t0.0 + 20_000_000)),
+            app: "tidynotes",
+            baselines: None,
+            fp: None,
+            overlay: None,
+            view: None,
+        };
+        let seen = check_l5("tidy notes", &case, 12);
+        // The case says something: the reference plan ticks items, and telling the view that Windows has
+        // them changes the plan and the harvest.
+        assert!(
+            seen.none_items >= 8 && seen.none_preselected >= 2,
+            "{seen:?}"
+        );
+        assert!(seen.views >= 16 && seen.changed >= 8, "{seen:?}");
+        assert!(seen.fingerprint_changed >= 1, "{seen:?}");
+
+        // The scan really ran with the injected view, and said so.
+        let view = PipelineBaseline::injected(purge_index::baseline_view::fixture::merged_view(
+            "Professional",
+            26340,
+            9882,
+            &[],
+            &[],
+        ));
+        let (replayed, _) = replay_case(&Case {
+            view: Some(&view),
+            // A directory that does not exist: an injected view never reads it.
+            baselines: Some(Path::new(r"Z:\no\such\baselines")),
+            ..case
+        })
+        .unwrap();
+        let injected: Vec<&String> = replayed
+            .warnings
+            .iter()
+            .filter(|w| w.contains("injected by the caller"))
+            .collect();
+        assert_eq!(injected.len(), 2, "{:?}", replayed.warnings);
+        assert!(
+            injected.iter().all(|w| w.contains("trust merged")),
+            "{injected:?}"
+        );
+        assert!(
+            !replayed.warnings.iter().any(|w| w.contains("baselines")),
+            "{:?}",
+            replayed.warnings
+        );
     }
 
     /// Replays the frozen git run into the temp directory (never into vm/runs).
@@ -975,6 +1656,7 @@ mod tests {
             fp: None,
             sidecar: false,
             live: false,
+            view: None,
         })
         .unwrap();
         assert!(r.verify_passed, "{:?}", r.warnings);
@@ -986,5 +1668,50 @@ mod tests {
         assert_eq!(v["tool"], "purge");
         assert_eq!(v["mode"], "post");
         let _ = std::fs::remove_file(&out);
+    }
+
+    /// With `PURGE_RUNS_DIR`: invariant L5 end to end over the frozen M0 runs ([`M0_RUNS`]), the view
+    /// injected into harvest and scan (design §8.3 S4 on synthetic views; BL-GATE's R3 repeats it with the
+    /// rig's local baselines through `replay --baseline-view`). `PURGE_L5_DRAWS` sets the number of random
+    /// subsets per run (default 6).
+    #[test]
+    #[ignore = "needs PURGE_RUNS_DIR with the frozen rig runs"]
+    fn l5_holds_for_the_frozen_runs_with_an_injected_view() {
+        let Some(runs) = std::env::var_os(RUNS_DIR_VAR) else {
+            eprintln!("{RUNS_DIR_VAR} not set; skipping");
+            return;
+        };
+        let draws = std::env::var("PURGE_L5_DRAWS")
+            .ok()
+            .and_then(|d| d.parse().ok())
+            .unwrap_or(6);
+        let mut changed = 0;
+        for id in M0_RUNS {
+            let dir = Path::new(&runs).join(id);
+            let text = std::fs::read_to_string(dir.join("run.json")).unwrap();
+            let info = parse_run_json(&text).unwrap();
+            let before = load_phase(&dir, &info.run, 1, None).unwrap();
+            let after = load_phase(&dir, &info.run, 2, None).unwrap();
+            let seen = check_l5(
+                id,
+                &Case {
+                    before: &before,
+                    after: Some(&after),
+                    main_key: &info.main_key,
+                    window: (info.t_start, info.t_end),
+                    app: id,
+                    baselines: None,
+                    fp: None,
+                    overlay: None,
+                    view: None,
+                },
+                draws,
+            );
+            // A run whose plan is small without an overlay (git: three items, none ticked) may show no
+            // change; the runs together must.
+            assert!(seen.none_items > 0, "{id}: {seen:?}");
+            changed += seen.changed;
+        }
+        assert!(changed > 0, "no view changed any plan");
     }
 }

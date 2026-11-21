@@ -16,6 +16,11 @@ path = "src/lib.rs"
 # The executor is linked only with this feature: a normal build has no code path into purge-exec
 # (`cargo xtask check-deps` enforces it).
 rig-exec = ["dep:purge-exec", "purge-exec/fault-inject"]
+# `pipeline::harvest_with_view` and `pipeline::scan_with_view`: a harvest and a scan with a baseline view
+# the caller built, instead of the one the engine loads (BASELINE_LOCAL_DESIGN.md §8.1, run R3). For
+# `cargo xtask replay --baseline-view` and tests only. Nothing in the CLI or the RPC server calls them,
+# and a release build (`cargo build --release -p purge-engine`) does not have them.
+inject-view = []
 
 [dependencies]
 purge-model.workspace = true

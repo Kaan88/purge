@@ -33,7 +33,10 @@
 //!   Files itself, a profile, …) are left out, so one bad `InstallLocation` cannot block a whole drive;
 //! - the baseline view ([`baseline`]): the clean-Windows baseline of exactly this (edition, build.ubr)
 //!   when the baseline directory holds one; otherwise the cached local baseline and the neighbouring
-//!   shipped baselines, which only ever say "this is Windows' own" (BASELINE_LOCAL_DESIGN.md).
+//!   shipped baselines, which only ever say "this is Windows' own" (BASELINE_LOCAL_DESIGN.md). A view
+//!   the caller built replaces it only through `harvest_with_view` and `scan_with_view`, which exist
+//!   with the `inject-view` feature alone (the offline replay `cargo xtask replay --baseline-view` and
+//!   tests); the CLI and the server never call them.
 //!
 //! Nothing here fails because a fact could not be read: what is missing becomes a warning line and the
 //! pipeline goes on with less. Only a broken precondition (an unknown program id, a fingerprint of another
@@ -405,6 +408,38 @@ pub fn harvest(
     program_id: &str,
     kb: &Kb,
     settings: &Settings,
+    progress: Progress<'_>,
+) -> Result<Harvested, PipelineError> {
+    harvest_in(sources, program_id, kb, settings, None, progress)
+}
+
+/// [`harvest`] with the baseline view `baseline` ([`PipelineBaseline::injected`]) in place of the one
+/// the engine would load: the settings' baseline directory and cache are not read. For the offline
+/// replay (`cargo xtask replay --baseline-view`) and tests; only with the `inject-view` feature, which
+/// neither the CLI nor the RPC server uses.
+///
+/// # Errors
+///
+/// As [`harvest`].
+#[cfg(any(test, feature = "inject-view"))]
+pub fn harvest_with_view(
+    sources: Sources<'_>,
+    program_id: &str,
+    kb: &Kb,
+    settings: &Settings,
+    baseline: &PipelineBaseline,
+    progress: Progress<'_>,
+) -> Result<Harvested, PipelineError> {
+    harvest_in(sources, program_id, kb, settings, Some(baseline), progress)
+}
+
+/// [`harvest`]; `injected`: the view to work with instead of the loaded one.
+fn harvest_in(
+    sources: Sources<'_>,
+    program_id: &str,
+    kb: &Kb,
+    settings: &Settings,
+    injected: Option<&PipelineBaseline>,
     mut progress: Progress<'_>,
 ) -> Result<Harvested, PipelineError> {
     let mut step = Step::new(&mut progress);
@@ -420,7 +455,14 @@ pub fn harvest(
         entry.display_name
     ));
 
-    let baseline = baseline_for(sources, settings, &mut warnings, &mut step);
+    let loaded;
+    let baseline = match injected {
+        Some(injected) => step_injected(injected, &mut warnings, &mut step),
+        None => {
+            loaded = baseline_for(sources, settings, &mut warnings, &mut step);
+            &loaded
+        }
+    };
     step.say("harvest: reading roots, Inno log, anchors and the reference snapshot");
     let (cache, cache_kind) = table_cache(sources, settings);
     let cache = CountingCache::new(cache.as_ref());
@@ -443,6 +485,23 @@ pub fn harvest(
         report.fingerprint.ref_snapshot.len()
     ));
     Ok(Harvested { report, warnings })
+}
+
+/// The injected view of a step, said in the progress and in the warnings, so a plan made with one
+/// never reads as a plan of the engine's own baseline.
+fn step_injected<'b>(
+    injected: &'b PipelineBaseline,
+    warnings: &mut Vec<String>,
+    step: &mut Step<'_, '_>,
+) -> &'b PipelineBaseline {
+    let line = format!(
+        "baseline view {} injected by the caller: trust {}",
+        injected.view.name(),
+        injected.view.trust()
+    );
+    warnings.push(format!("baseline: {line}"));
+    step.done(&line);
+    injected
 }
 
 /// Loads the baseline view for the Windows the sources describe ([`baseline::load`]), with progress.
@@ -690,6 +749,46 @@ pub fn scan(
     settings: &Settings,
     progress: Progress<'_>,
 ) -> Result<Scanned, PipelineError> {
+    scan_in(sources, fp, mode, app_id, settings, None, progress)
+}
+
+/// [`scan`] with the baseline view `baseline` ([`PipelineBaseline::injected`]) in place of the one the
+/// engine would load; see [`harvest_with_view`]. Only with the `inject-view` feature.
+///
+/// # Errors
+///
+/// As [`scan`].
+#[cfg(any(test, feature = "inject-view"))]
+pub fn scan_with_view(
+    sources: Sources<'_>,
+    fp: &Fingerprint,
+    mode: ScanMode,
+    app_id: Option<&str>,
+    settings: &Settings,
+    baseline: &PipelineBaseline,
+    progress: Progress<'_>,
+) -> Result<Scanned, PipelineError> {
+    scan_in(
+        sources,
+        fp,
+        mode,
+        app_id,
+        settings,
+        Some(baseline),
+        progress,
+    )
+}
+
+/// [`scan`]; `injected`: the view to work with instead of the loaded one.
+fn scan_in(
+    sources: Sources<'_>,
+    fp: &Fingerprint,
+    mode: ScanMode,
+    app_id: Option<&str>,
+    settings: &Settings,
+    injected: Option<&PipelineBaseline>,
+    progress: Progress<'_>,
+) -> Result<Scanned, PipelineError> {
     let mut warnings = Vec::new();
     let verify = match mode {
         ScanMode::Post => {
@@ -739,6 +838,7 @@ pub fn scan(
         Some(verify),
         &app_id,
         settings,
+        injected,
         warnings,
         progress,
     )
@@ -827,6 +927,7 @@ pub fn scan_path(
         None,
         &app_id,
         settings,
+        None,
         warnings,
         progress,
     )
@@ -956,6 +1057,7 @@ fn run_scan(
     verify_gone: Option<VerifyGone>,
     app_id: &str,
     settings: &Settings,
+    injected: Option<&PipelineBaseline>,
     mut warnings: Vec<String>,
     mut progress: Progress<'_>,
 ) -> Result<Scanned, PipelineError> {
@@ -1007,7 +1109,14 @@ fn run_scan(
         other_apps.apps().len()
     ));
 
-    let baseline = baseline_for(sources, settings, &mut warnings, &mut step);
+    let loaded;
+    let baseline = match injected {
+        Some(injected) => step_injected(injected, &mut warnings, &mut step),
+        None => {
+            loaded = baseline_for(sources, settings, &mut warnings, &mut step);
+            &loaded
+        }
+    };
 
     // Scanners. What every scanner shares is read once, before the first (C-SCANEXT): the one
     // reference walk, the MSI ownership index and the system objects.
@@ -1365,6 +1474,61 @@ mod tests {
             "pipeline.rs calls a scanner directly"
         );
         assert_eq!(source.matches(&driver).count(), 1);
+    }
+
+    /// A caller-built baseline view enters only through `harvest_with_view`, `scan_with_view` and
+    /// `PipelineBaseline::injected`, each behind the `inject-view` feature (the offline replay and
+    /// tests). No source of the CLI or of the binary names them: the engine a user runs, as a CLI or
+    /// as a server, works with the view it loads itself.
+    #[test]
+    fn only_the_gated_doors_take_an_injected_view() {
+        let doors = [
+            ["harvest", "_with_view"].concat(),
+            ["scan", "_with_view"].concat(),
+            ["PipelineBaseline::", "injected"].concat(),
+            ["fn ", "injected("].concat(),
+            ["inject", "-view"].concat(),
+        ];
+        let gate = ["#[cfg(any(test, feature = \"inject", "-view\"))]"].concat();
+        let pipeline = include_str!("pipeline.rs");
+        let baseline = include_str!("pipeline/baseline.rs");
+        for (text, door, n) in [
+            (pipeline, ["pub fn harvest", "_with_view("].concat(), 1),
+            (pipeline, ["pub fn scan", "_with_view("].concat(), 1),
+            (baseline, ["pub fn ", "injected("].concat(), 1),
+        ] {
+            assert_eq!(text.matches(&door).count(), n, "{door}");
+            let at = text.find(&door).unwrap();
+            let before = text[..at].trim_end();
+            assert!(before.ends_with(&gate), "{door} is not behind the feature");
+        }
+
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut stack = vec![src.clone()];
+        let mut read = 0;
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                let rel = path
+                    .strip_prefix(&src)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                if rel == "pipeline.rs" || rel == "pipeline/baseline.rs" {
+                    continue;
+                }
+                let text = std::fs::read_to_string(&path).unwrap();
+                read += 1;
+                for door in &doors {
+                    assert!(!text.contains(door.as_str()), "{rel} names {door}");
+                }
+            }
+        }
+        assert!(read >= 8, "{read} sources read");
     }
 
     /// A registry that counts the reads of one key's values. Its walker is the trait's default, which
