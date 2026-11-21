@@ -5,6 +5,15 @@ this work is a 2026-11-21 row in `docs/DECISIONS.md` (Post-M1b), mostly "(coordi
 so the work can be continued from any harness: read it, then `git log --oneline -15` and `git worktree list`.
 
 
+## RESUMED 2026-11-21 night (OpenCode, Opus coordinating, Flash/Sonnet writers). Goal: reach wave 5 fast.
+- M3-R1 Fable review DONE: docs/reviews/m3/r1-review.md (B0 M2 S9 N11). Fixes in worktree `m3-r1-fixes` (Flash,
+  running): M1 DEPENDENTLOADFLAG, M2 unique candidate ids, S1-S9, the 5 DECISIONS rows.
+- M3-BENCH reviewed + fixed (0202a25), merged into baseline 2a6aa97. Timings NOT taken: warm run needs an idle
+  host (later), cold series needs 5 user reboots (`cargo xtask bench-launch --cold [--reset] --purge out\purge`).
+- Wave 3 started early, in parallel (unelevated ci deferred to merge time): worktrees `m3-stdio` (Flash),
+  `m3-icons` (Flash), `m3-ui-shell` (Sonnet), all from 2a6aa97. Waiting: M3-BROKER-CORE and M3-GEN-DTO (after the R1
+  fixes: pipe binding S1, CandidateRef M2), M3-RUNNER (next free slot), M3-ENGINE-OUT (rule: after BL-GATE).
+
 ## PAUSED 2026-11-21 ~21:00 (third pause, user asked for a handoff). Nothing pushed this session.
 State: `baseline` holds M3 waves 1-2 except M3-BENCH, plus BL-RESIDUE. No VM running, no build running.
 - Merged (local only): M3-S0 a9aa940, M3-UI-IMPORT, M3-RIG-UAC 77ded10, M3-WIN-TASKDLG 9404a2a, M3-WIN-PIPE
