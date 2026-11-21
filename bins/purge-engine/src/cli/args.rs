@@ -33,6 +33,8 @@ verbs:
   plan show <plan.json>
   baseline build --out <file>               build this Windows' local baseline (writes only <file>)
   baseline info <file>                      check a local baseline file and print its seal
+  hello                                     print what engine.hello reports, as JSON: the engine, this
+                                            Windows, and the baseline view a scan would work with
   kb lint <pack.json>... [--baselines <dir>]
 
   <program_id> is an inventory id (HKLM|64|Git_is1) or the Uninstall key name of exactly one entry.
@@ -124,6 +126,8 @@ pub enum Command {
     BaselineBuild,
     /// `baseline info`.
     BaselineInfo,
+    /// `hello`.
+    Hello,
     /// `kb lint`.
     KbLint,
 }
@@ -152,6 +156,7 @@ impl Command {
             Command::PlanFromTargets => "plan from-targets",
             Command::BaselineBuild => "baseline build",
             Command::BaselineInfo => "baseline info",
+            Command::Hello => "hello",
             Command::KbLint => "kb lint",
         }
     }
@@ -175,7 +180,7 @@ impl Command {
             | Command::QuarantineExpiring
             | Command::QuarantinePurge
             | Command::PlanFromTargets => "M2",
-            Command::BaselineBuild | Command::BaselineInfo => "BL",
+            Command::BaselineBuild | Command::BaselineInfo | Command::Hello => "BL",
             Command::KbLint => "M4",
             Command::Stdio | Command::Broker => "M3",
         }
@@ -396,6 +401,8 @@ pub enum Invocation {
     BaselineBuild(BaselineBuildArgs),
     /// `baseline info`.
     BaselineInfo(BaselineInfoArgs),
+    /// `hello`.
+    Hello,
     /// An executor verb (run only by a `rig-exec` build).
     Executor(ExecVerb),
 }
@@ -419,6 +426,7 @@ pub fn parse(args: &[String]) -> Result<Invocation, String> {
         Command::PlanShow => plan_show(&rest).map(Invocation::PlanShow),
         Command::BaselineBuild => baseline_build(&rest).map(Invocation::BaselineBuild),
         Command::BaselineInfo => baseline_info(&rest).map(Invocation::BaselineInfo),
+        Command::Hello => no_arguments("hello", &rest).map(|()| Invocation::Hello),
         Command::PlanFromTargets => from_targets(&rest)
             .map(ExecVerb::PlanFromTargets)
             .map(Invocation::Executor),
@@ -486,6 +494,7 @@ fn verb(args: &[String]) -> Result<Verb, String> {
         "harvest" => Command::Harvest,
         "uninstall" => Command::Uninstall,
         "scan" => Command::Scan,
+        "hello" => Command::Hello,
         "exec" => Command::Exec,
         "undo" => Command::Undo,
         "plan" => {
@@ -909,6 +918,8 @@ mod tests {
                 file: PathBuf::from("x.tsv.gz")
             }))
         );
+        assert_eq!(p("hello"), Ok(Invocation::Hello));
+        assert!(err("hello now").contains("unexpected argument"));
         assert!(err("baseline build").contains("needs --out"));
         assert!(err("baseline build --out a b").contains("unexpected argument"));
         assert!(err("baseline info").contains("missing <file>"));

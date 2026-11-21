@@ -3,14 +3,17 @@
 # and __ENGINE__ with 1 (engine mode) or 0, and submits the result as an agent job (elevated, interactive
 # user). Outputs in C:\cr\out\<run>\:
 #   run.log, run.json, lists-<run>-0|1|2.json, snap-<run>-0|1|2.tsv.gz, msi-*.log (MSI apps)
-#   engine mode also: inv-1.json, fp.json, engine-run.json, plan-purge.json (+ its sidecar), inv-2.json
+#   engine mode also: inv-1.json, engine-hello.json, fp.json, engine-run.json, plan-purge.json (+ its sidecar),
+#   inv-2.json
 #   extra checks (__EXTRA__ = 1, rig.ps1 -ExtraChecks): plan-live.json (scan of the still-installed app, after the
 #   harvest) and plan-purge-b.json (a second identical post scan); results in run.json `extra`
 # Every phase is wrapped: a failure is recorded in run.json and the remaining captures still run.
 # Phase order (RIG.md §4, §4a, §4b): edge-pause, setup, pre-apps (+ pre-launch, pre-uninstall), plant-pre,
 # defender-idle, arp0/lists0/snap0, install (upgrade_from first), detect, launch, post-apps, plant-post, lists1,
-# [engine-inventory-1], snap1, [engine-harvest, engine-scan-live], uninstall, lists2, [engine-inventory-2], snap2,
-# edge-check, entries, [engine-scan, engine-scan-repeat].
+# [engine-inventory-1], snap1, [engine-hello, engine-harvest, engine-scan-live], uninstall, lists2,
+# [engine-inventory-2], snap2, edge-check, entries, [engine-scan, engine-scan-repeat].
+# engine-hello (RIG.md §4a): `purge-engine hello` -> engine-hello.json; the phase fails when the baseline trust it
+# reports is not the one the run is for (__TRUST__, or Exact when the engine has this Windows' shipped baseline).
 # M1b options (__M1B__, RIG.md section 12) add msi-tables-1 / msi-tables-2 right after snap1 / snap2 and, with traps,
 # TrapB as the first pre-app plus m1b-traps-pre (before lists1), m1b-traps-between (before uninstall) and
 # m1b-traps-post (after uninstall, before lists2).
@@ -21,6 +24,10 @@ $ExtraFlag = '__EXTRA__'
 # M1b options (rig.ps1 ConvertTo-M1bOpts, RIG.md section 12): base64 of {msi_tables, traps, trap_a, trap_b} as UTF-8
 # JSON; empty or unreplaced = none (the M0 / M1a behaviour).
 $M1bFlag = '__M1B__'
+# The baseline trust the host expects `engine.hello` to report (rig.ps1 -ExpectTrust: exact, merged, local, none,
+# below-exact); empty or unreplaced = decided here (riglib Get-RigExpectedTrust: exact when the engine has the
+# shipped baseline of this Windows, else nothing is expected).
+$TrustFlag = '__TRUST__'
 # Checked before anything is loaded or created. Case-sensitive, and the placeholders are built by
 # concatenation so the host's .Replace('__ID__', ...) cannot rewrite them.
 if ($Id -cnotmatch '^[a-z0-9][a-z0-9_-]*$' -or $Id -eq ('__' + 'ID__')) {
@@ -29,6 +36,10 @@ if ($Id -cnotmatch '^[a-z0-9][a-z0-9_-]*$' -or $Id -eq ('__' + 'ID__')) {
 if ($Run -eq ('__' + 'RUN__')) { $Run = $Id }
 if ($Run -cnotmatch '^[a-z0-9][a-z0-9_.-]*$') {
     Write-Host ("run-app.ps1: bad run name '{0}'" -f $Run); exit 2
+}
+if ($TrustFlag -eq ('__' + 'TRUST__')) { $TrustFlag = '' }
+if ($TrustFlag -cnotmatch '^(|exact|merged|local|none|below-exact)$') {
+    Write-Host ("run-app.ps1: bad expected baseline trust '{0}'" -f $TrustFlag); exit 2
 }
 # An unreplaced placeholder means the vendor uninstall path of M0 (no engine).
 $Engine = ($EngineFlag -eq '1')
@@ -129,6 +140,7 @@ if ($Extra) {
 $Inv1 = Join-Path $Dir 'inv-1.json'
 $FpFile = Join-Path $Dir 'fp.json'
 $EngineRun = Join-Path $Dir 'engine-run.json'
+$EngineHello = Join-Path $Dir 'engine-hello.json'
 $PlanFile = Join-Path $Dir 'plan-purge.json'
 $Inv2 = Join-Path $Dir 'inv-2.json'
 $PlanLive = Join-Path $Dir 'plan-live.json'
@@ -136,7 +148,9 @@ $PlanB = Join-Path $Dir 'plan-purge-b.json'
 if ($Engine) {
     $S.engine = [ordered]@{
         exe = $RigEngine; app = $Id; program_id = $null; run = $null
-        files = [ordered]@{ inv1 = 'inv-1.json'; fp = 'fp.json'; run = 'engine-run.json'; plan = 'plan-purge.json'; inv2 = 'inv-2.json' }
+        files = [ordered]@{ inv1 = 'inv-1.json'; hello = 'engine-hello.json'; fp = 'fp.json'; run = 'engine-run.json'; plan = 'plan-purge.json'; inv2 = 'inv-2.json' }
+        # What engine.hello said before the harvest, and the baseline trust this run is for (phase engine-hello).
+        hello = [ordered]@{ expected = $null; asked = $TrustFlag; baseline_trust = $null; baseline_view = $null; elevated = $null; ok = $null }
         # The (edition, build) baselines the engine can see (rig.ps1 -NoBaselines leaves none).
         baselines = @(Get-ChildItem -LiteralPath (Join-Path (Split-Path -Parent $RigEngine) 'kb\baselines') -File -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })
         calls = New-Object System.Collections.ArrayList
@@ -522,6 +536,28 @@ if ("$($e.app.tech)" -match 'Inno' -and $S.main) {
 
 # ------------------------------------------------------------------------------- engine: before uninstall
 if ($Engine) {
+    # engine.hello first (review BL-R1 M1): the baseline trust of the engine as it runs here, elevated, with the
+    # tree the host pushed and protected. A run whose engine does not have the trust the run is for fails here; the
+    # harvest and the scan still run, and the campaign records the run as failed.
+    Phase 'engine-hello' {
+        $null = Invoke-EngineStep -Step 'hello' -Arguments 'hello' -Calls $S.engine.calls -TimeoutSec $EngineMaxSec -StdoutFile $EngineHello
+        $h = [IO.File]::ReadAllText($EngineHello) | ConvertFrom-Json
+        $hello = $S.engine.hello
+        $hello.baseline_trust = "$($h.baseline_trust)"
+        $hello.elevated = $h.elevated
+        if ($h.baseline_view) { $hello.baseline_view = "$($h.baseline_view.name)" }
+        $hello.expected = Get-RigExpectedTrust -Asked $TrustFlag -Edition "$($h.edition)" -Build $h.build -Ubr $h.ubr -BaselineNames $S.engine.baselines
+        Log "engine.hello: baseline_trust $($hello.baseline_trust) (view $($hello.baseline_view)), elevated $($hello.elevated); this run expects '$($hello.expected)'"
+        $why = Test-RigBaselineTrust -Expected $hello.expected -Actual $hello.baseline_trust
+        $hello.ok = (-not $why)
+        if ($why) {
+            if (Get-Command Get-RigEngineTreeProblems -ErrorAction SilentlyContinue) {
+                foreach ($p in @(Get-RigEngineTreeProblems (Split-Path -Parent $RigEngine))) { Log "  engine tree: $p" }
+            }
+            throw $why
+        }
+    } $S
+    Save-Run
     Phase 'engine-harvest' {
         if (-not $S.engine.program_id) { throw 'no program_id (engine-inventory-1 failed)' }
         $a = 'harvest ' + (ConvertTo-EngineArg $S.engine.program_id) + ' -o ' + (ConvertTo-EngineArg $FpFile)

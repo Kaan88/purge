@@ -66,8 +66,18 @@ Two directions of use, which the whole design rests on:
 - **L3 Exact is untouched.** On a host with an exact shipped baseline the engine behaves byte-for-byte as
   at the M1b gate: the local baseline is not built, not read and not merged.
 - **L4 The cap.** Absence at a trust below Exact never yields Safe and never preselects (§4.4).
-- **L5 Monotone.** For every scan: `preselected(non-exact view) ⊆ preselected(no baseline)` and
-  `Blocked(non-exact view) ⊇ Blocked(no baseline)`.
+- **L5 Monotone.** A view below Exact only takes away: what a scan or a plan offers with a view below Exact,
+  the same scan or plan without a baseline offers at least as strongly. For every item offered below Exact
+  there is an item of the no-baseline result that (1) has the same target or, when the no-baseline result has
+  no item of that target, a key or directory that contains it; (2) has a band at least as high, with
+  not listed < Blocked < Weak < Likely < Safe; (3) is preselected if the item below Exact is. So nothing new is
+  offered (not even as Blocked), no band is raised, the preselected set is a subset, and what was Blocked is
+  Blocked or no longer listed. The Blocked set is *not* a superset: a scanner may withhold a Windows key it
+  listed as Blocked without a baseline. The containing case in (1) is the one named exception to "the same
+  target": a scanner told that a key is Windows' own may offer the app's values in it instead of the key.
+  This is the one statement of L5 (restated after review BL-R1 S7; the first wording, "Blocked sets are
+  supersets", was not what presence-only gives). It is checked per scanner (`purge-scan`
+  `tests/shared/l5.rs`) and per plan (`xtask replay`, `l5_violations`).
 - **L6 A local file is never an exact baseline.** Different header tag, directory and file name; the
   exact loader rejects it (§3.5).
 - **L7 Advice only lowers** (§7).
@@ -276,7 +286,18 @@ nothing, so those fingerprints are byte-identical to the M1b gate's. `cargo xtas
 table (every call, its class, what it does below Exact) and fails on an unlisted call, on `key_absent` outside the
 two capped files, on a capped file without the `Inferred => Unknown` arm, and on a negated presence call.
 
-### 4.4 Where the cap is applied (three layers)
+**The cap as built has two live layers, not three (review BL-R1 S1; DECISIONS 2026-11-21).** Of the three layers
+of §4.4 the carrier and the seal act below Exact. The policy backstop P-BL-1 is inert in production under a Merged
+or Local view: the scan hands the policy `ScanCtx::absence_trust()`, which is `trust().presence_only()`, so None
+below Exact, and the fingerprint records None too; `is_capped` then acts only on evidence that carries the
+carrier's own fact. A site wired to inferred absence by mistake is therefore stopped by the capped path itself
+(it never sees `Inferred`), by `baseline-sites`, and by the seal for the evidence forms the seal knows; key-scope
+MSI and Burn records and key-scope `ChainedRef` are outside the seal and would not be stopped by the policy either.
+Handing the policy the view's own trust would close that, and would cap the MSI and Burn key records a no-baseline
+scan preselects today: a recall loss with no safety gain while no site consumes inferred absence. So the code
+stays, and §8.5 carries the condition.
+
+### 4.4 Where the cap is applied (three layers; two of them live while presence-only, see §4.3 "as built")
 
 1. **Scanner layer, the carrier.** `CandidateBuilder` gets `absence(&mut self, a: Absence)`. For
    `Inferred(t)` it adds the detail facts `baseline=<view name>`, `baseline_trust=merged|local` to the
@@ -321,6 +342,19 @@ Exact when their `os` matches a shipped baseline and as None otherwise, which is
   in `kb/baselines` under an exact name is refused (L6); a test that an incomplete local baseline gives
   trust None and still blocks.
 - Replay gate: with exact baselines the plans are byte-identical to the M1b gate plans (L3).
+- As built for L5 (presence-only; reviews BL-R1 S3, S7, M2). Per scanner, `tests/shared/l5.rs` runs each
+  scanner world without a baseline, with views below Exact that hold nothing (the candidates must be equal),
+  and with views that hold what the no-baseline candidates name: all of it, then seeded random parts of it
+  (keys, values, directories, files, the keys of services and tasks, the values of firewall rules). Each pair
+  must hold L5 as §2 states it, with the policy at trust None and at the view's own trust. A test fails when
+  a scanner offers nothing in any of its worlds or when no presence view changes what it offers, unless the
+  scanner is named exempt with the reason (SYS-APPX: a package is nothing a baseline holds); and the
+  comparison is shown to bite on the candidates of each scan. Per plan, `xtask replay --baseline-view
+  merged|local|none` with `--local` and `--neighbour` injects the view into the harvest **and** the scan
+  (`purge-engine` feature `inject-view`, enabled by xtask only; no CLI or RPC path reaches it), and
+  `l5_violations` compares the plan with the no-baseline plan. With presence-only the merged view is held
+  against the no-baseline golden, so the golden `cls_assoc_vscode_merged.txt` listed above was not made
+  (review BL-R1 N11).
 
 ## 5. Cache
 
@@ -350,6 +384,14 @@ Exact when their `os` matches a shipped baseline and as None otherwise, which is
   a second and keeps S1. After a store the two newest files of that source are kept. The loaded local baseline
   is the union of the parts; its source id (the fingerprint's `local_id`) is made from the ids of the parts
   used. The one-file form of §3.5 is still what `baseline build --out` writes for the rig.
+- **A stale part answers presence** (review BL-R1 S5). After a servicing change the rebuild of S1 takes minutes,
+  and until it has ended the engine would have no component manifests at all. On a miss a load therefore takes
+  the newest part of that source of the same edition and build that this builder wrote (any id, any UBR; the
+  two newest files are kept) and marks its `#src` line incomplete with the reason `stale: …`. It is a list of
+  keys Windows owned on this machine before the change, so it only adds presence (L1), at the cost of a few
+  keys of removed components. The local baseline is incomplete with it, so the trust is None (L2) and nothing is
+  inferred; the part still counts as missing for the build, and the local baseline's source id says `stale:`
+  for it, so it is never the id of a complete one.
 - **S3 is never cached.** Nothing an id could be made from says that the live `HKU\.DEFAULT` changed, so
   every load of the view reads it again through the registry source (about 0.3 s) and judges its seal then.
   An engine that is not elevated cannot read all of it and cannot list every user's packages (it takes the
@@ -373,10 +415,15 @@ Exact when their `os` matches a shipped baseline and as None otherwise, which is
   `Settings::check_shipped_dir`; fixtures and replays do not, because their file system source describes
   another machine than the one the baseline directory is on. As built, the exact baseline's file and
   `view.json` are judged themselves too (a file moved into the directory keeps its old owner and grants; a
-  hard link shares them); one that fails is not used and the view is built without it. Open before BL-GATE
-  (question 5 of §11, not checked on the VMs): the rig's `C:\cr\bin\kb\baselines` is made by `mkdir` below
-  the drive root and so inherits its grant for Authenticated Users; unless the rig protects `C:\cr\bin`, its
-  elevated engine uses no shipped baseline and the exact runs become values-only.
+  hard link shares them); one that fails is not used and the view is built without it. The rig (review BL-R1
+  M1; scripts changed, **not yet run on a VM**): its `C:\cr\bin\kb\baselines` is made by `mkdir` below the
+  drive root and so inherits its grant for Authenticated Users, which made its elevated engine drop every
+  shipped baseline. `rig.ps1` `Push-Tools` now protects `C:\cr\bin\kb` after the copies (owner Administrators;
+  protected DACL: SYSTEM and Administrators full, Users read and execute) and takes delete and re-ACL rights
+  on `C:\cr` and `C:\cr\bin` from standard users, and every engine run asks `purge-engine hello` (the result
+  of `engine.hello`) and fails when `baseline_trust` is not the trust the run is for (`vm/RIG.md` §4a). The
+  first rig run confirms it, or shows what the directory rule still objects to (the run's `engine-hello`
+  phase logs it).
 - **Budget** (`PURGE_TIMING` phases `baseline.local.*`; `read` is the workers' time taking the next manifest and
   reading it, outside the listing lock since gate M round 2): cold build at background I/O and CPU priority,
   in parallel over the manifests: at most 30 s on the 591-program host, at most 120 s on a 2-vCPU VM;
@@ -478,8 +525,8 @@ in the COM areas of HKLM Classes, 60 to 80% in `SOFTWARE\Microsoft`, 50 to 70% i
   other false-absent keys at most 0.5% of the area's truth keys, each listed in the report.
 - **S3** Local, in every area marked `local`: the same two numbers with local-only sets. An area that
   fails is not marked; "no area marked" is an accepted outcome (Local is then presence-only).
-- **S4** L3 and L5 hold over R3: exact plans byte-identical; preselected sets are subsets; Blocked sets
-  are supersets.
+- **S4** L3 and L5 hold over R3: exact plans byte-identical; every plan made with an injected view below
+  Exact holds L5, as §2 states it, against the no-baseline plan of the same run (`l5_violations` is empty).
 - **S5** The completeness seal passes on both VMs and on the host, and fails when one source is made
   unreadable (fault injection in a unit test).
 
@@ -513,6 +560,11 @@ An area may let inferred absence support Safe only after a user decision and onl
 **zero** false-absent keys of any shape in that area on at least three leave-one-out pairs, two of them
 with a build distance at least as large as the one trusted. That needs more shipped baselines, which is
 what automated release-build baseline packs would provide.
+
+The first A site wired below Exact, capped or not, comes in the same change with `baseline.view.trust()` as the
+scan side of `BaselineTrust::for_policy` in the pipeline, so that the policy backstop P-BL-1 is live again
+(review BL-R1 S1: while presence-only the policy is handed None below Exact, §4.3 "as built"), and with the
+seal's list of evidence forms reviewed for the kinds that site can emit.
 
 ## 9. Packages
 

@@ -7,9 +7,19 @@
 //!   ([`ScanCtx::in_baseline`], `ctx.baseline.has_*`). The answer is the union of every set the view
 //!   holds, at every trust; it only ever blocks.
 //! - **A, absence**: "is this key proven not Windows' own?" A scanner asks **only here**:
-//!   [`ScanCtx::key_absence`] for one key, [`ScanCtx::has_exact_baseline`] and
-//!   [`ScanCtx::has_matching_exact_baseline`] for "is there a baseline whose absence is proof".
+//!   [`ScanCtx::key_absence`] for one key, [`ScanCtx::has_exact_baseline`] (and its older name
+//!   [`ScanCtx::has_matching_exact_baseline`]) for "is there a baseline whose absence is proof".
 //!   `cargo xtask baseline-sites` fails when `key_absent` is called anywhere else in this crate.
+//!
+//! # Exact means "of this Windows"
+//!
+//! Absence is proof only from the shipped baseline of exactly the Windows the scan runs on
+//! ([`ScanCtx::os_now`]), as in the harvest (`HarvestCtx::has_exact_baseline`). An Exact view of
+//! another edition or build proves nothing about this machine: both gates are false for it and
+//! [`ScanCtx::key_absence`] answers `Unknown` where the view says `Proven` (review BL-R1 S2). The
+//! pipeline never builds such a view (the exact baseline is selected for the machine's own Windows);
+//! the rule is here so that the state means the same thing in both crates. What such a view has is
+//! still presence.
 //!
 //! # Presence-only below Exact
 //!
@@ -23,7 +33,10 @@
 //! # The carrier and the seal (defence in depth)
 //!
 //! The machinery of the trust cap is here all the same, so that a site wired to inferred absence
-//! by mistake, or on purpose once the cap is lifted (§8.5), cannot reach Safe or preselection:
+//! by mistake, or on purpose once the cap is lifted (§8.5), cannot reach Safe or preselection with
+//! the evidence forms the seal knows ([`claims_absence`]). These two are the live layers: the
+//! third, the policy backstop P-BL-1, is handed trust None below Exact
+//! ([`ScanCtx::absence_trust`]) and so does not act in production.
 //!
 //! - [`CandidateBuilder::absence`] is the carrier: for [`Absence::Inferred`] it adds the soft blocker
 //!   `BaselineInferred` and the detail facts `baseline`, `baseline_trust`, `baseline_neighbours` and
@@ -70,29 +83,40 @@ impl ScanCtx<'_> {
     }
 
     /// **A.** What the scan may conclude about `key` not being Windows' own: `Present`, `Proven`
-    /// (an Exact view, inside the capture scope, not in the baseline) or `Unknown`. Never
-    /// `Inferred`: see the module documentation.
+    /// (the exact baseline of this Windows, inside the capture scope, does not have the key) or
+    /// `Unknown`. Never `Inferred`, and never `Proven` from a baseline of another Windows: see the
+    /// module documentation.
     pub fn key_absence(&self, key: &str) -> Absence {
-        capped(self.baseline.key_absent(key))
+        match capped(self.baseline.key_absent(key)) {
+            Absence::Proven if !self.has_exact_baseline() => Absence::Unknown,
+            answer => answer,
+        }
     }
 
-    /// **A.** Whether the scan holds a baseline whose absence is proof: an Exact view. Below Exact
-    /// this is what "no baseline" was (values-only work, §5.7.1 step 3), whatever the view holds
-    /// for presence.
+    /// **A.** Whether the scan holds a baseline whose absence is proof: an Exact view of exactly the
+    /// Windows the scan runs on (the machine as the source reports it now, else as the fingerprint
+    /// recorded it). Below Exact, and with an exact baseline of another Windows, this is what "no
+    /// baseline" was (values-only work, §5.7.1 step 3), whatever the view holds for presence.
     pub fn has_exact_baseline(&self) -> bool {
-        self.baseline.trust() == BaselineTrust::Exact
+        self.matching_exact_baseline().is_some()
     }
 
-    /// **A.** [`ScanCtx::has_exact_baseline`], and the baseline is of exactly the Windows the scan
-    /// runs on (the machine as the source reports it now, else as the fingerprint recorded it).
+    /// **A.** The same as [`ScanCtx::has_exact_baseline`], which requires the match itself.
     pub fn has_matching_exact_baseline(&self) -> bool {
-        self.matching_exact_baseline().is_some()
+        self.has_exact_baseline()
+    }
+
+    /// Whether the view is an exact shipped baseline of **another** Windows than the scan runs on:
+    /// a baseline is there and proves nothing here. Only for naming the reason
+    /// (`NotProven::BaselineMismatch`); no site may take it for a baseline.
+    pub(crate) fn has_foreign_exact_baseline(&self) -> bool {
+        self.baseline.trust() == BaselineTrust::Exact && !self.has_exact_baseline()
     }
 
     /// **A.** The name (`<edition>-<build>.<ubr>`) of the exact baseline of the Windows the scan runs
     /// on, when the view is that.
     pub(crate) fn matching_exact_baseline(&self) -> Option<String> {
-        if !self.has_exact_baseline() {
+        if self.baseline.trust() != BaselineTrust::Exact {
             return None;
         }
         let os = self.os_now();
@@ -102,10 +126,14 @@ impl ScanCtx<'_> {
     }
 
     /// The trust of the absence answers this scan consumed: what the pipeline hands to the policy
-    /// as the scan's side of `BaselineTrust::for_policy`. Presence-only: `Exact` for an Exact view,
-    /// `None` below it.
+    /// as the scan's side of `BaselineTrust::for_policy`. Presence-only: `Exact` for the exact
+    /// baseline of this Windows, `None` for anything else.
     pub fn absence_trust(&self) -> BaselineTrust {
-        self.baseline.trust().presence_only()
+        if self.has_exact_baseline() {
+            BaselineTrust::Exact
+        } else {
+            BaselineTrust::None
+        }
     }
 
     /// The seal of the trust cap (§4.4 layer 2): whether `candidate` must not leave a scan made with
@@ -133,8 +161,11 @@ impl ScanCtx<'_> {
 ///   `baseline=none`, which is how their sites mark the Tier B form made without an absence answer.
 ///
 /// Key-scope `InstallerManifest(Msi | Burn)` and `ChainedRef` are not in the list: their sites never
-/// ask the baseline, with or without one, so they claim nothing about it. (The policy backstop
-/// P-BL-1 still caps them when it is handed an inferred trust.)
+/// ask the baseline, with or without one, so they claim nothing about it. Nothing else caps them
+/// today: the policy backstop P-BL-1 would, if it were handed an inferred trust, and in production
+/// it never is ([`ScanCtx::absence_trust`] is None below Exact, and the fingerprint records None).
+/// The cap has two live layers, the carrier and this seal (review BL-R1 S1; BASELINE_LOCAL_DESIGN.md
+/// §4.3 "as built", §8.5).
 pub fn claims_absence(evidence: &Evidence, target: &Target) -> bool {
     if !evidence.is_absence_dependent(target) {
         return false;

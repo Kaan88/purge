@@ -4414,10 +4414,26 @@ mod tests {
         assert!(ctx.has_exact_baseline() && ctx.has_matching_exact_baseline());
         assert_eq!(ctx.absence_trust(), BaselineTrust::Exact);
 
-        // An exact baseline of another Windows: a baseline, not this Windows' own.
-        world.baseline = Some(baseline("EnterpriseS", &[]));
+        // An exact baseline of another Windows proves nothing here (review BL-R1 S2): both gates are
+        // false, absence is unknown, the policy is handed no trust. What it has is still presence.
+        world.baseline = Some(baseline("EnterpriseS", &[WINDOWS_KEY]));
         let ctx = world.ctx();
-        assert!(ctx.has_exact_baseline() && !ctx.has_matching_exact_baseline());
+        assert_eq!(ctx.baseline.trust(), BaselineTrust::Exact);
+        assert_eq!(ctx.baseline.key_absent(SH_AUTO), Absence::Proven);
+        assert!(!ctx.has_exact_baseline() && !ctx.has_matching_exact_baseline());
+        assert!(ctx.has_foreign_exact_baseline());
+        assert_eq!(ctx.key_absence(SH_AUTO), Absence::Unknown);
+        assert_eq!(ctx.key_absence(WINDOWS_KEY), Absence::Present);
+        assert_eq!(ctx.absence_trust(), BaselineTrust::None);
+        assert!(!ctx.key_record_covers(SH_AUTO));
+        assert!(!ctx.key_record_covers(r"HKLM\SYSTEM\CurrentControlSet\Enum\X"));
+        assert!(ctx.in_baseline(&key(WINDOWS_KEY)));
+        // The same baseline for its own Windows: the gates are true and it proves.
+        world.baseline = Some(baseline(EDITION, &[WINDOWS_KEY]));
+        let ctx = world.ctx();
+        assert!(!ctx.has_foreign_exact_baseline());
+        assert!(ctx.key_record_covers(SH_AUTO));
+        assert!(ctx.key_record_covers(r"HKLM\SYSTEM\CurrentControlSet\Enum\X"));
 
         for (view, trust) in views_below_exact() {
             // The view itself: inferred where its trust and the (open) rules allow.

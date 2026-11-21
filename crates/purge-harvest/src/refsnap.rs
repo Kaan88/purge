@@ -231,7 +231,9 @@ pub(crate) const HKLM_CLASSES: &str = r"HKLM\SOFTWARE\Classes";
 
 /// The key path in the form the sources list it: a user's `Software\Classes` (a registry link) is
 /// rewritten to the `HKU\<sid>_Classes` hive it points to, and an unbound `HKCU` root is bound to `sid`.
-/// Everything else is returned unchanged (without a trailing separator).
+/// Everything else is returned unchanged (without a trailing separator). That includes
+/// `Software\Classes` of a hive without a classes hive (`.DEFAULT` and the service accounts,
+/// [`purge_model::has_classes_hive`]): it is an ordinary key, listed and canonical where it is.
 pub fn source_key(key: &str, sid: Option<&str>) -> String {
     let key = key.trim_matches(prefix::SEP);
     let mut segs: Vec<&str> = prefix::segments(key).collect();
@@ -244,6 +246,7 @@ pub fn source_key(key: &str, sid: Option<&str>) -> String {
     let user_classes = segs.len() >= 4
         && prefix::eq_ci(segs[0], "HKU")
         && !segs[1].to_ascii_lowercase().ends_with("_classes")
+        && purge_model::has_classes_hive(segs[1])
         && prefix::eq_ci(segs[2], "Software")
         && prefix::eq_ci(segs[3], "Classes");
     if user_classes {
@@ -504,6 +507,58 @@ mod tests {
         );
         // Without a user, HKCU stays unbound.
         assert_eq!(source_key(r"HKCU\Software\X", None), r"HKCU\Software\X");
+    }
+
+    /// `source_key` gives a key below a user's `Software\Classes` the spelling `purge-guard` calls
+    /// canonical, for the in-place and for the canonical input: the `_Classes` hive for a user, the key
+    /// where it is for a hive without a classes hive. The same table as `purge-guard`'s
+    /// `classes_spellings_agree` and `purge-source`'s
+    /// `canonical_and_in_place_classes_spellings_open_the_same_key`.
+    #[test]
+    fn source_key_agrees_with_the_canonical_form() {
+        use purge_guard::canon::{GuardEnv, canon_key};
+        let env = GuardEnv::sample();
+        let canonical = |key: &str| {
+            canon_key(key, None, &env, None)
+                .map(|k| k.key_path())
+                .unwrap()
+        };
+        let mut rows: Vec<(String, String)> = vec![
+            (
+                format!(r"HKU\{SID}\Software\Classes\Vendor.Doc\shell"),
+                format!(r"HKU\{SID}_Classes\Vendor.Doc\shell"),
+            ),
+            (
+                format!(r"HKU\{SID}\Software\Classes\WOW6432Node\CLSID\{{X}}"),
+                format!(r"HKU\{SID}_Classes\WOW6432Node\CLSID\{{X}}"),
+            ),
+        ];
+        for sid in [".DEFAULT", "S-1-5-18", "S-1-5-19", "S-1-5-20"] {
+            for tail in [r"Vendor.Doc\shell", r"WOW6432Node\CLSID\{X}"] {
+                let key = format!(r"HKU\{sid}\Software\Classes\{tail}");
+                rows.push((key.clone(), key));
+            }
+        }
+        for (in_place, want) in &rows {
+            assert_eq!(&source_key(in_place, None), want, "{in_place}");
+            assert_eq!(&source_key(want, None), want, "{want}");
+            assert_eq!(&canonical(in_place), want, "{in_place}");
+            assert_eq!(&canonical(want), want, "{want}");
+        }
+        // Any letter case of the hive name, and the root key itself.
+        assert_eq!(
+            source_key(r"HKU\.default\SOFTWARE\classes\x", None),
+            r"HKU\.default\SOFTWARE\classes\x"
+        );
+        assert_eq!(
+            source_key(r"HKU\S-1-5-18\Software\Classes", None),
+            r"HKU\S-1-5-18\Software\Classes"
+        );
+        // Only the exact names.
+        assert_eq!(
+            source_key(r"HKU\S-1-5-18-1\Software\Classes\x", None),
+            r"HKU\S-1-5-18-1_Classes\x"
+        );
     }
 
     #[test]

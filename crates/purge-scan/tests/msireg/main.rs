@@ -32,17 +32,15 @@ fn l5_a_view_below_exact_only_takes_away() {
         &purge_scan::reg_instfolders::RegInstFolders,
         &purge_scan::reg_shareddlls::RegSharedDlls,
     ];
-    let mut offered = 0;
+    let mut tally = l5::Tally::default();
     for scanner in scanners {
-        let none = l5::check(scanner.id(), &make().fp.os, &|view| {
+        let checked = l5::check(scanner.id(), &make().fp.os, &|view| {
             let mut world = make();
             world.baseline = view.unwrap_or_else(|| BaselineView::empty().clone());
             world.run(scanner)
         });
-        offered += none.len();
+        tally.add(scanner.id(), &checked);
     }
-    assert!(
-        offered > 7,
-        "the world offers something to compare: {offered}"
-    );
+    // Each of the three offers something, and presence changes it.
+    tally.assert_not_vacuous(&[], &[]);
 }

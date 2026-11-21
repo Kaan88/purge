@@ -2648,10 +2648,11 @@ fn ref_any_same_output_with_shared_hits() {
 // Invariant L5 (BASELINE_LOCAL_DESIGN.md §2): a view below Exact only takes away
 // ---------------------------------------------------------------------------------------------------------
 
-/// The Firefox leftovers, Git with the installer's key records, and Git's skeleton key, with each of
-/// the five scanners: a view below Exact that holds nothing gives the no-baseline candidates exactly;
-/// one that says Windows has the keys preselects nothing new and unblocks nothing
-/// (`tests/shared/l5.rs`).
+/// The Firefox leftovers, Git with the installer's key records, Git's skeleton key, and one world each
+/// for the `App Paths`, start entry and environment scanners, with each of the five scanners: a view
+/// below Exact that holds nothing gives the no-baseline candidates exactly; one that says Windows has
+/// keys or values of them offers nothing new, raises no band and preselects nothing new
+/// (`tests/shared/l5.rs`). Every scanner offers something in some world, and presence changes it.
 #[test]
 fn l5_a_view_below_exact_only_takes_away() {
     let own = r"HKLM\SOFTWARE\GitForWindows";
@@ -2687,17 +2688,101 @@ fn l5_a_view_below_exact_only_takes_away() {
         )
     };
     let firefox_world = || World::new(firefox_leftovers(), firefox());
+    // Firefox's `App Paths` and `Applications` keys (`apppaths_golden`).
+    let app_paths_world = || {
+        let exe = format!(r"{FIREFOX}\firefox.exe");
+        let machine_paths = app_paths(r"HKLM\SOFTWARE");
+        let mut world = World::new(
+            with_thunderbird(machine())
+                .sz(&format!(r"{machine_paths}\firefox.exe"), "", &exe)
+                .sz(&format!(r"{machine_paths}\firefox.exe"), "Path", FIREFOX)
+                .sz(
+                    r"HKLM\SOFTWARE\Classes\Applications\firefox.exe\shell\open\command",
+                    "",
+                    &format!(r#""{exe}" -osint -url "%1""#),
+                ),
+            firefox(),
+        );
+        world.other_apps = thunderbird();
+        world
+    };
+    // Git's start entries with their `StartupApproved` switches (`run_golden`).
+    let run_world = || {
+        let hklm = r"HKLM\SOFTWARE";
+        let mut fp = git();
+        fp.ref_snapshot = vec![snap(
+            value(run_key(hklm, "Run"), "GitTray"),
+            RefCarrier::Data,
+            AnchorKind::Root,
+            GIT,
+        )];
+        fp.inno = vec![inno(
+            InnoRecordKind::RegDeleteValue,
+            value(run_key(hklm, "Run"), "GitTray"),
+        )];
+        World::new(
+            machine()
+                .sz(
+                    &run_key(hklm, "Run"),
+                    "GitTray",
+                    &format!(r#""{GIT}\cmd\git-tray.exe" --minimized"#),
+                )
+                .binary(&approved(hklm, "Run"), "GitTray", ENABLED.to_vec())
+                .sz(
+                    &run_key(&hkcu(), "RunOnce"),
+                    "GitCleanup",
+                    &format!(r"{GIT}\cleanup.cmd"),
+                ),
+            fp,
+        )
+    };
+    // Git's entry of the machine's `Path` (`env_git_path_segment_golden`).
+    let env_world = || {
+        World::new(
+            path_value(&[
+                r"%SystemRoot%\system32",
+                r"C:\Windows",
+                &git_cmd(),
+                r"C:\Tools\bin",
+            ])
+            .sz(MACHINE_ENV, "OS", "Windows_NT"),
+            git_with_path_snapshot(),
+        )
+    };
+    // A variable of Git's own that the installer's log records
+    // (`env_single_value_variable_the_installer_recorded_is_tier_a`).
+    let env_variable_world = || {
+        let mut fp = git();
+        fp.ref_snapshot = vec![snap(
+            value(MACHINE_ENV, "GIT_SSH"),
+            RefCarrier::Data,
+            AnchorKind::Root,
+            GIT,
+        )];
+        fp.inno = vec![inno(
+            InnoRecordKind::RegDeleteValue,
+            value(MACHINE_ENV, "GIT_SSH"),
+        )];
+        World::new(
+            machine().sz(MACHINE_ENV, "GIT_SSH", &format!(r"{GIT}\usr\bin\ssh.exe")),
+            fp,
+        )
+    };
     type Make<'a> = &'a dyn Fn() -> World;
-    let worlds: [(&str, Make<'_>); 3] = [
+    let worlds: [(&str, Make<'_>); 7] = [
         ("firefox", &firefox_world),
         ("git inno", &git_inno),
         ("git skeleton", &git_skeleton),
+        ("app paths", &app_paths_world),
+        ("run", &run_world),
+        ("env", &env_world),
+        ("env variable", &env_variable_world),
     ];
     let scanners: [&dyn Scanner; 5] = [&RegSoftware, &RefAny, &RegAppPaths, &RegRun, &RegEnv];
-    let mut offered = 0;
+    let mut tally = l5::Tally::default();
     for (name, make) in worlds {
         for scanner in scanners {
-            let none = l5::check(
+            let checked = l5::check(
                 &format!("{name}/{}", scanner.id()),
                 &make().fp.os,
                 &|view| {
@@ -2706,11 +2791,8 @@ fn l5_a_view_below_exact_only_takes_away() {
                     world.scan(scanner)
                 },
             );
-            offered += none.len();
+            tally.add(scanner.id(), &checked);
         }
     }
-    assert!(
-        offered > 10,
-        "the worlds offer something to compare: {offered}"
-    );
+    tally.assert_not_vacuous(&[], &[]);
 }

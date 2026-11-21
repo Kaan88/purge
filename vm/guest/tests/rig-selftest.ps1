@@ -48,6 +48,47 @@ foreach ($f in @(Get-ChildItem -LiteralPath $Guest -Filter '*.ps1') + @(Get-Item
     }
 }
 
+# ------------------------------------- engine-tree.ps1 and the expected baseline trust (review BL-R1 M1)
+& {
+    . (Join-Path $Guest 'riglib.ps1')
+    $ErrorActionPreference = 'Stop'
+    # The two descriptors the protect job sets, judged as purge-win sid.rs judges them.
+    Check 'engine-tree: the baseline tree descriptor passes as a leaf' (@(Get-RigSddlProblems -Sddl $RigBaselineTreeSddl -Leaf).Count -eq 0)
+    Check 'engine-tree: the ancestor descriptor passes as an ancestor' (@(Get-RigSddlProblems -Sddl $RigAncestorSddl).Count -eq 0)
+    $p = @(Get-RigSddlProblems -Sddl $RigAncestorSddl -Leaf)
+    Check 'engine-tree: the ancestor descriptor is not a leaf (users may add files there)' ($p.Count -eq 1 -and $p[0] -match '^S-1-5-11 may write') ($p -join '; ')
+    # What C:\cr is before the job: Modify for Authenticated Users, inherited from the drive root.
+    $p = @(Get-RigSddlProblems -Sddl 'O:BAG:BAD:AI(A;OICIID;FA;;;SY)(A;OICIID;FA;;;BA)(A;OICIID;0x1301bf;;;AU)')
+    Check 'engine-tree: inherited Modify for Authenticated Users fails an ancestor (DELETE)' ($p.Count -eq 1 -and $p[0] -match 'S-1-5-11 may write \(mask 0x10000\)') ($p -join '; ')
+    $p = @(Get-RigSddlProblems -Sddl 'O:S-1-5-21-1-2-3-1001G:BAD:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)' -Leaf)
+    Check 'engine-tree: a file the guest user owns fails (the host copies as that user)' ($p.Count -eq 1 -and $p[0] -match '^owner S-1-5-21-1-2-3-1001 is not') ($p -join '; ')
+    Check 'engine-tree: no DACL fails' ((@(Get-RigSddlProblems -Sddl 'O:BAG:BA') -join ';') -match 'no DACL')
+    Check 'engine-tree: an inherit-only grant and CREATOR OWNER do not count' (@(Get-RigSddlProblems -Sddl 'O:SYG:SYD:PAI(A;OICI;FA;;;SY)(A;OICIIO;FA;;;CO)(A;OICIIO;0x1301bf;;;BU)(A;;0x1200a9;;;BU)' -Leaf).Count -eq 0)
+    Check 'engine-tree: TrustedInstaller as owner passes' (@(Get-RigSddlProblems -Sddl 'O:S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464G:SYD:PAI(A;;FA;;;SY)').Count -eq 0)
+    # Read-only on the host: System32 is admin-only writable, the test's work directory is not.
+    Check 'engine-tree: System32 passes the rule on this machine' (@(Get-RigAdminOnlyProblems (Join-Path $env:SystemRoot 'System32')).Count -eq 0) (@(Get-RigAdminOnlyProblems (Join-Path $env:SystemRoot 'System32')) -join '; ')
+    Check 'engine-tree: a directory in the user''s temp does not' (@(Get-RigAdminOnlyProblems $Work).Count -gt 0)
+    $tree = Join-Path $Work 'tree'
+    Check 'engine-tree: a tree without kb\baselines is a problem' ((@(Get-RigEngineTreeProblems $tree) -join ';') -match 'kb\\baselines is missing')
+    New-Item -ItemType Directory -Force (Join-Path $tree 'kb\baselines') | Out-Null
+    [IO.File]::WriteAllText((Join-Path $tree 'kb\baselines\Professional-26340.9882.tsv.gz'), 'x')
+    $p = @(Get-RigEngineTreeProblems $tree)
+    Check 'engine-tree: an unprotected tree names the directory and the file' (@($p | Where-Object { $_ -like '*kb\baselines:*' }).Count -ge 1 -and @($p | Where-Object { $_ -like '*Professional-26340.9882.tsv.gz:*' }).Count -ge 1) ($p -join '; ')
+    Check 'engine-tree job: an unknown action fails with the FAILED line' ((Invoke-RigEngineTreeJob -Action 'nope') -match '^ENGINE-TREE nope FAILED: unknown action')
+
+    # The baseline trust a run expects, and the comparison with engine.hello.
+    $bl = @('EnterpriseSEval-26100.1742.tsv.gz', 'professional-26340.9882.tsv.gz', 'view.json')
+    Check 'expected trust: the exact baseline of this Windows is there -> exact' ((Get-RigExpectedTrust '' 'Professional' 26340 9882 $bl) -eq 'exact')
+    Check 'expected trust: another revision is not exact -> nothing expected' ((Get-RigExpectedTrust '' 'Professional' 26340 9883 $bl) -eq '' -and (Get-RigExpectedTrust '' 'Professional' 26340 9882 @()) -eq '')
+    Check 'expected trust: the host''s choice wins' ((Get-RigExpectedTrust 'below-exact' 'Professional' 26340 9882 $bl) -eq 'below-exact' -and (Get-RigExpectedTrust 'none' 'Professional' 26340 9882 $bl) -eq 'none')
+    $msg = $null; try { $null = Get-RigExpectedTrust 'sure' 'Professional' 26340 9882 $bl } catch { $msg = $_.Exception.Message }
+    Check 'expected trust: an unknown choice throws' ($msg -match 'bad expected baseline trust') "got '$msg'"
+    Check 'trust check: equal (any case) or nothing expected -> ok' ($null -eq (Test-RigBaselineTrust 'exact' 'Exact') -and $null -eq (Test-RigBaselineTrust '' 'None') -and $null -eq (Test-RigBaselineTrust 'merged' 'Merged'))
+    Check 'trust check: exact expected, None reported -> refused' ((Test-RigBaselineTrust 'exact' 'None') -match "baseline_trust 'None'; this run is for 'exact'")
+    Check 'trust check: below-exact takes merged, local and none, not exact' ($null -eq (Test-RigBaselineTrust 'below-exact' 'Merged') -and $null -eq (Test-RigBaselineTrust 'below-exact' 'Local') -and $null -eq (Test-RigBaselineTrust 'below-exact' 'None') -and (Test-RigBaselineTrust 'below-exact' 'Exact') -match 'below Exact')
+    Check 'trust check: a hello without the field is refused when something is expected' ((Test-RigBaselineTrust 'exact' '') -match 'reports no baseline trust')
+}
+
 # ------------------------------------------------------- riglib: LaunchMedium deletes its task on failure
 & {
     . (Join-Path $Guest 'riglib.ps1')
@@ -561,6 +602,10 @@ if "%VERB%"=="inventory" (
   type "%STUB_DIR%\inv.json"
   exit /b 0
 )
+if "%VERB%"=="hello" (
+  type "%STUB_DIR%\hello.json"
+  exit /b 0
+)
 if "%VERB%"=="harvest" (
   copy /y "%STUB_DIR%\fp.json" "%OUT%" >nul
   exit /b 0
@@ -632,9 +677,14 @@ exit /b 0
 '@
 
 # Writes the stub engine and its canned JSON into $Dir; $MainKey is the ARP key name of the main entry.
-function New-StubEngine([string]$Dir, [string]$MainKey) {
+function New-StubEngine([string]$Dir, [string]$MainKey, [string]$Trust = 'Exact') {
     $stub = Join-Path $Dir 'stub'
     New-Item -ItemType Directory -Force $stub | Out-Null
+    # engine.hello of a Professional 26340.9882 machine whose view has trust $Trust.
+    $view = '{"name":"local-Professional-26340.9882+1","trust":"' + $Trust + '","local_id":"0123456789abcdef"}'
+    if ($Trust -eq 'Exact') { $view = '{"name":"Professional-26340.9882","trust":"Exact","local_id":null}' }
+    [IO.File]::WriteAllText((Join-Path $stub 'hello.json'), ('{"version":"0.1.0","elevated":true,"user_sid":"S-1-5-21-1-2-3-1001","shell_sid":null,"edition":"Professional","build":26340,"ubr":9882,"policy_version":"bl.1",' +
+        '"baseline_available":' + $(if ($Trust -eq 'Exact') { 'true' } else { 'false' }) + ',"baseline_trust":"' + $Trust + '","baseline_view":' + $view + ',"baseline_build":{"state":"none","reason":"stub"}}'))
     $exe = Join-Path $Dir 'purge-engine.cmd'
     [IO.File]::WriteAllText($exe, $StubCmd.Replace("`r`n", "`n").Replace("`n", "`r`n"), (New-Object System.Text.ASCIIEncoding))
     $root = 'HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall'
@@ -695,6 +745,14 @@ function New-StubEngine([string]$Dir, [string]$MainKey) {
     $t = New-RunJobText -Id 'npp-userfiles' -Run 'x0-npp-userfiles' -Engine -Extra
     Check 'New-RunJobText -Engine -Extra: __EXTRA__ = 1, nothing left unreplaced' ($t.Contains("`$ExtraFlag = '1'") -and -not ($t -match '__(ID|RUN|ENGINE|EXTRA)__'))
     Check 'New-RunJobText without -Extra: __EXTRA__ = 0' ((New-RunJobText -Id 'npp' -Run 'r0-npp' -Engine).Contains("`$ExtraFlag = '0'"))
+    # __TRUST__ (review BL-R1 M1): empty unless the host names the baseline trust the run is for.
+    $t = New-RunJobText -Id 'npp' -Run 'r0-npp' -Engine
+    Check 'New-RunJobText without -ExpectTrust: __TRUST__ empty, nothing left unreplaced' ($t.Contains("`$TrustFlag = ''") -and -not ($t -match '__(ID|RUN|ENGINE|EXTRA|M1B|TRUST)__'))
+    Check 'New-RunJobText -ExpectTrust below-exact' ((New-RunJobText -Id 'npp' -Run 'r0-npp' -Engine -ExpectTrust 'below-exact').Contains("`$TrustFlag = 'below-exact'"))
+    $msg = $null; try { $null = New-RunJobText -Id 'npp' -ExpectTrust 'exact' } catch { $msg = $_.Exception.Message }
+    Check 'New-RunJobText -ExpectTrust without -Engine throws' ($msg -match 'needs -Engine') "got '$msg'"
+    $msg = $null; try { $null = New-RunJobText -Id 'npp' -Run 'r0-npp' -Engine -ExpectTrust 'Exactly' } catch { $msg = $_.Exception.Message }
+    Check 'New-RunJobText rejects an unknown -ExpectTrust' ([bool]$msg) "got '$msg'"
     $msg = $null; try { $null = New-RunJobText -Id 'npp' -Extra } catch { $msg = $_.Exception.Message }
     Check 'New-RunJobText -Extra without -Engine throws' ($msg -match 'needs -Engine') "got '$msg'"
     $r = Test-HeadCheck (New-RunJobText -Id 'npp' -Run 'r0-npp' -Engine)
@@ -1100,16 +1158,23 @@ function Snap([string]$Run, [string]$Phase) { Ev "snap:$Phase"; [IO.File]::Write
 
 # Runs one generated job in a child powershell.exe. Returns {code, out, dir (C:\cr\out\<run> stand-in), run
 # (run.json), phases (names), failed (names), events, engine (engine command lines), stub}.
-function Invoke-FakeRunApp([string]$Scenario, [string]$Id, [string]$Run = '', [switch]$EngineMode, [string]$Fail = '', [switch]$Extra) {
+# -Trust: the baseline trust the stub's `hello` reports. -ExactBaseline: the stub engine's kb\baselines holds the
+# shipped baseline of the stub's Windows. -ExpectTrust: the host's __TRUST__.
+function Invoke-FakeRunApp([string]$Scenario, [string]$Id, [string]$Run = '', [switch]$EngineMode, [string]$Fail = '', [switch]$Extra,
+                           [string]$Trust = 'Exact', [switch]$ExactBaseline, [string]$ExpectTrust = '') {
     $W = Join-Path $Work "ra-$Scenario"
     foreach ($d in 'out', 'inst') { New-Item -ItemType Directory -Force (Join-Path $W $d) | Out-Null }
+    if ($ExactBaseline) {
+        New-Item -ItemType Directory -Force (Join-Path $W 'kb\baselines') | Out-Null
+        [IO.File]::WriteAllText((Join-Path $W 'kb\baselines\professional-26340.9882.tsv.gz'), 'x')
+    }
     . (Join-Path $Vm 'rig.ps1')
     . (Join-Path $Guest 'apps.ps1')
     $mainKey = 'Fake-' + [IO.Path]::GetFileNameWithoutExtension((Get-App $Id).file)
-    $sd = New-StubEngine $W $mainKey
+    $sd = New-StubEngine $W $mainKey $Trust
     [IO.File]::WriteAllText((Join-Path $W 'fakes.ps1'), $Fakes.Replace('@W@', $W), (New-Object System.Text.UTF8Encoding($true)))
     if (-not $Run) { $Run = $Id }
-    $text = New-RunJobText -Id $Id -Run $Run -Engine:$EngineMode -Extra:$Extra
+    $text = New-RunJobText -Id $Id -Run $Run -Engine:$EngineMode -Extra:$Extra -ExpectTrust $ExpectTrust
     $text = $text.Replace('. C:\cr\guest\riglib.ps1', ". '$Guest\riglib.ps1'")
     $text = $text.Replace('. C:\cr\guest\apps.ps1', ". '$Guest\apps.ps1'")
     # The fakes come after x0-plants.ps1, so they replace its plant functions too.
@@ -1139,7 +1204,7 @@ function Steps($R) { @($R.events | Where-Object { $_ -match '^(lists|snap|start|
 
 $M0Phases = 'edge-pause setup defender-idle arp0 lists0 snap0 install detect launch lists1 snap1 uninstall lists2 snap2 edge-check entries'
 # Engine inventory right after the lists of the same point (RIG.md §4a capture order).
-$EnginePhases = 'edge-pause setup defender-idle arp0 lists0 snap0 install detect launch lists1 engine-inventory-1 snap1 engine-harvest uninstall lists2 engine-inventory-2 snap2 edge-check entries engine-scan'
+$EnginePhases = 'edge-pause setup defender-idle arp0 lists0 snap0 install detect launch lists1 engine-inventory-1 snap1 engine-hello engine-harvest uninstall lists2 engine-inventory-2 snap2 edge-check entries engine-scan'
 
 & {
     $ErrorActionPreference = 'Stop'
@@ -1162,9 +1227,9 @@ $EnginePhases = 'edge-pause setup defender-idle arp0 lists0 snap0 install detect
     # Engine mode, every call ok.
     $r = Invoke-FakeRunApp 'engine' 'npp' 'r0-npp' -EngineMode
     Check 'run-app engine: exit 0, documented phase order' ($r.code -eq 0 -and ($r.phases -join ' ') -eq $EnginePhases) "exit $($r.code); phases: $($r.phases -join ' ')`n$($r.out)"
-    Check 'run-app engine: captures and engine calls in order' ((Steps $r) -eq 'lists:0 snap:0 start:npp.exe medium:PurgeRigLaunch:app.exe lists:1 engine:inventory snap:1 engine:harvest engine:uninstall lists:2 engine:inventory snap:2 engine:scan') (Steps $r)
+    Check 'run-app engine: captures and engine calls in order' ((Steps $r) -eq 'lists:0 snap:0 start:npp.exe medium:PurgeRigLaunch:app.exe lists:1 engine:inventory snap:1 engine:hello engine:harvest engine:uninstall lists:2 engine:inventory snap:2 engine:scan') (Steps $r)
     Check 'run-app engine: Edge pause is the first event, before any capture' ($r.events[0] -eq 'edge-pause' -and $r.run.edge_pause.held -eq $true -and $r.run.edge_pause.versions_end) ($r.events -join ' | ')
-    Check 'run-app engine: outputs under the prefixed run name only' ((Files $r.dir) -eq 'engine-run.json,fp.json,inv-1.json,inv-2.json,lists-r0-npp-0.json,lists-r0-npp-1.json,lists-r0-npp-2.json,plan-purge.json,plan-purge.scan.json,run.json,run.log,snap-r0-npp-0.tsv.gz,snap-r0-npp-1.tsv.gz,snap-r0-npp-2.tsv.gz' -and -not (Test-Path (Join-Path $r.outRoot 'npp'))) (Files $r.dir)
+    Check 'run-app engine: outputs under the prefixed run name only' ((Files $r.dir) -eq 'engine-hello.json,engine-run.json,fp.json,inv-1.json,inv-2.json,lists-r0-npp-0.json,lists-r0-npp-1.json,lists-r0-npp-2.json,plan-purge.json,plan-purge.scan.json,run.json,run.log,snap-r0-npp-0.tsv.gz,snap-r0-npp-1.tsv.gz,snap-r0-npp-2.tsv.gz' -and -not (Test-Path (Join-Path $r.outRoot 'npp'))) (Files $r.dir)
     Check 'run-app engine: no extra checks without -Extra' (-not ($r.run.PSObject.Properties.Name -contains 'extra') -and -not ($r.engine -match '--mode external')) ($r.engine -join ' | ')
     Check 'run-app engine: run.json names run r0-npp of app npp' ($r.run.run -eq 'r0-npp' -and $r.run.id -eq 'npp')
     Check 'run-app engine: Defender idle before the captures, versions recorded at snap 0 and snap 2' ((@($r.events | Where-Object { $_ -match '^(defender-idle|lists:0|snap:0)$' }) -join ' ') -eq 'defender-idle lists:0 snap:0' -and $r.run.defender.idle.stable -eq $true -and $r.run.defender.idle.out_dir -eq $r.dir -and $r.run.defender.snap0.av_signature -eq '1.463.300.0' -and $r.run.defender.snap2.av_signature -eq '1.463.300.0') (($r.events -join ' | ') + ' ' + ($r.run.defender | ConvertTo-Json -Depth 4 -Compress))
@@ -1178,7 +1243,25 @@ $EnginePhases = 'edge-pause setup defender-idle arp0 lists0 snap0 install detect
     Check 'run-app engine: t0/t1/exit copied from engine-run.json' ($u.via -eq 'purge-engine' -and $u.times -eq 'engine' -and $t0 -eq $r.stub.t_start -and $u.exit -eq 0 -and $u.outcome -eq 'Success' -and $u.verify_gone.passed -eq $true -and $u.t1 -and $u.rig_t0 -and $u.rig_t1) "t0=$($u.t0) ($t0 vs $($r.stub.t_start)) times=$($u.times) exit=$($u.exit)"
     Check 'run-app engine: no vendor uninstall, entry gone' (-not ($r.events -match '^start:uninst-') -and $u.entry_gone -eq $true)
     Check 'run-app engine: every tree wait has the PID-reuse guard (-Preexisting)' (-not ($r.events -contains 'waittree:no-preexisting')) ($r.events -join ' | ')
-    Check 'run-app engine: five engine calls recorded' ((@($r.run.engine.calls) | ForEach-Object { $_.step }) -join ',' -eq 'inventory-1,harvest,uninstall,inventory-2,scan') ((@($r.run.engine.calls) | ForEach-Object { $_.step }) -join ',')
+    Check 'run-app engine: six engine calls recorded' ((@($r.run.engine.calls) | ForEach-Object { $_.step }) -join ',' -eq 'inventory-1,hello,harvest,uninstall,inventory-2,scan') ((@($r.run.engine.calls) | ForEach-Object { $_.step }) -join ',')
+    # engine.hello (review BL-R1 M1). No baseline in the stub's kb\baselines and no -ExpectTrust: recorded only.
+    $eh = $r.run.engine.hello
+    Check 'run-app engine: hello recorded, nothing expected without the exact baseline' ($eh.baseline_trust -eq 'Exact' -and $eh.baseline_view -eq 'Professional-26340.9882' -and $eh.elevated -eq $true -and $eh.expected -eq '' -and $eh.ok -eq $true -and (Test-Path (Join-Path $r.dir 'engine-hello.json'))) ($eh | ConvertTo-Json -Compress)
+
+    # The engine has this Windows' shipped baseline: the run is an exact run, and hello must say Exact.
+    $r = Invoke-FakeRunApp 'hello-exact' 'npp' 'r0-npp' -EngineMode -ExactBaseline
+    Check 'run-app hello: exact baseline pushed, trust Exact -> run ok' ($r.code -eq 0 -and -not $r.failed.Count -and $r.run.engine.hello.expected -eq 'exact' -and $r.run.engine.hello.ok -eq $true) "exit $($r.code); failed: $($r.failed -join ','); $($r.run.engine.hello | ConvertTo-Json -Compress)"
+    $r = Invoke-FakeRunApp 'hello-dropped' 'npp' 'r0-npp' -EngineMode -ExactBaseline -Trust 'None'
+    $ph = @($r.run.phases) | Where-Object { $_.name -eq 'engine-hello' }
+    Check 'run-app hello: exact baseline pushed, trust None -> engine-hello fails, the run fails' ($r.code -eq 1 -and ($r.failed -join ',') -eq 'engine-hello' -and $r.run.engine.hello.ok -eq $false -and $ph.error -match "baseline_trust 'None'; this run is for 'exact'") "exit $($r.code); failed: $($r.failed -join ','); $($ph.error)"
+    Check 'run-app hello: a failed engine-hello does not stop the harvest, the captures or the scan' (($r.phases -join ' ') -eq $EnginePhases -and (Steps $r) -match 'engine:hello engine:harvest engine:uninstall lists:2 engine:inventory snap:2 engine:scan$') (Steps $r)
+    # The host names the trust: a hidden-baseline run.
+    $r = Invoke-FakeRunApp 'hello-hidden' 'npp' 'r0-npp' -EngineMode -Trust 'Merged' -ExpectTrust 'below-exact'
+    Check 'run-app hello: -ExpectTrust below-exact, trust Merged -> ok' ($r.code -eq 0 -and $r.run.engine.hello.expected -eq 'below-exact' -and $r.run.engine.hello.asked -eq 'below-exact' -and $r.run.engine.hello.baseline_trust -eq 'Merged') "exit $($r.code); $($r.run.engine.hello | ConvertTo-Json -Compress)"
+    $r = Invoke-FakeRunApp 'hello-not-hidden' 'npp' 'r0-npp' -EngineMode -Trust 'Exact' -ExpectTrust 'below-exact'
+    Check 'run-app hello: -ExpectTrust below-exact, trust Exact -> fails' ($r.code -eq 1 -and ($r.failed -join ',') -eq 'engine-hello') "exit $($r.code); failed: $($r.failed -join ',')"
+    $r = Invoke-FakeRunApp 'hello-merged' 'npp' 'r0-npp' -EngineMode -Trust 'None' -ExpectTrust 'merged'
+    Check 'run-app hello: -ExpectTrust merged, trust None -> fails' ($r.code -eq 1 -and ($r.failed -join ',') -eq 'engine-hello') "exit $($r.code); failed: $($r.failed -join ',')"
 
     # Engine mode, harvest fails: recorded, the captures still run, uninstall runs without --fp.
     $r = Invoke-FakeRunApp 'harvest-fails' 'npp' 'r0-npp' -EngineMode -Fail 'harvest'
@@ -1203,7 +1286,7 @@ $EnginePhases = 'edge-pause setup defender-idle arp0 lists0 snap0 install detect
 
     # x0 (RIG.md §4b): plants before snap 0 and after the launch, live scan and repeat scan.
     $r = Invoke-FakeRunApp 'x0-npp-userfiles' 'npp-userfiles' 'x0t-npp-userfiles' -EngineMode -Extra
-    $x0Phases = 'edge-pause setup plant-pre defender-idle arp0 lists0 snap0 install detect launch plant-post lists1 engine-inventory-1 snap1 engine-harvest engine-scan-live uninstall lists2 engine-inventory-2 snap2 edge-check entries engine-scan engine-scan-repeat'
+    $x0Phases = 'edge-pause setup plant-pre defender-idle arp0 lists0 snap0 install detect launch plant-post lists1 engine-inventory-1 snap1 engine-hello engine-harvest engine-scan-live uninstall lists2 engine-inventory-2 snap2 edge-check entries engine-scan engine-scan-repeat'
     Check 'run-app x0 npp-userfiles: exit 0, plant and extra-check phases in order' ($r.code -eq 0 -and ($r.phases -join ' ') -eq $x0Phases) "exit $($r.code); $($r.phases -join ' ')`n$($r.out)"
     $ev = @($r.events | Where-Object { $_ -match '^(lists:|snap:|plant:|medium:)' }) -join ' '
     Check 'run-app x0 npp-userfiles: plant-pre before lists 0, plant-post after the launch and before lists 1' ($ev -eq 'plant:plant-pre:Plant-NppPortable lists:0 snap:0 medium:PurgeRigLaunch:app.exe plant:plant-post:Plant-NppUserFiles lists:1 snap:1 lists:2 snap:2') $ev
@@ -1213,7 +1296,7 @@ $EnginePhases = 'edge-pause setup defender-idle arp0 lists0 snap0 install detect
         ((Steps $r) -match 'engine:harvest engine:scan engine:uninstall')) ($r.engine -join ' | ')
     $x = $r.run.extra
     Check 'run-app x0 npp-userfiles: extra record (live counts, root band, det_equal by plan hash)' ($x.live_items -eq 1 -and $x.live_safe -eq 0 -and $x.live_preselected -eq 0 -and (@($x.live_root_band) -join ',') -eq 'Likely' -and $x.det_equal -eq $true -and $x.det_how -eq 'plan_hash' -and $x.plan_a -eq 'abc123') ($x | ConvertTo-Json -Compress)
-    Check 'run-app x0 npp-userfiles: repeat scan writes plan-purge-b.json' ((Test-Path (Join-Path $r.dir 'plan-purge-b.json')) -and ((@($r.run.engine.calls) | ForEach-Object { $_.step }) -join ',') -eq 'inventory-1,harvest,scan-live,uninstall,inventory-2,scan,scan-repeat') ((@($r.run.engine.calls) | ForEach-Object { $_.step }) -join ',')
+    Check 'run-app x0 npp-userfiles: repeat scan writes plan-purge-b.json' ((Test-Path (Join-Path $r.dir 'plan-purge-b.json')) -and ((@($r.run.engine.calls) | ForEach-Object { $_.step }) -join ',') -eq 'inventory-1,hello,harvest,scan-live,uninstall,inventory-2,scan,scan-repeat') ((@($r.run.engine.calls) | ForEach-Object { $_.step }) -join ',')
 
     # pre_launch + pre_uninstall: Firefox installed, launched and removed before snap 0, then installed again.
     $r = Invoke-FakeRunApp 'x0-ff-reinstall' 'ff-reinstall' 'x0t-ff-reinstall' -EngineMode
@@ -1265,9 +1348,53 @@ $EnginePhases = 'edge-pause setup defender-idle arp0 lists0 snap0 install detect
 
     $script:RepoRoot = $repo
     $script:GuestCalls = New-Object System.Collections.ArrayList
-    function Invoke-Guest([string[]]$Sub) { [void]$script:GuestCalls.Add($Sub -join ' '); [pscustomobject]@{ code = 0; out = @() } }
+    # The guest: every guestcontrol call succeeds, except the write probe of kb\baselines when the tree is
+    # "protected"; an engine-tree job is recorded as a call and answers with $script:TreeJobLog.
+    $script:TreeProtected = $false
+    $script:TreeJobLog = { param($Action) "ENGINE-TREE $Action OK" }
+    function Invoke-Guest([string[]]$Sub) {
+        [void]$script:GuestCalls.Add($Sub -join ' ')
+        $code = 0
+        if ($script:TreeProtected -and ($Sub -join ' ') -eq 'mkdir C:\cr\bin\kb\baselines\.rig-probe') { $code = 1 }
+        [pscustomobject]@{ code = $code; out = @() }
+    }
     function Invoke-GuestCmd([string]$CommandLine, [int]$TimeoutSec = 120) { [void]$script:GuestCalls.Add("cmd $CommandLine"); [pscustomobject]@{ code = 0; out = @() } }
+    function Invoke-GuestJob { param($Text, $Name, $TimeoutSec, $LogCopy)
+        $action = $Name -replace '^engine-tree-', ''
+        [void]$script:GuestCalls.Add("job $Name")
+        $script:LastTreeJob = $Text
+        if ($action -eq 'open') { $script:TreeProtected = $false }
+        [pscustomobject]@{ name = $Name; done = $true; seconds = 1; log = (& $script:TreeJobLog $action); log_file = '' }
+    }
     $rt = Join-Path $H 'rigtool.exe'; [IO.File]::WriteAllText($rt, 'MZ')
+    Push-Tools -RigTool $rt
+    $gc = $script:GuestCalls -join "`n"
+    # Review BL-R1 M1: the baseline tree is protected by an elevated job after the last copy into it.
+    $calls = @($script:GuestCalls)
+    $lastCopy = -1; for ($i = 0; $i -lt $calls.Count; $i++) { if ($calls[$i] -like 'copyto --target-directory C:\cr\bin\*') { $lastCopy = $i } }
+    Check 'Push-Tools with an engine: one protect job, after the copies, no open job on a fresh tree' (
+        @($calls | Where-Object { $_ -eq 'job engine-tree-protect' }).Count -eq 1 -and -not ($calls -contains 'job engine-tree-open') -and
+        [array]::IndexOf($calls, 'job engine-tree-protect') -gt $lastCopy -and $lastCopy -ge 0 -and
+        [array]::IndexOf($calls, 'mkdir C:\cr\bin\kb\baselines\.rig-probe') -lt [array]::IndexOf($calls, 'mkdir --parents C:\cr\bin')) $gc
+    $perr = $null; $null = [Management.Automation.Language.Parser]::ParseInput($script:LastTreeJob, [ref]$null, [ref]$perr)
+    Check 'Push-Tools: the protect job is guest\engine-tree.ps1 plus one call, and parses' (@($perr).Count -eq 0 -and $script:LastTreeJob.Contains('function Protect-RigEngineTree') -and $script:LastTreeJob.TrimEnd().EndsWith('Invoke-RigEngineTreeJob -Action protect')) ($script:LastTreeJob.Substring([Math]::Max(0, $script:LastTreeJob.Length - 120)))
+    # A second push without a restore: the tree is protected, so it is opened before the unelevated copies.
+    $script:TreeProtected = $true; $script:GuestCalls.Clear()
+    Push-Tools -RigTool $rt
+    $calls = @($script:GuestCalls)
+    Check 'Push-Tools on a protected tree: open job first, then the copies, then protect' (
+        [array]::IndexOf($calls, 'job engine-tree-open') -ge 0 -and [array]::IndexOf($calls, 'job engine-tree-open') -lt [array]::IndexOf($calls, 'mkdir --parents C:\cr\bin') -and
+        [array]::IndexOf($calls, 'job engine-tree-protect') -gt [array]::IndexOf($calls, 'job engine-tree-open')) ($calls -join "`n")
+    # The guest job says the tree does not pass the rule: the push fails, so no run starts on it.
+    $script:TreeJobLog = { param($Action) "ENGINE-TREE $Action FAILED: C:\cr: S-1-5-11 may write (mask 0x10000)" }
+    $msg = $null; try { Push-Tools -RigTool $rt } catch { $msg = $_.Exception.Message }
+    Check 'Push-Tools: a protect job that fails throws with the reason' ($msg -match 'engine tree protect failed' -and $msg -match 'S-1-5-11 may write') "got '$msg'"
+    $script:TreeJobLog = { param($Action) '' }
+    $msg = $null; try { Push-Tools -RigTool $rt } catch { $msg = $_.Exception.Message }
+    Check 'Push-Tools: a protect job without the OK line throws' ($msg -match 'engine tree protect failed') "got '$msg'"
+    $script:TreeJobLog = { param($Action) "ENGINE-TREE $Action OK" }
+    Check 'Test-EngineTreeLog: only the OK line of that action counts' ((Test-EngineTreeLog "x`r`nENGINE-TREE protect OK`r`n" 'protect') -and -not (Test-EngineTreeLog 'ENGINE-TREE open OK' 'protect') -and -not (Test-EngineTreeLog 'ENGINE-TREE protect FAILED: ENGINE-TREE protect OK' 'protect'))
+    $script:GuestCalls.Clear()
     Push-Tools -RigTool $rt
     $gc = $script:GuestCalls -join "`n"
     Check 'Push-Tools: engine to C:\cr\bin, baselines to C:\cr\bin\kb\baselines, both verified' (
@@ -1280,6 +1407,7 @@ $EnginePhases = 'edge-pause setup defender-idle arp0 lists0 snap0 install detect
     Push-Tools -RigTool $rt
     $gc = $script:GuestCalls -join "`n"
     Check 'Push-Tools without a built engine: no engine copy (M0)' (-not ($gc -match 'copyto[^\n]*purge-engine') -and -not ($gc -match 'copyto[^\n]*baselines') -and -not $gc.Contains('stat C:\cr\bin\purge-engine.exe') -and $gc.Contains('copyto --target-directory C:\cr\bin\ ' + $rt)) $gc
+    Check 'Push-Tools without an engine: no engine-tree job' (-not ($gc -match 'job engine-tree')) $gc
     $msg = $null; try { Push-Tools -RigTool $rt -Engine (Join-Path $H 'missing.exe') } catch { $msg = $_.Exception.Message }
     Check 'Push-Tools -Engine <missing> throws' ($msg -match 'purge-engine not found') "got '$msg'"
     [IO.File]::WriteAllText($eng, 'MZ fake')
@@ -1287,6 +1415,7 @@ $EnginePhases = 'edge-pause setup defender-idle arp0 lists0 snap0 install detect
     Push-Tools -RigTool $rt -NoBaselines
     $gc = $script:GuestCalls -join "`n"
     Check 'Push-Tools -NoBaselines: engine pushed, old baselines deleted, none copied' ($gc.Contains("copyto --target-directory C:\cr\bin\ $eng") -and $gc.Contains('C:\cr\bin\kb\baselines\*.tsv.gz') -and -not ($gc -match 'copyto[^\n]*baselines')) $gc
+    Check 'Push-Tools -NoBaselines: the (empty) baseline tree is protected all the same' ($gc -match 'job engine-tree-protect') $gc
     # Host installer cache: Get-CachedRunFiles picks the run's files the cache holds; Push-Tools sends them + manifest.
     $cache = Join-Path $H 'cache'; New-Item -ItemType Directory -Force $cache | Out-Null
     foreach ($n in 'cache-sources.json', 'npp-portable.zip', 'thunderbird.exe') { [IO.File]::WriteAllText((Join-Path $cache $n), 'x') }

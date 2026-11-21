@@ -85,6 +85,21 @@ impl PipelineBaseline {
         }
     }
 
+    /// A view the caller built, in place of the one [`load`] would give: for the offline replay
+    /// (`cargo xtask replay --baseline-view`, design §8.1 run R3) and tests, through
+    /// [`super::harvest_with_view`] and [`super::scan_with_view`]. No directory is read, no cache is
+    /// opened and nothing is built. Only with the `inject-view` feature: the CLI and the RPC server
+    /// have no way to make one.
+    #[cfg(any(test, feature = "inject-view"))]
+    pub fn injected(view: BaselineView) -> PipelineBaseline {
+        PipelineBaseline {
+            view,
+            exact_counts: None,
+            configured: true,
+            parts: None,
+        }
+    }
+
     /// The record counts of the exact shipped baseline, when the view is Exact.
     pub fn exact_counts(&self) -> Option<RecordCounts> {
         self.exact_counts
@@ -346,10 +361,15 @@ fn cache_warning(
         return;
     };
     let missing: Vec<String> = match (cache, parts) {
+        // A stale part answers presence meanwhile; the part of this Windows as it is now is still
+        // to be built, and the local baseline is incomplete until it is.
         (Some(_), Some(parts)) => parts
             .iter()
-            .filter(|(_, state)| *state == PartState::Missing)
-            .map(|(source, _)| source.to_string())
+            .filter(|(_, state)| state.needs_build())
+            .map(|(source, state)| match state {
+                PartState::Stale => format!("{source} (an older part answers presence meanwhile)"),
+                _ => source.to_string(),
+            })
             .collect(),
         _ => {
             warnings.push(format!(
@@ -1174,15 +1194,28 @@ mod tests {
             signature_kind: PackageSignatureKind::System,
         });
         let before = std::fs::read_dir(&t.cache).unwrap().count();
-        let loaded = load(Sources::of(&updated), &settings, &os(), &mut Vec::new());
+        // Until it is built, the S4 part of before the update answers presence (review BL-R1 S5):
+        // the local baseline is incomplete with it, so the trust is None, and the warnings say that
+        // S4 is still to be built.
+        let mut warnings = Vec::new();
+        let loaded = load(Sources::of(&updated), &settings, &os(), &mut warnings);
         let parts = loaded.parts.unwrap();
         assert_eq!(
             [parts[0].1, parts[1].1, parts[2].1],
             [
                 PartState::Hit { derived: true },
                 PartState::Hit { derived: false },
-                PartState::Missing
+                PartState::Stale
             ]
+        );
+        assert_eq!(loaded.trust(), BaselineTrust::None);
+        assert!(has(&warnings, "stale: the part with id"), "{warnings:?}");
+        assert!(
+            has(
+                &warnings,
+                "lacks S4 (an older part answers presence meanwhile)"
+            ),
+            "{warnings:?}"
         );
         assert_eq!(
             build_to_end(&updated, &settings),
@@ -1190,13 +1223,7 @@ mod tests {
         );
         assert_eq!(std::fs::read_dir(&t.cache).unwrap().count(), before + 1);
         let loaded = load(Sources::of(&updated), &settings, &os(), &mut Vec::new());
-        assert!(
-            loaded
-                .parts
-                .unwrap()
-                .iter()
-                .all(|(_, s)| *s != PartState::Missing)
-        );
+        assert!(loaded.parts.unwrap().iter().all(|(_, s)| !s.needs_build()));
     }
 
     #[test]

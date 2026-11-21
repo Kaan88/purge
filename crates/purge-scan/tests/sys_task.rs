@@ -947,4 +947,5 @@ fn l5_a_view_below_exact_only_takes_away() {
         world.run()
     });
     assert!(find(&none, UPDATE).is_some(), "{none:#?}");
+    none.must_offer("tasks", &["SYS-TASK"]).must_change("tasks");
 }

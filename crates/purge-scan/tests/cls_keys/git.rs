@@ -190,12 +190,13 @@ fn structural_shell_roots_are_never_offered() {
 fn l5_a_view_below_exact_only_takes_away() {
     // After the uninstall only the two skeletons are left, and both rest on absence: no view below
     // Exact offers either, however permissive its rules (`without_a_baseline_neither_key_is_offered`).
-    let offered = crate::l5_check("git", &world_before_baseline);
+    let offered = crate::l5_check("git", &world_before_baseline, &[]);
     assert_eq!(offered, 0, "a skeleton is offered without a baseline");
     // With Git's verbs still there the scan has something to take away.
     let offered = crate::l5_check(
         "git with verbs",
         &|| with_git_verbs(world_before_baseline()),
+        &["CLS-VERBS"],
     );
     assert!(offered > 0, "the world offers something without a baseline");
 }

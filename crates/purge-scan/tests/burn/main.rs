@@ -37,10 +37,10 @@ fn l5_a_view_below_exact_only_takes_away() {
         &purge_scan::sys_burndeps::SysBurnDeps,
         &purge_scan::fs_pkgcache::FsPkgCache,
     ];
-    let mut offered = 0;
+    let mut tally = l5::Tally::default();
     for (name, make) in worlds {
         for scanner in scanners {
-            let none = l5::check(
+            let checked = l5::check(
                 &format!("{name}/{}", scanner.id()),
                 &make().fp.os,
                 &|view| {
@@ -49,11 +49,9 @@ fn l5_a_view_below_exact_only_takes_away() {
                     world.run(scanner)
                 },
             );
-            offered += none.len();
+            tally.add(scanner.id(), &checked);
         }
     }
-    assert!(
-        offered > 4,
-        "the worlds offer something to compare: {offered}"
-    );
+    // Both scanners offer something, and presence changes it.
+    tally.assert_not_vacuous(&[], &[]);
 }

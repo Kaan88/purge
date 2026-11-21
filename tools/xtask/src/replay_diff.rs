@@ -435,6 +435,7 @@ pub fn run(root: &Path, args: &[String]) -> Result<bool> {
             fp: None,
             sidecar: true,
             live: false,
+            view: None,
         };
         let replayed = replay::replay(&opts).with_context(|| format!("replaying {id}"))?;
         let sidecar = purge_engine::cli::output::sidecar_path(&opts.out);

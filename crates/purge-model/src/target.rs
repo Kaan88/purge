@@ -196,6 +196,26 @@ impl View {
 const WOW_NODE: &str = "WOW6432Node";
 /// Suffix of a user's classes hive under `HKEY_USERS`.
 const CLASSES_SUFFIX: &str = "_Classes";
+/// The `HKEY_USERS` hives that have no `<SID>_Classes` hive: the default profile and the three service
+/// accounts.
+const NO_CLASSES_HIVE: [&str; 4] = [".DEFAULT", "S-1-5-18", "S-1-5-19", "S-1-5-20"];
+
+/// Whether the user hive `HKU\<sid>` has a classes hive `HKU\<sid>_Classes`, so that its
+/// `Software\Classes` is a link to that hive and `HKU\<sid>\Software\Classes\x` is the key
+/// `HKU\<sid>_Classes\x`.
+///
+/// False for `.DEFAULT`, `S-1-5-18`, `S-1-5-19` and `S-1-5-20` (any letter case, the exact names only):
+/// there `Software\Classes` is an ordinary key, and a key below it is addressed, read and canonical
+/// where it is. `sid` is the hive name without the `_Classes` suffix.
+///
+/// The rule is lexical. Every place that folds a user's `Software\Classes` onto the classes hive asks
+/// here (the Live source's path translation, `purge-guard`'s canonical form, the harvest's
+/// `source_key`), so one key has one canonical spelling in all of them.
+pub fn has_classes_hive(sid: &str) -> bool {
+    !NO_CLASSES_HIVE
+        .iter()
+        .any(|name| sid.eq_ignore_ascii_case(name))
+}
 
 /// What part of a key a [`TypedTarget`] refers to; mirrors the registry variants of [`Target`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -844,6 +864,38 @@ mod tests {
         // A hive literally named `_Classes` has no SID part and is read as a plain user hive.
         let typed = TypedTarget::try_from(&key(r"HKU\_Classes\X")).unwrap();
         assert_eq!(typed.hive(), &Hive::Hku("_Classes".into()));
+    }
+
+    /// The four hives without a classes hive, by exact name in any letter case; every other hive name
+    /// has one.
+    #[test]
+    fn classes_hive_predicate() {
+        for sid in [
+            ".DEFAULT", ".default", "S-1-5-18", "s-1-5-18", "S-1-5-19", "S-1-5-20",
+        ] {
+            assert!(!has_classes_hive(sid), "{sid}");
+        }
+        for sid in [
+            SID,
+            "S-1-5-18-1",
+            "S-1-5-2",
+            "S-1-5-21",
+            "S-1-12-1-1-2-3-4",
+            "S-1-5-80-1-2-3-4-5",
+            ".DEFAULTS",
+            "",
+        ] {
+            assert!(has_classes_hive(sid), "{sid}");
+        }
+        // The canonical form of a key below such a hive's `Software\Classes` is the key where it is.
+        for sid in [".DEFAULT", "S-1-5-18", "S-1-5-19", "S-1-5-20"] {
+            let path = format!(r"HKU\{sid}\Software\Classes\CLSID\{{A}}");
+            let typed = TypedTarget::try_from(&key(&path)).unwrap();
+            assert_eq!(typed.hive(), &Hive::Hku(sid.into()));
+            assert_eq!(typed.view(), View::K64);
+            assert_eq!(typed.path(), r"Software\Classes\CLSID\{A}");
+            assert_eq!(typed.key_path(), path);
+        }
     }
 
     /// Every target a plan may contain, as this crate writes it, reads with rigtool's field names.

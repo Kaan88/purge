@@ -8,8 +8,9 @@
 //!    `CurrentControlSet` is a registry link that `purge-win` refuses to traverse.
 //! 2. `HKU\<SID>\Software\Classes\<more>` → `HKU\<SID>_Classes\<more>`: the physical classes hive.
 //!    `HKU\<SID>\Software\Classes` itself is left alone, so it is opened (and reported) as the link it is.
-//!    Not for the hives that have no classes hive of their own (`.DEFAULT`, `S-1-5-18`, `S-1-5-19`,
-//!    `S-1-5-20`): there `Software\Classes` is an ordinary key and is read where it is.
+//!    Not for the hives that have no classes hive of their own ([`purge_model::has_classes_hive`]:
+//!    `.DEFAULT`, `S-1-5-18`, `S-1-5-19`, `S-1-5-20`): there `Software\Classes` is an ordinary key and is
+//!    read where it is, which is also its canonical spelling in `purge-guard` and in the harvest.
 //! 3. The `WOW6432Node` segment is read the way [`TypedTarget`] reads it, i.e. only where Windows redirects:
 //!    `HKLM\SOFTWARE\WOW6432Node\X` → `SOFTWARE\X` opened with `KEY_WOW64_32KEY`, and
 //!    `HKU\<SID>_Classes\WOW6432Node\X` → `<SID>_Classes\X` with `KEY_WOW64_32KEY`. The redirector then
@@ -23,7 +24,7 @@
 //! `HKCU`, `HKCR` and `HKCC` are not canonical (they are per-process aliases or merged views) and are
 //! refused with [`SourceError::InvalidPath`].
 
-use purge_model::{Hive, TypedTarget, View};
+use purge_model::{Hive, TypedTarget, View, has_classes_hive};
 use purge_win::reg::{RegRoot, RegView};
 
 use crate::registry::{map_current_control_set, split_key};
@@ -33,8 +34,6 @@ use crate::types::{SourceError, SourceResult};
 const WOW_NODE: &str = "WOW6432Node";
 /// Suffix of a user's classes hive under `HKEY_USERS`.
 const CLASSES_SUFFIX: &str = "_Classes";
-/// `HKEY_USERS` hives without a `<SID>_Classes` hive: their `Software\Classes` is an ordinary key.
-const NO_CLASSES_HIVE: [&str; 4] = [".DEFAULT", "S-1-5-18", "S-1-5-19", "S-1-5-20"];
 
 /// Where a canonical key path is opened.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -111,7 +110,7 @@ pub(crate) fn translate_key(
         }
         if segs.len() > 4
             && !ends_with_ci(&segs[1], CLASSES_SUFFIX)
-            && !NO_CLASSES_HIVE.iter().any(|s| eq_ci(&segs[1], s))
+            && has_classes_hive(&segs[1])
             && eq_ci(&segs[2], "Software")
             && eq_ci(&segs[3], "Classes")
         {
@@ -313,6 +312,45 @@ mod tests {
         ];
         for (key, want) in cases {
             assert_eq!(t(&key).as_ref(), Ok(&want), "{key}");
+        }
+    }
+
+    /// A key below a user's `Software\Classes` is opened at one place whether it is spelled in place or
+    /// in the canonical form `purge-guard` gives it (the same table as `purge-guard`'s
+    /// `classes_spellings_agree` and the harvest's `source_key_agrees_with_the_canonical_form`): the
+    /// `_Classes` hive for a user, the key where it is for a hive without a classes hive.
+    #[test]
+    fn canonical_and_in_place_classes_spellings_open_the_same_key() {
+        use RegRoot::Hku;
+        use RegView::{K32, K64};
+        // (in place, canonical, where both are opened)
+        let mut rows: Vec<(String, String, RegLocation)> = vec![
+            (
+                format!(r"HKU\{SID}\Software\Classes\Vendor.Doc\shell"),
+                format!(r"HKU\{SID}_Classes\Vendor.Doc\shell"),
+                loc(Hku, &format!(r"{SID}_Classes\Vendor.Doc\shell"), K64),
+            ),
+            (
+                format!(r"HKU\{SID}\Software\Classes\WOW6432Node\CLSID\{{X}}"),
+                format!(r"HKU\{SID}_Classes\WOW6432Node\CLSID\{{X}}"),
+                loc(Hku, &format!(r"{SID}_Classes\CLSID\{{X}}"), K32),
+            ),
+        ];
+        for sid in [".DEFAULT", "S-1-5-18", "S-1-5-19", "S-1-5-20"] {
+            for tail in [r"Vendor.Doc\shell", r"WOW6432Node\CLSID\{X}"] {
+                let key = format!(r"HKU\{sid}\Software\Classes\{tail}");
+                let at = loc(Hku, &format!(r"{sid}\Software\Classes\{tail}"), K64);
+                rows.push((key.clone(), key, at));
+            }
+        }
+        for (in_place, canonical, want) in rows {
+            assert_eq!(t(&in_place).as_ref(), Ok(&want), "{in_place}");
+            assert_eq!(t(&canonical).as_ref(), Ok(&want), "{canonical}");
+            // The canonical spelling is the one the model renders, so a target's key reads the same key.
+            let (hive, view, path) = TypedTarget::parse_key_path(&canonical).unwrap();
+            let typed = TypedTarget::new(hive, view, path, purge_model::RegKind::Key);
+            assert_eq!(typed.key_path(), canonical);
+            assert_eq!(t(&typed.key_path()).as_ref(), Ok(&want), "{canonical}");
         }
     }
 

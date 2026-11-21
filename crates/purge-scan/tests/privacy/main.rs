@@ -38,4 +38,6 @@ fn l5_a_view_below_exact_only_takes_away() {
         world.privacy()
     });
     assert_eq!(none.len(), 2, "{none:#?}");
+    none.must_offer("privacy", &["REG-PRIVACY"])
+        .must_change("privacy");
 }

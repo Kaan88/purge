@@ -358,9 +358,48 @@ function Get-CachedRunFiles {
     @($names | ForEach-Object { Join-Path $CacheDir $_ } | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })
 }
 
+# Pure: the text of an engine-tree job: guest\engine-tree.ps1 (functions only) followed by one call. The job runs
+# elevated through the agent; its last log line is 'ENGINE-TREE <action> OK' or '... FAILED: <why>'.
+function New-EngineTreeJobText {
+    param([Parameter(Mandatory)][ValidateSet('open', 'protect')][string]$Action)
+    $lib = [IO.File]::ReadAllText((Join-Path $script:RigDir (HostPath 'guest\engine-tree.ps1')))
+    $lib.TrimEnd() + "`r`n`r`nInvoke-RigEngineTreeJob -Action $Action`r`n"
+}
+
+# Pure: whether the log of an engine-tree job says the action succeeded.
+function Test-EngineTreeLog([string]$Log, [string]$Action) { "$Log" -match "(?m)^ENGINE-TREE $([regex]::Escape($Action)) OK\s*$" }
+
+# Runs guest\engine-tree.ps1 elevated in the guest (the agent must be up). 'protect': C:\cr\bin\kb becomes
+# admin-only writable (owner Administrators, protected DACL: SYSTEM and Administrators full, Users read/execute)
+# and C:\cr, C:\cr\bin stop letting a standard user delete or rename what lies below, so the elevated engine's
+# directory rule accepts kb\baselines (docs\BASELINE_LOCAL_DESIGN.md section 5; review BL-R1 M1). The guest job
+# checks the result against that rule and the host throws when it does not hold. 'open' undoes it.
+function Invoke-EngineTreeJob {
+    param([Parameter(Mandatory)][ValidateSet('open', 'protect')][string]$Action, [int]$TimeoutSec = 300)
+    $j = Invoke-GuestJob -Text (New-EngineTreeJobText -Action $Action) -Name "engine-tree-$Action" -TimeoutSec $TimeoutSec
+    if (-not $j.done) { throw "engine tree ${Action}: the guest job did not finish within $TimeoutSec s" }
+    if (-not (Test-EngineTreeLog $j.log $Action)) {
+        $tail = @("$($j.log)" -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -Last 3) -join ' | '
+        throw "engine tree ${Action} failed: $tail"
+    }
+    Write-RigLog "  engine tree: $Action ok ($($j.seconds) s)"
+}
+
+# Whether the unelevated guest user can write C:\cr\bin\kb\baselines: true on a tree no push has protected yet
+# (a fresh snapshot restore) and when the directory does not exist yet.
+function Test-EngineTreeOpen {
+    if ((Invoke-Guest @('stat', 'C:\cr\bin\kb\baselines')).code -ne 0) { return $true }
+    if ((Invoke-Guest @('mkdir', 'C:\cr\bin\kb\baselines\.rig-probe')).code -ne 0) { return $false }
+    $null = Invoke-Guest @('rmdir', 'C:\cr\bin\kb\baselines\.rig-probe')
+    $true
+}
+
 # Copies a fresh rigtool.exe to C:\cr\bin, purge-engine.exe to C:\cr\bin and kb\baselines\*.tsv.gz to
 # C:\cr\bin\kb\baselines (see Get-EnginePush; none with -NoBaselines), and vm\guest\*.ps1 to C:\cr\guest (old
 # copies deleted first). -Installers: host cache files (Get-CachedRunFiles) to C:\cr\inst, with the manifest.
+# With an engine, the baseline tree is then protected by an elevated guest job (Invoke-EngineTreeJob protect), so
+# the elevated engine uses the baselines; a tree an earlier push protected is opened first (the copies run as the
+# unelevated guest user). Both jobs need the agent.
 function Push-Tools {
     param([string]$RigTool = '', [string]$Engine = '', [switch]$NoBaselines, [string[]]$Installers = @())
     # The guest's rigtool is always the Windows build (rigtool.exe), on a Linux host too.
@@ -371,6 +410,7 @@ function Push-Tools {
     $ep = Get-EnginePush -Engine $Engine
     if ($NoBaselines) { $ep.baselines = @() }
     $scripts = @(Get-ChildItem -LiteralPath (Join-Path $script:RigDir 'guest') -Filter '*.ps1' | ForEach-Object { $_.FullName })
+    if (-not (Test-EngineTreeOpen)) { Invoke-EngineTreeJob -Action open }
     foreach ($d in 'C:\cr\bin', 'C:\cr\bin\kb\baselines', 'C:\cr\guest', 'C:\cr\out', 'C:\cr\stage') { $null = Invoke-Guest @('mkdir', '--parents', $d) }
     $null = Invoke-GuestCmd 'del /f /q C:\cr\guest\*.ps1 C:\cr\bin\rigtool.exe C:\cr\bin\purge-engine.exe C:\cr\bin\kb\baselines\*.tsv.gz'
     $r = Invoke-Guest @('copyto', '--target-directory', 'C:\cr\bin\', $RigTool)
@@ -403,6 +443,10 @@ function Push-Tools {
         if ((Invoke-Guest @('stat', $f)).code -ne 0) { $missing += $f }
     }
     if ($missing.Count) { throw "not in the guest after copy: $($missing -join ', ')" }
+    # After the last unelevated copy into kb\baselines: without this the elevated engine refuses the directory
+    # (a standard user could write it) and every run is a values-only run. Also with -NoBaselines, whose empty
+    # directory the engine then accepts as empty.
+    if ($ep.engine) { Invoke-EngineTreeJob -Action protect }
     $what = 'rigtool.exe'
     if ($ep.engine) { $what += " + purge-engine.exe ($($ep.engine)) + $($ep.baselines.Count) baseline(s)$(if ($NoBaselines) { ' (-NoBaselines)' })" }
     if ($inst.Count) { $what += " + cached $(($inst | ForEach-Object { Split-Path -Leaf $_ }) -join ', ')" }
@@ -412,21 +456,25 @@ function Push-Tools {
 # ---------------------------------------------------------------------------------------------- runs
 
 # Pure: the job text for a run. App runs (run-app.ps1): __ID__ = the app id, __RUN__ = the run name (default
-# the id), __ENGINE__ = 1 with -Engine, else 0, __EXTRA__ = 1 with -Extra (needs -Engine), else 0. Null runs
+# the id), __ENGINE__ = 1 with -Engine, else 0, __EXTRA__ = 1 with -Extra (needs -Engine), else 0, __TRUST__ =
+# -ExpectTrust (needs -Engine; empty = the guest decides). Null runs
 # (null-run.ps1): __RUN__ = the run name (default null<n>, or <prefix>null<n>), __WAIT__ = the idle seconds per
 # wait (default 60).
 function New-RunJobText {
-    param([string]$Id = '', [int]$NullRun = 0, [string]$Run = '', [switch]$Engine, [switch]$Extra, [int]$NullWaitSec = 60, $M1b = $null)
+    param([string]$Id = '', [int]$NullRun = 0, [string]$Run = '', [switch]$Engine, [switch]$Extra, [int]$NullWaitSec = 60, $M1b = $null,
+          # __TRUST__: the baseline trust `engine.hello` must report in this run (see Invoke-Campaign -ExpectTrust).
+          [ValidateSet('', 'exact', 'merged', 'local', 'none', 'below-exact')][string]$ExpectTrust = '')
     if ($Id) {
         if ($Id -cnotmatch '^[a-z0-9][a-z0-9_-]*$') { throw "bad app id '$Id' (lowercase letters, digits, _ and -)" }
         if (-not $Run) { $Run = $Id }
         if ($Run -cnotmatch '^[a-z0-9][a-z0-9_.-]*$') { throw "bad run name '$Run' (lowercase letters, digits, _, . and -)" }
         if ($Extra -and -not $Engine) { throw '-Extra (extra checks) needs -Engine' }
+        if ($ExpectTrust -and -not $Engine) { throw '-ExpectTrust needs -Engine' }
         $tpl = [IO.File]::ReadAllText((Join-Path $script:RigDir (HostPath 'guest\run-app.ps1')))
         # __M1B__ (RIG.md section 12): base64 of the M1b options as UTF-8 JSON (ConvertTo-M1bOpts); empty = none.
         $m1bText = ''
         if ($M1b) { $m1bText = [Convert]::ToBase64String((New-Object System.Text.UTF8Encoding($false)).GetBytes((ConvertTo-Json -InputObject (ConvertTo-M1bOpts $M1b) -Compress))) }
-        return $tpl.Replace('__ID__', $Id).Replace('__RUN__', $Run).Replace('__ENGINE__', $(if ($Engine) { '1' } else { '0' })).Replace('__EXTRA__', $(if ($Extra) { '1' } else { '0' })).Replace('__M1B__', $m1bText)
+        return $tpl.Replace('__ID__', $Id).Replace('__RUN__', $Run).Replace('__ENGINE__', $(if ($Engine) { '1' } else { '0' })).Replace('__EXTRA__', $(if ($Extra) { '1' } else { '0' })).Replace('__M1B__', $m1bText).Replace('__TRUST__', $ExpectTrust)
     }
     if ($NullRun -lt 1) { throw 'give -Id or -Null n (n >= 1)' }
     if (-not $Run) { $Run = "null$NullRun" }
@@ -479,11 +527,12 @@ function Invoke-Run {
         [Parameter(ParameterSetName = 'app')][switch]$Engine,
         [Parameter(ParameterSetName = 'app')][switch]$ExtraChecks,
         [Parameter(ParameterSetName = 'app')]$M1b = $null,
+        [Parameter(ParameterSetName = 'app')][ValidateSet('', 'exact', 'merged', 'local', 'none', 'below-exact')][string]$ExpectTrust = '',
         [int]$TimeoutSec = 0
     )
     if ($PSCmdlet.ParameterSetName -eq 'app') {
         $run = Get-RunName -Id $Id -RunPrefix $RunPrefix -Engine:$Engine
-        $text = New-RunJobText -Id $Id -Run $run -Engine:$Engine -Extra:$ExtraChecks -M1b $M1b; $to = 5400
+        $text = New-RunJobText -Id $Id -Run $run -Engine:$Engine -Extra:$ExtraChecks -M1b $M1b -ExpectTrust $ExpectTrust; $to = 5400
     } else {
         $run = Get-NullRunName -N $NullRun -RunPrefix $RunPrefix
         $text = New-RunJobText -NullRun $NullRun -Run $run -NullWaitSec $NullWaitSec; $to = 2400
@@ -619,14 +668,20 @@ function Test-RunResult {
 # for it is from this run (Test-RunResult) with every phase ok. -RunPrefix names the app runs <prefix><id>
 # and the null runs <prefix>null<n> (without a prefix: null<n>, as in M0); -Engine <purge-engine.exe> pushes
 # that engine and runs the apps in engine mode. -NullWaitSec / -NullOrder: see the header.
+# Every engine run asks `purge-engine hello` before its harvest (run-app.ps1 phase engine-hello) and fails when the
+# baseline trust it reports is not the one the run is for. -ExpectTrust names it: exact, merged, local, none, or
+# below-exact (any of the last three: a run with the exact baseline hidden). Without it a run expects Exact when
+# the pushed baselines hold the one of the guest's Windows, and nothing otherwise (-NoBaselines: recorded only).
 function Invoke-Campaign {
     param([string[]]$Ids = @(), [int]$Nulls = 3, [string]$Snapshot = 'rig-base', [switch]$NoRestore,
           [string]$RunPrefix = '', [string]$Engine = '', [int]$NullWaitSec = 60,
           [ValidateSet('first', 'spread')][string]$NullOrder = 'first', [switch]$ExtraChecks, [switch]$NoBaselines,
           [string]$ExecutionEngine = $env:RIG_VM_EXECUTION_ENGINE, [switch]$No3D = ($env:RIG_VM_NO_3D -eq '1'),
           # M1b options of the app runs (ConvertTo-M1bOpts; RIG.md section 12), $null for none.
-          $M1b = $null)
+          $M1b = $null,
+          [ValidateSet('', 'exact', 'merged', 'local', 'none', 'below-exact')][string]$ExpectTrust = '')
     $useEngine = [bool]$Engine
+    if ($ExpectTrust -and -not $useEngine) { throw '-ExpectTrust needs -Engine' }
     if ($M1b) { $null = ConvertTo-M1bOpts $M1b }   # checked before anything is moved or restored
     if ($ExtraChecks -and -not $useEngine) { throw '-ExtraChecks needs -Engine' }
     if ($NoBaselines -and -not $useEngine) { throw '-NoBaselines needs -Engine' }
@@ -654,7 +709,7 @@ function Invoke-Campaign {
                 if (-not $NoRestore) { Restore-Base -Snapshot $Snapshot -ExecutionEngine $ExecutionEngine -No3D:$No3D } else { Wait-Agent -TimeoutSec 120 }
                 $inst = @(); if ($p.id) { $inst = @(Get-CachedRunFiles -Id $p.id) }
                 Push-Tools -Engine $Engine -NoBaselines:$NoBaselines -Installers $inst
-                if ($p.id) { $res = Invoke-Run -Id $p.id -RunPrefix $RunPrefix -Engine:$useEngine -ExtraChecks:$ExtraChecks -M1b $M1b }
+                if ($p.id) { $res = Invoke-Run -Id $p.id -RunPrefix $RunPrefix -Engine:$useEngine -ExtraChecks:$ExtraChecks -M1b $M1b -ExpectTrust $ExpectTrust }
                 else { $res = Invoke-Run -NullRun $p.null -RunPrefix $RunPrefix -NullWaitSec $NullWaitSec }
                 $rec.pulled = @($res.pulled).Count
                 $chk = Test-RunResult -Run $p.run -NotBefore $t

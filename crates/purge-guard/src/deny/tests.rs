@@ -1114,6 +1114,20 @@ fn reg_system_accounts_and_unloaded_hives() {
         (r"HKU\S-1-5-19\Software\Vendor", "reg.hku.system-account"),
         (r"HKU\S-1-5-20\Software\Vendor", "reg.hku.system-account"),
         (r"HKU\S-1-5-18_Classes\Vendor.Doc", "reg.hku.system-account"),
+        // These hives have no classes hive: the key is canonical where it is, and denied all the same.
+        (
+            r"HKU\.DEFAULT\Software\Classes\Vendor.Doc",
+            "reg.hku.system-account",
+        ),
+        (
+            r"HKU\S-1-5-18\Software\Classes\Vendor.Doc",
+            "reg.hku.system-account",
+        ),
+        (
+            r"HKU\S-1-5-19\Software\Classes\CLSID\{X}",
+            "reg.hku.system-account",
+        ),
+        (r"HKU\S-1-5-20\Software\Classes", "reg.hku.system-account"),
         (
             r"HKU\S-1-5-21-1-2-3-1002\Software\Vendor",
             "reg.hku.not-loaded",
