@@ -1,5 +1,6 @@
 //! The CLI of ENGINE_PLAN.md §3.4: argument parsing ([`args`]), the M1a verbs over the
-//! [`pipeline`](crate::pipeline), output files ([`output`]) and `plan show` ([`show`]).
+//! [`pipeline`](crate::pipeline), output files ([`output`]), `plan show` ([`show`]) and the local
+//! baseline verbs ([`baseline`]).
 //!
 //! # Streams
 //!
@@ -39,6 +40,7 @@
 //! module that links `purge-exec`; any other build answers [`Exit::NeedsConsent`] and touches nothing.
 
 pub mod args;
+pub mod baseline;
 #[cfg(feature = "rig-exec")]
 pub mod exec;
 pub mod output;
@@ -344,6 +346,14 @@ fn run_inner(
         Invocation::Uninstall(a) => uninstall(&a, env, started),
         Invocation::Scan(a) => scan(&a, env, started),
         Invocation::PlanShow(a) => plan_show(&a, env),
+        Invocation::BaselineBuild(a) => baseline::build_verb(
+            &a,
+            env,
+            &purge_source::live::LiveLocal::new(),
+            purge_win::sxs::find_base().map_err(|e| e.to_string()),
+            started,
+        ),
+        Invocation::BaselineInfo(a) => baseline::info_verb(&a, env),
         Invocation::Executor(verb) => executor(verb, env),
     }
 }

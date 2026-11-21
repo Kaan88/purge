@@ -23,7 +23,9 @@ use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
 };
 use windows_sys::Win32::System::Threading::{
-    OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
+    GetCurrentThread, OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+    QueryFullProcessImageNameW, SetThreadPriority, THREAD_MODE_BACKGROUND_BEGIN,
+    THREAD_MODE_BACKGROUND_END,
 };
 
 #[cfg(feature = "run")]
@@ -113,6 +115,32 @@ pub fn process_image_path(pid: u32) -> io::Result<Option<PathBuf>> {
     Ok(Some(PathBuf::from(String::from_utf16_lossy(
         &buf[..len as usize],
     ))))
+}
+
+/// Puts the **calling thread** into background mode (`on`: `THREAD_MODE_BACKGROUND_BEGIN`, which lowers
+/// its CPU, I/O and memory priority) or takes it out again (`THREAD_MODE_BACKGROUND_END`). It changes
+/// only this thread's scheduling, nothing else of the process or the system. Asking for the mode the
+/// thread is already in is not an error. Used by the local baseline build (BASELINE_LOCAL_DESIGN.md §5,
+/// "background I/O and CPU priority").
+pub fn set_thread_background(on: bool) -> io::Result<()> {
+    /// `ERROR_THREAD_MODE_ALREADY_BACKGROUND`.
+    const ALREADY_BACKGROUND: i32 = 400;
+    /// `ERROR_THREAD_MODE_NOT_BACKGROUND`.
+    const NOT_BACKGROUND: i32 = 401;
+    let mode = if on {
+        THREAD_MODE_BACKGROUND_BEGIN
+    } else {
+        THREAD_MODE_BACKGROUND_END
+    };
+    // SAFETY: the pseudo handle of the calling thread; plain call.
+    if unsafe { SetThreadPriority(GetCurrentThread(), mode) } != 0 {
+        return Ok(());
+    }
+    let err = last_error();
+    match err.raw_os_error() {
+        Some(ALREADY_BACKGROUND | NOT_BACKGROUND) => Ok(()),
+        _ => Err(err),
+    }
 }
 
 /// Process creation, Job objects and the MSI mutex probe (feature `run` only).
@@ -397,6 +425,18 @@ mod job {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn background_mode_of_a_thread() {
+        std::thread::spawn(|| {
+            set_thread_background(true).unwrap();
+            set_thread_background(true).unwrap();
+            set_thread_background(false).unwrap();
+            set_thread_background(false).unwrap();
+        })
+        .join()
+        .unwrap();
+    }
 
     #[test]
     fn own_image_path() {

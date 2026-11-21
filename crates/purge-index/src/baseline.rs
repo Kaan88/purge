@@ -260,11 +260,7 @@ impl Baseline {
             return Err(BaselineError::BadHeader(String::new()));
         }
         let mut out = parse_header(&line)?;
-
-        let mut folded: Vec<u8> = Vec::with_capacity(512);
-        let mut norm = String::with_capacity(512);
-        let bad = |line: u64, reason: &'static str| BaselineError::BadRecord { line, reason };
-
+        let mut records = RecordParser::new();
         while read_line(&mut reader, &mut line)? {
             line_no += 1;
             if line.is_empty() {
@@ -276,80 +272,57 @@ impl Baseline {
                 }
                 continue;
             }
-            if line.len() < 2 || line[1] != b'\t' {
-                return Err(bad(line_no, "no field after the record type"));
-            }
-            let mut fields = line[2..].split(|b| *b == b'\t');
-            let first = fields.next().unwrap_or_default();
-            let text = fold_field(first, &mut folded).map_err(|r| bad(line_no, r))?;
-            match line[0] {
-                b'K' => {
-                    normalise_key(text, &mut norm);
-                    out.keys.push(hash(norm.as_bytes()));
-                    out.leaves.push(hash(leaf(&norm).as_bytes()));
-                    push_parts(leaf(&norm), &mut out.parts);
-                    out.counts.keys += 1;
-                }
-                b'V' => {
-                    normalise_key(text, &mut norm);
-                    let key_hash = hash(norm.as_bytes());
-                    let (Some(name), Some(ty), Some(data)) =
-                        (fields.next(), fields.next(), fields.next())
-                    else {
-                        return Err(bad(
-                            line_no,
-                            "a value record needs key, name, type and hash",
-                        ));
-                    };
-                    let name = fold_field(name, &mut folded).map_err(|r| bad(line_no, r))?;
-                    let ty = parse_dec(ty)
-                        .ok_or_else(|| bad(line_no, "the value type is not a number"))?;
-                    let data_hash = parse_hex(data)
-                        .ok_or_else(|| bad(line_no, "the value hash is not 16 hex digits"))?;
-                    out.values.push(ValueRec {
-                        id: value_id(key_hash, name),
-                        ty,
-                        data_hash,
-                    });
-                    if !name.is_empty() {
-                        out.leaves.push(hash(name.as_bytes()));
-                        push_parts(name, &mut out.parts);
-                    }
-                    out.counts.values += 1;
-                }
-                b'D' | b'F' => {
-                    normalise_path(text, &mut norm);
-                    let h = hash(norm.as_bytes());
-                    out.leaves.push(hash(leaf(&norm).as_bytes()));
-                    push_parts(leaf(&norm), &mut out.parts);
-                    if line[0] == b'D' {
-                        out.dirs.push(h);
-                        out.counts.dirs += 1;
-                    } else {
-                        out.files.push(h);
-                        out.counts.files += 1;
-                    }
-                }
-                _ => return Err(bad(line_no, "unknown record type")),
-            }
+            records.add(&mut out, &line, line_no)?;
         }
+        out.finish_sets();
+        Ok(out)
+    }
 
+    /// A baseline with no records yet, for a reader of another header (the local baseline,
+    /// [`crate::local_baseline::LocalBaseline`]) that feeds a [`RecordParser`] and then calls
+    /// [`Baseline::finish_sets`].
+    pub(crate) fn empty(
+        edition: &str,
+        build: u32,
+        ubr: u32,
+        captured_at: &str,
+        computer: &str,
+        source: &str,
+    ) -> Baseline {
+        Baseline {
+            edition: edition.to_owned(),
+            build,
+            ubr,
+            captured_at: captured_at.to_owned(),
+            computer: computer.to_owned(),
+            source: source.to_owned(),
+            counts: RecordCounts::default(),
+            keys: Vec::new(),
+            values: Vec::new(),
+            dirs: Vec::new(),
+            files: Vec::new(),
+            leaves: Vec::new(),
+            parts: Vec::new(),
+        }
+    }
+
+    /// Sorts and de-duplicates the hashed sets once every record is in.
+    pub(crate) fn finish_sets(&mut self) {
         for set in [
-            &mut out.keys,
-            &mut out.dirs,
-            &mut out.files,
-            &mut out.leaves,
-            &mut out.parts,
+            &mut self.keys,
+            &mut self.dirs,
+            &mut self.files,
+            &mut self.leaves,
+            &mut self.parts,
         ] {
             set.sort_unstable();
             set.dedup();
             set.shrink_to_fit();
         }
         // Stable, so that of two records normalising to the same value the first one in the file wins.
-        out.values.sort_by_key(|v| v.id);
-        out.values.dedup_by_key(|v| v.id);
-        out.values.shrink_to_fit();
-        Ok(out)
+        self.values.sort_by_key(|v| v.id);
+        self.values.dedup_by_key(|v| v.id);
+        self.values.shrink_to_fit();
     }
 
     /// The Windows `EditionID` the baseline was taken on (e.g. `Professional`).
@@ -590,25 +563,106 @@ fn parse_header(line: &[u8]) -> Result<Baseline, BaselineError> {
         return Err(bad());
     };
     let (build, ubr) = version.trim().split_once('.').ok_or_else(bad)?;
-    Ok(Baseline {
-        edition: edition.to_owned(),
-        build: build.parse().map_err(|_| bad())?,
-        ubr: ubr.parse().map_err(|_| bad())?,
-        captured_at: time.to_owned(),
-        computer: computer.to_owned(),
-        source: String::new(),
-        counts: RecordCounts::default(),
-        keys: Vec::new(),
-        values: Vec::new(),
-        dirs: Vec::new(),
-        files: Vec::new(),
-        leaves: Vec::new(),
-        parts: Vec::new(),
-    })
+    Ok(Baseline::empty(
+        edition,
+        build.parse().map_err(|_| bad())?,
+        ubr.parse().map_err(|_| bad())?,
+        time,
+        computer,
+        "",
+    ))
+}
+
+/// The record lines of the baseline format (`K`, `V`, `D`, `F`; `kb/baselines/README.md`), hashed into
+/// a [`Baseline`]'s sets. Shared by the exact loader ([`Baseline::from_reader`]) and the local
+/// baseline's reader, which differ only in their header and trailer lines.
+pub(crate) struct RecordParser {
+    folded: Vec<u8>,
+    norm: String,
+}
+
+impl RecordParser {
+    pub(crate) fn new() -> RecordParser {
+        RecordParser {
+            folded: Vec::with_capacity(512),
+            norm: String::with_capacity(512),
+        }
+    }
+
+    /// Adds one record line (without its line end; neither empty nor a `#` line) to `out`. `line_no`
+    /// is the 1-based line number the error names.
+    pub(crate) fn add(
+        &mut self,
+        out: &mut Baseline,
+        line: &[u8],
+        line_no: u64,
+    ) -> Result<(), BaselineError> {
+        let bad = |reason: &'static str| BaselineError::BadRecord {
+            line: line_no,
+            reason,
+        };
+        let (folded, norm) = (&mut self.folded, &mut self.norm);
+        if line.len() < 2 || line[1] != b'\t' {
+            return Err(bad("no field after the record type"));
+        }
+        let mut fields = line[2..].split(|b| *b == b'\t');
+        let first = fields.next().unwrap_or_default();
+        let text = fold_field(first, folded).map_err(bad)?;
+        match line[0] {
+            b'K' => {
+                normalise_key(text, norm);
+                out.keys.push(hash(norm.as_bytes()));
+                out.leaves.push(hash(leaf(norm).as_bytes()));
+                push_parts(leaf(norm), &mut out.parts);
+                out.counts.keys += 1;
+            }
+            b'V' => {
+                normalise_key(text, norm);
+                let key_hash = hash(norm.as_bytes());
+                let (Some(name), Some(ty), Some(data)) =
+                    (fields.next(), fields.next(), fields.next())
+                else {
+                    return Err(bad("a value record needs key, name, type and hash"));
+                };
+                let name = fold_field(name, folded).map_err(bad)?;
+                let ty = parse_dec(ty).ok_or_else(|| bad("the value type is not a number"))?;
+                let data_hash =
+                    parse_hex(data).ok_or_else(|| bad("the value hash is not 16 hex digits"))?;
+                out.values.push(ValueRec {
+                    id: value_id(key_hash, name),
+                    ty,
+                    data_hash,
+                });
+                if !name.is_empty() {
+                    out.leaves.push(hash(name.as_bytes()));
+                    push_parts(name, &mut out.parts);
+                }
+                out.counts.values += 1;
+            }
+            b'D' | b'F' => {
+                normalise_path(text, norm);
+                let h = hash(norm.as_bytes());
+                out.leaves.push(hash(leaf(norm).as_bytes()));
+                push_parts(leaf(norm), &mut out.parts);
+                if line[0] == b'D' {
+                    out.dirs.push(h);
+                    out.counts.dirs += 1;
+                } else {
+                    out.files.push(h);
+                    out.counts.files += 1;
+                }
+            }
+            _ => return Err(bad("unknown record type")),
+        }
+        Ok(())
+    }
 }
 
 /// Reads one line without its terminator (`\n` or `\r\n`); `false` at the end of the input.
-fn read_line<R: BufRead>(reader: &mut R, line: &mut Vec<u8>) -> Result<bool, BaselineError> {
+pub(crate) fn read_line<R: BufRead>(
+    reader: &mut R,
+    line: &mut Vec<u8>,
+) -> Result<bool, BaselineError> {
     line.clear();
     if reader.read_until(b'\n', line)? == 0 {
         return Ok(false);

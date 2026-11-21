@@ -12,7 +12,8 @@ purge-model.workspace = true
 purge-source.workspace = true
 purge-guard.workspace = true
 # M1B-SYSOBJ: the command-line splitter (purge_win::cmdline, no features) and kb/hosts.json.
-purge-win.workspace = true
+# BL-BUILD: `read` for manifest expansion (purge_win::sxs) and the build's background thread mode.
+purge-win = { workspace = true, features = ["read"] }
 serde_json.workspace = true
 flate2.workspace = true
 serde.workspace = true
