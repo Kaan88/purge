@@ -31,6 +31,7 @@ pub mod fs_write;
 pub mod known_folders;
 pub mod msi;
 pub mod msi_db;
+pub mod offreg;
 pub mod os;
 pub mod process;
 pub mod reg;
