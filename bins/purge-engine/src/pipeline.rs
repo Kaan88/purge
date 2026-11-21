@@ -138,6 +138,10 @@ pub struct Settings {
     /// (BASELINE_LOCAL_DESIGN.md §5). `None`: no local baseline is read or built. See
     /// [`baseline::local_cache`] for when the directory is used.
     pub local_baseline_dir: Option<PathBuf>,
+    /// Purge's machine data root, `<ProgramData>\Purge` (session index, quarantine). `None`: the
+    /// executor's store is not located. Read-only users of the index (the medium engine's
+    /// `history.index`) need it; nothing in the pipeline writes here.
+    pub data_root: Option<PathBuf>,
     /// The sources describe the machine the baseline directory is on (the live engine): when the
     /// engine is elevated, [`Settings::baseline_dir`] is used only if administrators and the system
     /// alone can write it (design §5 "The shipped directory"). Off for fixtures and replays, whose

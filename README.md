@@ -12,7 +12,8 @@ first real types. The plan is `docs/ENGINE_PLAN.md`; milestones are in its §11.
 | Path | What |
 |---|---|
 | `crates/` | Engine libraries (Rust): `purge-model` (shared types), `purge-win` (Win32; feature `write` for the executor only), `purge-source`, `purge-inventory`, `purge-identity`, `purge-harvest`, `purge-index`, `purge-scan`, `purge-guard`, `purge-policy`, `purge-plan`, `purge-exec`, `purge-kb`, `purge-rpc`. Each `lib.rs` states its job and milestone. |
-| `bins/purge-engine` | The engine: `--stdio` server, elevated `--broker`, CLI verbs (ENGINE_PLAN.md §3.4) |
+| `bins/purge-engine` | The medium engine: `--stdio` server and CLI verbs (ENGINE_PLAN.md §3.4) |
+| `bins/purge-broker` | The elevated broker: harvest, uninstall, scan, consent, execute and undo (M3) |
 | `bins/purge-mcp` | AI-agent MCP server (M6). Never links the executor. |
 | `tools/xtask` | `cargo xtask ui-strings \| check-deps \| ci` |
 | `kb/` | Knowledge base: packs, clean-Windows baselines, vendor and shared-component data |

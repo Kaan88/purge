@@ -118,6 +118,7 @@ impl<S> Started<S> {
             purge_dirs: vec![path(&self.install_dir), path(&self.data_root)],
             msi_table_dir: Some(self.data_root.join("fp").join("msitables")),
             local_baseline_dir: Some(self.data_root.join("baseline")),
+            data_root: Some(self.data_root.clone()),
             check_shipped_dir: true,
             volume_rule: VolumeRule::On(self.system_volume.clone()),
             local_build: None,

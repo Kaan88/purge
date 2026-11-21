@@ -1,14 +1,13 @@
-//! `purge-engine`: one executable, three roles (ENGINE_PLAN.md §3.1, §3.4).
+//! `purge-engine`: one executable, two roles (ENGINE_PLAN.md §3.1, §3.4).
 //!
-//! - `--stdio`: medium-integrity server for the UI (inventory, icons, sizes, per-user work);
-//! - `--broker`: the elevated broker (harvest, uninstall, scan, plan, consent, execute, undo);
+//! - `--stdio`: medium-integrity server for the UI (inventory, sizes, per-user work);
 //! - CLI verbs for the VM rig and power users. Headless `exec` exists only with the `rig-exec` feature.
+//!   (The elevated broker is its own binary, `purge-broker`; the engine has no broker mode.)
 //!
 //! Milestone: the CLI verbs `inventory`, `harvest`, `uninstall`, `scan` and `plan show` in M1a;
-//! `exec`/`undo`/`journal`/`quarantine` in M2, `--stdio` and `--broker` in M3 (§11.1). The M2 executor
-//! verbs run only in a `rig-exec` build (the VM rig); a normal build refuses them with exit code 5
-//! because they need the consent dialog. `--stdio`, `--broker` and `kb lint` report "not implemented"
-//! with exit code 1.
+//! `exec`/`undo`/`journal`/`quarantine` in M2, `--stdio` in M3 (§11.1). The M2 executor verbs run only
+//! in a `rig-exec` build (the VM rig); a normal build refuses them with exit code 5 because they need
+//! the consent dialog. `kb lint` reports "not implemented" with exit code 1.
 //!
 //! This file only wires the live machine into [`purge_engine::cli::run`]: the `Live` sources, the live
 //! process host, and the settings taken from the process (see [`settings`]).
@@ -95,8 +94,10 @@ fn settings_from(facts: ProcessFacts) -> Settings {
     }
     let mut msi_table_dir = None;
     let mut local_baseline_dir = None;
+    let mut data_root = None;
     if let Some(data) = program_data.as_ref().and_then(|p| p.to_str()) {
         let root = format!("{}\\Purge", data.trim_end_matches('\\'));
+        data_root = Some(PathBuf::from(&root));
         msi_table_dir = Some(PathBuf::from(format!("{root}\\fp\\msitables")));
         local_baseline_dir = Some(PathBuf::from(format!("{root}\\baseline")));
         purge_dirs.push(root);
@@ -106,6 +107,7 @@ fn settings_from(facts: ProcessFacts) -> Settings {
         purge_dirs,
         msi_table_dir,
         local_baseline_dir,
+        data_root,
         check_shipped_dir: true,
         volume_rule,
         local_build: None,
@@ -208,6 +210,10 @@ mod tests {
         assert_eq!(
             s.local_baseline_dir.as_deref(),
             Some(Path::new(r"C:\ProgramData\Purge\baseline"))
+        );
+        assert_eq!(
+            s.data_root.as_deref(),
+            Some(Path::new(r"C:\ProgramData\Purge"))
         );
         assert!(s.check_shipped_dir);
         assert_eq!(s.volume_rule, VolumeRule::On(r"\\?\volume{0}\".into()));

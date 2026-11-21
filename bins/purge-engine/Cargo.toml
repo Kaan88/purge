@@ -45,6 +45,8 @@ anyhow.workspace = true
 # The relaxed test store and the in-memory boot-move list for tests/exec_cli.rs (test builds only).
 purge-exec = { workspace = true, features = ["test-support"] }
 purge-win = { workspace = true, features = ["read", "write"] }
+# Anonymous pipes for the `--stdio` integration tests (tests/engine/m3_stdio.rs).
+windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_System_Pipes"] }
 
 [lints]
 workspace = true

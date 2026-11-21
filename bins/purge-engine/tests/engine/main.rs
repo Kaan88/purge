@@ -13,7 +13,9 @@
 //! - `m1b_exec` (`rig-exec` builds): `exec --fp` and `undo` of a service, a scheduled task and a
 //!   firewall rule over in-memory object backends, and their exit codes;
 //! - `m1b_scan`: the M1b scanners through harvest and scan (MSI remnants, system objects, COM, Burn,
-//!   diagnostics), with the hostile shapes of R3a.
+//!   diagnostics), with the hostile shapes of R3a;
+//! - `m3_stdio`: the medium engine's `--stdio` server over NDJSON streams (programs, sizes, changes,
+//!   history, hello, cancel) with fixture sources.
 
 mod common;
 mod exit_codes;
@@ -21,4 +23,5 @@ mod inno;
 #[cfg(feature = "rig-exec")]
 mod m1b_exec;
 mod m1b_scan;
+mod m3_stdio;
 mod nsis;

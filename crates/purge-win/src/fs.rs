@@ -30,9 +30,9 @@ use windows_sys::Win32::Storage::FileSystem::{
     FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_STANDARD_INFO,
     FIND_FIRST_EX_LARGE_FETCH, FileAttributeTagInfo, FileBasicInfo, FileIdInfo, FileStandardInfo,
     FindClose, FindExInfoBasic, FindExSearchNameMatch, FindFirstFileExW, FindNextFileW,
-    GetDriveTypeW, GetFileInformationByHandleEx, GetFinalPathNameByHandleW, GetLongPathNameW,
-    GetVolumeInformationW, GetVolumePathNameW, OPEN_EXISTING, SYNCHRONIZE, VOLUME_NAME_DOS,
-    WIN32_FIND_DATAW,
+    GetDiskFreeSpaceExW, GetDriveTypeW, GetFileInformationByHandleEx, GetFinalPathNameByHandleW,
+    GetLongPathNameW, GetVolumeInformationW, GetVolumePathNameW, OPEN_EXISTING, SYNCHRONIZE,
+    VOLUME_NAME_DOS, WIN32_FIND_DATAW,
 };
 
 use crate::os::{Win32Error, from_wide, wide};
@@ -459,6 +459,19 @@ pub fn volume_info(path: &Path) -> Result<VolumeInfo, Win32Error> {
         drive_type,
         fs_name: from_wide(&fs_name),
     })
+}
+
+/// Total size in bytes of the volume holding `path` (`GetDiskFreeSpaceExW`).
+pub fn volume_total_bytes(path: &Path) -> Result<u64, Win32Error> {
+    let p = wide(path);
+    let mut free_to_caller = 0u64;
+    let mut total = 0u64;
+    let mut free = 0u64;
+    // SAFETY: `p` is NUL-terminated; all three out-pointers are valid for one `u64` each.
+    if unsafe { GetDiskFreeSpaceExW(p.as_ptr(), &mut free_to_caller, &mut total, &mut free) } == 0 {
+        return Err(Win32Error::last());
+    }
+    Ok(total)
 }
 
 /// Reads at most `max` bytes from the start of a file. A name-surrogate reparse point (symlink,
