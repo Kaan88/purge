@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<!-- Hand-written test fixture: a component without registry keys (BL-MANIFEST); not a Microsoft file. -->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v3" manifestVersion="1.0">
+  <assemblyIdentity name="Purge-Test-FilesOnly" version="10.0.26100.1" processorArchitecture="amd64" language="neutral" publicKeyToken="31bf3856ad364e35" />
+  <dependency discoverable="no">
+    <dependentAssembly>
+      <assemblyIdentity name="Purge-Test-Other" version="10.0.26100.1" processorArchitecture="wow64" language="neutral" publicKeyToken="31bf3856ad364e35" />
+    </dependentAssembly>
+  </dependency>
+  <file name="purgeonly.exe" destinationPath="$(runtime.system32)\" sourceName="purgeonly.exe" />
+  <file name="purgestore.dll" sourceName="purgestore.dll" importPath="$(build.nttree)\" />
+  <localization>
+    <resources culture="en-US">
+      <stringTable>
+        <string id="displayName" value="Purge test &amp; files only" />
+      </stringTable>
+    </resources>
+  </localization>
+</assembly>
