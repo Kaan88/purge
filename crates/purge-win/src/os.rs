@@ -120,6 +120,55 @@ pub(crate) unsafe fn from_wide_ptr(p: *const u16) -> String {
     }
 }
 
+/// 64 bits from the system's preferred cryptographic random source (`BCryptGenRandom`).
+pub fn random_u64() -> Result<u64, Win32Error> {
+    use windows_sys::Win32::Security::Cryptography::{
+        BCRYPT_USE_SYSTEM_PREFERRED_RNG, BCryptGenRandom,
+    };
+    let mut bytes = [0u8; 8];
+    // SAFETY: `bytes` is a writable buffer of exactly the length passed; a null algorithm handle is
+    // allowed with `BCRYPT_USE_SYSTEM_PREFERRED_RNG`.
+    let status = unsafe {
+        BCryptGenRandom(
+            std::ptr::null_mut(),
+            bytes.as_mut_ptr(),
+            bytes.len() as u32,
+            BCRYPT_USE_SYSTEM_PREFERRED_RNG,
+        )
+    };
+    if status != 0 {
+        return Err(Win32Error::INVALID_DATA);
+    }
+    Ok(u64::from_le_bytes(bytes))
+}
+
+/// Closes the process's three standard handles and clears them (`SetStdHandle(.., NULL)`), so the
+/// elevated broker holds nothing it was started with (M3 design 3.4). Later writes through `std`
+/// to a cleared handle are silently dropped. A handle shared by two of the three is closed once.
+pub fn close_std_handles() {
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Console::{
+        GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, SetStdHandle,
+    };
+    let mut closed: Vec<usize> = Vec::new();
+    for which in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+        // SAFETY: plain query of the process's standard handle slot.
+        let h = unsafe { GetStdHandle(which) };
+        if h.is_null() || h == INVALID_HANDLE_VALUE {
+            continue;
+        }
+        // SAFETY: clears the slot first, so nothing reads the handle after it is closed below.
+        unsafe { SetStdHandle(which, std::ptr::null_mut()) };
+        if closed.contains(&(h as usize)) {
+            continue;
+        }
+        closed.push(h as usize);
+        // SAFETY: the handle came from the slot just cleared; this process owns it, and it is
+        // closed once.
+        unsafe { CloseHandle(h) };
+    }
+}
+
 /// Windows version facts from `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OsVersion {
@@ -190,6 +239,48 @@ mod tests {
         assert!(Win32Error::check(0).is_ok());
         assert_eq!(Win32Error::check(5), Err(Win32Error::ACCESS_DENIED));
         assert!(Win32Error(5).to_string().starts_with("Win32 error 5"));
+    }
+
+    #[test]
+    fn random_values_differ() {
+        let values: Vec<u64> = (0..8).map(|_| random_u64().unwrap()).collect();
+        assert!(values.iter().any(|v| *v != values[0]), "{values:?}");
+    }
+
+    /// The child half of [`std_handles_are_closed_and_cleared`]: runs only when the parent set the
+    /// variable, because it closes the harness's own standard handles.
+    #[test]
+    fn std_handles_child() {
+        use windows_sys::Win32::System::Console::{
+            GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+        };
+        if std::env::var_os("PURGE_TEST_CLOSE_STD").is_none() {
+            return;
+        }
+        close_std_handles();
+        for which in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+            // SAFETY: plain query of the process's standard handle slot.
+            assert!(unsafe { GetStdHandle(which) }.is_null());
+        }
+        // Writing to a cleared handle is dropped, not a panic.
+        use std::io::Write;
+        let _ = std::io::stdout().write_all(b"dropped");
+        let _ = std::io::stderr().write_all(b"dropped");
+        close_std_handles();
+    }
+
+    #[test]
+    fn std_handles_are_closed_and_cleared() {
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "os::tests::std_handles_child",
+                "--test-threads=1",
+            ])
+            .env("PURGE_TEST_CLOSE_STD", "1")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
     }
 
     #[test]

@@ -454,6 +454,7 @@ struct Shared {
     changed: Condvar,
     control: BuildControl,
     scan_seen: AtomicBool,
+    stop: AtomicBool,
 }
 
 /// The background build of this engine process: its state, and the way a scan tells it that it is
@@ -485,6 +486,7 @@ impl LocalBuild {
                 changed: Condvar::new(),
                 control: BuildControl::new(),
                 scan_seen: AtomicBool::new(false),
+                stop: AtomicBool::new(false),
             }),
         }
     }
@@ -519,6 +521,18 @@ impl LocalBuild {
         if let BaselineBuild::Building { scan_waiting, .. } = &mut *state {
             *scan_waiting = true;
         }
+    }
+
+    /// Asks the build to stop before it starts its next part (the broker is closing, M3 design 3.6).
+    /// A part being built is not interrupted, and the parts already stored stay: a cache part is
+    /// written to a temporary name and renamed, so a stop, or the process ending in the middle of a
+    /// part, never leaves a partial cache file.
+    pub fn request_stop(&self) {
+        self.shared.stop.store(true, Ordering::Relaxed);
+    }
+
+    fn stop_requested(&self) -> bool {
+        self.shared.stop.load(Ordering::Relaxed)
     }
 
     /// The build's threads leave background priority (nothing says that a scan is waiting).
@@ -683,6 +697,10 @@ where
     let mut base = Some(base);
     let timing = purge_source::metered::installed().is_some();
     for at in 0..todo.len() {
+        if build.stop_requested() {
+            problems.push("the build was stopped before it ended".into());
+            break;
+        }
         let (source, id) = &todo[at];
         if *source == LocalSource::S1
             && let Some(base) = base.take()
@@ -842,6 +860,25 @@ mod tests {
                 .expect("a cache directory is configured")
                 .wait()
         })
+    }
+
+    /// The broker's exit (M3 design 3.6): a stop requested before the next part is seen, and a
+    /// stopped build stores no part and ends as `Failed`.
+    #[test]
+    fn a_stopped_build_stores_nothing() {
+        let t = tree("stopped");
+        let f = t.machine(true, true);
+        let build = LocalBuild::new(BaselineBuild::Checking);
+        build.request_stop();
+        let end = run_build(&build, Sources::of(&f), &t.settings(), &f, no_base);
+        assert!(
+            matches!(&end, BaselineBuild::Failed { reason } if reason.contains("stopped")),
+            "{end:?}"
+        );
+        let stored = std::fs::read_dir(&t.cache)
+            .map(|d| d.count())
+            .unwrap_or_default();
+        assert_eq!(stored, 0, "the cache directory holds a part");
     }
 
     /// L3: with a shipped baseline of exactly this Windows the view is that baseline, and neither a
