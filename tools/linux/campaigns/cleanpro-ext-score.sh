@@ -13,7 +13,7 @@ FOOTPRINT='x2-ff-tbafter x2-thunderbird truth/x2'
 export M1A_PREFIX=x2- M1A_APPS="git-toolsdir git-userstate vscode-userstate vscode-zipcopy git-upgrade npp-userfiles ff-esr ff-devedition vscode-with-user thunderbird ff-tbafter vscode-insiders-pair vscode-upgrade ff-reinstall vlc winmerge" M1A_AMBIENT=truth/f0/ambient-f0.json M1A_M0_RUNS=runs/_none M1A_BCU=0 M1A_OUT=truth/x2
 export M1A_SANITY=skip
 export RIGTOOL=/home/kaan/.cache/purge-rigtool-target/release/rigtool
-REPO=/mnt/C/Users/kaank/Desktop/uninstall/purge
+REPO=${PURGE_REPO:?set PURGE_REPO to the repo root}
 DIR=$HOME/purge-target/campaigns
 LOG=$DIR/$NAME-score.out
 cd "$REPO/vm" || { echo "$NAME-score: cannot cd to $REPO/vm" >&2; exit 2; }

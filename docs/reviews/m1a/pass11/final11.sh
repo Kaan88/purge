@@ -1,5 +1,5 @@
 #!/bin/bash
-P=$HOME/purge-target/pass11; R=/mnt/C/Users/kaank/Desktop/uninstall/purge
+P=$HOME/purge-target/pass11; R=${PURGE_REPO:?set PURGE_REPO}
 export CARGO_BUILD_JOBS=8 RUST_TEST_THREADS=8
 H() { (cd $R; find crates bins -type f | sort | xargs -d "\n" sha256sum | sha256sum; find crates bins -type f | wc -l); }
 echo "== tree hash at start"; H

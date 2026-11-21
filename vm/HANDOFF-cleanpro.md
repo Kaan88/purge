@@ -10,7 +10,7 @@ M0 is done (docs/M0_REPORT.md). This is the follow-up: build the Clean-Pro VM an
 ## State
 
 - VM **`Purge-CleanPro`** (`E:\purge-vm\Purge-CleanPro`) is created: Windows 11 **Pro Insider 10.0.26340.9882**
-  from `C:\Users\kaank\Downloads\Windows11_InsiderPreview_Client_x64_en-us_26340_9882.iso` (image 6), EFI +
+  from `C:\Users\<user>\Downloads\Windows11_InsiderPreview_Client_x64_en-us_26340_9882.iso` (image 6), EFI +
   Secure Boot + TPM 2.0, 4 vCPU / 4 GB, 3D off, SATA disk with **discard off** (discard on made setup's TRIM
   hang and the VM abort). User `tester`, password in the session password file (pass it only through
   `--passwordfile`; VBoxManage `unattended install` prints it, so filter its output).

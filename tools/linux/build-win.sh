@@ -3,7 +3,7 @@
 # usage: build-win.sh [OUT_DIR]   (default ~/purge-out/<branch>-<short sha>[-dirty])
 set -euo pipefail
 source "$(dirname "$0")/env-win.sh"
-REPO=/mnt/C/Users/kaank/Desktop/uninstall/purge
+REPO=${PURGE_REPO:?set PURGE_REPO to the repo root}
 T=x86_64-pc-windows-gnullvm
 rev=$(git -C "$REPO" rev-parse --abbrev-ref HEAD)-$(git -C "$REPO" rev-parse --short HEAD)
 [ -n "$(git -C "$REPO" status --porcelain -- crates bins tools Cargo.lock)" ] && rev="$rev-dirty"

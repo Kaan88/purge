@@ -6,10 +6,10 @@ set -uo pipefail
 VM='Purge-CleanPro'
 NAME='cleanpro-ext'
 ARGS='-Snapshot rig-base -Ids git-toolsdir,git-userstate,vscode-userstate,vscode-zipcopy,git-upgrade,npp-userfiles,ff-esr,ff-devedition,vscode-with-user,thunderbird,ff-tbafter,vscode-insiders-pair,vscode-upgrade,ff-reinstall,vlc,winmerge -Nulls 0 -RunPrefix x2- -ExtraChecks -Engine ./target/release/purge-engine.exe -ExecutionEngine default'
-export VMPWFILE=/mnt/C/Users/kaank/AppData/Local/Temp/claude/00f7b7199d1b697b/907a18b5-8b7a-4e9b-ba62-ed4a6d257fd6/scratchpad/vmpw.txt
+export VMPWFILE=${VMPWFILE:?set VMPWFILE to the guest password file}
 export RIG_TMP=$HOME/.cache/purge-rig-tmp
 export POWERSHELL_TELEMETRY_OPTOUT=1
-REPO=/mnt/C/Users/kaank/Desktop/uninstall/purge
+REPO=${PURGE_REPO:?set PURGE_REPO to the repo root}
 DIR=$HOME/purge-target/campaigns
 OUT=$DIR/$NAME.out
 VBOX=/usr/lib/virtualbox/VBoxManage

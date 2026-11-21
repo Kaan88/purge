@@ -4,10 +4,10 @@
   "runs": [
     {
       "id": "xn1-m1b-x-fidelity",
-      "dir": "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\runs\\xn1-m1b-x-fidelity",
+      "dir": "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\vm\\runs\\xn1-m1b-x-fidelity",
       "pair": [
-        "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\runs\\xn1-m1b-x-fidelity\\snap-xn1-m1b-x-fidelity-a.tsv.gz",
-        "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\runs\\xn1-m1b-x-fidelity\\snap-xn1-m1b-x-fidelity-b.tsv.gz"
+        "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\vm\\runs\\xn1-m1b-x-fidelity\\snap-xn1-m1b-x-fidelity-a.tsv.gz",
+        "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\vm\\runs\\xn1-m1b-x-fidelity\\snap-xn1-m1b-x-fidelity-b.tsv.gz"
       ],
       "records": [
         "~D:C:\\Program Files\\WindowsApps\\Microsoft.WindowsAppRuntime.2_2.6.5.0_x64__8wekyb3d8bbwe\\bs-Latn-BA",
@@ -199,10 +199,10 @@
     },
     {
       "id": "xn1-m1b-x-traps",
-      "dir": "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\runs\\xn1-m1b-x-traps",
+      "dir": "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\vm\\runs\\xn1-m1b-x-traps",
       "pair": [
-        "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\runs\\xn1-m1b-x-traps\\snap-xn1-m1b-x-traps-a.tsv.gz",
-        "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\runs\\xn1-m1b-x-traps\\snap-xn1-m1b-x-traps-b.tsv.gz"
+        "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\vm\\runs\\xn1-m1b-x-traps\\snap-xn1-m1b-x-traps-a.tsv.gz",
+        "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\vm\\runs\\xn1-m1b-x-traps\\snap-xn1-m1b-x-traps-b.tsv.gz"
       ],
       "records": [
         "+K:HKLM\\SOFTWARE\\Microsoft\\Wbem\\Tracing\\Providers\\DeliveryOptimizationMIProv @ root/Microsoft/Windows/DeliveryOptimization",
@@ -623,10 +623,10 @@
     },
     {
       "id": "xn2-m1b-x-fidelity",
-      "dir": "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\runs\\xn2-m1b-x-fidelity",
+      "dir": "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\vm\\runs\\xn2-m1b-x-fidelity",
       "pair": [
-        "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\runs\\xn2-m1b-x-fidelity\\snap-xn2-m1b-x-fidelity-a.tsv.gz",
-        "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\runs\\xn2-m1b-x-fidelity\\snap-xn2-m1b-x-fidelity-b.tsv.gz"
+        "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\vm\\runs\\xn2-m1b-x-fidelity\\snap-xn2-m1b-x-fidelity-a.tsv.gz",
+        "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\vm\\runs\\xn2-m1b-x-fidelity\\snap-xn2-m1b-x-fidelity-b.tsv.gz"
       ],
       "records": [
         "-K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\TiRunning",
@@ -844,10 +844,10 @@
     },
     {
       "id": "xn2-m1b-x-traps",
-      "dir": "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\runs\\xn2-m1b-x-traps",
+      "dir": "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\vm\\runs\\xn2-m1b-x-traps",
       "pair": [
-        "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\runs\\xn2-m1b-x-traps\\snap-xn2-m1b-x-traps-a.tsv.gz",
-        "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\runs\\xn2-m1b-x-traps\\snap-xn2-m1b-x-traps-b.tsv.gz"
+        "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\vm\\runs\\xn2-m1b-x-traps\\snap-xn2-m1b-x-traps-a.tsv.gz",
+        "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\vm\\runs\\xn2-m1b-x-traps\\snap-xn2-m1b-x-traps-b.tsv.gz"
       ],
       "records": [
         "+K:HKLM\\SOFTWARE\\Microsoft\\Wbem\\Tracing\\Providers\\WMIProv @ root/wmi",
@@ -1072,10 +1072,10 @@
     },
     {
       "id": "xn3-m1b-x-fidelity",
-      "dir": "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\runs\\xn3-m1b-x-fidelity",
+      "dir": "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\vm\\runs\\xn3-m1b-x-fidelity",
       "pair": [
-        "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\runs\\xn3-m1b-x-fidelity\\snap-xn3-m1b-x-fidelity-a.tsv.gz",
-        "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\runs\\xn3-m1b-x-fidelity\\snap-xn3-m1b-x-fidelity-b.tsv.gz"
+        "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\vm\\runs\\xn3-m1b-x-fidelity\\snap-xn3-m1b-x-fidelity-a.tsv.gz",
+        "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\vm\\runs\\xn3-m1b-x-fidelity\\snap-xn3-m1b-x-fidelity-b.tsv.gz"
       ],
       "records": [
         "-K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\TiRunning",
@@ -1298,10 +1298,10 @@
     },
     {
       "id": "xn3-m1b-x-traps",
-      "dir": "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\runs\\xn3-m1b-x-traps",
+      "dir": "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\vm\\runs\\xn3-m1b-x-traps",
       "pair": [
-        "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\runs\\xn3-m1b-x-traps\\snap-xn3-m1b-x-traps-a.tsv.gz",
-        "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\runs\\xn3-m1b-x-traps\\snap-xn3-m1b-x-traps-b.tsv.gz"
+        "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\vm\\runs\\xn3-m1b-x-traps\\snap-xn3-m1b-x-traps-a.tsv.gz",
+        "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\vm\\runs\\xn3-m1b-x-traps\\snap-xn3-m1b-x-traps-b.tsv.gz"
       ],
       "records": [
         "+K:HKLM\\SOFTWARE\\Microsoft\\Wbem\\Tracing\\Providers\\DeliveryOptimizationMIProv @ root/Microsoft/Windows/DeliveryOptimization",
@@ -1684,10 +1684,10 @@
     },
     {
       "id": "xn4-m1b-x-fidelity",
-      "dir": "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\runs\\xn4-m1b-x-fidelity",
+      "dir": "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\vm\\runs\\xn4-m1b-x-fidelity",
       "pair": [
-        "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\runs\\xn4-m1b-x-fidelity\\snap-xn4-m1b-x-fidelity-a.tsv.gz",
-        "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\runs\\xn4-m1b-x-fidelity\\snap-xn4-m1b-x-fidelity-b.tsv.gz"
+        "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\vm\\runs\\xn4-m1b-x-fidelity\\snap-xn4-m1b-x-fidelity-a.tsv.gz",
+        "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\vm\\runs\\xn4-m1b-x-fidelity\\snap-xn4-m1b-x-fidelity-b.tsv.gz"
       ],
       "records": [
         "-K:HKLM\\SOFTWARE\\Microsoft\\Wbem\\Tracing\\Providers\\NetAdapterCim @ ROOT/StandardCimv2",
@@ -1908,10 +1908,10 @@
     },
     {
       "id": "xn4-m1b-x-traps",
-      "dir": "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\runs\\xn4-m1b-x-traps",
+      "dir": "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\vm\\runs\\xn4-m1b-x-traps",
       "pair": [
-        "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\runs\\xn4-m1b-x-traps\\snap-xn4-m1b-x-traps-a.tsv.gz",
-        "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\runs\\xn4-m1b-x-traps\\snap-xn4-m1b-x-traps-b.tsv.gz"
+        "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\vm\\runs\\xn4-m1b-x-traps\\snap-xn4-m1b-x-traps-a.tsv.gz",
+        "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\vm\\runs\\xn4-m1b-x-traps\\snap-xn4-m1b-x-traps-b.tsv.gz"
       ],
       "records": [
         "-K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\TiRunning",
@@ -2139,10 +2139,10 @@
     },
     {
       "id": "xn5-m1b-x-fidelity",
-      "dir": "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\runs\\xn5-m1b-x-fidelity",
+      "dir": "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\vm\\runs\\xn5-m1b-x-fidelity",
       "pair": [
-        "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\runs\\xn5-m1b-x-fidelity\\snap-xn5-m1b-x-fidelity-a.tsv.gz",
-        "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\runs\\xn5-m1b-x-fidelity\\snap-xn5-m1b-x-fidelity-b.tsv.gz"
+        "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\vm\\runs\\xn5-m1b-x-fidelity\\snap-xn5-m1b-x-fidelity-a.tsv.gz",
+        "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\vm\\runs\\xn5-m1b-x-fidelity\\snap-xn5-m1b-x-fidelity-b.tsv.gz"
       ],
       "records": [
         "-K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\TiRunning",
@@ -2364,10 +2364,10 @@
     },
     {
       "id": "xn5-m1b-x-traps",
-      "dir": "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\runs\\xn5-m1b-x-traps",
+      "dir": "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\vm\\runs\\xn5-m1b-x-traps",
       "pair": [
-        "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\runs\\xn5-m1b-x-traps\\snap-xn5-m1b-x-traps-a.tsv.gz",
-        "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\runs\\xn5-m1b-x-traps\\snap-xn5-m1b-x-traps-b.tsv.gz"
+        "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\vm\\runs\\xn5-m1b-x-traps\\snap-xn5-m1b-x-traps-a.tsv.gz",
+        "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\vm\\runs\\xn5-m1b-x-traps\\snap-xn5-m1b-x-traps-b.tsv.gz"
       ],
       "records": [
         "-K:HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\TiRunning",
@@ -2595,10 +2595,10 @@
     },
     {
       "id": "xn6-m1b-x-fidelity",
-      "dir": "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\runs\\xn6-m1b-x-fidelity",
+      "dir": "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\vm\\runs\\xn6-m1b-x-fidelity",
       "pair": [
-        "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\runs\\xn6-m1b-x-fidelity\\snap-xn6-m1b-x-fidelity-a.tsv.gz",
-        "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\runs\\xn6-m1b-x-fidelity\\snap-xn6-m1b-x-fidelity-b.tsv.gz"
+        "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\vm\\runs\\xn6-m1b-x-fidelity\\snap-xn6-m1b-x-fidelity-a.tsv.gz",
+        "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\vm\\runs\\xn6-m1b-x-fidelity\\snap-xn6-m1b-x-fidelity-b.tsv.gz"
       ],
       "records": [
         "+K:HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\IrisService\\Cache\\10555034898488330153",
@@ -2942,10 +2942,10 @@
     },
     {
       "id": "xn6-m1b-x-traps",
-      "dir": "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\runs\\xn6-m1b-x-traps",
+      "dir": "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\vm\\runs\\xn6-m1b-x-traps",
       "pair": [
-        "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\runs\\xn6-m1b-x-traps\\snap-xn6-m1b-x-traps-a.tsv.gz",
-        "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\vm\\runs\\xn6-m1b-x-traps\\snap-xn6-m1b-x-traps-b.tsv.gz"
+        "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\vm\\runs\\xn6-m1b-x-traps\\snap-xn6-m1b-x-traps-a.tsv.gz",
+        "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\vm\\runs\\xn6-m1b-x-traps\\snap-xn6-m1b-x-traps-b.tsv.gz"
       ],
       "records": [
         "+K:HKLM\\SOFTWARE\\Microsoft\\Wbem\\Tracing\\Providers\\DeliveryOptimizationMIProv @ root/Microsoft/Windows/DeliveryOptimization",

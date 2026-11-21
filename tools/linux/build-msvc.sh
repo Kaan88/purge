@@ -13,7 +13,7 @@ if [ "${1:-}" = "--install" ]; then INSTALL=1; shift; fi
 export PATH="$HOME/.cargo/bin:$PATH"
 export XWIN_CACHE_DIR="${XWIN_CACHE_DIR:-$HOME/.cache/cargo-xwin}"
 export XWIN_ARCH=x86_64
-REPO=/mnt/C/Users/kaank/Desktop/uninstall/purge
+REPO=${PURGE_REPO:?set PURGE_REPO to the repo root}
 T=x86_64-pc-windows-msvc
 rev=$(git -C "$REPO" rev-parse --abbrev-ref HEAD)-$(git -C "$REPO" rev-parse --short HEAD)
 [ -n "$(git -C "$REPO" status --porcelain -- crates bins tools Cargo.lock)" ] && rev="$rev-dirty"

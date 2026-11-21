@@ -1,6 +1,6 @@
 # Pass eleven: engine state for handoff (2026-11-15)
 
-Repo `/mnt/C/Users/kaank/Desktop/uninstall/purge`, branch `m1a`, everything uncommitted on top of `9d4b906`.
+Repo `/mnt/C/Users/<user>/Desktop/uninstall/purge`, branch `m1a`, everything uncommitted on top of `9d4b906`.
 POLICY_VERSION is `m1a.6`.
 
 ## 1. Tree hash
@@ -101,7 +101,7 @@ Linux (wine must be restarted first: `wineserver -k`, then check `wine --version
 
 ```
 source ~/purge-target/env-win.sh; export CARGO_BUILD_JOBS=8 RUST_TEST_THREADS=8
-cd /mnt/C/Users/kaank/Desktop/uninstall/purge
+cd /mnt/C/Users/<user>/Desktop/uninstall/purge
 # everything in one go (ci, ignored tests, replay-all + score, re-plans, mutations, hash at start and end):
 ~/purge-target/pass11/final11.sh > ~/purge-target/pass11/final11.log 2>&1
 # or singly:

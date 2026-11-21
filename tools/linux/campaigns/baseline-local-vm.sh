@@ -15,7 +15,7 @@ set -uo pipefail
 VM=$1; NAME=$2; TRUTH=$3; NEIGHBOUR=$4; NO3D=${5:-}
 export RIG_TMP=${RIG_TMP:-$HOME/.cache/purge-rig-tmp}
 export POWERSHELL_TELEMETRY_OPTOUT=1
-REPO=${PURGE_REPO:-/mnt/C/Users/kaank/Desktop/uninstall/purge}
+REPO=${PURGE_REPO:?set PURGE_REPO to the repo root}
 DIR=$HOME/purge-target/campaigns
 OUT=$DIR/$NAME.out
 VBOX=/usr/lib/virtualbox/VBoxManage

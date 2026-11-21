@@ -1,4 +1,4 @@
---- /mnt/C/Users/kaank/Desktop/uninstall/purge/crates/purge-scan/tests/reg/hostile.rs	2026-11-15 04:11:19.101684700 +0300
+--- /mnt/C/Users/<user>/Desktop/uninstall/purge/crates/purge-scan/tests/reg/hostile.rs	2026-11-15 04:11:19.101684700 +0300
 +++ ws/crates/purge-scan/tests/reg/hostile.rs	2026-11-15 04:51:56.123066622 +0300
 @@ -784,3 +784,241 @@
          }

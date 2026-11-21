@@ -7,7 +7,7 @@ campaigns. Paused state: M1b scan gate campaign 4 stopped after G4a (see HANDOFF
 
 Rig scripts, docs, memory and VirtualBox configs use absolute paths. Use the same ones on the laptop:
 
-- Repo at `C:\Users\kaank\Desktop\uninstall\purge` (same Windows user name `kaank` if possible). Claude Code's project
+- Repo at `C:\Users\<user>\Desktop\uninstall\purge` (same Windows user name `<user>` if possible). Claude Code's project
   memory is keyed by this path.
 - An `E:` drive. If the laptop has no E: partition, map one: `subst E: C:\E` (make it permanent with a logon task or
   `HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\DOS Devices` value `E:` = `\??\C:\E`).
@@ -25,8 +25,8 @@ Rig scripts, docs, memory and VirtualBox configs use absolute paths. Use the sam
 | Gate evidence | `E:\purge-build\gate-evidence\` | 5.5 GB | All campaigns' logs, archived runs (gate3-gate6), smoke runs. |
 | M2-head engine (G7 baseline) | `E:\purge-build\m2-base\purge-engine-m2-3265797.exe` | 0.4 GB folder | Or rebuild from commit 3265797. |
 | Guest password file | user's secrets folder on the desktop (path in Claude's local memory; ask the user) | tiny | Works for both VMs, guest user `tester`. Keep it outside any Temp folder on the laptop. |
-| Claude Code memory | `C:\Users\kaank\.claude\projects\C--Users-kaank-Desktop-uninstall-purge\memory\` | tiny | Copy to the same path so the laptop session knows the project history. |
-| UI alpha zip | `C:\Users\kaank\Desktop\Purge-ui-alpha-2.zip` | 46 MB | Optional. |
+| Claude Code memory | `C:\Users\<user>\.claude\projects\C--Users-<user>-Desktop-uninstall-purge\memory\` | tiny | Copy to the same path so the laptop session knows the project history. |
+| UI alpha zip | `C:\Users\<user>\Desktop\Purge-ui-alpha-2.zip` | 46 MB | Optional. |
 
 Not copied: build folders (`E:\purge-build\gate`, `ci-unelev`, `ui-alpha`, `<repo>\target`, `vm\rigtool\target`,
 `vm\build`): rebuild on the laptop. The user's other VMs (DietPi, haiku) stay on the desktop.
@@ -46,16 +46,16 @@ Git branches on origin (`Kaan88/purge`): `main`, `m1a`, `m2`, `m1b` (work branch
 
 - Desktop: OpenSSH Server installed, service `sshd` (startup Manual, running), key-only login
   (`PasswordAuthentication no`), firewall rule `OpenSSH-Server-In-TCP` limited to the Private profile and the local
-  subnet. Desktop LAN address: `192.168.1.115`, user `kaank` (an administrator, so its keys live in
+  subnet. Desktop LAN address: `192.168.1.115`, user `<user>` (an administrator, so its keys live in
   `C:\ProgramData\ssh\administrators_authorized_keys`, ACL SYSTEM + Administrators only).
 - On the laptop: `ssh-keygen -t ed25519`, then put the content of `%USERPROFILE%\.ssh\id_ed25519.pub` into the desktop's
   `C:\ProgramData\ssh\administrators_authorized_keys` (one line; USB stick or typed by the user, or Claude on the desktop
   adds it when given the public key).
-- Test: `ssh kaank@192.168.1.115 hostname`.
+- Test: `ssh <user>@192.168.1.115 hostname`.
 - Copy (the VMs must be powered off on the desktop), for example:
-  `scp -r kaank@192.168.1.115:E:/inbound-vm/Inbound-Win11-Test E:/inbound-vm/`
-  `scp -r kaank@192.168.1.115:E:/purge-vm E:/`
-  `scp -r kaank@192.168.1.115:C:/Users/kaank/Desktop/uninstall/purge/vm/cache C:/Users/kaank/Desktop/uninstall/purge/vm/`
+  `scp -r <user>@192.168.1.115:E:/inbound-vm/Inbound-Win11-Test E:/inbound-vm/`
+  `scp -r <user>@192.168.1.115:E:/purge-vm E:/`
+  `scp -r <user>@192.168.1.115:C:/Users/<user>/Desktop/uninstall/purge/vm/cache C:/Users/<user>/Desktop/uninstall/purge/vm/`
   and the same for `vm/runs`, `E:/purge-build/gate-evidence`, `E:/purge-build/m2-base`, the memory folder.
   For ~80 GB of VM disks over gigabit, expect about 15-25 min; Wi-Fi is much slower, use a cable or a USB drive.
 - After the migration: `Stop-Service sshd; Set-Service sshd -StartupType Disabled` on the desktop (or keep it if the

@@ -59,7 +59,7 @@ neighbour" for all of them; that label comes from the root and misnames the clas
 (finding S3).
 
 Some truth keys counted as false absent are not Windows keys (M1), all in the Inbound truth: `HKU\<sid>\Software\
-Google\Chrome\NativeMessagingHosts\com.kaank.downloadmanager` for certain, and most likely the three keys of the
+Google\Chrome\NativeMessagingHosts\com.<user>.downloadmanager` for certain, and most likely the three keys of the
 per-user `Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall` chain (what a 32-bit per-user installer
 leaves). `HKU\<sid>\Software\ChangeTracker` (R1) is a real Windows key
 (`AppModel\RegistryWriteVirtualization\ExcludedKeys` names it; it exists on the host), so that miss is real.
@@ -223,7 +223,7 @@ then fill up to `max_count` with the nearest others inside `max_build_distance`.
 
 - **M1. The shipped truths are not clean.** Both hold VirtualBox Guest Additions keys (`HKLM\SOFTWARE\Oracle\VirtualBox
   Guest Additions`, its `Uninstall` key, `WOW6432Node\Oracle`, driver entries); the Inbound truth also holds
-  `com.kaank.downloadmanager` under Chrome's and Edge's `NativeMessagingHosts` and a per-user `Wow6432Node\…\Uninstall`
+  `com.<user>.downloadmanager` under Chrome's and Edge's `NativeMessagingHosts` and a per-user `Wow6432Node\…\Uninstall`
   chain. Because each VM is the other's neighbour, the VirtualBox keys count as "covered by merged"; in
   `software-vendor` two of the four local shared-shape misses (`Oracle`, `Oracle\VirtualBox Guest Additions`) are
   covered only that way. Without them the area still passes, so the conclusion stands. One of R2's four

@@ -1,4 +1,4 @@
---- /mnt/C/Users/kaank/Desktop/uninstall/purge/crates/purge-guard/src/prefix.rs	2026-11-15 03:39:14.385652000 +0300
+--- /mnt/C/Users/<user>/Desktop/uninstall/purge/crates/purge-guard/src/prefix.rs	2026-11-15 03:39:14.385652000 +0300
 +++ ws/crates/purge-guard/src/prefix.rs	2026-11-15 04:50:12.217438527 +0300
 @@ -181,7 +181,7 @@
  pub fn is_one_path(text: &str) -> bool {
@@ -9,7 +9,7 @@
          && !text.chars().any(char::is_control)
          && !text
              .get(if drive { 2 } else { 0 }..)
---- /mnt/C/Users/kaank/Desktop/uninstall/purge/crates/purge-scan/src/framework.rs	2026-11-15 03:40:25.832169900 +0300
+--- /mnt/C/Users/<user>/Desktop/uninstall/purge/crates/purge-scan/src/framework.rs	2026-11-15 03:40:25.832169900 +0300
 +++ ws/crates/purge-scan/src/framework.rs	2026-11-15 04:50:12.217998845 +0300
 @@ -647,7 +647,19 @@
      pub fn run(&self, scanner: &dyn Scanner, app: &AppIdentityView) -> Vec<Candidate> {

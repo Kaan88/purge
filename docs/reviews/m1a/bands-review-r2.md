@@ -169,4 +169,4 @@ None on safety.
 7. **Missed, safe:** `HKLM\SOFTWARE\mozilla.org`, `C:\ProgramData\Mozilla-<guid>` (offered in the first gate, not now), `ShimInclusionList\false`, `.vscode*` and `.copilot`, Prefetch, jump lists, temp files.
 8. **VS Code's uninstaller left a trailing `;` on the machine `Path`.** Not an engine matter; mentioned in case the PATH scanner later treats an empty segment as its own.
 
-Working files of this review: `/tmp/claude-1000/-mnt-C-Users-kaank-Desktop-uninstall-purge/2a88ab4a-cd5b-4ff0-bb84-ac5184aaad71/scratchpad/gate/bands/` (`dump.py`, `verify.py`, per-run outputs).
+Working files of this review: `/tmp/claude-1000/-mnt-C-Users-<user>-Desktop-uninstall-purge/2a88ab4a-cd5b-4ff0-bb84-ac5184aaad71/scratchpad/gate/bands/` (`dump.py`, `verify.py`, per-run outputs).

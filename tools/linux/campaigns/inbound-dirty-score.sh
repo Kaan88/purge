@@ -14,7 +14,7 @@ export M1A_PREFIX=f2d- M1A_APPS="firefox vscode-user git npp vlc" M1A_NULLS="f2d
 export M1A_SANITY=skip
 export M1A_LABELS="firefox=firefox-dirty vscode-user=vscode-user-dirty"
 export RIGTOOL=/home/kaan/.cache/purge-rigtool-target/release/rigtool
-REPO=/mnt/C/Users/kaank/Desktop/uninstall/purge
+REPO=${PURGE_REPO:?set PURGE_REPO to the repo root}
 DIR=$HOME/purge-target/campaigns
 LOG=$DIR/$NAME-score.out
 cd "$REPO/vm" || { echo "$NAME-score: cannot cd to $REPO/vm" >&2; exit 2; }

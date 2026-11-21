@@ -6,10 +6,10 @@ set -uo pipefail
 VM='Inbound-Win11-Test'
 NAME='inbound-dirty'
 ARGS='-Snapshot dirty-base -Ids firefox,vscode-user,git,npp,vlc -Nulls 2 -NullOrder spread -NullWaitSec 120 -RunPrefix f2d- -ExtraChecks -Engine ./target/release/purge-engine.exe -ExecutionEngine default -No3D'
-export VMPWFILE=/mnt/C/Users/kaank/AppData/Local/Temp/claude/00f7b7199d1b697b/907a18b5-8b7a-4e9b-ba62-ed4a6d257fd6/scratchpad/vmpw.txt
+export VMPWFILE=${VMPWFILE:?set VMPWFILE to the guest password file}
 export RIG_TMP=$HOME/.cache/purge-rig-tmp
 export POWERSHELL_TELEMETRY_OPTOUT=1
-REPO=/mnt/C/Users/kaank/Desktop/uninstall/purge
+REPO=${PURGE_REPO:?set PURGE_REPO to the repo root}
 DIR=$HOME/purge-target/campaigns
 OUT=$DIR/$NAME.out
 VBOX=/usr/lib/virtualbox/VBoxManage

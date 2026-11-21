@@ -144,4 +144,4 @@ Nice to have:
 - Fix the hard-coded "r0" in the sanity report.
 - 7-Zip attribution (M1b).
 
-Scratch outputs of this review (re-scored r2 and r1, with and without servicing rules): `/tmp/claude-1000/-mnt-C-Users-kaank-Desktop-uninstall-purge/2a88ab4a-cd5b-4ff0-bb84-ac5184aaad71/scratchpad/gate/rev/`
+Scratch outputs of this review (re-scored r2 and r1, with and without servicing rules): `/tmp/claude-1000/-mnt-C-Users-<user>-Desktop-uninstall-purge/2a88ab4a-cd5b-4ff0-bb84-ac5184aaad71/scratchpad/gate/rev/`

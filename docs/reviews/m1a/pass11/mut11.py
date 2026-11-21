@@ -4,7 +4,7 @@ import os, subprocess, sys, shutil
 HOME = os.path.expanduser('~')
 P = HOME + '/purge-target/pass11'
 WS = P + '/mutws'
-REPO = '/mnt/C/Users/kaank/Desktop/uninstall/purge'
+REPO = '/mnt/C/Users/<user>/Desktop/uninstall/purge'
 ENV = dict(os.environ, CARGO_TARGET_DIR=HOME + '/purge-target/pass11/tgt-mut', CARGO_BUILD_JOBS='8')
 FW = 'crates/purge-scan/src/framework.rs'
 PX = 'crates/purge-guard/src/prefix.rs'

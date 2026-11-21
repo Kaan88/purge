@@ -9,8 +9,8 @@ export const meta = {
 }
 // Adapted from m1a-wave-wf_67f1aac5-e39.js (Windows session 8033e7d2) for the CachyOS host. Every change is listed in
 // m2-wave-linux.CHANGES.md next to this file.
-const ROOT = '/mnt/C/Users/kaank/Desktop/uninstall/purge'
-const WINROOT = 'C:\\Users\\kaank\\Desktop\\uninstall\\purge'
+const ROOT = '/mnt/C/Users/<user>/Desktop/uninstall/purge'
+const WINROOT = 'C:\\Users\\<user>\\Desktop\\uninstall\\purge'
 const PT = '/home/kaan/purge-target'
 // Routing (user, model-routing memory + M2 brief): M2 crate code and its reviews -> Fable medium (critical AND high);
 // rig/VM/install packages (importance medium) -> Opus medium; trivial -> Sonnet. Per-package override: p.model / p.effort.

@@ -4,10 +4,10 @@
   "runs": [
     {
       "id": "n1-m2-traps",
-      "dir": "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n1-m2-traps",
+      "dir": "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n1-m2-traps",
       "pair": [
-        "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n1-m2-traps\\snap-n1-m2-traps-a.tsv.gz",
-        "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n1-m2-traps\\snap-n1-m2-traps-b.tsv.gz"
+        "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n1-m2-traps\\snap-n1-m2-traps-a.tsv.gz",
+        "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n1-m2-traps\\snap-n1-m2-traps-b.tsv.gz"
       ],
       "records": [
         "-V:HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\VolatileNotifications|41C64E6DA3853855",
@@ -256,10 +256,10 @@
     },
     {
       "id": "n1-m2-fidelity",
-      "dir": "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n1-m2-fidelity",
+      "dir": "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n1-m2-fidelity",
       "pair": [
-        "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n1-m2-fidelity\\snap-n1-m2-fidelity-a.tsv.gz",
-        "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n1-m2-fidelity\\snap-n1-m2-fidelity-b.tsv.gz"
+        "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n1-m2-fidelity\\snap-n1-m2-fidelity-a.tsv.gz",
+        "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n1-m2-fidelity\\snap-n1-m2-fidelity-b.tsv.gz"
       ],
       "records": [
         "~D:C:\\Program Files\\PurgeFixtureApp\\nested\\A\\B",
@@ -460,10 +460,10 @@
     },
     {
       "id": "n2-m2-traps",
-      "dir": "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n2-m2-traps",
+      "dir": "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n2-m2-traps",
       "pair": [
-        "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n2-m2-traps\\snap-n2-m2-traps-a.tsv.gz",
-        "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n2-m2-traps\\snap-n2-m2-traps-b.tsv.gz"
+        "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n2-m2-traps\\snap-n2-m2-traps-a.tsv.gz",
+        "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n2-m2-traps\\snap-n2-m2-traps-b.tsv.gz"
       ],
       "records": [
         "-V:HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\VolatileNotifications|41C64E6DA3854855",
@@ -707,10 +707,10 @@
     },
     {
       "id": "n2-m2-fidelity",
-      "dir": "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n2-m2-fidelity",
+      "dir": "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n2-m2-fidelity",
       "pair": [
-        "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n2-m2-fidelity\\snap-n2-m2-fidelity-a.tsv.gz",
-        "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n2-m2-fidelity\\snap-n2-m2-fidelity-b.tsv.gz"
+        "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n2-m2-fidelity\\snap-n2-m2-fidelity-a.tsv.gz",
+        "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n2-m2-fidelity\\snap-n2-m2-fidelity-b.tsv.gz"
       ],
       "records": [
         "~D:C:\\Program Files\\PurgeFixtureApp\\hardlinks",
@@ -911,10 +911,10 @@
     },
     {
       "id": "n3-m2-traps",
-      "dir": "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n3-m2-traps",
+      "dir": "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n3-m2-traps",
       "pair": [
-        "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n3-m2-traps\\snap-n3-m2-traps-a.tsv.gz",
-        "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n3-m2-traps\\snap-n3-m2-traps-b.tsv.gz"
+        "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n3-m2-traps\\snap-n3-m2-traps-a.tsv.gz",
+        "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n3-m2-traps\\snap-n3-m2-traps-b.tsv.gz"
       ],
       "records": [
         "-V:HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\VolatileNotifications|41C64E6DA3851855",
@@ -1165,10 +1165,10 @@
     },
     {
       "id": "n3-m2-fidelity",
-      "dir": "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n3-m2-fidelity",
+      "dir": "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n3-m2-fidelity",
       "pair": [
-        "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n3-m2-fidelity\\snap-n3-m2-fidelity-a.tsv.gz",
-        "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n3-m2-fidelity\\snap-n3-m2-fidelity-b.tsv.gz"
+        "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n3-m2-fidelity\\snap-n3-m2-fidelity-a.tsv.gz",
+        "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n3-m2-fidelity\\snap-n3-m2-fidelity-b.tsv.gz"
       ],
       "records": [
         "-V:HKLM\\SYSTEM\\CurrentControlSet\\Control\\hivelist|\\REGISTRY\\MACHINE\\DRIVERS",
@@ -1368,10 +1368,10 @@
     },
     {
       "id": "n4-m2-traps",
-      "dir": "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n4-m2-traps",
+      "dir": "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n4-m2-traps",
       "pair": [
-        "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n4-m2-traps\\snap-n4-m2-traps-a.tsv.gz",
-        "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n4-m2-traps\\snap-n4-m2-traps-b.tsv.gz"
+        "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n4-m2-traps\\snap-n4-m2-traps-a.tsv.gz",
+        "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n4-m2-traps\\snap-n4-m2-traps-b.tsv.gz"
       ],
       "records": [
         "-V:HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\VolatileNotifications|41C64E6DA3855055",
@@ -1618,10 +1618,10 @@
     },
     {
       "id": "n4-m2-fidelity",
-      "dir": "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n4-m2-fidelity",
+      "dir": "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n4-m2-fidelity",
       "pair": [
-        "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n4-m2-fidelity\\snap-n4-m2-fidelity-a.tsv.gz",
-        "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n4-m2-fidelity\\snap-n4-m2-fidelity-b.tsv.gz"
+        "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n4-m2-fidelity\\snap-n4-m2-fidelity-a.tsv.gz",
+        "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n4-m2-fidelity\\snap-n4-m2-fidelity-b.tsv.gz"
       ],
       "records": [
         "~D:C:\\Program Files\\PurgeFixtureApp\\hardlinks",
@@ -1822,10 +1822,10 @@
     },
     {
       "id": "n5-m2-traps",
-      "dir": "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n5-m2-traps",
+      "dir": "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n5-m2-traps",
       "pair": [
-        "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n5-m2-traps\\snap-n5-m2-traps-a.tsv.gz",
-        "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n5-m2-traps\\snap-n5-m2-traps-b.tsv.gz"
+        "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n5-m2-traps\\snap-n5-m2-traps-a.tsv.gz",
+        "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n5-m2-traps\\snap-n5-m2-traps-b.tsv.gz"
       ],
       "records": [
         "-K:HKLM\\SOFTWARE\\Microsoft\\Wbem\\Tracing\\Providers\\CIMWin32 @ root/CIMV2",
@@ -2075,10 +2075,10 @@
     },
     {
       "id": "n5-m2-fidelity",
-      "dir": "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n5-m2-fidelity",
+      "dir": "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n5-m2-fidelity",
       "pair": [
-        "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n5-m2-fidelity\\snap-n5-m2-fidelity-a.tsv.gz",
-        "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n5-m2-fidelity\\snap-n5-m2-fidelity-b.tsv.gz"
+        "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n5-m2-fidelity\\snap-n5-m2-fidelity-a.tsv.gz",
+        "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n5-m2-fidelity\\snap-n5-m2-fidelity-b.tsv.gz"
       ],
       "records": [
         "~D:C:\\Program Files\\PurgeFixtureApp\\tree\\empty",
@@ -2276,10 +2276,10 @@
     },
     {
       "id": "n6-m2-traps",
-      "dir": "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n6-m2-traps",
+      "dir": "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n6-m2-traps",
       "pair": [
-        "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n6-m2-traps\\snap-n6-m2-traps-a.tsv.gz",
-        "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n6-m2-traps\\snap-n6-m2-traps-b.tsv.gz"
+        "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n6-m2-traps\\snap-n6-m2-traps-a.tsv.gz",
+        "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n6-m2-traps\\snap-n6-m2-traps-b.tsv.gz"
       ],
       "records": [
         "-V:HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\VolatileNotifications|41C64E6DA3854055",
@@ -2525,10 +2525,10 @@
     },
     {
       "id": "n6-m2-fidelity",
-      "dir": "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n6-m2-fidelity",
+      "dir": "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n6-m2-fidelity",
       "pair": [
-        "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n6-m2-fidelity\\snap-n6-m2-fidelity-a.tsv.gz",
-        "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n6-m2-fidelity\\snap-n6-m2-fidelity-b.tsv.gz"
+        "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n6-m2-fidelity\\snap-n6-m2-fidelity-a.tsv.gz",
+        "C:\\Users\\<user>\\Desktop\\uninstall\\purge\\.claude\\worktrees\\agent-a8b0a0bc519f660f1\\vm\\runs\\n6-m2-fidelity\\snap-n6-m2-fidelity-b.tsv.gz"
       ],
       "records": [
         "-K:HKLM\\SOFTWARE\\Microsoft\\Wbem\\Tracing\\Providers\\CIMWin32 @ root/CIMV2",

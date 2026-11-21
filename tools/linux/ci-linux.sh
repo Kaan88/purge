@@ -33,7 +33,7 @@ for a in "$@"; do
   esac
 done
 
-REPO=${PURGE_REPO:-/mnt/C/Users/kaank/Desktop/uninstall/purge}
+REPO=${PURGE_REPO:?set PURGE_REPO to the repo root}
 export CARGO_TARGET_DIR=${CI_TARGET_DIR:-$HOME/purge-target/ci-linux}
 LOGS=${CI_LOG_DIR:-$CARGO_TARGET_DIR/ci-logs}
 SKIP=" ${CI_SKIP:-} "

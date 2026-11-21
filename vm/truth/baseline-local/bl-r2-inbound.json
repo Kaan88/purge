@@ -5097,7 +5097,7 @@
         "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Edge\\BLBeacon",
         "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Edge\\IEToEdge",
         "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Edge\\NativeMessagingHosts",
-        "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Edge\\NativeMessagingHosts\\com.kaank.downloadmanager",
+        "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Edge\\NativeMessagingHosts\\com.<user>.downloadmanager",
         "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Edge\\PreferenceMACs",
         "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Edge\\PreferenceMACs\\Default",
         "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Edge\\PreferenceMACs\\Default\\extensions.settings",
@@ -5283,7 +5283,7 @@
         "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\ActiveSync\\Partners",
         "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Edge\\BLBeacon",
         "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Edge\\NativeMessagingHosts",
-        "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Edge\\NativeMessagingHosts\\com.kaank.downloadmanager",
+        "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Edge\\NativeMessagingHosts\\com.<user>.downloadmanager",
         "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Edge\\PrefsLightweight",
         "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\IdentityCRL\\Immersive\\production\\Token\\{0CB4A94A-6E8C-477B-88C8-A3799FC97414}",
         "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\IdentityCRL\\Immersive\\production\\Token\\{A3D87918-9442-435E-9382-9B170962CAB4}",
@@ -5489,7 +5489,7 @@
         "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\appdatalow\\software\\microsoft\\ime\\15.0\\IMEJP\\MSIME",
         "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\appdatalow\\software\\microsoft\\Internet Explorer",
         "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\appdatalow\\software\\microsoft\\RepService",
-        "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Google\\Chrome\\NativeMessagingHosts\\com.kaank.downloadmanager",
+        "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Google\\Chrome\\NativeMessagingHosts\\com.<user>.downloadmanager",
         "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Policies\\Microsoft\\SystemCertificates",
         "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Policies\\Microsoft\\SystemCertificates\\CA",
         "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Policies\\Microsoft\\SystemCertificates\\CA\\Certificates",
@@ -5522,7 +5522,7 @@
         "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall"
       ],
       "false_absent_merged_first": [
-        "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Google\\Chrome\\NativeMessagingHosts\\com.kaank.downloadmanager",
+        "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Google\\Chrome\\NativeMessagingHosts\\com.<user>.downloadmanager",
         "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Wow6432Node\\Microsoft\\Windows",
         "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion",
         "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall"

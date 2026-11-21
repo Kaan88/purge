@@ -1,7 +1,7 @@
 Changes from m1a-wave-wf_67f1aac5-e39.js (Windows session 8033e7d2) to m2-wave-linux.js
 
 1. meta.name m1a-wave -> m2-wave-linux; descriptions mention M2 and ci-linux.sh.
-2. ROOT: C:\Users\kaank\Desktop\uninstall\purge -> /mnt/C/Users/kaank/Desktop/uninstall/purge. New WINROOT constant; RULES tell agents that design-file paths (all C:\...) map to ROOT/... with '/'.
+2. ROOT: C:\Users\<user>\Desktop\uninstall\purge -> /mnt/C/Users/<user>/Desktop/uninstall/purge. New WINROOT constant; RULES tell agents that design-file paths (all C:\...) map to ROOT/... with '/'.
 3. DESIGN default: per-session Windows temp scratchpad m1a-design.json -> ROOT/docs/M2_DESIGN.json (args.design still overrides).
 4. ROUTE: high was opus/high, now fable/medium (M2 crate code incl. high packages -> Fable medium, as the user requires). critical fable/medium, medium opus/medium (all medium M2 packages are rig/VM: RIG-DEEP, RIG-TRAPS, RIG-EXECDIFF, RIG-RUN, GATE), trivial sonnet unchanged. New: per-package override p.model / p.effort.
 5. RULES: milestone M1a -> M2 (§7, §11.1); added "no git stash/checkout/reset", LF endings for new files, and the design's destructive-test confinement rule (temp dirs + HKU\<SID>\Software\PurgeTest-<random>). Removed the Windows build sentence (moved to BUILD).

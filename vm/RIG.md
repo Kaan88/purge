@@ -662,7 +662,7 @@ Campaign (from the repository root, same parameters as on Windows):
 ```bash
 export VMPWFILE=/path/to/vmpw.txt                # bare guest password; never printed
 export RIG_TMP=$HOME/.cache/purge-rig-tmp; mkdir -p "$RIG_TMP"
-cd /mnt/C/Users/kaank/Desktop/uninstall/purge
+cd /mnt/C/Users/<user>/Desktop/uninstall/purge
 # Inbound-Win11-Test (default VM); smoke: one app, extra checks
 pwsh -NoProfile -File vm/rig.ps1 -VmName Inbound-Win11-Test -Snapshot rig-base -Ids npp-userfiles -Nulls 0 \
      -RunPrefix lx0t- -ExtraChecks -Engine ./target/release/purge-engine.exe
