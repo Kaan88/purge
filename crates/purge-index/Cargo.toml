@@ -17,6 +17,8 @@ serde_json.workspace = true
 flate2.workspace = true
 serde.workspace = true
 sha2.workspace = true
+# BL-MANIFEST: streaming reader for component manifests (local baseline, BASELINE_LOCAL_DESIGN.md §3.2).
+quick-xml.workspace = true
 
 [lints]
 workspace = true

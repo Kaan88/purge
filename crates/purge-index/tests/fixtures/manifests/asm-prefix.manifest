@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<!-- Hand-written test fixture: elements spelled with the asm: prefix (BL-MANIFEST); not a Microsoft file. -->
+<asm:assembly xmlns:asm="urn:schemas-microsoft-com:asm.v3" asm:manifestVersion="1.0">
+  <asm:assemblyIdentity name="Purge-Test-Prefixed" version="10.0.26100.1" processorArchitecture="amd64" language="neutral" publicKeyToken="31bf3856ad364e35" />
+  <asm:registryKeys>
+    <asm:registryKey asm:keyName="HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\PurgeTest\Prefixed">
+      <asm:registryValue name="Enabled" valueType="REG_DWORD" value="0x00000001" />
+      <asm:registryValue asm:name="Mode" asm:valueType="REG_SZ" value="on" />
+    </asm:registryKey>
+    <registryKey keyName="HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\PurgeTest\Unprefixed">
+      <registryValue name="Level" valueType="REG_QWORD" value="0x0000000000000002" />
+    </registryKey>
+  </asm:registryKeys>
+  <asm:directories>
+    <asm:directory destinationPath="$(runtime.programData)\Microsoft\PurgeTest" owner="true" />
+  </asm:directories>
+</asm:assembly>

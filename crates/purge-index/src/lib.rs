@@ -8,6 +8,7 @@
 //! Milestone: targeted queries in M1a, MSI ownership rows in M1b (§11.1).
 
 pub mod baseline;
+pub mod local_baseline;
 pub mod matcher;
 pub mod ownership;
 pub mod queries;

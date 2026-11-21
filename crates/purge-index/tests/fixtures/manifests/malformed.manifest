@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<!-- Hand-written test fixture: well-formed records before a mismatched end tag (BL-MANIFEST). -->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v3" manifestVersion="1.0">
+  <assemblyIdentity name="Purge-Test-Malformed" version="10.0.26100.1" processorArchitecture="amd64" language="neutral" publicKeyToken="31bf3856ad364e35" />
+  <file name="purgebroken.dll" destinationPath="$(runtime.system32)\" />
+  <registryKeys>
+    <registryKey keyName="HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\PurgeTest\Broken">
+      <registryValue name="Partial" valueType="REG_SZ" value="1" />
+    </registryKey>
+    <registryKey keyName="HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\PurgeTest\Broken2">
+  </registryKeys>
+</assembly>

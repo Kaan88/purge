@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<!-- Hand-written test fixture in the shape of a component manifest (BL-MANIFEST); not a Microsoft file. -->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v3" manifestVersion="1.0" copyright="Purge test fixture">
+  <assemblyIdentity name="Purge-Test-Shell-Clsid" version="10.0.26100.1" processorArchitecture="amd64" language="neutral" buildType="release" publicKeyToken="31bf3856ad364e35" versionScope="nonSxS" />
+  <dependency discoverable="no" resourceType="Resources">
+    <dependentAssembly>
+      <assemblyIdentity name="Purge-Test-Shell-Clsid.Resources" version="10.0.26100.1" processorArchitecture="x86" language="*" buildType="release" publicKeyToken="0000000000000000" />
+    </dependentAssembly>
+  </dependency>
+  <file name="purgetest.dll" destinationPath="$(runtime.system32)\" sourceName="purgetest.dll" importPath="$(build.nttree)\" sourcePath=".\">
+    <securityDescriptor name="WRP_FILE_DEFAULT_SDDL" />
+    <asmv2:hash xmlns:asmv2="urn:schemas-microsoft-com:asm.v2" xmlns:dsig="http://www.w3.org/2000/09/xmldsig#">
+      <dsig:Transforms>
+        <dsig:Transform Algorithm="urn:schemas-microsoft-com:HashTransforms.Identity" />
+      </dsig:Transforms>
+      <dsig:DigestMethod Algorithm="http://www.w3.org/2000/09/xmldsig#sha256" />
+      <dsig:DigestValue>AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=</dsig:DigestValue>
+    </asmv2:hash>
+  </file>
+  <registryKeys>
+    <registryKey keyName="HKEY_CLASSES_ROOT\CLSID\{0D7A1F64-3C2B-4E5A-9F10-0000000000A1}\" perUserVirtualization="Enable">
+      <registryValue name="" valueType="REG_SZ" value="Purge Test Object" />
+      <registryValue name="LocalizedString" valueType="REG_EXPAND_SZ" value="@%SystemRoot%\system32\purgetest.dll,-100" />
+      <securityDescriptor name="WRP_REGKEY_DEFAULT_SDDL" />
+    </registryKey>
+    <registryKey keyName="HKEY_CLASSES_ROOT\CLSID\{0D7A1F64-3C2B-4E5A-9F10-0000000000A1}\InProcServer32\">
+      <registryValue name="" valueType="REG_EXPAND_SZ" value="%SystemRoot%\system32\purgetest.dll" />
+      <registryValue name="ThreadingModel" valueType="REG_SZ" value="Both" />
+    </registryKey>
+    <registryKey keyName="HKEY_CLASSES_ROOT\CLSID\{0D7A1F64-3C2B-4E5A-9F10-0000000000A1}\ShellFolder\">
+      <registryValue name="Attributes" valueType="REG_DWORD" value="0xa0000000" />
+    </registryKey>
+    <registryKey keyName="HKEY_CLASSES_ROOT\PurgeTest.Object.1\CLSID\">
+      <registryValue name="" valueType="REG_SZ" value="{0D7A1F64-3C2B-4E5A-9F10-0000000000A1}" />
+    </registryKey>
+    <registryKey keyName="HKEY_CLASSES_ROOT\.purgetest\OpenWithProgids\">
+      <registryValue name="PurgeTest.Object.1" valueType="REG_NONE" value="" />
+    </registryKey>
+  </registryKeys>
+  <trustInfo>
+    <security>
+      <accessControl>
+        <securityDescriptorDefinitions>
+          <securityDescriptorDefinition name="WRP_REGKEY_DEFAULT_SDDL" sddl="O:S-1-5-80-0G:S-1-5-80-0D:P(A;CI;GA;;;S-1-5-80-0)(A;CI;GR;;;BA)" />
+        </securityDescriptorDefinitions>
+      </accessControl>
+    </security>
+  </trustInfo>
+</assembly>

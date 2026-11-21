@@ -43,6 +43,7 @@ flate2 = "1"
 sha2 = "0.10"
 unicode-normalization = "0.1"
 crc32fast = "1"
+quick-xml = "0.41"
 
 purge-model = { path = "crates/purge-model" }
 purge-win = { path = "crates/purge-win", default-features = false }

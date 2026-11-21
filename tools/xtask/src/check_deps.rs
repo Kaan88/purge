@@ -14,8 +14,9 @@
 //!    releases are built with `cargo build --release -p purge-engine`).
 //! 5. **Forbidden identifiers** (M1b, C-WIN). purge-win's code (its `src`, test modules left out) never
 //!    names an API that starts, stops or controls a service, opens, installs, configures or repairs an
-//!    MSI product, or removes a firewall rule by name through `INetFwRules`, and never spawns `netsh` or
-//!    PowerShell (see `identifier_violations`).
+//!    MSI product, or removes a firewall rule by name through `INetFwRules`, never names an offreg call
+//!    that creates, changes, saves or merges an offline hive, never mounts a hive (`RegLoadKey`,
+//!    `RegLoadAppKey`), and never spawns `netsh` or PowerShell (see `identifier_violations`).
 //!
 //! `xtask ci` also builds purge-mcp on its own (`cargo clippy -p purge-mcp`), so code that only compiles
 //! with features another member turns on fails CI.
@@ -339,6 +340,20 @@ pub const FORBIDDEN_WIN_IDENTS: &[&str] = &[
     "MsiInstallProduct",
     "MsiConfigureProduct",
     "MsiReinstallProduct",
+    // Offline hives (BL-WIN-OFFREG): purge-win only opens, enumerates and closes them.
+    "ORCreateHive",
+    "ORCreateKey",
+    "ORDeleteKey",
+    "ORDeleteValue",
+    "ORFlushHive",
+    "ORMergeHives",
+    "ORRenameKey",
+    "ORSaveHive",
+    "ORSetKeySecurity",
+    "ORSetValue",
+    "ORSetVirtualFlags",
+    "RegLoadKey",
+    "RegLoadAppKey",
 ];
 
 /// Tools purge-win's code must not name in any case (no spawned tool changes the machine).
@@ -450,6 +465,19 @@ mod tests {
             ("MsiInstallProductW(p, c)", "MsiInstallProduct"),
             ("MsiConfigureProductEx(p, 0, 2, c)", "MsiConfigureProduct"),
             ("MsiReinstallProductW(p, 0)", "MsiReinstallProduct"),
+            ("ORCreateHive(&mut h)", "ORCreateHive"),
+            ("ORCreateKey(h, name, None, 0, None, &mut k, None)", "ORCreateKey"),
+            ("ORDeleteKey(h, name)", "ORDeleteKey"),
+            ("ORDeleteValue(k, name)", "ORDeleteValue"),
+            ("ORFlushHive(h)", "ORFlushHive"),
+            ("ORMergeHives(hs, 2, &mut h)", "ORMergeHives"),
+            ("ORRenameKey(k, name)", "ORRenameKey"),
+            ("ORSaveHiveEx(h, path, 6, 1)", "ORSaveHive"),
+            ("ORSetKeySecurity(k, 4, sd)", "ORSetKeySecurity"),
+            ("ORSetValue(k, name, 1, data, n)", "ORSetValue"),
+            ("ORSetVirtualFlags(k, 0)", "ORSetVirtualFlags"),
+            ("RegLoadKeyW(HKEY_USERS, name, path)", "RegLoadKey"),
+            ("RegLoadAppKeyW(path, &mut k, 0x20019, 0, 0)", "RegLoadAppKey"),
             ("Command::new(\"NETSH.exe\")", "netsh"),
             (
                 "let p = r\"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\";",
