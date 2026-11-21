@@ -31,12 +31,17 @@
 //!      the release tree of any other package with a binary target except purge-broker. A default
 //!      workspace build links purge-exec into purge-broker alone and turns on neither executor feature.
 //!    - (d) No package depends on purge-broker, under any feature, as any kind of dependency.
-//!    - (e) **One privilege, one place** (B9). In the production code of every member (its `src`, test
-//!      items and comments left out), `SeRestorePrivilege` (as a string or as `SE_RESTORE_NAME`) is
-//!      named in one function, of purge-win; no other privilege is named; the privilege-adjusting
-//!      APIs ([`PRIVILEGE_APIS`]) are named only in that function or in a plain `use` of its file;
-//!      and the function's name has exactly one reference besides its definition and plain `use`s,
-//!      in purge-exec (see `privilege_violations`; one temporary allowance, [`TEMP_WIN_CALLER`]).
+//!    - (e) **One privilege, one place** (B9; M3-WIN-PRIV's shape, coordinator decision 2026-11-21).
+//!      In the production code of every member (its `src`, test items and comments left out):
+//!      `SeRestorePrivilege` (as a string or as `SE_RESTORE_NAME`) is named in one function, of
+//!      purge-win's `src/privilege.rs`, and no other privilege is named anywhere; the token-adjusting
+//!      APIs ([`PRIVILEGE_APIS`]) are named only in that file, in the body of the write-gated
+//!      `pub(crate)` enabler `with_restore_privilege` or in a write-gated plain `use`, so its
+//!      read-only queries adjust nothing; the enabler is referenced only from `src/reg_write.rs`, once
+//!      in each of `CreatedKey::set_security` and `CreatedKey::reopen_and_set_owner` (any other
+//!      reference is a violation); `reopen_and_set_owner` has exactly one production reference, in
+//!      purge-exec's `src/act_service.rs`. The callers of `set_security` are not limited (the M2 use).
+//!      See `privilege_violations`.
 //!    - (f) **Manifests and cfg.** Only purge-exec and purge-broker ask for `purge-win/write`, as a
 //!      dependency feature or through a feature of their own (purge-engine also as a dev-dependency),
 //!      and no other purge-win feature turns `write` on. No member's build script emits `rustc-cfg`
@@ -633,22 +638,38 @@ pub const PRIVILEGE_APIS: [&str; 4] = [
     concat!("ZwAdjust", "PrivilegesToken"),
     concat!("RtlAdjust", "Privilege"),
 ];
-/// TEMPORARY (M3-DEPS, until M3-WIN-PRIV merges): the one reference of the privilege function may be
-/// in purge-win while that function is still `with_restore_privilege` in purge-win's
-/// `src/reg_write.rs`, called by `CreatedKey::set_security` in the same file. M3-WIN-PRIV moves the
-/// function to `privilege.rs` with its one caller in purge-exec; this allowance then matches nothing
-/// and is deleted. As (file, function, caller).
-pub const TEMP_WIN_CALLER: (&str, &str, &str) =
-    ("src/reg_write.rs", "with_restore_privilege", "set_security");
+/// The one file that names the privilege and the adjusting APIs (purge-win's, M3-WIN-PRIV).
+const PRIVILEGE_FILE: &str = "src/privilege.rs";
+/// The attribute that makes an item of [`PRIVILEGE_FILE`] `write`-only.
+const WRITE_GATE: &str = "#[cfg(feature = \"write\")]";
+/// The scoped enabler: `pub(crate)`, write-gated, in [`PRIVILEGE_FILE`]; the only function that may
+/// adjust a token.
+const ENABLER: &str = "with_restore_privilege";
+/// Where the enabler may be used: purge-win's file, the type, and exactly these methods of it, each
+/// once (coordinator decision 2026-11-21, DECISIONS). `set_security` is the M2 use (an owner the token
+/// may not assign, E1 SYSTEM-owned restores), `reopen_and_set_owner` the R8b M1 one.
+const ENABLER_USERS: (&str, &str, [&str; 2]) = (
+    "src/reg_write.rs",
+    "CreatedKey",
+    ["set_security", "reopen_and_set_owner"],
+);
+/// The enabler user with exactly one production caller, and where that caller must be.
+const OWNER_RESTORE: &str = "reopen_and_set_owner";
+/// The file of [`OWNER_RESTORE`]'s one caller (purge-exec's `set_recorded_security`).
+const OWNER_RESTORE_CALLER: (&str, &str) = (EXEC, "src/act_service.rs");
 
 /// The production code of one source file of a member (rule 4e).
 struct Source {
     krate: String,
     /// Relative to the member's directory, `/`-separated (`src/reg_write.rs`).
     file: String,
+    /// The file as written, by line.
+    lines: Vec<String>,
     /// Comments removed, literals emptied, test items blanked; line breaks kept
     /// ([`baseline_sites::analyse`]).
     code: String,
+    /// The offset in `code` where each line starts.
+    starts: Vec<usize>,
     /// The string literals on production lines, as (offset of the line's first `"` in `code`, text).
     literals: Vec<(usize, String)>,
 }
@@ -656,7 +677,32 @@ struct Source {
 impl Source {
     /// The production view of `text`, and the out-of-line test modules it declares.
     fn new(krate: &str, file: &str, text: &str) -> (Source, Vec<String>) {
-        let (code, modules) = baseline_sites::analyse(text);
+        // `#[cfg(all(test, …))]` is test code too (`baseline_sites::analyse` knows only
+        // `#[cfg(test)]`); written as that, line for line. `any(test, …)` is not.
+        let normalised: String = text
+            .split_inclusive('\n')
+            .map(|line| {
+                let t = line.trim();
+                let all_test = t
+                    .strip_prefix("#[cfg(all(")
+                    .and_then(|r| r.strip_suffix("))]"))
+                    .is_some_and(|args| args.split(',').any(|a| a.trim() == "test"));
+                if all_test {
+                    let indent = &line[..line.len() - line.trim_start().len()];
+                    let end = if line.ends_with("\r\n") {
+                        "\r\n"
+                    } else if line.ends_with('\n') {
+                        "\n"
+                    } else {
+                        ""
+                    };
+                    format!("{indent}#[cfg(test)]{end}")
+                } else {
+                    line.to_owned()
+                }
+            })
+            .collect();
+        let (code, modules) = baseline_sites::analyse(&normalised);
         let mut starts = vec![0];
         starts.extend(code.match_indices('\n').map(|(i, _)| i + 1));
         let literals = lex::rust_literals(text)
@@ -671,10 +717,45 @@ impl Source {
         let source = Source {
             krate: krate.to_owned(),
             file: file.to_owned(),
+            lines: text.lines().map(str::to_owned).collect(),
             code,
+            starts,
             literals,
         };
         (source, modules)
+    }
+
+    /// The 0-based line of an offset in `code`.
+    fn line_of(&self, at: usize) -> usize {
+        self.starts.partition_point(|s| *s <= at).saturating_sub(1)
+    }
+
+    /// The line of an offset as written, trimmed.
+    fn line_text(&self, at: usize) -> &str {
+        self.lines.get(self.line_of(at)).map_or("", |l| l.trim())
+    }
+
+    /// Whether the item whose keyword (`fn`, `use`) is at `at` carries [`WRITE_GATE`] among the
+    /// attribute and comment lines right above it.
+    fn write_gated(&self, at: usize) -> bool {
+        for line in self.lines[..self.line_of(at).min(self.lines.len())]
+            .iter()
+            .rev()
+        {
+            let t = line.trim();
+            if t == WRITE_GATE {
+                return true;
+            }
+            if !(t.starts_with("#[") || t.starts_with("//")) {
+                return false;
+            }
+        }
+        false
+    }
+
+    /// Whether this is purge-win's file `file`.
+    fn is_win(&self, file: &str) -> bool {
+        self.krate == WIN && self.file == file
     }
 }
 
@@ -884,21 +965,153 @@ fn privilege_constant(word: &str) -> Option<&str> {
     .then_some(mid)
 }
 
-/// The identifiers ([`idents`]) and the functions ([`fn_spans`]) of one [`Source`].
-type Parsed<'a> = (Vec<(usize, &'a str)>, Vec<FnSpan>);
+/// The `impl` blocks of `code` as (self type, body); the type is the last identifier, outside `<…>`,
+/// after `for` if there is one (`impl Deref for CreatedKey` and `impl CreatedKey` give `CreatedKey`).
+fn impl_spans(code: &str, ids: &[(usize, &str)]) -> Vec<(String, Range<usize>)> {
+    let b = code.as_bytes();
+    let mut out = Vec::new();
+    for (at, word) in ids {
+        if *word != "impl" {
+            continue;
+        }
+        // An item, not `impl Trait` in a type (`-> impl Fn()`, `x: impl Read`).
+        let before = code[..*at].trim_end();
+        let item = before.is_empty()
+            || before.ends_with(['}', ';', ']', '{'])
+            || before.ends_with("unsafe")
+            || before.ends_with("default");
+        if !item {
+            continue;
+        }
+        let Some(open) = (at + 4..b.len()).find(|j| matches!(b[*j], b'{' | b';')) else {
+            continue;
+        };
+        if b[open] == b';' {
+            continue;
+        }
+        let header = &code[at + 4..open];
+        let mut angle = 0i32;
+        let mut top = String::new();
+        let mut prev = ' ';
+        for c in header.chars() {
+            match c {
+                '<' => angle += 1,
+                '>' if prev != '-' => angle -= 1,
+                _ if angle == 0 => top.push(c),
+                _ => {}
+            }
+            prev = c;
+        }
+        let words: Vec<&str> = idents(&top).into_iter().map(|(_, w)| w).collect();
+        let after_for = match words.iter().rposition(|w| *w == "for") {
+            Some(i) => &words[i + 1..],
+            None => &words[..],
+        };
+        let ty = after_for
+            .iter()
+            .take_while(|w| **w != "where")
+            .last()
+            .copied()
+            .unwrap_or_default();
+        let mut depth = 0usize;
+        let mut close = b.len();
+        for (j, c) in b.iter().enumerate().skip(open) {
+            match c {
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        close = j;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        out.push((ty.to_owned(), open..close));
+    }
+    out
+}
+
+/// The offset of the `use` whose declaration holds identifier `k`, if one does.
+fn use_at(code: &str, ids: &[(usize, &str)], k: usize) -> Option<usize> {
+    in_use(code, ids, k)
+        .then(|| {
+            ids[..k]
+                .iter()
+                .rev()
+                .find(|(_, w)| *w == "use")
+                .map(|(u, _)| *u)
+        })
+        .flatten()
+}
+
+/// The identifiers, functions and impl blocks of one [`Source`].
+struct Parsed<'a> {
+    ids: Vec<(usize, &'a str)>,
+    fns: Vec<FnSpan>,
+    impls: Vec<(String, Range<usize>)>,
+}
+
+impl Parsed<'_> {
+    /// `Type::method` (or `method`) of the innermost function around `at`, `(no function)` outside.
+    fn place(&self, at: usize) -> String {
+        let Some(f) = enclosing(&self.fns, at) else {
+            return "(no function)".to_owned();
+        };
+        let name = &self.fns[f].name;
+        match self.impl_of(at) {
+            Some(ty) => format!("{ty}::{name}"),
+            None => name.clone(),
+        }
+    }
+
+    /// The self type of the innermost impl block around `at`.
+    fn impl_of(&self, at: usize) -> Option<&str> {
+        self.impls
+            .iter()
+            .filter(|(_, r)| r.start < at && at < r.end)
+            .min_by_key(|(_, r)| r.len())
+            .map(|(ty, _)| ty.as_str())
+    }
+}
 
 /// Violations of rule 4e over the production sources of every member, and on success a line that names
-/// the privilege function and its one caller.
+/// where the privilege is named, enabled and used.
+///
+/// - `SeRestorePrivilege` (string or `SE_RESTORE_NAME`) is named in one function, of purge-win's
+///   [`PRIVILEGE_FILE`] (the LUID lookup); no other privilege is named anywhere.
+/// - The adjusting APIs ([`PRIVILEGE_APIS`]) are named only in [`PRIVILEGE_FILE`]: in the body of
+///   [`ENABLER`] or in a plain `use` carrying [`WRITE_GATE`]. So the read-only queries of that file
+///   (the LUID lookup, the state read-back) may use the lookup but adjust nothing.
+/// - [`ENABLER`] is defined there, `pub(crate)` and write-gated. Besides plain `use`s in
+///   [`ENABLER_USERS`]' file, it is referenced only in the methods [`ENABLER_USERS`] lists, once in
+///   each of them.
+/// - [`OWNER_RESTORE`] has exactly one production reference, in [`OWNER_RESTORE_CALLER`]. The callers
+///   of `set_security` are not limited by this rule (the M2 use).
 fn privilege_violations(sources: &[Source]) -> (Vec<String>, Option<String>) {
     let mut out = Vec::new();
     let parsed: Vec<Parsed<'_>> = sources
         .iter()
         .map(|s| {
             let ids = idents(&s.code);
-            let spans = fn_spans(&s.code, &ids);
-            (ids, spans)
+            Parsed {
+                fns: fn_spans(&s.code, &ids),
+                impls: impl_spans(&s.code, &ids),
+                ids,
+            }
         })
         .collect();
+    let at_place = |i: usize, at: usize| {
+        format!(
+            "{} {} {}",
+            sources[i].krate,
+            sources[i].file,
+            parsed[i].place(at)
+        )
+    };
+
+    // The privilege's name.
     let mut sites = Vec::new();
     for (i, s) in sources.iter().enumerate() {
         for (at, text) in &s.literals {
@@ -920,7 +1133,7 @@ fn privilege_violations(sources: &[Source]) -> (Vec<String>, Option<String>) {
                 ));
             }
         }
-        for (at, word) in &parsed[i].0 {
+        for (at, word) in &parsed[i].ids {
             match privilege_constant(word) {
                 Some(RESTORE_CONSTANT) => sites.push((i, *at)),
                 Some(_) => out.push(format!(
@@ -934,140 +1147,205 @@ fn privilege_violations(sources: &[Source]) -> (Vec<String>, Option<String>) {
     }
     let mut owners = BTreeSet::new();
     for (i, at) in &sites {
-        match enclosing(&parsed[*i].1, *at) {
-            Some(k) => {
-                owners.insert((*i, k));
-            }
-            None => out.push(format!(
+        let s = &sources[*i];
+        if !s.is_win(PRIVILEGE_FILE) {
+            out.push(format!(
+                "{} {} names {RESTORE_PRIVILEGE}; only purge-win {PRIVILEGE_FILE} may",
+                s.krate, s.file
+            ));
+        } else if let Some(k) = enclosing(&parsed[*i].fns, *at) {
+            owners.insert((*i, k));
+        } else {
+            out.push(format!(
                 "{} {} names {RESTORE_PRIVILEGE} outside a function",
-                sources[*i].krate, sources[*i].file
-            )),
+                s.krate, s.file
+            ));
         }
     }
-    let label = |(i, k): (usize, usize)| {
-        let s = &sources[i];
-        format!("{} {} {}", s.krate, s.file, parsed[i].1[k].name)
-    };
-    let owner = match owners.len() {
+    let lookup = match owners.len() {
         0 => {
             if sites.is_empty() {
                 out.push(format!(
-                    "no function names {RESTORE_PRIVILEGE}; one purge-win function must (undo's owner \
-                     restore)"
+                    "no function names {RESTORE_PRIVILEGE}; one function of purge-win {PRIVILEGE_FILE} \
+                     must (the LUID lookup)"
                 ));
             }
             None
         }
-        1 => owners.first().copied(),
+        1 => owners.first().map(|(i, k)| parsed[*i].fns[*k].name.clone()),
         n => {
-            let all: Vec<String> = owners.iter().map(|o| label(*o)).collect();
+            let all: Vec<String> = owners
+                .iter()
+                .map(|(i, k)| at_place(*i, parsed[*i].fns[*k].body.start + 1))
+                .collect();
             out.push(format!(
-                "{RESTORE_PRIVILEGE} is named in {n} functions ({}); only one, of purge-win, may",
+                "{RESTORE_PRIVILEGE} is named in {n} functions ({}); only one may",
                 all.join(", ")
             ));
             None
         }
     };
-    if let Some(o) = owner
-        && sources[o.0].krate != WIN
-    {
-        out.push(format!(
-            "{RESTORE_PRIVILEGE} is named in {}; only purge-win may name it",
-            label(o)
-        ));
+
+    // The enabler: defined once in the privilege file, pub(crate) and write-gated.
+    let priv_file = sources.iter().position(|s| s.is_win(PRIVILEGE_FILE));
+    let enabler = priv_file.and_then(|i| {
+        parsed[i]
+            .fns
+            .iter()
+            .position(|f| f.name == ENABLER)
+            .map(|k| (i, k))
+    });
+    match enabler {
+        None => out.push(format!(
+            "purge-win {PRIVILEGE_FILE} has no fn {ENABLER} (the one function that may enable a privilege)"
+        )),
+        Some((i, k)) => {
+            let s = &sources[i];
+            let f = &parsed[i].fns[k];
+            if !s
+                .line_text(f.name_at)
+                .starts_with(&format!("pub(crate) fn {ENABLER}"))
+            {
+                out.push(format!(
+                    "purge-win {PRIVILEGE_FILE} {ENABLER} is not `pub(crate) fn`; it may not leave purge-win"
+                ));
+            }
+            if !s.write_gated(f.name_at) {
+                out.push(format!(
+                    "purge-win {PRIVILEGE_FILE} {ENABLER} is not under {WRITE_GATE}"
+                ));
+            }
+        }
     }
+
+    // The adjusting APIs: in the enabler's body or a write-gated plain `use` of its file only.
     for (i, s) in sources.iter().enumerate() {
-        let ids = &parsed[i].0;
+        let ids = &parsed[i].ids;
         for (k, (at, word)) in ids.iter().enumerate() {
             if !PRIVILEGE_APIS.contains(word) {
                 continue;
             }
-            let in_owner =
-                owner.is_some_and(|(fi, fk)| fi == i && parsed[i].1[fk].body.contains(at));
-            let imported = owner.is_some_and(|(fi, _)| fi == i)
-                && in_use(&s.code, ids, k)
-                && !aliased(&s.code, ids, k);
-            if !(in_owner || imported) {
-                let place = match owner {
-                    Some(o) => format!("outside {}", label(o)),
-                    None => format!("and no single function names {RESTORE_PRIVILEGE}"),
-                };
-                out.push(format!("{} {} names {word} {place}", s.krate, s.file));
+            let in_enabler =
+                enabler.is_some_and(|(ei, ek)| ei == i && parsed[ei].fns[ek].body.contains(at));
+            let gated_use = s.is_win(PRIVILEGE_FILE)
+                && !aliased(&s.code, ids, k)
+                && use_at(&s.code, ids, k).is_some_and(|u| s.write_gated(u));
+            if !(in_enabler || gated_use) {
+                out.push(format!(
+                    "{} names {word}; only purge-win {PRIVILEGE_FILE} {ENABLER} (or a {WRITE_GATE} use \
+                     of that file) may",
+                    at_place(i, *at)
+                ));
             }
         }
     }
-    let Some((fi, fk)) = owner else {
-        return (out, None);
-    };
-    let f = &parsed[fi].1[fk];
-    let mut refs = Vec::new();
+
+    // The enabler's users, and the owner restore's one caller.
+    let (users_file, users_type, users) = ENABLER_USERS;
+    let mut uses: BTreeMap<&str, usize> = users.iter().map(|u| (*u, 0)).collect();
+    let mut owner_restore_def = None;
+    let mut owner_restore_refs = Vec::new();
     for (i, s) in sources.iter().enumerate() {
-        let ids = &parsed[i].0;
-        for (k, (at, word)) in ids.iter().enumerate() {
-            if *word != f.name || (i == fi && *at == f.name_at) {
+        let p = &parsed[i];
+        for (k, (at, word)) in p.ids.iter().enumerate() {
+            let is_enabler = *word == ENABLER;
+            if !is_enabler && *word != OWNER_RESTORE {
                 continue;
             }
-            if in_use(&s.code, ids, k) {
-                if aliased(&s.code, ids, k) {
+            if is_enabler && enabler.is_some_and(|(ei, ek)| ei == i && p.fns[ek].name_at == *at) {
+                continue;
+            }
+            let defines = p.fns.iter().any(|f| f.name_at == *at);
+            if !is_enabler && defines {
+                if s.is_win(users_file) && p.impl_of(*at) == Some(users_type) {
+                    owner_restore_def = Some(i);
+                    continue;
+                }
+                out.push(format!(
+                    "{} defines another {OWNER_RESTORE}",
+                    at_place(i, *at)
+                ));
+                continue;
+            }
+            if in_use(&s.code, p.ids.as_slice(), k) {
+                if aliased(&s.code, &p.ids, k) {
                     out.push(format!(
-                        "{} {} imports {} under another name",
-                        s.krate, s.file, f.name
+                        "{} {} imports {word} under another name",
+                        s.krate, s.file
+                    ));
+                } else if is_enabler && !s.is_win(users_file) {
+                    out.push(format!(
+                        "{} {} imports {ENABLER}; only purge-win {users_file} may",
+                        s.krate, s.file
                     ));
                 }
                 continue;
             }
-            let caller = enclosing(&parsed[i].1, *at)
-                .map_or("(no function)", |c| parsed[i].1[c].name.as_str());
-            refs.push((i, caller));
-        }
-    }
-    let fsrc = &sources[fi];
-    let mut summary = None;
-    match refs.as_slice() {
-        [(i, caller)] => {
-            let s = &sources[*i];
-            let temp = fsrc.krate == WIN
-                && fsrc.file == TEMP_WIN_CALLER.0
-                && f.name == TEMP_WIN_CALLER.1
-                && s.krate == WIN
-                && s.file == TEMP_WIN_CALLER.0
-                && *caller == TEMP_WIN_CALLER.2;
-            if s.krate == EXEC || temp {
-                summary = Some(format!(
-                    "{RESTORE_PRIVILEGE} and the privilege APIs are named only in {}, whose one \
-                     reference is in {} {} {caller}{}",
-                    label((fi, fk)),
-                    s.krate,
-                    s.file,
-                    if temp {
-                        " (TEMPORARY: purge-win, until M3-WIN-PRIV moves the caller to purge-exec)"
-                    } else {
-                        ""
-                    }
-                ));
-            } else {
-                out.push(format!(
-                    "the one reference of {} is in {} {} {caller}; it must be in purge-exec",
-                    label((fi, fk)),
-                    s.krate,
-                    s.file
-                ));
+            if !is_enabler {
+                owner_restore_refs.push((i, *at));
+                continue;
+            }
+            let method = enclosing(&p.fns, *at).map(|f| p.fns[f].name.as_str());
+            match method.and_then(|m| uses.get_mut(m)) {
+                Some(n) if s.is_win(users_file) && p.impl_of(*at) == Some(users_type) => *n += 1,
+                _ => out.push(format!(
+                    "{} references {ENABLER}; only {} in purge-win {users_file} may",
+                    at_place(i, *at),
+                    users
+                        .iter()
+                        .map(|u| format!("{users_type}::{u}"))
+                        .collect::<Vec<_>>()
+                        .join(" and ")
+                )),
             }
         }
-        refs => {
-            let all: Vec<String> = refs
-                .iter()
-                .map(|(i, caller)| format!("{} {} {caller}", sources[*i].krate, sources[*i].file))
-                .collect();
+    }
+    for (user, n) in &uses {
+        if *n != 1 {
             out.push(format!(
-                "{} (which enables {RESTORE_PRIVILEGE}) has {} references ({}); it must have exactly \
-                 one, in purge-exec",
-                label((fi, fk)),
-                refs.len(),
-                all.join(", ")
+                "purge-win {users_file} {users_type}::{user} references {ENABLER} {n} times; the \
+                 allowlist (ENABLER_USERS, DECISIONS) has it once"
             ));
         }
     }
+    if owner_restore_def.is_none() {
+        out.push(format!(
+            "purge-win {users_file} has no {users_type}::{OWNER_RESTORE}"
+        ));
+    }
+    let mut caller = None;
+    match owner_restore_refs.as_slice() {
+        [(i, at)]
+            if sources[*i].krate == OWNER_RESTORE_CALLER.0
+                && sources[*i].file == OWNER_RESTORE_CALLER.1 =>
+        {
+            caller = Some(at_place(*i, *at));
+        }
+        refs => {
+            let all: Vec<String> = refs.iter().map(|(i, at)| at_place(*i, *at)).collect();
+            out.push(format!(
+                "{users_type}::{OWNER_RESTORE} has {} production references ({}); it must have exactly \
+                 one, in {} {}",
+                refs.len(),
+                all.join(", "),
+                OWNER_RESTORE_CALLER.0,
+                OWNER_RESTORE_CALLER.1
+            ));
+        }
+    }
+    let summary = match (lookup, caller) {
+        (Some(lookup), Some(caller)) if out.is_empty() => Some(format!(
+            "{RESTORE_PRIVILEGE} is named only in purge-win {PRIVILEGE_FILE} {lookup}; tokens are \
+             adjusted only in its write-gated pub(crate) {ENABLER}, used only by {} in {users_file}; \
+             {users_type}::{OWNER_RESTORE} has one caller, {caller}",
+            users
+                .iter()
+                .map(|u| format!("{users_type}::{u}"))
+                .collect::<Vec<_>>()
+                .join(" and ")
+        )),
+        _ => None,
+    };
     (out, summary)
 }
 
@@ -1832,113 +2110,249 @@ mod tests {
             .collect()
     }
 
-    const WIN_PRIV: &str = "use windows_sys::Win32::Security::{AdjustTokenPrivileges, LUID};\n\
+    /// purge-win `src/privilege.rs` in the M3-WIN-PRIV shape.
+    const WIN_PRIV: &str = "#[cfg(feature = \"write\")]\n\
+        use windows_sys::Win32::Security::{AdjustTokenPrivileges, DuplicateTokenEx};\n\
+        use windows_sys::Win32::Security::{GetTokenInformation, LookupPrivilegeValueW};\n\
         // SeRestorePrivilege, AdjustTokenPrivileges and with_restore_privilege() in a comment.\n\
-        /// Runs `f` with `SeRestorePrivilege` on.\n\
-        pub fn with_restore_privilege<T>(f: impl FnOnce() -> T) -> Result<T, u32> {\n\
+        /// The LUID of `SeRestorePrivilege`.\n\
+        fn restore_luid() -> Result<LUID, u32> {\n\
             let name = wide(\"SeRestorePrivilege\");\n\
+            unsafe { LookupPrivilegeValueW(null(), name.as_ptr(), &mut l) };\n\
+            Ok(l)\n\
+        }\n\
+        pub fn restore_privilege_enabled() -> Result<bool, u32> {\n\
+            let luid = restore_luid()?;\n\
+            unsafe { GetTokenInformation(t, 3, b, n, &mut n) };\n\
+            Ok(true)\n\
+        }\n\
+        /// Runs `f` with the privilege on.\n\
+        #[cfg(feature = \"write\")]\n\
+        pub(crate) fn with_restore_privilege<T>(f: impl FnOnce() -> T) -> Result<T, u32> {\n\
+            let p = TOKEN_PRIVILEGES { Luid: restore_luid()?, Attributes: 2 };\n\
             if unsafe { AdjustTokenPrivileges(t, 0, &p, 0, null(), null()) } == 0 { return Err(1); }\n\
             Ok(f())\n\
         }\n\
-        #[cfg(test)]\n\
+        #[cfg(all(test, feature = \"write\"))]\n\
         mod tests {\n\
             fn t() { super::with_restore_privilege(|| ()); let _ = \"SeBackupPrivilege\"; }\n\
         }\n";
-    const EXEC_CALL: &str = "use purge_win::privilege::with_restore_privilege;\n\
-        pub fn restore_owner(key: &Key) -> bool {\n\
-            with_restore_privilege(|| key.set_owner()).is_ok()\n\
+    /// purge-win `src/reg_write.rs`: the two users of the enabler.
+    const WIN_REG: &str = "use crate::privilege::with_restore_privilege;\n\
+        impl Deref for CreatedKey { fn deref(&self) -> &WKey { &self.0 } }\n\
+        impl CreatedKey {\n\
+            pub fn set_security(&self, sddl: &str) -> Result<(), u32> {\n\
+                let set = || nt(self.0);\n\
+                match set() { Err(1307) => with_restore_privilege(set).unwrap_or(Err(1307)), o => o }\n\
+            }\n\
+            pub fn reopen_and_set_owner(&self, owner: &str) -> Result<(), u32> {\n\
+                with_restore_privilege(|| self.reopen(owner)).and_then(|r| r)\n\
+            }\n\
+        }\n\
+        #[cfg(test)]\n\
+        mod tests {\n\
+            fn t(k: &CreatedKey) { k.reopen_and_set_owner(\"O:SY\").unwrap(); }\n\
         }\n";
+    /// purge-exec `src/act_service.rs`: the one owner-restore caller, and set_security used freely.
+    const EXEC_CALL: &str = "fn set_recorded_security(key: &CreatedKey, sddl: &str, owner: &str) {\n\
+            let _ = key.set_security(sddl);\n\
+            if key.set_security(owner).is_err() && key.reopen_and_set_owner(owner).is_err() { note(); }\n\
+        }\n\
+        fn other(key: &CreatedKey) { let _ = key.set_security(\"D:\"); }\n";
 
-    /// Rule 4e: one function names the privilege, it is in purge-win, and it has one caller, in
-    /// purge-exec. Comments and test items do not count.
+    /// Rule 4e as the coordinator stated it for the M3-WIN-PRIV shape: the name and the adjusting APIs
+    /// only in purge-win's privilege.rs (the APIs write-gated, in the enabler); the enabler
+    /// `pub(crate)` and used only by the two allowlisted methods, once each; `reopen_and_set_owner`
+    /// with one caller, in purge-exec's act_service.rs. Comments and test items do not count.
     #[test]
-    fn rule_4e_one_privilege_function_with_one_caller() {
+    fn rule_4e_privilege_named_enabled_and_used_only_where_allowed() {
         let win = (WIN, "src/privilege.rs", WIN_PRIV);
-        let exec = (EXEC, "src/regbackup.rs", EXEC_CALL);
-        let (found, ok) = privilege_violations(&sources(&[win, exec]));
+        let reg = (WIN, "src/reg_write.rs", WIN_REG);
+        let exec = (EXEC, "src/act_service.rs", EXEC_CALL);
+        let (found, ok) = privilege_violations(&sources(&[win, reg, exec]));
         assert_eq!(found, Vec::<String>::new());
         assert_eq!(
             ok.unwrap(),
-            "SeRestorePrivilege and the privilege APIs are named only in purge-win src/privilege.rs \
-             with_restore_privilege, whose one reference is in purge-exec src/regbackup.rs restore_owner"
+            "SeRestorePrivilege is named only in purge-win src/privilege.rs restore_luid; tokens are \
+             adjusted only in its write-gated pub(crate) with_restore_privilege, used only by \
+             CreatedKey::set_security and CreatedKey::reopen_and_set_owner in src/reg_write.rs; \
+             CreatedKey::reopen_and_set_owner has one caller, purge-exec src/act_service.rs \
+             set_recorded_security"
         );
-
         let check = |files: &[(&str, &str, &str)]| privilege_violations(&sources(files)).0;
-        let second = format!("{EXEC_CALL}fn again() {{ with_restore_privilege(|| ()); }}\n");
+
+        // reopen_and_set_owner: a second caller, a caller elsewhere, none.
+        let second = format!(
+            "{EXEC_CALL}fn again(k: &CreatedKey) {{ k.reopen_and_set_owner(\"O:SY\").ok(); }}\n"
+        );
         assert_eq!(
-            check(&[win, (EXEC, "src/regbackup.rs", &second)]),
+            check(&[win, reg, (EXEC, "src/act_service.rs", &second)]),
             [
-                "purge-win src/privilege.rs with_restore_privilege (which enables SeRestorePrivilege) has 2 \
-              references (purge-exec src/regbackup.rs restore_owner, purge-exec src/regbackup.rs again); \
-              it must have exactly one, in purge-exec"
+                "CreatedKey::reopen_and_set_owner has 2 production references (purge-exec src/act_service.rs \
+              set_recorded_security, purge-exec src/act_service.rs again); it must have exactly one, in \
+              purge-exec src/act_service.rs"
             ]
         );
-        let broker_call = "fn run() { purge_win::privilege::with_restore_privilege(|| ()); }\n";
+        let broker = "fn run(k: &CreatedKey) { k.reopen_and_set_owner(\"O:SY\").ok(); }\n";
         assert_eq!(
-            check(&[win, (BROKER, "src/start.rs", broker_call)]),
+            check(&[win, reg, exec, (BROKER, "src/start.rs", broker)]).len(),
+            1
+        );
+        let moved = EXEC_CALL.replace("&& key.reopen_and_set_owner(owner).is_err()", "");
+        assert_eq!(
+            check(&[
+                win,
+                reg,
+                (EXEC, "src/act_service.rs", &moved),
+                (EXEC, "src/regbackup.rs", broker)
+            ]),
             [
-                "the one reference of purge-win src/privilege.rs with_restore_privilege is in purge-broker \
-              src/start.rs run; it must be in purge-exec"
+                "CreatedKey::reopen_and_set_owner has 1 production references (purge-exec src/regbackup.rs \
+              run); it must have exactly one, in purge-exec src/act_service.rs"
             ]
-        );
-        let wrapper =
-            format!("{WIN_PRIV}pub fn owner_set() {{ with_restore_privilege(|| ()); }}\n");
-        assert_eq!(
-            check(&[(WIN, "src/privilege.rs", &wrapper), exec]).len(),
-            1,
-            "a wrapper is a second reference"
-        );
-        let alias = "use purge_win::privilege::with_restore_privilege as elevate;\nfn f() { elevate(|| ()); }\n";
-        assert_eq!(
-            check(&[win, exec, (EXEC, "src/act_fs.rs", alias)]),
-            ["purge-exec src/act_fs.rs imports with_restore_privilege under another name"]
         );
 
-        // The name in a second function, in another crate, outside a function, or not at all. With
-        // no single function, the adjusting API (its import and its call) is named out of scope too.
-        let twice = format!("{WIN_PRIV}fn other() {{ let _ = w!(\"SeRestorePrivilege\"); }}\n");
-        let unscoped = "purge-win src/privilege.rs names AdjustTokenPrivileges and no single function \
-                        names SeRestorePrivilege";
+        // The enabler: another user in reg_write.rs, in another file, a re-export, an alias, a second
+        // use inside an allowlisted method, its visibility and gate.
+        let third = format!(
+            "{WIN_REG}impl WKey {{ pub fn take_owner(&self) {{ with_restore_privilege(|| ()).ok(); }} }}\n"
+        );
         assert_eq!(
-            check(&[(WIN, "src/privilege.rs", &twice), exec]),
+            check(&[win, (WIN, "src/reg_write.rs", &third), exec]),
             [
-                "SeRestorePrivilege is named in 2 functions (purge-win src/privilege.rs with_restore_privilege, \
-              purge-win src/privilege.rs other); only one, of purge-win, may",
-                unscoped,
-                unscoped,
+                "purge-win src/reg_write.rs WKey::take_owner references with_restore_privilege; only \
+              CreatedKey::set_security and CreatedKey::reopen_and_set_owner in purge-win src/reg_write.rs \
+              may"
             ]
         );
-        let constant = "fn by_constant() { unsafe { LookupPrivilegeValueW(null(), SE_RESTORE_NAME, &mut l) }; }\n";
-        let found = check(&[win, exec, (EXEC, "src/x.rs", constant)]);
+        let fs = "use crate::privilege::with_restore_privilege;\n\
+                  impl MoveHandle { pub fn set_security(&self) { with_restore_privilege(|| ()).ok(); } }\n";
+        assert_eq!(
+            check(&[win, reg, exec, (WIN, "src/fs_write.rs", fs)]),
+            [
+                "purge-win src/fs_write.rs imports with_restore_privilege; only purge-win src/reg_write.rs may",
+                "purge-win src/fs_write.rs MoveHandle::set_security references with_restore_privilege; only \
+                 CreatedKey::set_security and CreatedKey::reopen_and_set_owner in purge-win src/reg_write.rs \
+                 may",
+            ]
+        );
+        let reexport = "pub use privilege::with_restore_privilege;\n";
+        assert_eq!(
+            check(&[win, reg, exec, (WIN, "src/lib.rs", reexport)]),
+            [
+                "purge-win src/lib.rs imports with_restore_privilege; only purge-win src/reg_write.rs may"
+            ]
+        );
+        let alias = WIN_REG.replace(
+            "with_restore_privilege;\n",
+            "with_restore_privilege as elevate;\n",
+        );
         assert!(
-            found[0].starts_with("SeRestorePrivilege is named in 2 functions")
-                && found[0].contains("purge-exec src/x.rs by_constant"),
-            "{found:?}"
+            check(&[win, (WIN, "src/reg_write.rs", &alias), exec]).contains(
+                &"purge-win src/reg_write.rs imports with_restore_privilege under another name"
+                    .to_owned()
+            )
         );
-        let in_exec =
-            "pub fn restore() { let n = \"SeRestorePrivilege\"; }\nfn c() { restore(); }\n";
+        let twice = WIN_REG.replace(
+            "with_restore_privilege(|| self.reopen(owner))",
+            "with_restore_privilege(|| ()).ok(); with_restore_privilege(|| self.reopen(owner))",
+        );
         assert_eq!(
-            check(&[(EXEC, "src/x.rs", in_exec)]),
+            check(&[win, (WIN, "src/reg_write.rs", &twice), exec]),
             [
-                "SeRestorePrivilege is named in purge-exec src/x.rs restore; only purge-win may name it"
+                "purge-win src/reg_write.rs CreatedKey::reopen_and_set_owner references with_restore_privilege \
+              2 times; the allowlist (ENABLER_USERS, DECISIONS) has it once"
             ]
         );
-        let outside = "const NAME: &str = \"SeRestorePrivilege\";\n";
+        let public = WIN_PRIV.replace(
+            "pub(crate) fn with_restore_privilege",
+            "pub fn with_restore_privilege",
+        );
         assert_eq!(
-            check(&[(WIN, "src/privilege.rs", outside)]),
+            check(&[(WIN, "src/privilege.rs", &public), reg, exec]),
+            [
+                "purge-win src/privilege.rs with_restore_privilege is not `pub(crate) fn`; it may not leave \
+              purge-win"
+            ]
+        );
+        let ungated = WIN_PRIV.replace(
+            "#[cfg(feature = \"write\")]\npub(crate) fn",
+            "pub(crate) fn",
+        );
+        assert_eq!(
+            check(&[(WIN, "src/privilege.rs", &ungated), reg, exec]),
+            [
+                "purge-win src/privilege.rs with_restore_privilege is not under #[cfg(feature = \"write\")]"
+            ]
+        );
+
+        // The adjusting APIs: in a read-only query, in an ungated use, in another file, by string.
+        let query = WIN_PRIV.replace(
+            "let luid = restore_luid()?;",
+            "let luid = restore_luid()?; unsafe { AdjustTokenPrivileges(t, 1, p, 0, n, n) };",
+        );
+        assert_eq!(
+            check(&[(WIN, "src/privilege.rs", &query), reg, exec]),
+            [
+                "purge-win src/privilege.rs restore_privilege_enabled names AdjustTokenPrivileges; only \
+              purge-win src/privilege.rs with_restore_privilege (or a #[cfg(feature = \"write\")] use of \
+              that file) may"
+            ]
+        );
+        let ungated_use = WIN_PRIV.replacen("#[cfg(feature = \"write\")]\n", "", 1);
+        assert_eq!(
+            check(&[(WIN, "src/privilege.rs", &ungated_use), reg, exec]).len(),
+            1
+        );
+        let elsewhere = "use windows_sys::Win32::Security::AdjustTokenPrivileges;\n\
+                         extern \"system\" { fn RtlAdjustPrivilege(p: u32, e: u8, t: u8, w: *mut u8) -> i32; }\n\
+                         fn g() { let p = GetProcAddress(h, s!(\"NtAdjustPrivilegesToken\")); }\n";
+        assert_eq!(
+            check(&[win, reg, exec, (EXEC, "src/y.rs", elsewhere)]),
+            [
+                "purge-exec src/y.rs has a string that names NtAdjustPrivilegesToken",
+                "purge-exec src/y.rs (no function) names AdjustTokenPrivileges; only purge-win \
+                 src/privilege.rs with_restore_privilege (or a #[cfg(feature = \"write\")] use of that file) \
+                 may",
+                "purge-exec src/y.rs (no function) names RtlAdjustPrivilege; only purge-win \
+                 src/privilege.rs with_restore_privilege (or a #[cfg(feature = \"write\")] use of that file) \
+                 may",
+            ]
+        );
+
+        // The name: in another file, in a second function, outside a function, missing; other
+        // privileges.
+        let in_reg = format!("{WIN_REG}fn probe() {{ let _ = w!(\"SeRestorePrivilege\"); }}\n");
+        assert_eq!(
+            check(&[win, (WIN, "src/reg_write.rs", &in_reg), exec]),
+            [
+                "purge-win src/reg_write.rs names SeRestorePrivilege; only purge-win src/privilege.rs may"
+            ]
+        );
+        let two = format!("{WIN_PRIV}fn other() {{ let _ = SE_RESTORE_NAME; }}\n");
+        assert_eq!(
+            check(&[(WIN, "src/privilege.rs", &two), reg, exec]),
+            [
+                "SeRestorePrivilege is named in 2 functions (purge-win src/privilege.rs restore_luid, purge-win \
+              src/privilege.rs other); only one may"
+            ]
+        );
+        let outside = format!("{WIN_PRIV}const NAME: &str = \"SeRestorePrivilege\";\n");
+        assert_eq!(
+            check(&[(WIN, "src/privilege.rs", &outside), reg, exec]),
             ["purge-win src/privilege.rs names SeRestorePrivilege outside a function"]
         );
+        let unnamed = WIN_PRIV.replace("wide(\"SeRestorePrivilege\")", "wide(\"x\")");
         assert_eq!(
-            check(&[exec]),
+            check(&[(WIN, "src/privilege.rs", &unnamed), reg, exec]),
             [
-                "no function names SeRestorePrivilege; one purge-win function must (undo's owner restore)"
+                "no function names SeRestorePrivilege; one function of purge-win src/privilege.rs must (the \
+              LUID lookup)"
             ]
         );
-
-        // Other privileges, and the adjusting APIs outside the function.
         let backup = "fn f() { let _ = \"SeBackupPrivilege\"; let _ = SE_DEBUG_NAME; }\n";
         assert_eq!(
-            check(&[win, exec, (WIN, "src/token.rs", backup)]),
+            check(&[win, reg, exec, (WIN, "src/token.rs", backup)]),
             [
                 "purge-win src/token.rs names the privilege SeBackupPrivilege; SeRestorePrivilege is the only \
                  one Purge may enable (B9)",
@@ -1946,60 +2360,23 @@ mod tests {
                  only privilege Purge may enable (B9)",
             ]
         );
-        let adjust = format!(
-            "{WIN_PRIV}fn more() {{ unsafe {{ AdjustTokenPrivileges(t, 1, p, 0, n, n) }}; }}\n"
-        );
         assert_eq!(
-            check(&[(WIN, "src/privilege.rs", &adjust), exec]),
-            [
-                "purge-win src/privilege.rs names AdjustTokenPrivileges outside purge-win src/privilege.rs \
-              with_restore_privilege"
-            ]
+            check(&[reg, exec]).len(),
+            2,
+            "no privilege file: no name, no enabler"
         );
-        let elsewhere = "use windows_sys::Win32::Security::AdjustTokenPrivileges;\n\
-                         extern \"system\" { fn RtlAdjustPrivilege(p: u32, e: u8, t: u8, w: *mut u8) -> i32; }\n\
-                         fn g() { let p = GetProcAddress(h, s!(\"NtAdjustPrivilegesToken\")); }\n";
-        assert_eq!(
-            check(&[win, exec, (EXEC, "src/y.rs", elsewhere)]),
-            [
-                "purge-exec src/y.rs has a string that names NtAdjustPrivilegesToken",
-                "purge-exec src/y.rs names AdjustTokenPrivileges outside purge-win src/privilege.rs \
-                 with_restore_privilege",
-                "purge-exec src/y.rs names RtlAdjustPrivilege outside purge-win src/privilege.rs \
-                 with_restore_privilege",
-            ]
-        );
-        let alias_api = WIN_PRIV.replace(
-            "{AdjustTokenPrivileges, LUID}",
-            "{AdjustTokenPrivileges as atp, LUID}",
-        );
-        assert_eq!(
-            check(&[(WIN, "src/privilege.rs", &alias_api), exec]).len(),
-            1
-        );
-
-        // TEMPORARY: today's shape (the caller in purge-win's reg_write.rs) passes, the same shape in
-        // another file does not.
-        let today = format!(
-            "{WIN_PRIV}impl CreatedKey {{\n    pub fn set_security(&self) {{ with_restore_privilege(|| ()).ok(); }}\n}}\n"
-        );
-        let (found, ok) = privilege_violations(&sources(&[(WIN, "src/reg_write.rs", &today)]));
-        assert_eq!(found, Vec::<String>::new());
-        assert!(
-            ok.unwrap().ends_with(
-                "(TEMPORARY: purge-win, until M3-WIN-PRIV moves the caller to purge-exec)"
-            )
-        );
-        assert_eq!(check(&[(WIN, "src/privilege.rs", &today)]).len(), 1);
     }
 
-    /// Rule 4e on the real tree: it passes, and names the one function.
+    /// Rule 4e on the real tree: it passes, and names the owner restore's one caller.
     #[test]
     fn rule_4e_holds_on_the_workspace() {
         let members = cargo_members(&crate::workspace_root()).unwrap();
         let (found, ok) = privilege_violations(&production_sources(&members).unwrap());
         assert_eq!(found, Vec::<String>::new());
-        assert!(ok.unwrap().contains("purge-win src/"));
+        assert!(
+            ok.unwrap()
+                .ends_with("has one caller, purge-exec src/act_service.rs set_recorded_security")
+        );
     }
 
     /// A scratch Cargo workspace with the crates rule 4 names, removed on drop.
@@ -2009,7 +2386,7 @@ mod tests {
         /// Members `purge-mcp`, `purge-win`, `purge-exec`, `purge-engine` and `purge-broker` as the real
         /// ones relate (`engine_extra` is added to the engine's `[features]`), plus `purge-other` with
         /// `other_deps`. The engine, the broker and purge-mcp have a binary; purge-win's privilege
-        /// function has its one caller in purge-exec.
+        /// files and purge-exec's owner-restore caller have the M3-WIN-PRIV shape.
         fn new(tag: &str, engine_extra: &str, other_deps: &str) -> FixtureWorkspace {
             let root =
                 std::env::temp_dir().join(format!("purge-xtask-deps-{tag}-{}", std::process::id()));
@@ -2033,17 +2410,23 @@ mod tests {
             krate(
                 "purge-win",
                 "[features]\ndefault = [\"read\"]\nread = []\nwrite = [\"read\"]\n",
-                "pub fn with_restore_privilege<T>(f: impl FnOnce() -> T) -> T {\n    \
-                 let _name = \"SeRestorePrivilege\";\n    f()\n}\n",
+                "mod privilege;\npub mod reg_write;\n",
                 false,
             );
             krate(
                 "purge-exec",
                 "[features]\nfault-inject = []\ntest-support = []\n\
                  [dependencies]\npurge-win = { path = \"../purge-win\", features = [\"write\"] }\n",
-                "pub fn restore_owner() {\n    purge_win::with_restore_privilege(|| ());\n}\n",
+                "mod act_service;\n",
                 false,
             );
+            for (file, text) in [
+                ("purge-win/src/privilege.rs", WIN_PRIV),
+                ("purge-win/src/reg_write.rs", WIN_REG),
+                ("purge-exec/src/act_service.rs", EXEC_CALL),
+            ] {
+                std::fs::write(root.join(file), text).unwrap();
+            }
             krate(
                 "purge-engine",
                 &format!(
@@ -2126,6 +2509,13 @@ mod tests {
     #[test]
     fn rule_4_fails_on_broken_manifests() {
         let clean = FixtureWorkspace::new("clean", "", "");
+        // Link arguments are not a cfg: the broker's manifest embedding and a later
+        // `/DEPENDENTLOADFLAG:0x800` (M3-HARDEN) stay allowed by rule 4f.
+        clean.append(
+            "purge-broker/build.rs",
+            "fn main() {\n    println!(\"cargo:rustc-link-arg-bins=/MANIFEST:EMBED\");\n    \
+             println!(\"cargo::rustc-link-arg=/DEPENDENTLOADFLAG:0x800\");\n}\n",
+        );
         assert_eq!(clean.found(), Vec::<String>::new());
         assert!(run(&clean.0).unwrap());
 
