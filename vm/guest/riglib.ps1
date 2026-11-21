@@ -1296,6 +1296,44 @@ function Snap([string]$Run, [string]$Phase) {
 
 $RigEngine = 'C:\cr\bin\purge-engine.exe'
 
+# The engine's baseline tree and the directory rule (Get-RigEngineTreeProblems; the host protects the tree in
+# Push-Tools). Functions only.
+if ($PSScriptRoot -and (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'engine-tree.ps1'))) { . (Join-Path $PSScriptRoot 'engine-tree.ps1') }
+
+# The baseline trusts `engine.hello` reports (purge-model BaselineTrust), lower case, and 'below-exact' for any of
+# the last three.
+$RigBaselineTrusts = @('exact', 'merged', 'local', 'none')
+
+# Pure: the baseline trust a run expects of its engine. $Asked is the host's choice (rig.ps1 -ExpectTrust: exact,
+# merged, local, none or below-exact) and wins. Without one: 'exact' when the engine's kb\baselines holds the shipped
+# baseline of exactly this Windows (<edition>-<build>.<ubr>.tsv.gz, names compared without case), else '' (nothing
+# is expected, the trust is only recorded).
+function Get-RigExpectedTrust([string]$Asked, [string]$Edition, $Build, $Ubr, $BaselineNames) {
+    if ($Asked) {
+        $a = $Asked.ToLowerInvariant()
+        if ($RigBaselineTrusts -notcontains $a -and $a -ne 'below-exact') { throw "bad expected baseline trust '$Asked' (exact, merged, local, none, below-exact)" }
+        return $a
+    }
+    $name = "$Edition-$Build.$Ubr.tsv.gz"
+    if (@(@($BaselineNames) | Where-Object { "$_" -ieq $name }).Count) { return 'exact' }
+    ''
+}
+
+# Pure: why the baseline trust `engine.hello` reports is not the one the run is for; $null when it is, or when
+# nothing is expected. A run that is scored as an exact-baseline run although its engine dropped the shipped
+# baseline (a directory a standard user can write, review BL-R1 M1) would be a values-only run under another name.
+function Test-RigBaselineTrust([string]$Expected, [string]$Actual) {
+    $a = "$Actual".ToLowerInvariant()
+    if (-not $Expected) { return $null }
+    if ($RigBaselineTrusts -notcontains $a) { return "engine.hello reports no baseline trust ('$Actual'); this run is for '$Expected'" }
+    if ($Expected -eq 'below-exact') {
+        if ($a -ne 'exact') { return $null }
+        return "engine.hello reports baseline_trust '$Actual'; this run is for a view below Exact (the exact baseline was to be hidden)"
+    }
+    if ($a -eq $Expected) { return $null }
+    "engine.hello reports baseline_trust '$Actual'; this run is for '$Expected'"
+}
+
 # Pure: one argument quoted for a verbatim argument string (CommandLineToArgvW rules). Program ids hold
 # '|' and ARP key names hold spaces, so anything but a plain word is quoted. A NUL cannot be passed (the command
 # line is a C string: everything after it is lost, e.g. a REG_SZ read with its terminator truncated `rigtool snap`

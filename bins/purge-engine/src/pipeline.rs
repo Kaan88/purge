@@ -487,6 +487,41 @@ fn harvest_in(
     Ok(Harvested { report, warnings })
 }
 
+/// The result of `engine.hello` for the machine the sources describe (ENGINE_PLAN.md §3.3): the
+/// engine's version and policy, the account and its elevation, this Windows, and the baseline view a
+/// harvest or a scan started now would work with ([`baseline::load`]: the same directory check, the
+/// same cache). Read-only: nothing is built. What lowered the view's trust is in `warnings`.
+///
+/// Before the stdio server and the broker exist (M3) the CLI verb `hello` is its one transport; the VM
+/// rig reads `baseline_trust` from it and refuses a run whose engine does not have the trust the run
+/// is for (review BL-R1 M1).
+pub fn hello(
+    sources: Sources<'_>,
+    settings: &Settings,
+    warnings: &mut Vec<String>,
+) -> purge_rpc::EngineHello {
+    let mut silent = |_: &str| {};
+    let mut progress: Progress<'_> = &mut silent;
+    let mut step = Step::new(&mut progress);
+    let baseline = baseline_for(sources, settings, warnings, &mut step);
+    let os = sources.sys.os_info().unwrap_or(OsInfo {
+        edition: String::new(),
+        build: 0,
+        ubr: 0,
+    });
+    purge_rpc::EngineHello {
+        version: env!("CARGO_PKG_VERSION").to_owned(),
+        elevated: sources.sys.elevated(),
+        user_sid: sources.sys.user_sid().unwrap_or_default(),
+        shell_sid: None,
+        edition: os.edition,
+        build: os.build,
+        ubr: os.ubr,
+        policy_version: purge_policy::band::POLICY_VERSION.to_owned(),
+        baseline: baseline.status(settings.local_build.as_ref()),
+    }
+}
+
 /// The injected view of a step, said in the progress and in the warnings, so a plan made with one
 /// never reads as a plan of the engine's own baseline.
 fn step_injected<'b>(

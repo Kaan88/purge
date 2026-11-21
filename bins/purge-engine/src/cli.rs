@@ -405,8 +405,19 @@ fn run_inner(
             started,
         ),
         Invocation::BaselineInfo(a) => baseline::info_verb(&a, env),
+        Invocation::Hello => hello(env),
         Invocation::Executor(verb) => executor(verb, env),
     }
+}
+
+/// `hello`: the result of `engine.hello` ([`pipeline::hello`]) as JSON on stdout. Read-only: no
+/// build is started and nothing is written. What lowered the baseline's trust goes to stderr as
+/// warnings, as in a scan.
+fn hello(env: &mut Env<'_>) -> Exit {
+    let mut warnings = Vec::new();
+    let hello = pipeline::hello(env.sources, &env.settings, &mut warnings);
+    env.warnings(&warnings);
+    env.emit(None, &output::json_text(&hello), "hello")
 }
 
 fn inventory(a: &InventoryArgs, env: &mut Env<'_>, started: Instant) -> Exit {
@@ -761,6 +772,78 @@ mod tests {
             Exit::from(&PipelineError::Runtime(String::new())),
             Exit::Runtime
         );
+    }
+
+    /// `hello` prints the result of `engine.hello`: with the shipped baseline of the machine's
+    /// Windows the trust is Exact, without a baseline directory it is None; a shipped directory a
+    /// standard user can write is not used by an elevated engine, and `hello` says so (the case the
+    /// VM rig must catch, review BL-R1 M1).
+    #[test]
+    fn hello_reports_the_baseline_trust() {
+        let shipped = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../kb/baselines");
+        let hello = |fixture: &Fixture, settings: Settings| {
+            let mut host = NoHost;
+            let (mut out, mut err) = (Vec::new(), Vec::new());
+            let exit = run(
+                &["hello".to_owned()],
+                &mut Env {
+                    sources: Sources::of(fixture),
+                    host: &mut host,
+                    settings,
+                    run_options: RunOptions::default(),
+                    stdout: &mut out,
+                    stderr: &mut err,
+                },
+            );
+            assert_eq!(exit, Exit::Ok, "{}", String::from_utf8_lossy(&err));
+            let hello: purge_rpc::EngineHello = serde_json::from_slice(&out).unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&out).unwrap();
+            (hello, json, String::from_utf8(err).unwrap())
+        };
+        let machine = |elevated: bool| {
+            let mut f = Fixture::builder()
+                .os("Professional", 26340, 9882)
+                .user_sid("S-1-5-21-1-2-3-1001")
+                .build();
+            f.system_mut().elevated = elevated;
+            f
+        };
+        let with = |check: bool| Settings {
+            baseline_dir: Some(shipped.clone()),
+            check_shipped_dir: check,
+            ..Settings::default()
+        };
+
+        let (h, json, err) = hello(&machine(true), with(false));
+        assert_eq!(h.baseline.baseline_trust, purge_model::BaselineTrust::Exact);
+        assert!(h.baseline.baseline_available && h.elevated);
+        assert_eq!(
+            (h.edition.as_str(), h.build, h.ubr),
+            ("Professional", 26340, 9882)
+        );
+        assert_eq!(h.user_sid, "S-1-5-21-1-2-3-1001");
+        assert_eq!(h.policy_version, purge_policy::band::POLICY_VERSION);
+        // The field the rig reads, as it is spelled on the wire.
+        assert_eq!(json["baseline_trust"], "Exact");
+        assert_eq!(json["baseline_view"]["name"], "Professional-26340.9882");
+        assert!(err.is_empty(), "{err}");
+
+        // No baseline directory.
+        let (h, json, _) = hello(&machine(true), Settings::default());
+        assert_eq!(h.baseline.baseline_trust, purge_model::BaselineTrust::None);
+        assert!(!h.baseline.baseline_available);
+        assert_eq!(json["baseline_trust"], "None");
+        assert!(json["baseline_view"].is_null());
+
+        // The directory rule: the fixture's file system does not vouch for the shipped directory, so
+        // an elevated engine that checks uses no shipped baseline; one that is not elevated does.
+        let (h, json, err) = hello(&machine(true), with(true));
+        assert_ne!(h.baseline.baseline_trust, purge_model::BaselineTrust::Exact);
+        assert_eq!(json["baseline_available"], false);
+        assert!(err.contains("no shipped baseline is used"), "{err}");
+        let (h, _, _) = hello(&machine(false), with(true));
+        assert_eq!(h.baseline.baseline_trust, purge_model::BaselineTrust::Exact);
+        assert!(!h.elevated);
     }
 
     #[test]

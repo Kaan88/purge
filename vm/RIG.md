@@ -203,12 +203,33 @@ changes, each engine call its own phase (command line, exit code, stdout/stderr 
 | After | Phase | Command (CLI contract ENGINE_PLAN §3.4) |
 |---|---|---|
 | `lists 1` (before `snap 1`) | `engine-inventory-1` | `purge-engine inventory --json > inv-1.json`; the `program_id` of the main ARP entry is the entry whose `key_path` is `run.json` `main.key` (compared canonically) |
-| `snap 1` | `engine-harvest` | `purge-engine harvest <program_id> -o fp.json` |
+| `snap 1` | `engine-hello` | `purge-engine hello > engine-hello.json` (the result of `engine.hello`); the phase fails when `baseline_trust` is not the trust the run is for (below) |
+| | `engine-harvest` | `purge-engine harvest <program_id> -o fp.json` |
 | | `engine-scan-live` (`-ExtraChecks` only) | `purge-engine scan --fp fp.json --mode external --app <id> -o plan-live.json`, the still-installed app (§4b) |
 | | `uninstall` | `purge-engine uninstall <program_id> --quiet --fp fp.json -o engine-run.json` **instead of** the vendor command; `run.json` `uninstall.t0/t1/exit` come from `engine-run.json` (`t_start`, `t_end`, `exit_code`; `uninstall.times` = `engine`, or `rig` when the file is missing), plus `outcome`, `verify_gone`, `engine_exit`, `rig_t0`/`rig_t1`. The rig's WaitTree (engine process tree, ARP entry gone, max 10 min) and the 30 s settle still run as a safety net. |
 | `lists 2` (before `snap 2`) | `engine-inventory-2` | `purge-engine inventory --json > inv-2.json` |
 | `snap 2`, `edge-check`, `entries` | `engine-scan` | `purge-engine scan --fp fp.json --mode post --app <id> -o plan-purge.json` (`--app`: the plan's `app` is the truth id, ENGINE_PLAN P40) |
 | | `engine-scan-repeat` (`-ExtraChecks` only) | the same scan again `-o plan-purge-b.json` (§4b) |
+
+**The baseline tree and the trust of a run (review BL-R1 M1; not yet run on a VM).** An elevated engine uses
+`<exe dir>\kb\baselines` only when administrators and the system alone can write it and every ancestor
+(BASELINE_LOCAL_DESIGN.md §5). `C:\cr` inherits Modify for Authenticated Users from the drive root and the host
+copies as the unelevated guest user, so after the copies `Push-Tools` runs `guest\engine-tree.ps1` as an elevated
+agent job (`protect`): `C:\cr\bin\kb` and everything in it gets owner Administrators and a protected DACL (SYSTEM
+and Administrators full, Users read and execute); `C:\cr` and `C:\cr\bin` get owner Administrators and a
+protected DACL like a drive root's (Authenticated Users may add files and folders and modify what lies below, but
+cannot delete, rename or re-ACL the folder itself), so the rig's other directories work as before. The job checks
+the result against the engine's rule and the push fails when it does not hold. A second push without a snapshot
+restore opens the tree first (`open`: back to inheritance), copies, and protects again.
+
+Every engine run then asks the engine itself: `engine-hello` records `run.json` `engine.hello`
+`{expected, asked, baseline_trust, baseline_view, elevated, ok}`. The expected trust is `-ExpectTrust` of
+`Invoke-Campaign` / `Invoke-Run` (`exact`, `merged`, `local`, `none`, or `below-exact` for a run with the exact
+baseline hidden); without it, `exact` when the pushed baselines hold `<edition>-<build>.<ubr>.tsv.gz` of the
+guest's Windows, and nothing otherwise (`-NoBaselines`: recorded only). A mismatch fails the phase, and with it
+the run (`failed phases: engine-hello`); the harvest, the captures and the scan still run, so the evidence of what
+the engine did is kept. An "exact" run whose engine dropped the shipped baseline can therefore not be scored as
+one.
 
 **Capture order rule.** Each inventory runs right after the `lists` capture of the same point, so `invdiff`
 compares two views of the same moment (in r0 an Edge update fell between `lists 2` and the old
