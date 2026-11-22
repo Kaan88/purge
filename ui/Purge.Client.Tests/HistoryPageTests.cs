@@ -227,6 +227,131 @@ public sealed class HistoryPageTests
     }
 
     [Fact]
+    public async Task OpeningThePageNeverAsksForInterruptedSessions()
+    {
+        var broker = new ScriptedHistoryBroker();
+        var launches = 0;
+        var vm = new HistoryViewModel(_ => Task.FromResult(GitIndex()), _ => { launches++; return Launch(broker); });
+
+        await vm.LoadAsync();
+
+        Assert.Equal(0, launches);
+        Assert.Equal(0, broker.PendingCalls);
+        Assert.False(vm.Selected!.Interrupted);
+    }
+
+    [Fact]
+    public async Task CheckForInterruptedListsASessionTheIndexDoesNotHaveAndOffersItsRecovery()
+    {
+        const string cut = "20251116T090000Z-00000000000000aa";
+        var broker = new ScriptedHistoryBroker
+        {
+            Pending = new PendingList
+            {
+                Sessions = [new PendingSession { Session = cut, App = "Mozilla Firefox", Done = 37, Total = 52, Started = 134077617020000000 }],
+            },
+            Recover = new OutcomeResult { Outcome = Outcome.Complete },
+        };
+        var launches = 0;
+        var vm = new HistoryViewModel(_ => Task.FromResult(GitIndex()), _ => { launches++; return Launch(broker); });
+        await vm.LoadAsync();
+
+        await vm.CheckInterruptedAsync();
+
+        Assert.Equal(1, launches);
+        Assert.Equal(1, broker.PendingCalls);
+        Assert.Equal([cut, GitSession], vm.Sessions.Select(s => s.Id));
+        var found = vm.Selected!;
+        Assert.Equal(cut, found.Id);
+        Assert.True(found.Interrupted);
+        Assert.True(found.FromJournal);
+        Assert.Equal("Mozilla Firefox", found.Name);
+        Assert.Equal("Interrupted", found.State);
+        Assert.Equal("37 of 52 items done · found in the journals", found.Detail);
+        Assert.False(found.Held);
+        Assert.False(vm.CanRestore);
+        Assert.Null(vm.ActionInfo);
+
+        await vm.RecoverAsync(rollback: false);
+
+        Assert.Equal([(cut, false)], broker.RecoverCalls);
+        Assert.Equal("Finished", vm.RestoreTitle);
+        // Recovered: it is no longer listed from the journal (the index lists it once recovery wrote its entry).
+        Assert.DoesNotContain(vm.Sessions, s => s.Id == cut);
+        Assert.Equal(1, launches);
+    }
+
+    [Fact]
+    public async Task CheckForInterruptedMarksAnIndexedSessionWhoseReportWasNeverWritten()
+    {
+        // The index lists the session as committed; journal.pending lists it (Unindexed: no report).
+        var broker = new ScriptedHistoryBroker { Pending = Fixture<PendingList>("pipe.journal.pending.result.json") };
+        var vm = new HistoryViewModel(_ => Task.FromResult(GitIndex()), _ => Launch(broker));
+        await vm.LoadAsync();
+        Assert.False(vm.Selected!.Interrupted);
+
+        await vm.CheckInterruptedAsync();
+
+        var git = Assert.Single(vm.Sessions);
+        Assert.True(git.Interrupted);
+        Assert.False(git.FromJournal);
+        Assert.Equal("Interrupted", git.State);
+        Assert.Equal(HistoryChip.Caution, git.Chip);
+    }
+
+    [Fact]
+    public async Task CheckForInterruptedSaysSoWhenNothingWasInterrupted()
+    {
+        var broker = new ScriptedHistoryBroker();
+        var vm = new HistoryViewModel(_ => Task.FromResult(new HistoryIndex()), _ => Launch(broker));
+        await vm.LoadAsync();
+
+        await vm.CheckInterruptedAsync();
+
+        Assert.Equal(HistoryPhase.Empty, vm.Phase);
+        Assert.Equal("No cleanup was interrupted.", vm.ActionInfo);
+        Assert.False(vm.Busy);
+    }
+
+    [Fact]
+    public async Task ARestoreRefusedForRecoveryListsTheInterruptedSessionsWithoutAnotherPrompt()
+    {
+        const string cut = "20251116T090000Z-00000000000000aa";
+        var broker = new ScriptedHistoryBroker
+        {
+            UndoError = new BrokerRpcException(-32000, "needs_recovery", "an interrupted session comes first"),
+            Pending = new PendingList { Sessions = [new PendingSession { Session = cut, App = "Firefox", Started = 1 }] },
+        };
+        var launches = 0;
+        var vm = new HistoryViewModel(_ => Task.FromResult(GitIndex()), _ => { launches++; return Launch(broker); });
+        await vm.LoadAsync();
+
+        await vm.RestoreAsync(all: true);
+
+        Assert.Equal(1, launches);
+        Assert.Equal(1, broker.PendingCalls);
+        Assert.Contains("interrupted cleanup comes first", vm.ActionError);
+        Assert.Equal(cut, vm.Selected!.Id);
+        Assert.True(vm.Selected.Interrupted);
+    }
+
+    [Fact]
+    public async Task AnotherWriterOfTheStoreIsBusyNotAFailure()
+    {
+        var broker = new ScriptedHistoryBroker
+        {
+            UndoError = new BrokerRpcException(-32000, "busy", "a mutating request is running"),
+        };
+        var vm = new HistoryViewModel(_ => Task.FromResult(GitIndex()), _ => Launch(broker));
+        await vm.LoadAsync();
+
+        await vm.RestoreAsync(all: true);
+
+        Assert.Equal("Another Purge window is changing the quarantine. Wait for it to finish, then try again.", vm.ActionError);
+        Assert.False(vm.Busy);
+    }
+
+    [Fact]
     public async Task TheMediumEngineAnswersHistoryIndex()
     {
         var result = ScriptedEngine.Compact(File.ReadAllText(FixturePath("stdio.history.index.result.json")));
@@ -258,6 +383,8 @@ public sealed class HistoryPageTests
         public HistoryDetail Detail { get; init; } = new();
         public UndoResult Undo { get; init; } = new();
         public OutcomeResult Recover { get; init; } = new();
+        public PendingList Pending { get; init; } = new();
+        public int PendingCalls { get; private set; }
         public Exception? GetError { get; init; }
         public Exception? UndoError { get; init; }
         public List<string> GetCalls { get; } = [];
@@ -290,6 +417,12 @@ public sealed class HistoryPageTests
         {
             RecoverCalls.Add((session, rollback));
             return Task.FromResult(Recover);
+        }
+
+        public Task<PendingList> PendingAsync(CancellationToken ct)
+        {
+            PendingCalls++;
+            return Task.FromResult(Pending);
         }
 
         public ValueTask DisposeAsync()

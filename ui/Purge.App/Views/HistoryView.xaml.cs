@@ -110,6 +110,7 @@ public sealed partial class HistoryView : UserControl
 
     private void Render()
     {
+        CheckInterrupted.IsEnabled = !_vm.Busy;
         var phase = _vm.Phase;
         var ready = phase == HistoryPhase.Ready;
         StatePanel.Visibility = ready ? Visibility.Collapsed : Visibility.Visible;
@@ -125,7 +126,15 @@ public sealed partial class HistoryView : UserControl
             HistoryPhase.Error => ("Couldn't read the history.", _vm.Error ?? ""),
             _ => ("", ""),
         };
-        if (!ready) return;
+        if (!ready)
+        {
+            // "Check for interrupted cleanups" works on an empty list too: its bars still show.
+            InfoBarHost.Children.Clear();
+            if (_vm.Waiting is { } waiting) ShowInfo(InfoBarSeverity.Informational, waiting, _vm.WaitingDetail, closable: false);
+            if (_vm.ActionInfo is { } info) ShowInfo(InfoBarSeverity.Informational, info, "");
+            if (_vm.ActionError is { } error) ShowInfo(InfoBarSeverity.Error, "Couldn't finish that.", error);
+            return;
+        }
         FillRows();
         RenderDetail();
     }
@@ -258,6 +267,8 @@ public sealed partial class HistoryView : UserControl
     private void OnOpenVault(object sender, RoutedEventArgs e) => MainWindow.Instance.Navigate("vault");
 
     private void OnRetryLoad(object sender, RoutedEventArgs e) => _ = _vm.LoadAsync();
+
+    private void OnCheckInterrupted(object sender, RoutedEventArgs e) => _ = _vm.CheckInterruptedAsync();
 
     private void OnShowItems(object sender, RoutedEventArgs e) => _ = _vm.ShowItemsAsync();
 

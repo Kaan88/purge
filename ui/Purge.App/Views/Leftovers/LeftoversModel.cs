@@ -160,6 +160,12 @@ public sealed class AttentionModel
 /// The Leftovers page's state machine and rules: paging, tick rules, re-tick after a re-scan,
 /// <c>plan.create</c> refusals, the waiting state and the result page (design 6.4, 7a S3, 8.1).
 /// It never claims an item was moved before <c>plan.execute</c> returned.
+/// <para>
+/// Threading: the model is driven from the UI thread and never leaves its context (no <c>ConfigureAwait(false)</c>),
+/// and the broker's notifications, which arrive on its reader thread, are posted to the context the model was made
+/// on. Every state change and every <see cref="Changed"/> so happens on the UI thread, and the view's refresh never
+/// reads the item list while another thread rewrites it.
+/// </para>
 /// </summary>
 public sealed class LeftoversViewModel : INotifyPropertyChanged
 {
@@ -175,18 +181,27 @@ public sealed class LeftoversViewModel : INotifyPropertyChanged
     private HashSet<string>? _rescanIds;
     private int _asked;
     private bool _busy;
+    private readonly SynchronizationContext? _context;
 
     public LeftoversViewModel(ILeftoversBroker broker, Action? allowForeground = null)
     {
         _broker = broker;
         _allowForeground = allowForeground;
-        _broker.ConsentShown += OnConsentShown;
-        _broker.BaselineChanged += OnBaselineChanged;
+        _context = SynchronizationContext.Current;
+        _broker.ConsentShown += shown => OnContext(() => OnConsentShown(shown));
+        _broker.BaselineChanged += changed => OnContext(() => OnBaselineChanged(changed));
+    }
+
+    /// <summary>Runs a broker notification's handler on the model's context (the UI thread in the app).</summary>
+    private void OnContext(Action handler)
+    {
+        if (_context is { } context && SynchronizationContext.Current != context) context.Post(_ => handler(), null);
+        else handler();
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
-    /// <summary>Raised after any state change, on whatever thread the change came from.</summary>
+    /// <summary>Raised after any state change, on the context that drives the model (the UI thread in the app).</summary>
     public event Action? Changed;
 
     public LeftoversPhase Phase { get; private set; } = LeftoversPhase.Empty;
@@ -293,7 +308,7 @@ public sealed class LeftoversViewModel : INotifyPropertyChanged
         try
         {
             Scan = new ScanResult { ScanId = scanId, Mode = mode };
-            await LoadCandidatesAsync(Scan, ct).ConfigureAwait(false);
+            await LoadCandidatesAsync(Scan, ct);
             BuildGroups();
             ApplyTicks(null);
             Phase = LeftoversPhase.Review;
@@ -362,10 +377,10 @@ public sealed class LeftoversViewModel : INotifyPropertyChanged
                 Changed?.Invoke();
             });
             var scan = sessionId is { Length: > 0 }
-                ? await _broker.ScanSessionAsync(sessionId, forced, activity, ct).ConfigureAwait(false)
-                : await _broker.ScanStoredAsync(programId ?? "", activity, ct).ConfigureAwait(false);
+                ? await _broker.ScanSessionAsync(sessionId, forced, activity, ct)
+                : await _broker.ScanStoredAsync(programId ?? "", activity, ct);
             Scan = scan;
-            await LoadCandidatesAsync(scan, ct).ConfigureAwait(false);
+            await LoadCandidatesAsync(scan, ct);
             BuildGroups();
             ApplyTicks(_rescanTicks);
             if (rescan) DescribeRescan();
@@ -401,7 +416,7 @@ public sealed class LeftoversViewModel : INotifyPropertyChanged
         var total = uint.MaxValue;
         while (offset < total)
         {
-            var page = await _broker.CandidatesAsync(scan.ScanId, offset, CandidatePageSize, ct).ConfigureAwait(false);
+            var page = await _broker.CandidatesAsync(scan.ScanId, offset, CandidatePageSize, ct);
             total = page.Total;
             if (page.Items.Count == 0) break;
             foreach (var candidate in page.Items) Items.Add(ToModel(candidate));
@@ -542,7 +557,7 @@ public sealed class LeftoversViewModel : INotifyPropertyChanged
         if (Scan is null) return;
         try
         {
-            var explanation = await _broker.ExplainAsync(Scan.ScanId, item.CandidateId, ct).ConfigureAwait(false);
+            var explanation = await _broker.ExplainAsync(Scan.ScanId, item.CandidateId, ct);
             item.Evidence = explanation.Evidence;
             item.Blockers = explanation.Blockers;
         }
@@ -581,7 +596,7 @@ public sealed class LeftoversViewModel : INotifyPropertyChanged
             try
             {
                 plan = await _broker.CreatePlanAsync(Scan.ScanId, chosen.Select(i => i.CandidateId).ToList(), ct)
-                    .ConfigureAwait(false);
+                    ;
             }
             catch (BrokerRpcException ex) when (ex.Kind == "plan_refused")
             {
@@ -603,7 +618,7 @@ public sealed class LeftoversViewModel : INotifyPropertyChanged
                 WaitingDetail = p.Phase;
                 Changed?.Invoke();
             });
-            var result = await _broker.ExecuteAsync(plan.PlanId, restorePoint, progress, ct).ConfigureAwait(false);
+            var result = await _broker.ExecuteAsync(plan.PlanId, restorePoint, progress, ct);
             Result = result;
             BuildResult(result);
             Phase = LeftoversPhase.Result;
@@ -746,7 +761,7 @@ public sealed class LeftoversViewModel : INotifyPropertyChanged
                 WaitingDetail = p.Phase;
                 Changed?.Invoke();
             });
-            var undo = await _broker.UndoAsync(undoTarget, progress, ct).ConfigureAwait(false);
+            var undo = await _broker.UndoAsync(undoTarget, progress, ct);
             Undo = undo;
             UndoConflictLines.Clear();
             foreach (var conflict in undo.Conflicts)
@@ -799,7 +814,7 @@ public sealed class LeftoversViewModel : INotifyPropertyChanged
         try
         {
             _allowForeground?.Invoke();
-            var retried = await _broker.RetryHeldAsync(result.Session, ct).ConfigureAwait(false);
+            var retried = await _broker.RetryHeldAsync(result.Session, ct);
             Phase = LeftoversPhase.Result;
             Info = retried.Outcome == Outcome.Complete
                 ? "The held items were tried again and moved."

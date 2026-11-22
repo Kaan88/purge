@@ -24,10 +24,39 @@ public interface IHistoryBroker : IAsyncDisposable
 
     /// <summary><c>journal.resume</c> or <c>journal.rollback {session}</c>: the recovery banner's two buttons.</summary>
     Task<OutcomeResult> RecoverAsync(string session, bool rollback, CancellationToken ct);
+
+    /// <summary>
+    /// <c>journal.pending</c>: the interrupted sessions the broker reads from the journals, those the index does not
+    /// list as open among them (a run that never reached its index entry, or whose report was never written).
+    /// </summary>
+    Task<PendingList> PendingAsync(CancellationToken ct);
 }
 
-/// <summary><see cref="IHistoryBroker"/> over a launched broker; disposing it ends the broker.</summary>
-public sealed class HistoryBroker : IHistoryBroker
+/// <summary>
+/// The broker calls of the Quarantine vault (design 7a page table): <c>undo.run</c> for "Put back…" and
+/// <c>quarantine.expiring</c> then <c>quarantine.purge</c> for "Review and delete…". The list is
+/// <c>history.index</c> on the medium engine; only these start the broker.
+/// </summary>
+public interface IVaultBroker : IAsyncDisposable
+{
+    /// <summary>False once the broker link ended; the page then launches a new broker on the next click.</summary>
+    bool IsLive { get; }
+
+    /// <summary>Lets the broker's dialog come to the foreground; called before a call that shows one.</summary>
+    void AllowForeground();
+
+    /// <summary><c>undo.run {session}</c> for the whole session.</summary>
+    Task<UndoResult> UndoAsync(string session, IReadOnlyList<uint>? ops, IProgress<Progress>? progress, CancellationToken ct);
+
+    /// <summary><c>quarantine.expiring</c>: what is past its retention now, with the broker's ids.</summary>
+    Task<ExpiringList> ExpiringAsync(CancellationToken ct);
+
+    /// <summary><c>quarantine.purge {expiry_ids}</c>: the broker's purge dialogs, then the deletes the user approved.</summary>
+    Task<PurgeResult> PurgeAsync(IReadOnlyList<string> expiryIds, CancellationToken ct);
+}
+
+/// <summary><see cref="IHistoryBroker"/> and <see cref="IVaultBroker"/> over a launched broker; disposing it ends the broker.</summary>
+public sealed class HistoryBroker : IHistoryBroker, IVaultBroker
 {
     private readonly BrokerSession _session;
     private IProgress<Progress>? _progress;
@@ -65,6 +94,16 @@ public sealed class HistoryBroker : IHistoryBroker
     public Task<OutcomeResult> RecoverAsync(string session, bool rollback, CancellationToken ct) =>
         _session.Rpc.CallAsync(rollback ? "journal.rollback" : "journal.resume", new SessionParams { Session = session },
             RpcJsonContext.Default.SessionParams, RpcJsonContext.Default.OutcomeResult, ct);
+
+    public Task<PendingList> PendingAsync(CancellationToken ct) =>
+        _session.Rpc.CallAsync("journal.pending", RpcJsonContext.Default.PendingList, ct);
+
+    public Task<ExpiringList> ExpiringAsync(CancellationToken ct) =>
+        _session.Rpc.CallAsync("quarantine.expiring", RpcJsonContext.Default.ExpiringList, ct);
+
+    public Task<PurgeResult> PurgeAsync(IReadOnlyList<string> expiryIds, CancellationToken ct) =>
+        _session.Rpc.CallAsync("quarantine.purge", new PurgeParams { ExpiryIds = [.. expiryIds] },
+            RpcJsonContext.Default.PurgeParams, RpcJsonContext.Default.PurgeResult, ct);
 
     public ValueTask DisposeAsync()
     {
