@@ -4,9 +4,14 @@ Branch `baseline`, pushed to `origin/baseline` (8c7142f). Design `docs/BASELINE_
 decision of this work is a row in `docs/DECISIONS.md` (Post-M1b). This file is kept current so the work can be
 continued from any harness: read it, then `git log --oneline -15` and `git worktree list`.
 
-## M3-R2 M2: FOURTH FABLE REVIEW OF f9bc039 ANSWERED 2026-11-22 (branch `r2-m2-inline`, pushed, NOT merged).
-- Fourth Fable review of f9bc039: changes needed (M6, L4); M5 + PATH filter closed → M6, L4, interpreter hosts
-  fixed in 5268a09, pending the fifth Fable review. Merge only after it.
+## M3-R2 M2: FIFTH FABLE REVIEW OF 518b48b ANSWERED 2026-11-22 (branch `r2-m2-inline`, pushed, NOT merged).
+- Fifth Fable review of 518b48b: changes needed (M7); M6, L4, interpreters, PATH closed → M7 fixed in 6e0d958,
+  pending the sixth Fable review (Fable said it approves the branch once M7 is fixed). Merge only after it.
+- M7: any argument token naming a host or interpreter (`conhost --headless powershell ...`, `rundll32
+  shell32.dll,ShellExec_RunDLL powershell ...`) makes the command `Medium`, for every program; `powershell_ise`
+  and `dotnet` added to `INTERPRETERS`.
+- Earlier round (fourth Fable review of f9bc039: changes needed (M6, L4); M5 + PATH filter closed → M6, L4,
+  interpreter hosts fixed in 5268a09):
 - M6: `sid` refuses any path not on a local fixed drive (UNC incl. `\\?\UNC\` and `\\localhost\c$`, mapped,
   `subst`, removable) for both the run and the data rule (DECISIONS H3 row). L4: a leading `//` is UNC in the
   argument check. Interpreter hosts (`pipeline::INTERPRETERS`: python, node, java, wsl, wscript, mshta, ...) are
