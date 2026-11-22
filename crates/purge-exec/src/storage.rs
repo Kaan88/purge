@@ -113,6 +113,9 @@ pub const WRITER_LOCK_FILE: &str = "writer.lock";
 pub const WRITER_WAIT: Duration = Duration::from_secs(2);
 /// The pause between two attempts to take the writer lock.
 const WRITER_POLL: Duration = Duration::from_millis(50);
+/// How long [`StorageRoots::writer_busy`] keeps trying before it answers busy: two brokers probing at
+/// once, or a scanner that opens the lock file for a moment, are not another writer.
+pub const WRITER_PROBE_WAIT: Duration = Duration::from_millis(250);
 /// Name of the journal in a session directory.
 pub const JOURNAL_FILE: &str = "journal.jsonl";
 /// Name of the copy of the executed scan document in a session directory.
@@ -1247,11 +1250,15 @@ impl StorageRoots {
         }
     }
 
-    /// Whether another operation holds the writer lock now. The lock is taken and released at once,
-    /// so the answer is only a hint (a caller uses it to refuse before it shows a dialog); the
-    /// operation itself still takes the lock.
+    /// Whether another operation holds the writer lock now: the lock is taken, trying for up to
+    /// [`WRITER_PROBE_WAIT`], and released at once. The answer is only a hint (a caller uses it to
+    /// refuse before it shows a dialog); the operation itself still takes the lock.
     pub fn writer_busy(&self) -> Result<bool, StorageError> {
-        Ok(self.try_lock_writer()?.is_none())
+        match self.lock_writer_within(WRITER_PROBE_WAIT) {
+            Ok(_) => Ok(false),
+            Err(StorageError::WriterBusy { .. }) => Ok(true),
+            Err(e) => Err(e),
+        }
     }
 
     /// One attempt at the writer lock: `Ok(None)` when another handle holds it. The file is opened,

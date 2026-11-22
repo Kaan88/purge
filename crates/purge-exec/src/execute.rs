@@ -312,6 +312,50 @@ pub enum ExecError {
         "the plan selects {0} service, scheduled task or firewall rule item(s), which only an elevated process can remove; nothing was done"
     )]
     NeedsElevation(usize),
+    /// Sessions were interrupted (a run, undo or retry without its end) when the run took the store's
+    /// writer lock: recovery comes first. Checked with the lock held, after the caller's own check
+    /// (which an interruption between that check and the approval could pass). Nothing was done.
+    #[error(
+        "session(s) {} were interrupted; resume or roll them back first; nothing was done",
+        .0.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
+    )]
+    NeedsRecovery(Vec<SessionId>),
+    /// The journal of these sessions cannot be read or does not fit its index entry, found when the run
+    /// took the store's writer lock. Nothing was done.
+    #[error("the journal of session(s) {} is damaged; nothing was done", .0.join(", "))]
+    Damaged(Vec<String>),
+}
+
+/// Refuses a run while a session is interrupted or damaged: the rule the broker and the CLI check
+/// before their dialog, checked again once the run holds the writer lock (review R3, single writer).
+fn nothing_pending(roots: &StorageRoots) -> Result<(), ExecError> {
+    use crate::recover::{PendingKind, pending};
+    let list = pending(roots)?;
+    let damaged: Vec<String> = list
+        .sessions
+        .iter()
+        .filter(|s| s.kind == PendingKind::Damaged)
+        .map(|s| format!("{} ({})", s.session, s.detail))
+        .collect();
+    if !damaged.is_empty() {
+        return Err(ExecError::Damaged(damaged));
+    }
+    let open: Vec<SessionId> = list
+        .sessions
+        .into_iter()
+        .filter(|s| {
+            matches!(
+                s.kind,
+                PendingKind::Run | PendingKind::Undo | PendingKind::Retry
+            )
+        })
+        .map(|s| s.session)
+        .collect();
+    if open.is_empty() {
+        Ok(())
+    } else {
+        Err(ExecError::NeedsRecovery(open))
+    }
 }
 
 /// Why a run stops early.
@@ -2337,8 +2381,10 @@ pub fn execute<R: RestorePointBackend>(
     env: ExecEnv<'_>,
     restore_points: R,
 ) -> Result<ExecOutput, ExecError> {
-    // The store's single writer for the whole run, its start and its end included.
+    // The store's single writer for the whole run, its start and its end included; an interrupted
+    // session found now, with no other writer at work, comes first.
     let _writer = env.roots.lock_writer()?;
+    nothing_pending(env.roots)?;
     let run = Run::start(request, env)?;
     drive(run, restore_points)
 }
@@ -2360,6 +2406,7 @@ pub fn execute_bound<R: RestorePointBackend>(
     restore_points: R,
 ) -> Result<ExecOutput, ExecError> {
     let _writer = env.roots.lock_writer()?;
+    nothing_pending(env.roots)?;
     let run = Run::start_bound(plan, settings, Some(fingerprint), env)?;
     drive(run, restore_points)
 }

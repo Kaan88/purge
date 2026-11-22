@@ -1775,3 +1775,116 @@ fn a_writer_that_dies_releases_the_lock() {
     child.wait().unwrap();
     roots.lock_writer_within(Duration::from_secs(10)).unwrap();
 }
+
+/// The probe before a dialog retries for [`WRITER_PROBE_WAIT`]: a lock held for a moment (another
+/// broker's probe, a scanner opening the file) is not a busy writer; one held throughout is.
+#[test]
+fn the_busy_probe_rides_out_a_momentary_holder() {
+    let (_s, roots) = fixture("writer-probe");
+    let held = roots.lock_writer_within(Duration::ZERO).unwrap();
+    std::thread::scope(|scope| {
+        scope.spawn(move || {
+            std::thread::sleep(Duration::from_millis(60));
+            drop(held);
+        });
+        assert!(!roots.writer_busy().unwrap(), "a 60 ms holder is not busy");
+    });
+    let _held = roots.lock_writer_within(Duration::ZERO).unwrap();
+    let started = std::time::Instant::now();
+    assert!(roots.writer_busy().unwrap());
+    assert!(started.elapsed() >= WRITER_PROBE_WAIT);
+}
+
+/// Set only in the children of [`two_processes_write_the_index_one_at_a_time`]: the data root, and the
+/// file the child writes its lock intervals to.
+const INDEX_CHILD_ROOT: &str = "PURGE_STORE_INDEX_CHILD_ROOT";
+const INDEX_CHILD_LOG: &str = "PURGE_STORE_INDEX_CHILD_LOG";
+/// Index updates each child makes.
+const INDEX_CHILD_UPDATES: usize = 12;
+
+/// A child of [`two_processes_write_the_index_one_at_a_time`]: each update under the writer lock, as
+/// every writing operation makes them, with the time the lock was held logged. Without its environment
+/// variables it does nothing.
+#[test]
+fn writer_index_child() {
+    let (Ok(root), Ok(log)) = (
+        std::env::var(INDEX_CHILD_ROOT),
+        std::env::var(INDEX_CHILD_LOG),
+    ) else {
+        return;
+    };
+    let roots = StorageRoots::relaxed(Path::new(&root)).unwrap();
+    let nanos = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    };
+    let mut lines = String::new();
+    for _ in 0..INDEX_CHILD_UPDATES {
+        let id = SessionId::new(sys::now(), sys::random_u64());
+        let writer = roots.lock_writer_within(Duration::from_secs(60)).unwrap();
+        let from = nanos();
+        roots
+            .update_index(|index| index.upsert(summary(id.clone(), 5, 1)))
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(5));
+        let to = nanos();
+        drop(writer);
+        lines.push_str(&format!("{from} {to}\n"));
+    }
+    std::fs::write(log, lines).unwrap();
+}
+
+/// Two processes updating one index at once, each under the writer lock: their lock intervals never
+/// overlap and the index keeps every entry of both (single writer, review R3; unlocked, such writers
+/// lost entries and failed with sharing violations on the index's temporary file).
+#[test]
+fn two_processes_write_the_index_one_at_a_time() {
+    let (s, roots) = fixture("writer-two-processes");
+    let spawn = |log: &str| {
+        Command::new(std::env::current_exe().unwrap())
+            .args([
+                "storage::tests::writer_index_child",
+                "--exact",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(INDEX_CHILD_ROOT, s.path("data"))
+            .env(INDEX_CHILD_LOG, s.path(log))
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap()
+    };
+    let mut children = [spawn("a.log"), spawn("b.log")];
+    for child in &mut children {
+        assert!(child.wait().unwrap().success());
+    }
+    let mut intervals: Vec<(u128, u128)> = ["a.log", "b.log"]
+        .iter()
+        .flat_map(|log| {
+            std::fs::read_to_string(s.path(log))
+                .unwrap()
+                .lines()
+                .map(|line| {
+                    let (from, to) = line.split_once(' ').unwrap();
+                    (from.parse().unwrap(), to.parse().unwrap())
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert_eq!(intervals.len(), 2 * INDEX_CHILD_UPDATES);
+    intervals.sort_unstable();
+    for pair in intervals.windows(2) {
+        assert!(
+            pair[0].1 <= pair[1].0,
+            "two writers held the lock at once: {pair:?}"
+        );
+    }
+    assert_eq!(
+        roots.read_index().unwrap().sessions.len(),
+        2 * INDEX_CHILD_UPDATES,
+        "no index update was lost"
+    );
+}
