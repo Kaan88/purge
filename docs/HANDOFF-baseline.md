@@ -4,7 +4,18 @@ Branch `baseline`, pushed to `origin/baseline` (8c7142f). Design `docs/BASELINE_
 decision of this work is a row in `docs/DECISIONS.md` (Post-M1b). This file is kept current so the work can be
 continued from any harness: read it, then `git log --oneline -15` and `git worktree list`.
 
-## PAUSED 2026-11-22 02:45 (fifth pause: restarting Claude Code UNELEVATED). Read this first.
+## COLD BENCH SERIES RUNNING (started 2026-11-22 ~03:40, unattended; user asleep). Read this first.
+- The user's desktop-PC trial PASSED: the fe444fd installer installs, finds leftovers and deletes them.
+- The user said "push as you go" (pushing no longer needs asking).
+- Cold-after-reboot bench (M3_BENCH 9.2(e)) runs by itself: Startup-folder entry `purge-cold-bench.cmd` runs
+  `C:\purge-build\cold\cold-step.ps1` at each auto-logon: one `bench-launch --cold` (run 1 with `--reset`) with the
+  frozen `C:\purge-build\cold\purge` (= fe444fd ui-publish) and `xtask.exe`, then a reboot, 5 runs in all.
+  Log `C:\purge-build\cold\cold.log`, count `count.txt`, `DONE` when finished (the Startup entry deletes itself).
+  Stop it: create `C:\purge-build\cold\STOP`. Results: `bench/launch/cold-DESKTOP-K1F333G.json` (uncommitted).
+- On resume: check `DONE` + `cold.log` (5 runs, exit codes, CPU-idle warnings), read the gate in the json, fill
+  the cold row of docs/M3_BENCH.md, commit + push. Then the M3-R2 cleanup ("Still open from M3-R2" below).
+
+## PAUSED 2026-11-22 02:45 (fifth pause: restarting Claude Code UNELEVATED).
 
 Done this session (Claude Code, Opus 5.5, elevated): the "Recommended first move" of the section below.
 - Dirty M1-writer files **stashed** (not dropped): `git stash list` -> "dirty M1-writer leftovers (unwanted, per
