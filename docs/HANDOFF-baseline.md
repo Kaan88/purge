@@ -4,9 +4,13 @@ Branch `baseline`, pushed to `origin/baseline` (8c7142f). Design `docs/BASELINE_
 decision of this work is a row in `docs/DECISIONS.md` (Post-M1b). This file is kept current so the work can be
 continued from any harness: read it, then `git log --oneline -15` and `git worktree list`.
 
-## M3-R2 M2: FIFTH FABLE REVIEW OF 518b48b ANSWERED 2026-11-22 (branch `r2-m2-inline`, pushed, NOT merged).
-- Fifth Fable review of 518b48b: changes needed (M7); M6, L4, interpreters, PATH closed → M7 fixed in 6e0d958,
-  pending the sixth Fable review (Fable said it approves the branch once M7 is fixed). Merge only after it.
+## M3-R2 M2: APPROVED 2026-11-22 (branch `r2-m2-inline`, pushed; the coordinator merges it).
+- Fifth Fable review of 518b48b: changes needed (M7); M6, L4, interpreters, PATH closed → M7 fixed in 6e0d958;
+  sixth Fable review of 9126b48: approved; optional follow-ups (`:` split, 8.3 names) in 2eb3360 (no further
+  review needed). `origin/baseline` merged into the branch first (fea1208).
+- Follow-ups: an argument part after a non-drive `:` is judged as a program name too (`/RUN:powershell` →
+  `Medium`); an 8.3 short file name (`~` + digit, `POWERS~1.EXE`) in the program or any argument part → `Medium`;
+  trailing dots and spaces are trimmed from file names (`powershell.exe.`).
 - M7: any argument token naming a host or interpreter (`conhost --headless powershell ...`, `rundll32
   shell32.dll,ShellExec_RunDLL powershell ...`) makes the command `Medium`, for every program; `powershell_ise`
   and `dotnet` added to `INTERPRETERS`.
