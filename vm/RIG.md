@@ -624,9 +624,11 @@ rigtool baseline-diff --truth SHIPPED.tsv.gz --local LOCAL.tsv.gz [--neighbour S
   `Wait-M2BootSettle`, CPU under 10 % over 30 s, standby list emptied) and as the first build of that boot. Run
   `bl-r1-cleanpro-firstread` / `bl-r2-inbound-firstread`; no baseline-diff. Evidence
   `vm\truth\baseline-local\<run>.json` (`purge.rig.baseline-local-firstread/1`: seconds, uptime, settle, network,
-  peak, file size, source id and `#src` lines, `budget_sec` 60, `within_budget`) and `<run>-build.json`. Budget: BL-RM
-  S7's "settled first build at most 60 s on the rig VM" (design §5's 120 s is the cold-build figure). Exit 3 when the
-  build failed, the CPU did not settle, the standby list was not emptied, an adapter was up, or it took over 60 s.
+  peak, file size, source id and `#src` lines, `budget_sec` 120, `within_budget`) and `<run>-build.json`. Budget:
+  design §5's 120 s (4 CPUs), which the coordinator's "W4 is restated" (DECISIONS 2026-11-21) applies to a first-read
+  build on a settled machine; review BL-RM S7 proposed 60 s, which no ruling adopted (the first A0 evidence of
+  2026-11-22 was judged against 60 s by mistake). Exit 3 when the build failed, the CPU did not settle, the standby
+  list was not emptied, an adapter was up, or it took over the budget.
 
 ## 9. Running the rig from Linux (CachyOS host, 2026-11-14)
 

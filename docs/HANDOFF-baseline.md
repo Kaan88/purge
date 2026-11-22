@@ -131,7 +131,7 @@ with `target\release\purge-engine.exe` and `vm\rigtool\target\release\rigtool.ex
 committed (m1b.sh BIND needs clean sources and rig inputs). Details: `vm\RIG.md` §8a (FirstRead) and §12.9 (R4).
 ```
 $env:VMPWFILE = '<pw file>'
-# A0  W4 settled first read (BL-RM S7; budget 60 s on the rig VM) -> vm\truth\baseline-local\bl-r?-*-firstread.json
+# A0  W4 settled first read (BL-RM S7; budget 120 s, design §5 / DECISIONS "W4 is restated") -> vm\truth\baseline-local\bl-r?-*-firstread.json
 .\vm\rig-baseline-local.ps1 -Mode R1 -FirstRead
 .\vm\rig-baseline-local.ps1 -Mode R2 -FirstRead
 # A3  exact smoke: first rig run with the BL-R1 M1 tree; run.json engine.hello must say asked/expected exact, ok true

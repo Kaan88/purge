@@ -47,10 +47,11 @@
   boot settle, quiet CPU, standby list emptied), as the first build of that boot (review BL-RM S7: the settled pass of
   the three-pass job is the third read in one boot, after Defender scanned every manifest twice). No baseline-diff.
   Evidence: vm\truth\baseline-local\<run>.json (purge.rig.baseline-local-firstread/1: duration, settle, uptime,
-  network, peak, file size, source id and #src lines) and <run>-build.json. Budget: "settled first build at most 60 s
-  on the rig VM" (BL-RM S7; design section 5 gives 120 s for the cold build on a 2-vCPU VM). Exit 3 when the build
-  failed, the settle did not hold (CPU not settled or standby list not emptied), the guest was online, or the build
-  took more than 60 s (the W4 number is still recorded).
+  network, peak, file size, source id and #src lines) and <run>-build.json. Budget: 120 s, design section 5 as
+  restated by the coordinator 2026-11-21 (DECISIONS: "the 120 s budget (4 CPUs) holds for a first-read build on a
+  settled machine"); review BL-RM S7 proposed 60 s, which that ruling did not adopt. Exit 3 when the build failed,
+  the settle did not hold (CPU not settled or standby list not emptied), the guest was online, or the build took
+  more than the budget (the W4 number is still recorded).
 #>
 [CmdletBinding()]
 param(
@@ -65,8 +66,8 @@ $ErrorActionPreference = 'Stop'
 
 # rig.ps1 has parameters of its own (Mode, Engine, ...): ours are kept here first.
 $B = [ordered]@{ mode = $Mode; engine = $Engine; rigtool = $RigTool; allow_unelevated = [bool]$AllowUnelevated; first_read = [bool]$FirstRead }
-# W4 settled first read, seconds on the rig VM (review BL-RM S7: "settled first build at most 60 s on the rig VM").
-$BlFirstReadBudgetSec = 60
+# W4 settled first read, seconds on the rig VM (design section 5, DECISIONS 2026-11-21 "W4 is restated": 120 s, 4 CPUs).
+$BlFirstReadBudgetSec = 120
 $BlRigDir = $PSScriptRoot
 $BlRepo = Split-Path -Parent $PSScriptRoot
 
@@ -482,7 +483,7 @@ function Get-BlFirstReadEvidence($Build, $Spec, [int]$BudgetSec, [string[]]$Sour
         seconds = $sec; exit = $(if ($p) { $p.exit } else { $null }); uptime_sec = $(if ($p) { $p.uptime_sec } else { $null })
         peak_working_set_mb = $(if ($p) { $p.peak_working_set_mb } else { $null }); file_bytes = $(if ($p) { $p.file_bytes } else { $null })
         total_line = $(if ($p) { $p.total_line } else { $null }); load_seconds = $Build.info.seconds
-        budget_sec = $BudgetSec; budget_source = 'review BL-RM S7: settled first build at most 60 s on the rig VM (design section 5: cold build at most 120 s on a 2-vCPU VM)'
+        budget_sec = $BudgetSec; budget_source = 'design section 5 as restated by the coordinator 2026-11-21 (DECISIONS "W4 is restated"): first-read build on a settled machine at most 120 s (4 CPUs)'
         within_budget = $within; settle = $st; network_up = $Build.network_up
         source_id = $(if (@($Sources).Count) { $Sources[0] } else { $null }); src = @($Sources | Select-Object -Skip 1)
         problems = $bad; ok = (-not $bad.Count) }
@@ -678,7 +679,7 @@ if ($rc -eq 0 -and $B.first_read) {
     $ev.doc.engine_path = $tools.engine
     [IO.File]::WriteAllText((Join-Path $BlReportDir "$($Spec.run).json"), (ConvertTo-Json -InputObject $ev.doc -Depth 6), (New-Object System.Text.UTF8Encoding($false)))
     $sd = $ev.doc.settle
-    Write-RigLog ("W4 settled first read: {0} s (budget {1} s, BL-RM S7) at uptime {2} s on {3} CPUs; peak {4} MB; file {5} bytes; CPU {6} % settled {7}; standby purged {8} -> $RRel\$($Spec.run).json" -f `
+    Write-RigLog ("W4 settled first read: {0} s (budget {1} s, design section 5) at uptime {2} s on {3} CPUs; peak {4} MB; file {5} bytes; CPU {6} % settled {7}; standby purged {8} -> $RRel\$($Spec.run).json" -f `
         $ev.doc.seconds, $BlFirstReadBudgetSec, $ev.doc.uptime_sec, $ev.doc.cpus, $ev.doc.peak_working_set_mb, $ev.doc.file_bytes, $sd.cpu_percent, $sd.cpu_settled, $sd.cache_purged)
     foreach ($b in $ev.problems) { Write-RigLog "PROBLEM: $b" }
     $rc = $(if ($ev.ok) { 0 } else { 3 })
