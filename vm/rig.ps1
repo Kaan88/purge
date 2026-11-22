@@ -508,8 +508,13 @@ $ErrorActionPreference = 'Continue'
 # run's engine-hello makes the S4 part stale, so hello reports trust None (BL-GATE R4, blm-m1bcp-7zip 2026-11-22).
 # Both the policy and the Store's own machine setting; before snap 0, so it is never part of an app's truth.
 foreach ($k in 'HKLM:\SOFTWARE\Policies\Microsoft\WindowsStore', 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsStore\WindowsUpdate') {
-    # New-Item only when the key is missing: -Force on an existing registry key replaces it (its values go).
-    try { if (-not (Test-Path -LiteralPath $k)) { $null = New-Item -Path $k }; Set-ItemProperty -Path $k -Name AutoDownload -Value 2 -Type DWord; "store: $k AutoDownload=2" }
+    # New-Item only when the key is missing (-Force then creates missing parents too): -Force on an existing
+    # registry key replaces it (its values go). -ErrorAction Stop so that a failure reaches the catch.
+    try {
+        if (-not (Test-Path -LiteralPath $k)) { $null = New-Item -Path $k -Force -ErrorAction Stop }
+        Set-ItemProperty -Path $k -Name AutoDownload -Value 2 -Type DWord -ErrorAction Stop
+        "store: $k AutoDownload=2"
+    }
     catch { "store: $k not set: $($_.Exception.Message)" }
 }
 $o = @(& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File 'C:\cr\install\install.ps1' -DataRootOnly 2>&1 | ForEach-Object { "$_" })
