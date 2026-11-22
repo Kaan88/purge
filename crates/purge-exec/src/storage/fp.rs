@@ -1,0 +1,284 @@
+//! The broker's fingerprint store: `<data root>\fp` and `fp\msitables` as checked `Store` directories
+//! (DECISIONS 2026-11-22, "fp checked").
+//!
+//! The broker writes, replaces and sweeps files in these two directories while elevated. They are
+//! admin-only on a correct install (`install.ps1` creates `fp` with the `Store` descriptor), but a
+//! directory a standard user could write (ACL drift, a restored backup, a future installer bug) would
+//! let a junction to `\RPC Control` and an object symbolic link turn a rename by path into an
+//! overwrite of any file, and a delete by path into a delete of any file. So both are checked like
+//! `sessions` and `Quarantine`: opened relative to the checked data root, without following a reparse
+//! point, and judged by [`verdict`] as [`ObjectKind::Store`] on that handle (a failing object is
+//! renamed aside, [`StorageError::Integrity`]); and every file in them is created, opened, replaced
+//! and deleted relative to the directory's checked handle, a reparse point at the name opened itself,
+//! never followed ([`FpDir`]).
+
+use std::fs::File;
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use purge_win::fs_write::{self, FsError};
+
+use super::{
+    CheckedDir, ObjectKind, REPLACE_RETRY_MS, StorageError, StorageRoots, at, io, is_store_name,
+    os_error,
+};
+
+/// The fingerprint directory under the data root.
+pub const FP_DIR: &str = "fp";
+/// The MSI table cache directory under [`FP_DIR`].
+pub const MSI_TABLES_DIR: &str = "msitables";
+
+/// `FILETIME` of the Unix epoch (100 ns ticks since 1601).
+const UNIX_EPOCH_FILETIME: i64 = 116_444_736_000_000_000;
+
+impl StorageRoots {
+    /// `<data root>\fp`.
+    pub fn fp_path(&self) -> PathBuf {
+        self.data_root.join(FP_DIR)
+    }
+
+    /// `<data root>\fp\msitables`.
+    pub fn msi_tables_path(&self) -> PathBuf {
+        self.fp_path().join(MSI_TABLES_DIR)
+    }
+
+    /// `<data root>\fp`, after checking the data root and `fp` (created with the `Store` descriptor
+    /// when missing, as the installer does). A failing `fp` is renamed aside and refused this time; the
+    /// next use creates a new one.
+    pub fn fp_dir(&self) -> Result<FpDir, StorageError> {
+        let root = self.checked_data_root()?;
+        let dir = self.fp_child(&root)?;
+        Ok(FpDir {
+            roots: self.clone(),
+            dir,
+        })
+    }
+
+    /// `<data root>\fp\msitables`, after checking the data root, `fp` and `msitables` (each created with
+    /// the `Store` descriptor when missing).
+    pub fn msi_tables_dir(&self) -> Result<FpDir, StorageError> {
+        let root = self.checked_data_root()?;
+        let fp = self.fp_child(&root)?;
+        let dir = self
+            .child_dir(
+                &fp,
+                MSI_TABLES_DIR,
+                ObjectKind::Store,
+                super::Create::IfAbsent,
+            )?
+            .ok_or_else(|| io("open", &self.msi_tables_path(), FsError::NotFound))?;
+        Ok(FpDir {
+            roots: self.clone(),
+            dir,
+        })
+    }
+
+    fn fp_child(&self, root: &CheckedDir) -> Result<CheckedDir, StorageError> {
+        self.child_dir(root, FP_DIR, ObjectKind::Store, super::Create::IfAbsent)?
+            .ok_or_else(|| io("open", &self.fp_path(), FsError::NotFound))
+    }
+}
+
+/// A checked directory of the fingerprint store (`fp` or `fp\msitables`) and the handle it was checked
+/// through. Every file is reached relative to that handle, by one plain name Purge generates
+/// (ASCII letters, digits, `.`, `_`, `-`), never by path. The files are [`ObjectKind::StoreFile`]s:
+/// a file, not a reparse point, one link, owner Administrators or SYSTEM, nobody else may write.
+#[derive(Debug)]
+pub struct FpDir {
+    roots: StorageRoots,
+    dir: CheckedDir,
+}
+
+impl FpDir {
+    /// The path the directory was checked at, for messages.
+    pub fn path(&self) -> &Path {
+        self.dir.path()
+    }
+
+    /// The checked directory.
+    pub fn dir(&self) -> &CheckedDir {
+        &self.dir
+    }
+
+    fn leaf_path(&self, leaf: &str) -> Result<PathBuf, StorageError> {
+        let path = self.dir.path.join(leaf);
+        if is_store_name(leaf) {
+            Ok(path)
+        } else {
+            Err(StorageError::InvalidPath(path.display().to_string()))
+        }
+    }
+
+    /// The bytes of the file `leaf`, opened relative to the directory's handle and checked as a store
+    /// file on the handle it is read through; `Ok(None)` when nothing has the name. An object that
+    /// fails the check is renamed aside ([`StorageError::Integrity`]); a file over `max` bytes is
+    /// [`StorageError::TooLarge`], nothing of it read.
+    pub fn read(&self, leaf: &str, max: u64) -> Result<Option<Vec<u8>>, StorageError> {
+        let path = self.leaf_path(leaf)?;
+        let opened = self.roots.open_file_at(
+            &self.dir,
+            leaf,
+            ObjectKind::StoreFile,
+            at::Open {
+                access: at::GENERIC_READ | at::READ_CONTROL,
+                // A writer may replace the name meanwhile; this handle keeps reading the old file.
+                share: at::SHARE_ALL,
+                create: None,
+                kind: at::Kind::File,
+            },
+        )?;
+        let Some((file, facts)) = opened else {
+            return Ok(None);
+        };
+        let too_large = |bytes| StorageError::TooLarge {
+            path: path.clone(),
+            bytes,
+            max,
+        };
+        if facts.size > max {
+            return Err(too_large(facts.size));
+        }
+        let mut bytes = Vec::new();
+        file.take(max.saturating_add(1))
+            .read_to_end(&mut bytes)
+            .map_err(|e| io("read", &path, os_error(&e)))?;
+        if bytes.len() as u64 > max {
+            return Err(too_large(bytes.len() as u64));
+        }
+        Ok(Some(bytes))
+    }
+
+    /// Replaces the file `leaf` with `bytes`, atomically: the temporary file `temp` is created new in
+    /// this directory relative to its handle (`StoreFile` descriptor), written and flushed, then
+    /// renamed over `leaf` through its own handle and the directory's. Readers see the old document or
+    /// the new one, never a mix.
+    ///
+    /// An object at `leaf` that fails its check is refused and renamed aside, never replaced. An
+    /// object at `temp` (a crash's leftover, or something planted) is removed when it passes the
+    /// check as Purge's own file and otherwise refused and renamed aside; nothing at either name is
+    /// ever followed. On a failure after the temporary file was created, it is deleted through its
+    /// handle.
+    pub fn replace(&self, leaf: &str, temp: &str, bytes: &[u8]) -> Result<(), StorageError> {
+        let dest = self.leaf_path(leaf)?;
+        let temp_path = self.leaf_path(temp)?;
+        if leaf.eq_ignore_ascii_case(temp) {
+            return Err(StorageError::InvalidPath(temp_path.display().to_string()));
+        }
+        let inspect_only = at::Open {
+            access: at::READ_CONTROL | at::FILE_READ_ATTRIBUTES,
+            share: at::SHARE_ALL,
+            create: None,
+            kind: at::Kind::File,
+        };
+        // The document being replaced must pass its own check: a planted object is refused and
+        // renamed aside, never silently replaced.
+        self.roots
+            .open_file_at(&self.dir, leaf, ObjectKind::StoreFile, inspect_only)?;
+        // Whatever has the temporary name is opened itself and checked: Purge's own leftover is
+        // deleted through the checked handle, anything else is refused and renamed aside.
+        let stale = at::Open {
+            access: at::DELETE | at::READ_CONTROL | at::FILE_READ_ATTRIBUTES,
+            ..inspect_only
+        };
+        if let Some((stale, _)) =
+            self.roots
+                .open_file_at(&self.dir, temp, ObjectKind::StoreFile, stale)?
+        {
+            at::dispose(&stale).map_err(|e| io("delete", &temp_path, e))?;
+        }
+        let (file, _) = self
+            .roots
+            .create_file_at(&self.dir, temp, ObjectKind::StoreFile)?;
+        let written = write_and_replace(&file, bytes, &temp_path, &self.dir, leaf, &dest);
+        if written.is_err() {
+            let _ = at::dispose(&file);
+        }
+        written
+    }
+
+    /// Deletes the files of this directory that `is_temp` accepts and that were last written before
+    /// `before`: only names Purge generates, and only a plain file with one link (not a directory, not
+    /// a reparse point of any kind), opened relative to the directory's handle without following
+    /// anything and deleted through that handle. A file another handle holds open is left. Failures
+    /// are ignored: a file left stays harmless. Returns how many were deleted.
+    pub fn sweep(&self, is_temp: impl Fn(&str) -> bool, before: SystemTime) -> usize {
+        let Some(cutoff) = filetime(before) else {
+            return 0;
+        };
+        let listing = at::open_at(
+            &self.dir.handle,
+            "",
+            at::Open {
+                access: at::FILE_LIST_DIRECTORY | at::FILE_READ_ATTRIBUTES,
+                share: at::SHARE_ALL,
+                create: None,
+                kind: at::Kind::Dir,
+            },
+        );
+        let Ok(names) = listing.and_then(|listing| at::list_names(&listing)) else {
+            return 0;
+        };
+        let mut removed = 0;
+        for name in names
+            .iter()
+            .filter(|name| is_store_name(name) && is_temp(name))
+        {
+            let Ok(handle) = at::open_at(
+                &self.dir.handle,
+                name,
+                at::Open {
+                    access: at::DELETE | at::FILE_READ_ATTRIBUTES,
+                    share: at::SHARE_NONE,
+                    create: None,
+                    kind: at::Kind::File,
+                },
+            ) else {
+                continue;
+            };
+            let Ok(facts) = at::facts(&handle) else {
+                continue;
+            };
+            let plain = !facts.is_dir && facts.reparse_tag == 0 && facts.n_links == 1;
+            if plain && facts.last_write < cutoff && at::dispose(&handle).is_ok() {
+                removed += 1;
+            }
+        }
+        removed
+    }
+}
+
+/// Writes `bytes` to the temporary file, flushes it and renames it over `leaf` of `dir`.
+fn write_and_replace(
+    file: &File,
+    bytes: &[u8],
+    temp_path: &Path,
+    dir: &CheckedDir,
+    leaf: &str,
+    dest: &Path,
+) -> Result<(), StorageError> {
+    let mut writer = file;
+    writer
+        .write_all(bytes)
+        .map_err(|e| io("write", temp_path, os_error(&e)))?;
+    fs_write::flush(file).map_err(|e| io("flush", temp_path, e))?;
+    let mut waits = REPLACE_RETRY_MS.iter();
+    loop {
+        match at::rename_at(file, &dir.handle, leaf, true) {
+            Ok(()) => return Ok(()),
+            // A reader that does not share delete access holds the old document: wait a little.
+            Err(e @ (FsError::SharingViolation | FsError::AccessDenied)) => match waits.next() {
+                Some(&ms) => std::thread::sleep(Duration::from_millis(ms)),
+                None => return Err(io("replace", dest, e)),
+            },
+            Err(e) => return Err(io("replace", dest, e)),
+        }
+    }
+}
+
+/// `time` as a `FILETIME`, or `None` before 1970 or past the range.
+fn filetime(time: SystemTime) -> Option<i64> {
+    let since = time.duration_since(UNIX_EPOCH).ok()?;
+    let ticks = i64::try_from(since.as_nanos() / 100).ok()?;
+    ticks.checked_add(UNIX_EPOCH_FILETIME)
+}

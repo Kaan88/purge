@@ -48,7 +48,10 @@ checks and the cap). Nothing above it turns a client value into a path.
 8. **Fingerprints.** Written atomically (temp + rename) under `<data root>\fp`, the name a SHA-256 of
    the program id; reading verifies the stored document names the same program. `prepare` fails if
    the store cannot be written; after a run or observation the update is best effort (the session in
-   memory is what this broker scans with).
+   memory is what this broker scans with). Since 2026-11-22 ("fp checked" in DECISIONS) `fp` and
+   `fp\msitables` are checked store directories and every read, write, rename and sweep in them goes
+   through purge-exec's `FpDir`, relative to the checked handle, never by path; the broker's MSI table
+   cache is `msitables::StoreTableCaches` over the same store.
 
 ## Tests to the review points
 

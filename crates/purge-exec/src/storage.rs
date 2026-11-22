@@ -12,6 +12,8 @@
 //!             reg\<op>.regbackup.json, def\<op>.json
 //!     Quarantine\                    Store
 //!         <session>\<op>\<leaf>      Store        items moved from the data root's volume
+//!     fp\                            Store        fp-<sha256>.json: the broker's stored fingerprints
+//!         msitables\                 Store        <sha256>.json: the broker's MSI table cache
 //! X:\.purge-q\<session>\<op>\<leaf>  Store        items from another fixed NTFS/ReFS volume
 //! ```
 //!
@@ -43,7 +45,8 @@
 //!   descriptor, written and flushed, then renamed over the index inside the checked `sessions`
 //!   directory, which is flushed too. A crash leaves the old or the new index, never a torn one.
 //! - Files are never opened by path. Every file inside the layout (the index, its temporary file,
-//!   the journal, reports, backups, definitions) is created or opened with `NtCreateFile` relative
+//!   the journal, reports, backups, definitions, the fingerprints and MSI table cache files of `fp`
+//!   and their temporary files, [`FpDir`]) is created or opened with `NtCreateFile` relative
 //!   to the handle of its freshly checked directory, and its facts are checked on the handle that
 //!   is then used ([`StoreFile`]). Directories below a checked directory are created the same way.
 //! - The index is a convenience. A missing index while session directories exist is
@@ -65,6 +68,7 @@
 
 mod at;
 mod cap;
+mod fp;
 mod integrity;
 mod sys;
 
@@ -90,6 +94,7 @@ use purge_win::fs_write::{
 use purge_win::secure;
 
 pub use cap::{CAP_ABSOLUTE_BYTES, CAP_VOLUME_PERCENT, CapExceeded, cap_bytes, check_cap};
+pub use fp::{FP_DIR, FpDir, MSI_TABLES_DIR};
 pub use integrity::{
     IntegrityFailure, IntegrityPolicy, ObjectFacts, ObjectKind, ROOT_TAKEOVER_RIGHTS,
     SDDL_DATA_ROOT, SDDL_INDEX, SDDL_SESSIONS, SDDL_STORE, SDDL_STORE_FILE, verdict,
@@ -1024,7 +1029,7 @@ impl StorageRoots {
     }
 
     /// Creates a fresh tree at `data_root` the way `install.ps1` does (data root, `sessions`,
-    /// `Quarantine`, `index.json` as `{}`), with the relaxed policy's descriptors, and returns relaxed
+    /// `Quarantine`, `fp`, `index.json` as `{}`), with the relaxed policy's descriptors, and returns relaxed
     /// storage over it. `data_root` must not exist; its parent must. Only under `cfg(test)` or the
     /// `test-support` feature.
     #[cfg(any(test, feature = "test-support"))]
@@ -1035,6 +1040,7 @@ impl StorageRoots {
         }
         roots.make_dir(&roots.sessions_path(), ObjectKind::Sessions)?;
         roots.make_dir(&roots.quarantine_path(), ObjectKind::Store)?;
+        roots.make_dir(&roots.fp_path(), ObjectKind::Store)?;
         let index = roots.index_path();
         let mut file =
             fs_write::create_file_secure(&ext(&index)?, &roots.policy.sddl_for(ObjectKind::Index))
@@ -1123,10 +1129,11 @@ impl StorageRoots {
             .map_err(|e| io("read the volume of", path, e))
     }
 
-    /// Checks the data root, `sessions` and `Quarantine` (creating the last two when missing, as the
-    /// installer would). A pre-flight for callers; every other method checks on its own.
+    /// Checks the data root, `sessions`, `Quarantine` and `fp` (creating the last three when missing,
+    /// as the installer would). A pre-flight for callers; every other method checks on its own.
     pub fn check(&self) -> Result<(), StorageError> {
-        self.layout().map(|_| ())
+        self.layout()?;
+        self.fp_dir().map(|_| ())
     }
 
     /// Creates a new session: a fresh id (UTC now + 64 random bits) and its directory under
@@ -1316,12 +1323,17 @@ impl StorageRoots {
 
     // ---- internals ----
 
-    /// Checks the data root, `sessions` and `Quarantine`.
-    fn layout(&self) -> Result<Layout, StorageError> {
+    /// Checks the data root.
+    fn checked_data_root(&self) -> Result<CheckedDir, StorageError> {
         let root = self
             .inspect(&self.data_root, ObjectKind::DataRoot, None)?
             .ok_or_else(|| StorageError::NotInstalled(self.data_root.clone()))?;
-        let root = checked(self.data_root.clone(), root);
+        Ok(checked(self.data_root.clone(), root))
+    }
+
+    /// Checks the data root, `sessions` and `Quarantine`.
+    fn layout(&self) -> Result<Layout, StorageError> {
+        let root = self.checked_data_root()?;
         let sessions = self
             .child_dir(&root, SESSIONS_DIR, ObjectKind::Sessions, Create::IfAbsent)?
             .ok_or_else(|| io("open", &self.sessions_path(), FsError::NotFound))?;

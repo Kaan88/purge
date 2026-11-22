@@ -464,6 +464,8 @@ pub(crate) struct Facts {
     pub size: u64,
     /// Volume serial and file id.
     pub file_id: FileId,
+    /// Last write time (`FILETIME`, 100 ns since 1601 UTC).
+    pub last_write: i64,
 }
 
 /// The facts of the object behind `h`.
@@ -486,6 +488,7 @@ pub(crate) fn facts(h: &impl AsHandle) -> Result<Facts, FsError> {
             volume_serial: id.volume_serial,
             id: id.file_id,
         },
+        last_write: basic.last_write,
     })
 }
 

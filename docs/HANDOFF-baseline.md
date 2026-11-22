@@ -4,6 +4,33 @@ Branch `baseline`, pushed to `origin/baseline` (8c7142f). Design `docs/BASELINE_
 decision of this work is a row in `docs/DECISIONS.md` (Post-M1b). This file is kept current so the work can be
 continued from any harness: read it, then `git log --oneline -15` and `git worktree list`.
 
+## FP CHECKED 2026-11-22 (branch `r3-fp-checked` from baseline 0d2879e; pushed, NOT merged: Fable review next).
+- Why: the R3 Fable re-review's follow-up. The elevated broker wrote, renamed and swept fingerprint files in
+  `<data root>\fp` by path (and its MSI table cache wrote `fp\msitables` by path); `fp` was admin-only only by
+  the installer's descriptor, never checked at run time. A user-writable `fp` would let a junction to
+  `\RPC Control` + object symlink turn the rename into an arbitrary overwrite and the sweep into an arbitrary
+  delete.
+- Fix (purge-exec `storage/fp.rs`): `StorageRoots::fp_dir` / `msi_tables_dir` = checked `Store` directories
+  (relative to the checked data root, created with `Store` when missing, failing ones renamed aside);
+  `check()` covers `fp`; `install_relaxed` creates it. `FpDir::{read, replace, sweep}` act relative to the
+  checked handle only (files are `StoreFile`s; temp leftovers checked then deleted by handle; sweep only old
+  plain one-link files). `at::Facts` gained `last_write`. Broker: fingerprint read/write/sweep through `FpDir`
+  (`uninstall.rs`), MSI table cache `msitables::StoreTableCaches` via the new `Settings::msi_table_source`
+  (`pipeline::table_cache` takes it before any path). purge-index: `encode_cache_file`/`decode_cache_file`/
+  `temp_file_name` (same format, same names). Engine unchanged by path (justified in DECISIONS row "fp checked").
+- Effect on installs: an old `fp\msitables` (made by path, inherited DACL) is renamed aside once to
+  `msitables.rejected-<utc>`; the cache refills.
+- Checks (unelevated, TEMP=C:\purge-build\tmp): fmt --check, clippy --workspace --all-targets -D warnings, rig
+  clippy (rig-exec + test-support), purge-mcp clippy, check-deps, no-new-walks, gen-dto --check: ok. purge-exec
+  (fault-inject + test-support) lib 491 (8 ignored) + every integration target; purge-broker 227 + 10 + 1;
+  purge-index 169 + 12 + 42 + 21; purge-engine default lib 69, engine 40, exec_cli 4; rig lib 74, engine 43,
+  exec_cli 14 (engine run with --test-threads=1: `m3_stdio::programs_list_sends_raw_rows_first_then_patches`
+  asserts a 50 ms wall clock and failed twice under the parallel run's load on this laptop, passes alone and
+  single-threaded; it reads no fp/msitables).
+- Symlink case of the tests runs only where the account may create symbolic links (skipped otherwise).
+- Open: none blocking. `<data root>\baseline` (local baseline cache) is still written by path by the broker's
+  build thread (`pipeline::baseline`), guarded by its admin-only checks only: same class, out of scope here.
+
 ## R3 SINGLE WRITER + UI FOLLOW-UPS 2026-11-22 (branch `r3-single-writer`; Fable re-review APPROVED, merged into baseline).
 - Verdict: two brokers (Leftovers' and History's/Vault's) could write one store at once with no guard. The index's
   read-modify-write lost entries and failed its read-back (measured: 6 unlocked writers x 4 updates, 18 sharing

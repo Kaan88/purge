@@ -126,7 +126,10 @@ impl<S> Started<S> {
         Settings {
             baseline_dir: Some(self.kb_dir.join("baselines")),
             purge_dirs: vec![path(&self.install_dir), path(&self.data_root)],
+            // Names the cache in the timing line only: the broker's cache is its store's checked
+            // `fp\msitables`, set by `main` (`msitables::StoreTableCaches`), never opened by path.
             msi_table_dir: Some(self.data_root.join("fp").join("msitables")),
+            msi_table_source: None,
             local_baseline_dir: Some(self.data_root.join("baseline")),
             data_root: Some(self.data_root.clone()),
             check_shipped_dir: true,

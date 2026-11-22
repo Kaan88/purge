@@ -8,13 +8,14 @@ use purge_win::sid::{ADMINISTRATORS_SID, LOCAL_SYSTEM_SID, TRUSTED_INSTALLER_SID
 pub const SDDL_DATA_ROOT: &str = "O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;;0x100020;;;BU)";
 /// `C:\ProgramData\Purge\sessions` (`install/README.md`, constant `Sessions`).
 pub const SDDL_SESSIONS: &str = "O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;;0x100020;;;BU)";
-/// `Quarantine`, and every directory purge-exec creates: session and op directories, `reg`, `def`,
-/// `X:\.purge-q` (`install/README.md`, constant `Store`).
+/// `Quarantine`, `fp`, and every directory purge-exec creates: session and op directories, `reg`,
+/// `def`, `X:\.purge-q`, `fp\msitables` (`install/README.md`, constant `Store`).
 pub const SDDL_STORE: &str = "O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)";
 /// `sessions\index.json` and the temporary file of its atomic rewrite (`install/README.md`, constant
 /// `Index`): the one object standard users may read.
 pub const SDDL_INDEX: &str = "O:BAD:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;BU)";
-/// Files purge-exec creates inside a session directory (journal, reports, backups). Not an installer
+/// Files purge-exec creates inside a session directory (journal, reports, backups) and in `fp` and
+/// `fp\msitables` (fingerprints, MSI table cache files, their temporary files). Not an installer
 /// constant: the admin-only `Store` access without the inheritance flags, which a file has no use for.
 pub const SDDL_STORE_FILE: &str = "O:BAD:P(A;;FA;;;SY)(A;;FA;;;BA)";
 
@@ -31,11 +32,12 @@ pub enum ObjectKind {
     DataRoot,
     /// `sessions`.
     Sessions,
-    /// `Quarantine`, `X:\.purge-q`, and every directory below them or below `sessions`.
+    /// `Quarantine`, `X:\.purge-q`, `fp`, `fp\msitables`, and every directory below them or below
+    /// `sessions`.
     Store,
     /// `sessions\index.json`.
     Index,
-    /// A file inside a session directory.
+    /// A file inside a session directory, `fp` or `fp\msitables`.
     StoreFile,
 }
 
@@ -651,6 +653,50 @@ mod tests {
             verdict(&strict, ObjectKind::Store, &dir_facts(dacl)),
             Err(IntegrityFailure::ForeignAccess { sid: None, mask: 1 })
         );
+    }
+
+    #[test]
+    fn a_user_writable_fingerprint_directory_is_refused() {
+        // `fp` and `fp\msitables` are `Store` directories (DECISIONS 2026-11-22, fp checked). The
+        // shapes a drifted `fp` takes: Users or Authenticated Users with Modify (explicit or inherited),
+        // a user with only add-file or delete-child, a user-owned directory, or a directory created by
+        // path under `fp` that inherits instead of carrying its own protected DACL.
+        let strict = IntegrityPolicy::strict();
+        assert_eq!(
+            verdict(&strict, ObjectKind::Store, &dir_facts(admin_dacl())),
+            Ok(())
+        );
+        for (entry, refused) in [
+            (ace(USERS, 0x0013_01BF, 0x03), 0x0013_01BF),
+            (ace("S-1-5-11", 0x0013_01BF, 0x13), 0x0013_01BF),
+            (ace(ME, 0x2, 0), 0x2),
+            (ace(ME, 0x40, 0), 0x40),
+            (ace("S-1-1-0", 0x1000_0000, 0x0B), 0x1000_0000),
+        ] {
+            let mut dacl = admin_dacl();
+            dacl.push(entry.clone());
+            assert_eq!(
+                verdict(&strict, ObjectKind::Store, &dir_facts(dacl)),
+                Err(IntegrityFailure::ForeignAccess {
+                    sid: entry.sid.clone(),
+                    mask: refused
+                }),
+                "{entry:?}"
+            );
+        }
+        let mut owned = dir_facts(admin_dacl());
+        owned.owner = Some(ME.to_owned());
+        assert!(matches!(
+            verdict(&strict, ObjectKind::Store, &owned),
+            Err(IntegrityFailure::Owner { .. })
+        ));
+        let inherited = ObjectFacts {
+            dacl_protected: false,
+            ..dir_facts(admin_dacl())
+        };
+        let failure = verdict(&strict, ObjectKind::Store, &inherited).unwrap_err();
+        assert_eq!(failure, IntegrityFailure::UnprotectedDacl);
+        assert!(failure.renames_aside());
     }
 
     #[test]

@@ -22,6 +22,7 @@ use purge_broker::broker::BrokerHandler;
 use purge_broker::exec_live::LiveExec;
 use purge_broker::lifetime::{SystemClock, codes};
 use purge_broker::live::LiveBackend;
+use purge_broker::msitables::StoreTableCaches;
 use purge_broker::purge::Purger;
 use purge_broker::serve::{Limits, Wiring, run};
 use purge_broker::undo::UndoMethods;
@@ -104,6 +105,8 @@ fn main() -> ExitCode {
         user_sid,
     };
     let mut settings = started.engine_settings();
+    // The MSI table cache is the store's checked `fp\msitables`, never the directory by path.
+    settings.msi_table_source = Some(StoreTableCaches::shared(started.store.clone()));
     let live = Live::new();
     let local = LiveLocal::new();
     let sources = Sources {

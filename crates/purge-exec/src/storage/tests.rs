@@ -198,7 +198,7 @@ fn constructors_refuse_paths_that_are_not_absolute_drive_paths() {
 fn relaxed_install_creates_the_installer_layout() {
     let (s, roots) = fixture("layout");
     assert!(!roots.policy().is_strict());
-    assert_eq!(names(&s.path("data")), ["Quarantine", "sessions"]);
+    assert_eq!(names(&s.path("data")), ["Quarantine", "fp", "sessions"]);
     assert_eq!(names(&roots.sessions_path()), ["index.json"]);
     assert_eq!(std::fs::read(roots.index_path()).unwrap(), b"{}");
     roots.check().unwrap();
@@ -215,6 +215,8 @@ fn relaxed_install_creates_the_installer_layout() {
     let root = sddl(roots.data_root());
     assert!(root.contains("(A;;0x100020;;;BU)"), "{root}");
     assert!(!sddl(&roots.quarantine_path()).contains(";BU)"));
+    let fp = sddl(&roots.fp_path());
+    assert!(fp.contains("D:P") && !fp.contains(";BU)"), "{fp}");
 }
 
 #[test]
@@ -234,8 +236,9 @@ fn missing_data_root_is_not_installed_and_missing_children_are_recreated() {
     std::fs::remove_dir(roots.quarantine_path()).unwrap();
     std::fs::remove_file(roots.index_path()).unwrap();
     std::fs::remove_dir(roots.sessions_path()).unwrap();
+    std::fs::remove_dir(roots.fp_path()).unwrap();
     roots.check().unwrap();
-    assert_eq!(names(&s.path("data")), ["Quarantine", "sessions"]);
+    assert_eq!(names(&s.path("data")), ["Quarantine", "fp", "sessions"]);
     // A missing index reads as empty.
     assert_eq!(roots.read_index().unwrap(), SessionIndex::default());
 }
@@ -262,7 +265,7 @@ fn strict_policy_refuses_and_renames_aside_a_tree_owned_by_a_user() {
     let to = renamed_to.clone().unwrap();
     assert!(!s.path("data").exists());
     // Renamed, not recursed into or deleted: the tree is intact under its new name.
-    assert_eq!(names(&to), ["Quarantine", "sessions"]);
+    assert_eq!(names(&to), ["Quarantine", "fp", "sessions"]);
     assert_eq!(
         std::fs::read(to.join(r"sessions\index.json")).unwrap(),
         b"{}"
@@ -1887,4 +1890,291 @@ fn two_processes_write_the_index_one_at_a_time() {
         2 * INDEX_CHILD_UPDATES,
         "no index update was lost"
     );
+}
+
+// ---- the fingerprint store: `fp` and `fp\msitables` (DECISIONS 2026-11-22, fp checked) ----
+
+const FP_DOC: &str = "fp-aaaa.json";
+const FP_TEMP: &str = "fp-aaaa.json.4242-0.tmp";
+
+/// Asserts an integrity refusal at `path` whose failure `failure_is` accepts, which renamed the object
+/// aside.
+fn assert_renamed(err: &StorageError, path: &Path, failure_is: fn(&IntegrityFailure) -> bool) {
+    let StorageError::Integrity {
+        path: failed,
+        failure,
+        renamed_to,
+        rename_error,
+    } = err
+    else {
+        panic!("expected an integrity refusal, got {err}");
+    };
+    assert!(same_path(failed, path), "{}", failed.display());
+    assert!(failure_is(failure), "{failure}");
+    assert_eq!(*rename_error, None);
+    let to = renamed_to.clone().expect("renamed aside");
+    assert_eq!(to.parent(), path.parent());
+    assert!(!path.exists());
+}
+
+fn sddl_of(path: &Path) -> String {
+    secure::handle_sddl(&secure::open_for_security(path).unwrap()).unwrap()
+}
+
+#[test]
+fn fp_and_msitables_are_checked_store_directories() {
+    let (_s, roots) = fixture("fpdirs");
+    let fp = roots.fp_dir().unwrap();
+    assert!(same_path(fp.path(), &roots.fp_path()));
+    // `msitables` is created on first use, protected and admin-only (plus the test user).
+    assert!(!roots.msi_tables_path().exists());
+    let tables = roots.msi_tables_dir().unwrap();
+    assert!(same_path(tables.path(), &roots.msi_tables_path()));
+    let sddl = sddl_of(&roots.msi_tables_path());
+    assert!(sddl.contains("D:P") && !sddl.contains(";BU)"), "{sddl}");
+    // A missing `fp` is recreated by the pre-flight, as the installer would.
+    drop((fp, tables));
+    std::fs::remove_dir(roots.msi_tables_path()).unwrap();
+    std::fs::remove_dir(roots.fp_path()).unwrap();
+    roots.check().unwrap();
+    assert!(roots.fp_path().is_dir());
+}
+
+#[test]
+fn a_junction_as_fp_or_msitables_is_renamed_aside_and_never_followed() {
+    for msitables in [false, true] {
+        let (s, roots) = fixture("fpjunction");
+        let canary = Canary::new(s.path("elsewhere"));
+        let path = if msitables {
+            roots.msi_tables_path()
+        } else {
+            roots.fp_path()
+        };
+        if path.exists() {
+            std::fs::remove_dir(&path).unwrap();
+        }
+        junction(&path, &canary.0);
+        let open = || {
+            if msitables {
+                roots.msi_tables_dir()
+            } else {
+                roots.fp_dir()
+            }
+        };
+        let err = open().unwrap_err();
+        assert_renamed_reparse(&err, &path);
+        canary.intact();
+        if !msitables {
+            // The broker's start pre-flight recreates `fp`.
+            roots.check().unwrap();
+        }
+        // The next use creates a fresh directory and writes into it, never into the target.
+        let dir = open().unwrap();
+        dir.replace(FP_DOC, FP_TEMP, b"doc").unwrap();
+        assert_eq!(dir.read(FP_DOC, 16).unwrap().unwrap(), b"doc");
+        canary.intact();
+    }
+}
+
+#[test]
+fn a_user_writable_fp_is_detected_and_renamed_aside() {
+    let (_s, roots) = fixture("fpacl");
+    // `fp` as a careless restore or installer might leave it: Users may modify it and all below.
+    std::fs::remove_dir(roots.fp_path()).unwrap();
+    let open = format!(
+        "{}(A;OICI;0x1301bf;;;BU)",
+        roots.policy().sddl_for(ObjectKind::Store)
+    );
+    fs_write::create_dir_secure(&ext(&roots.fp_path()).unwrap(), &open).unwrap();
+    std::fs::write(roots.fp_path().join(FP_DOC), b"old").unwrap();
+    let err = roots.check().unwrap_err();
+    assert_renamed(
+        &err,
+        &roots.fp_path(),
+        |f| matches!(f, IntegrityFailure::ForeignAccess { sid: Some(sid), .. } if sid == "S-1-5-32-545"),
+    );
+    // Nothing in it was read or written; the next use starts an admin-only `fp`.
+    let fp = roots.fp_dir().unwrap();
+    assert_eq!(fp.read(FP_DOC, 16).unwrap(), None);
+    assert!(!sddl_of(&roots.fp_path()).contains(";BU)"));
+
+    // A `msitables` an older broker made by path (`create_dir_all`: inherited, unprotected DACL) is
+    // renamed aside once and replaced by a protected one.
+    std::fs::create_dir(roots.msi_tables_path()).unwrap();
+    let err = roots.msi_tables_dir().unwrap_err();
+    assert_renamed(&err, &roots.msi_tables_path(), |f| {
+        matches!(f, IntegrityFailure::UnprotectedDacl)
+    });
+    roots.msi_tables_dir().unwrap();
+}
+
+#[test]
+fn fingerprint_files_are_replaced_atomically_and_read_back() {
+    let (_s, roots) = fixture("fpwrite");
+    let fp = roots.fp_dir().unwrap();
+    assert_eq!(fp.read(FP_DOC, 1 << 20).unwrap(), None);
+    fp.replace(FP_DOC, FP_TEMP, b"one").unwrap();
+    assert_eq!(fp.read(FP_DOC, 1 << 20).unwrap().unwrap(), b"one");
+    // A reader holding the old document does not stop the replacement.
+    let held = std::fs::File::open(roots.fp_path().join(FP_DOC)).unwrap();
+    fp.replace(FP_DOC, "fp-aaaa.json.4242-1.tmp", b"two")
+        .unwrap();
+    drop(held);
+    assert_eq!(fp.read(FP_DOC, 1 << 20).unwrap().unwrap(), b"two");
+    assert_eq!(names(&roots.fp_path()), [FP_DOC]);
+    // The written file is Purge's: protected, admin-only (plus the test user).
+    let sddl = sddl_of(&roots.fp_path().join(FP_DOC));
+    assert!(sddl.contains("D:P") && !sddl.contains(";BU)"), "{sddl}");
+    // Over the reader's limit: refused, nothing returned.
+    assert!(matches!(
+        fp.read(FP_DOC, 2),
+        Err(StorageError::TooLarge { bytes: 3, .. })
+    ));
+    // Only plain names Purge generates; never a path, and never the document as its own temporary.
+    for bad in [r"..\x.json", "a/b", "x:s", "", "a b", "x."] {
+        assert!(
+            matches!(fp.read(bad, 16), Err(StorageError::InvalidPath(_))),
+            "{bad:?}"
+        );
+        assert!(fp.replace(bad, FP_TEMP, b"x").is_err(), "{bad:?}");
+        assert!(fp.replace(FP_DOC, bad, b"x").is_err(), "{bad:?}");
+    }
+    assert!(matches!(
+        fp.replace(FP_DOC, "FP-AAAA.JSON", b"x"),
+        Err(StorageError::InvalidPath(_))
+    ));
+    // A leftover temporary file of Purge's own (a crash between the write and the rename) goes.
+    drop(
+        fs_write::create_file_secure(
+            &ext(&roots.fp_path().join(FP_TEMP)).unwrap(),
+            &roots.policy().sddl_for(ObjectKind::StoreFile),
+        )
+        .unwrap(),
+    );
+    fp.replace(FP_DOC, FP_TEMP, b"three").unwrap();
+    assert_eq!(fp.read(FP_DOC, 16).unwrap().unwrap(), b"three");
+    assert_eq!(names(&roots.fp_path()), [FP_DOC]);
+}
+
+#[test]
+fn planted_objects_at_a_fingerprint_name_are_renamed_aside_and_never_followed() {
+    let (s, roots) = fixture("fpplant");
+    let fp = roots.fp_dir().unwrap();
+    fp.replace(FP_DOC, FP_TEMP, b"doc").unwrap();
+    let canary = Canary::new(s.path("elsewhere"));
+    let outside = s.path("outside.txt");
+    std::fs::write(&outside, b"outside").unwrap();
+    let temp = roots.fp_path().join(FP_TEMP);
+    let doc = roots.fp_path().join(FP_DOC);
+
+    // A junction with the temporary name (how the `\RPC Control` trick starts).
+    junction(&temp, &canary.0);
+    let err = fp.replace(FP_DOC, FP_TEMP, b"new").unwrap_err();
+    assert_renamed_reparse(&err, &temp);
+    canary.intact();
+    assert_eq!(fp.read(FP_DOC, 16).unwrap().unwrap(), b"doc");
+
+    // A hard link with the temporary name: its other name is never written.
+    std::fs::hard_link(&outside, &temp).unwrap();
+    let err = fp.replace(FP_DOC, FP_TEMP, b"new").unwrap_err();
+    assert_renamed(&err, &temp, |f| {
+        matches!(f, IntegrityFailure::HardLinked { .. })
+    });
+    assert_eq!(std::fs::read(&outside).unwrap(), b"outside");
+
+    // A symbolic link with the temporary name, where this account may create one.
+    if std::os::windows::fs::symlink_file(&outside, &temp).is_ok() {
+        let err = fp.replace(FP_DOC, FP_TEMP, b"new").unwrap_err();
+        assert_renamed_reparse(&err, &temp);
+        assert_eq!(std::fs::read(&outside).unwrap(), b"outside");
+    }
+
+    // The same at the document's own name, for a write and for a read.
+    std::fs::remove_file(&doc).unwrap();
+    junction(&doc, &canary.0);
+    let err = fp.replace(FP_DOC, FP_TEMP, b"new").unwrap_err();
+    assert_renamed_reparse(&err, &doc);
+    canary.intact();
+    std::fs::hard_link(&outside, &doc).unwrap();
+    let err = fp.read(FP_DOC, 1 << 20).unwrap_err();
+    assert_renamed(&err, &doc, |f| {
+        matches!(f, IntegrityFailure::HardLinked { .. })
+    });
+    assert_eq!(std::fs::read(&outside).unwrap(), b"outside");
+
+    // Nothing was followed, and the store still works.
+    fp.replace(FP_DOC, FP_TEMP, b"new").unwrap();
+    assert_eq!(fp.read(FP_DOC, 16).unwrap().unwrap(), b"new");
+    canary.intact();
+    assert_eq!(std::fs::read(&outside).unwrap(), b"outside");
+}
+
+#[test]
+fn the_sweep_deletes_only_old_plain_files_it_opened_by_handle() {
+    use std::time::SystemTime;
+    let (s, roots) = fixture("fpsweep");
+    let fp = roots.fp_dir().unwrap();
+    let dir = roots.fp_path();
+    let is_temp = |name: &str| name.starts_with("fp-") && name.ends_with(".tmp");
+    let old = SystemTime::now() - Duration::from_secs(3600);
+    let make = |name: &str, written: SystemTime| {
+        let path = dir.join(name);
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_modified(written).unwrap();
+        path
+    };
+    let stale = make("fp-a.json.1-0.tmp", old);
+    let fresh = make("fp-a.json.1-1.tmp", SystemTime::now());
+    let document = make(FP_DOC, old);
+    let other = make("notes.tmp", old);
+    // A directory, a junction, a hard link and a symbolic link with a temporary name: never entered,
+    // followed or deleted.
+    let folder = dir.join("fp-a.json.2-0.tmp");
+    std::fs::create_dir(&folder).unwrap();
+    let canary = Canary::new(s.path("elsewhere"));
+    let linked_dir = dir.join("fp-a.json.2-1.tmp");
+    junction(&linked_dir, &canary.0);
+    let outside = s.path("outside.txt");
+    std::fs::write(&outside, b"outside").unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&outside)
+        .unwrap()
+        .set_modified(old)
+        .unwrap();
+    let hard = dir.join("fp-a.json.2-2.tmp");
+    std::fs::hard_link(&outside, &hard).unwrap();
+    let symlink = dir.join("fp-a.json.2-3.tmp");
+    let has_symlink = std::os::windows::fs::symlink_file(&outside, &symlink).is_ok();
+    // A temporary file another handle holds open (a write in progress) is left.
+    let held_path = dir.join("fp-a.json.3-0.tmp");
+    let held = fs_write::create_file_secure(
+        &ext(&held_path).unwrap(),
+        &roots.policy().sddl_for(ObjectKind::StoreFile),
+    )
+    .unwrap();
+    held.set_modified(old).unwrap();
+
+    let cutoff = SystemTime::now() - Duration::from_secs(60);
+    assert_eq!(fp.sweep(is_temp, cutoff), 1);
+    assert!(!stale.exists());
+    assert!(
+        fresh.exists(),
+        "younger than the cutoff: a write in progress"
+    );
+    assert!(document.exists() && other.exists());
+    assert!(folder.is_dir());
+    assert!(std::fs::symlink_metadata(&linked_dir).is_ok());
+    canary.intact();
+    assert_eq!(std::fs::read(&hard).unwrap(), b"outside");
+    assert_eq!(std::fs::read(&outside).unwrap(), b"outside");
+    if has_symlink {
+        assert!(std::fs::symlink_metadata(&symlink).is_ok());
+    }
+    assert!(held_path.exists());
+    drop(held);
+    // Once closed, the held file is an old plain file like any other.
+    assert_eq!(fp.sweep(is_temp, cutoff), 1);
+    assert!(!held_path.exists());
+    assert_eq!(fp.sweep(is_temp, cutoff), 0);
 }

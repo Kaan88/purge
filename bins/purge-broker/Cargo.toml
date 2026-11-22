@@ -18,6 +18,8 @@ purge-source.workspace = true
 purge-exec.workspace = true
 purge-guard.workspace = true
 purge-harvest.workspace = true
+# The MSI table cache's format, for the cache in the store's checked `fp\msitables` (msitables.rs).
+purge-index.workspace = true
 purge-rpc.workspace = true
 purge-win = { workspace = true, features = ["write"] }
 serde_json.workspace = true

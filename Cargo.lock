@@ -140,6 +140,7 @@ dependencies = [
  "purge-guard",
  "purge-harvest",
  "purge-identity",
+ "purge-index",
  "purge-inventory",
  "purge-model",
  "purge-plan",

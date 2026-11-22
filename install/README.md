@@ -89,7 +89,8 @@ panic-location marker (`purge-exec\src` or `purge-exec/src`): such an engine was
         index.json               Index          created as the 2-byte document {} (UTF-8, no BOM)
         writer.lock              (store file)   created by purge-exec on first use; the single-writer lock, held open
     Quarantine\                  Store          same-volume quarantine (purge-exec creates <session>\<op>)
-    fp\                          Store          fingerprints
+    fp\                          Store          the broker's fingerprints (checked by purge-exec on every use, like Quarantine)
+        msitables\               Store          the broker's MSI table cache (created and checked by purge-exec on first use)
     kb\                          Store          writable knowledge (learned packs; empty in M2)
 %ProgramData%\Microsoft\Windows\Start Menu\Programs\Purge.lnk
                                                 one all-users shortcut to %ProgramFiles%\Purge\Purge.exe
@@ -115,8 +116,14 @@ true; the left column names the code rule.
 | `<install dir>\kb` passes the directory rule | `Copy-FileTree` creates `kb\` below the protected root; the protection pass judges it by the same rule; `Install-Tree` refuses a reparse-point `kb` |
 | `<install dir>\Purge.exe` (the client image) admin-only writable | the UI publish folder is copied into the protected root by `Copy-FileTree`; the protection pass covers `Purge.exe` itself |
 | every file directly in `<install dir>\kb\baselines` admin-only writable | the protection pass visits every file of the deployed tree, `kb\baselines\*.tsv.gz` included |
-| data root `%ProgramData%\Purge` passes the directory rule and `StorageRoots::check` | `Install-Tree` creates the data layout (root, `sessions`, `Quarantine`, `fp`, `kb`, `sessions\index.json`) with its own protected descriptors |
+| data root `%ProgramData%\Purge` passes the directory rule and `StorageRoots::check` (data root, `sessions`, `Quarantine`, `fp`) | `Install-Tree` creates the data layout (root, `sessions`, `Quarantine`, `fp`, `kb`, `sessions\index.json`) with its own protected descriptors |
 | KB and baselines are `<install dir>\kb`, `PURGE_KB_DIR` is not read | the layout above; the engine and broker use `<exe dir>\kb` |
+
+`fp` and `fp\msitables` are checked store directories (DECISIONS 2026-11-22, "fp checked"): the broker
+reaches every file in them relative to the handle they were checked through, never by path, and an `fp`
+or `msitables` that is a reparse point or that anyone but Administrators and SYSTEM may write is renamed
+aside to `<name>.rejected-<utc>` and replaced. A `msitables` an older broker created by path (inherited,
+unprotected DACL) is renamed aside once that way and its cache rebuilt.
 
 `-Check` re-runs both tree verdicts, the deployed-file rule, the shortcut target and the event-log source,
 so it fails when any row above would fail after the fact (a replaced binary, a `Users` write ACE added to

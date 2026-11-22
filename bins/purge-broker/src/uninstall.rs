@@ -22,6 +22,11 @@
 //! a stored fingerprint read it back. After a run or an observation the broker writes the updated
 //! fingerprint again (best effort: the session in memory is what this broker scans with).
 //!
+//! `fp` is a checked store directory (DECISIONS 2026-11-22, "fp checked"): every read, write, rename
+//! and sweep goes through purge-exec's [`purge_exec::storage::FpDir`], relative to the handle `fp` was
+//! checked through, never by path, so a user-writable or planted `fp`, or a link at a fingerprint's
+//! name, is refused and renamed aside instead of followed.
+//!
 //! # Refusals
 //!
 //! A program id is looked up in the broker's own inventory only; one that is not there is `gone`
@@ -29,7 +34,7 @@
 //! the tables is `gone` (`uninstall_session`).
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
@@ -63,8 +68,6 @@ use crate::consent::view::{self, UninstallFacts};
 use crate::serve::{Ctx, Handler};
 use crate::session::gone;
 
-/// The subdirectory of the data root the prepared fingerprints are stored in.
-const FP_DIR: &str = "fp";
 /// Largest stored fingerprint the broker reads back.
 const MAX_FP_BYTES: u64 = 64 << 20;
 
@@ -182,37 +185,27 @@ fn is_fingerprint_temp(name: &str) -> bool {
         && decimal(call)
 }
 
-/// Removes the temporary fingerprint files in `dir` (the admin-only `fp` directory of the data root)
-/// last written before `before`: only names [`is_fingerprint_temp`] accepts, only plain files (not a
-/// directory, a link or any reparse point; the attributes are read without following one). Failures are
-/// ignored: a file left stays harmless. Returns how many were removed.
-fn sweep_fingerprint_temps(dir: &Path, before: SystemTime) -> usize {
-    use std::os::windows::fs::MetadataExt;
-    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return 0;
-    };
-    let mut removed = 0;
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        if !name.to_str().is_some_and(is_fingerprint_temp) {
-            continue;
-        }
-        let path = entry.path();
-        let Ok(meta) = std::fs::symlink_metadata(&path) else {
-            continue;
-        };
-        let plain = meta.file_type().is_file()
-            && !meta.file_type().is_symlink()
-            && meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0;
-        if plain
-            && meta.modified().is_ok_and(|written| written < before)
-            && std::fs::remove_file(&path).is_ok()
-        {
-            removed += 1;
-        }
+/// The name a program's fingerprint is stored under in `fp`: a SHA-256 of the program id, so no
+/// client-chosen text ever becomes a name.
+fn fingerprint_name(program: &ProgramId) -> String {
+    let hash = purge_exec::journal::sha256_bytes(program.to_string().as_bytes());
+    format!("fp-{hash}.json")
+}
+
+/// The temporary name of one write of `name`: of this process and call, so two brokers storing the same
+/// program's fingerprint at once never write into one temporary file, and the rename puts one whole
+/// document in place, never a mix of two (review R3, single writer).
+fn fingerprint_temp_name(name: &str, call: u64) -> String {
+    format!("{name}.{}-{call}.tmp", std::process::id())
+}
+
+/// A store refusal as the client sees it: a failed integrity check (an object renamed aside, a data
+/// root that is gone) is `store_integrity`, anything else a runtime error.
+fn store_error(error: StorageError) -> ErrorObject {
+    match error {
+        StorageError::Integrity { .. } | StorageError::NotInstalled(_) => runtime_store(&error),
+        other => ErrorObject::runtime(other.to_string()),
     }
-    removed
 }
 
 /// The broker's machine: the live sources, the checked data root and the runner's options.
@@ -234,16 +227,6 @@ impl LiveMachine {
             options: RunOptions::default(),
             started: SystemTime::now(),
         }
-    }
-
-    /// The file a program's fingerprint is stored in. The name is a SHA-256 of the program id, so no
-    /// client-chosen text ever becomes a path.
-    fn fingerprint_path(&self, program: &ProgramId) -> PathBuf {
-        let hash = purge_exec::journal::sha256_bytes(program.to_string().as_bytes());
-        self.store
-            .data_root()
-            .join(FP_DIR)
-            .join(format!("fp-{hash}.json"))
     }
 
     /// The volume facts of `path`, or of the nearest ancestor that exists.
@@ -282,62 +265,44 @@ impl Machine for LiveMachine {
         )
     }
 
+    /// Reads `fp-<hash>.json` relative to the store's checked `fp` handle, checked as a store file on
+    /// the handle it is read through; never by path (DECISIONS 2026-11-22, "fp checked").
     fn read_fingerprint(&self, program: &ProgramId) -> Result<Option<Fingerprint>, ErrorObject> {
-        let path = self.fingerprint_path(program);
-        let meta = match std::fs::metadata(&path) {
-            Ok(meta) => meta,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(e) => {
-                return Err(ErrorObject::runtime(format!(
-                    "cannot read {}: {e}",
-                    path.display()
-                )));
-            }
+        let fp = self.store.fp_dir().map_err(store_error)?;
+        let name = fingerprint_name(program);
+        let Some(bytes) = fp.read(&name, MAX_FP_BYTES).map_err(store_error)? else {
+            return Ok(None);
         };
-        if meta.len() > MAX_FP_BYTES {
-            return Err(ErrorObject::runtime(format!(
-                "{} is over the {MAX_FP_BYTES}-byte limit",
-                path.display()
-            )));
-        }
-        let text = std::fs::read_to_string(&path)
-            .map_err(|e| ErrorObject::runtime(format!("cannot read {}: {e}", path.display())))?;
-        let fingerprint: Fingerprint = serde_json::from_str(&text).map_err(|e| {
-            ErrorObject::runtime(format!("{} is not a fingerprint: {e}", path.display()))
+        let fingerprint: Fingerprint = serde_json::from_slice(&bytes).map_err(|e| {
+            ErrorObject::runtime(format!(
+                "{} is not a fingerprint: {e}",
+                fp.path().join(&name).display()
+            ))
         })?;
         Ok((fingerprint.program_id() == program).then_some(fingerprint))
     }
 
+    /// Replaces `fp-<hash>.json` through the store's checked `fp` handle: a temporary file created new
+    /// relative to it, written, flushed and renamed over the document by handle, so the old fingerprint
+    /// stays until the new one takes its place (review M3-R2 N1). Nothing at either name is followed: a
+    /// planted object is refused and renamed aside (DECISIONS 2026-11-22, "fp checked").
     fn write_fingerprint(
         &self,
         program: &ProgramId,
         fingerprint: &Fingerprint,
     ) -> Result<(), ErrorObject> {
-        let dir = self.store.data_root().join(FP_DIR);
-        std::fs::create_dir_all(&dir)
-            .map_err(|e| ErrorObject::runtime(format!("cannot create {}: {e}", dir.display())))?;
+        let fp = self.store.fp_dir().map_err(store_error)?;
         let bytes = serde_json::to_vec(fingerprint)
             .map_err(|e| ErrorObject::runtime(format!("cannot serialise the fingerprint: {e}")))?;
         // Temporary files a crashed broker left are removed first (never one of a write in progress).
         if let Some(stale) = SystemTime::now().checked_sub(FP_TEMP_STALE) {
-            sweep_fingerprint_temps(&dir, self.started.min(stale));
+            fp.sweep(is_fingerprint_temp, self.started.min(stale));
         }
-        let path = self.fingerprint_path(program);
-        // A temporary name of this process and call: two brokers storing the same program's
-        // fingerprint at once never write into one temporary file, so the rename puts one whole
-        // document in place, never a mix of two (review R3, single writer).
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let call = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let temp = path.with_extension(format!("json.{}-{call}.tmp", std::process::id()));
-        std::fs::write(&temp, &bytes)
-            .map_err(|e| ErrorObject::runtime(format!("cannot write {}: {e}", temp.display())))?;
-        // `std::fs::rename` replaces an existing file on Windows (`MOVEFILE_REPLACE_EXISTING`), so the
-        // old fingerprint stays until the new one takes its place; no removal first, which would open
-        // a window in which a crash loses it (review M3-R2 N1).
-        std::fs::rename(&temp, &path).map_err(|e| {
-            let _ = std::fs::remove_file(&temp);
-            ErrorObject::runtime(format!("cannot replace {}: {e}", path.display()))
-        })
+        let name = fingerprint_name(program);
+        fp.replace(&name, &fingerprint_temp_name(&name, call), &bytes)
+            .map_err(store_error)
     }
 
     fn unstorable(&self, candidates: &[&Candidate]) -> Result<Vec<Refusal>, ErrorObject> {
@@ -1108,57 +1073,53 @@ mod tests {
         ));
     }
 
+    // The sweep itself (only old plain files with one link, opened relative to the checked `fp`
+    // handle; never a directory, junction, symbolic link or hard link) is purge-exec's `FpDir::sweep`,
+    // tested there (`the_sweep_deletes_only_old_plain_files_it_opened_by_handle`). The broker only
+    // chooses which names are its temporary files.
     #[test]
-    fn only_stale_temporary_fingerprint_files_of_the_exact_pattern_are_swept() {
-        let dir = std::env::temp_dir().join(format!(
-            "purge-fp-sweep-{}-{:x}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+    fn only_temporary_fingerprint_names_of_the_exact_pattern_are_swept() {
         let hash = "a".repeat(64);
-        let old = SystemTime::now() - Duration::from_secs(3600);
-        let make = |name: &str, written: SystemTime| {
-            let path = dir.join(name);
-            let file = std::fs::File::create(&path).unwrap();
-            file.set_modified(written).unwrap();
-            path
-        };
-        let stale = make(&format!("fp-{hash}.json.4242-0.tmp"), old);
-        let fresh = make(&format!("fp-{hash}.json.4242-1.tmp"), SystemTime::now());
-        let document = make(&format!("fp-{hash}.json"), old);
-        let other = [
-            make(&format!("fp-{hash}.json.tmp"), old),
-            make(&format!("fp-{}.json.1-2.tmp", "A".repeat(64)), old),
-            make(&format!("fp-{hash}.json.1-x.tmp"), old),
-            make("notes.tmp", old),
-        ];
-        // A directory with the pattern's name is never entered or removed.
-        let folder = dir.join(format!("fp-{hash}.json.7-7.tmp"));
-        std::fs::create_dir(&folder).unwrap();
-
-        let cutoff = SystemTime::now() - Duration::from_secs(60);
-        assert_eq!(sweep_fingerprint_temps(&dir, cutoff), 1);
-        assert!(!stale.exists());
-        assert!(
-            fresh.exists(),
-            "a temporary file younger than the cutoff may be a write in progress"
-        );
-        assert!(document.exists());
-        assert!(other.iter().all(|p| p.exists()));
-        assert!(folder.is_dir());
-        assert_eq!(sweep_fingerprint_temps(&dir, cutoff), 0);
-        let _ = std::fs::remove_dir_all(&dir);
+        for name in [
+            format!("fp-{hash}.json.4242-0.tmp"),
+            format!("fp-{hash}.json.1-18446744073709551615.tmp"),
+        ] {
+            assert!(is_fingerprint_temp(&name), "{name}");
+        }
+        for name in [
+            format!("fp-{hash}.json"),
+            format!("fp-{hash}.json.tmp"),
+            format!("fp-{}.json.1-2.tmp", "A".repeat(64)),
+            format!("fp-{}.json.1-2.tmp", "a".repeat(63)),
+            format!("fp-{hash}.json.1-x.tmp"),
+            format!("fp-{hash}.json.-1.tmp"),
+            format!("fp-{hash}.json.1-.tmp"),
+            "notes.tmp".to_owned(),
+        ] {
+            assert!(!is_fingerprint_temp(&name), "{name}");
+        }
     }
 
     #[test]
-    fn the_temporary_name_of_a_write_is_the_pattern_the_sweep_knows() {
-        let hash = purge_exec::journal::sha256_bytes(b"HKLM|64|Vendor_is1");
-        let name = format!("fp-{hash}.json.{}-{}.tmp", std::process::id(), 17);
-        assert!(is_fingerprint_temp(&name), "{name}");
-        assert!(!is_fingerprint_temp(&format!("fp-{hash}.json")));
+    fn the_names_of_a_write_are_the_patterns_the_store_and_the_sweep_know() {
+        let program = ProgramId::machine(View::K64, "Vendor_is1").expect("program id");
+        let name = fingerprint_name(&program);
+        let hash = purge_exec::journal::sha256_bytes(program.to_string().as_bytes());
+        assert_eq!(name, format!("fp-{hash}.json"));
+        let temp = fingerprint_temp_name(&name, 17);
+        assert_eq!(
+            temp,
+            format!("fp-{hash}.json.{}-17.tmp", std::process::id())
+        );
+        assert!(is_fingerprint_temp(&temp), "{temp}");
+        assert!(!is_fingerprint_temp(&name));
+        // Both are plain names the checked store accepts: ASCII letters, digits, `.` and `-`.
+        for leaf in [&name, &temp] {
+            assert!(
+                leaf.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-'),
+                "{leaf}"
+            );
+        }
     }
 }
