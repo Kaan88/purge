@@ -4,6 +4,26 @@ Branch `baseline`, pushed to `origin/baseline` (8c7142f). Design `docs/BASELINE_
 decision of this work is a row in `docs/DECISIONS.md` (Post-M1b). This file is kept current so the work can be
 continued from any harness: read it, then `git log --oneline -15` and `git worktree list`.
 
+## M3-R2 CLEANUP DONE 2026-11-22 (40e82ba code, 1f969c4 docs; pushed).
+- `docs/reviews/m3/r2-review.md` has its "Fixes" section: every B/M/S finding, flagged point and note mapped to its
+  fix commit and tests (test names checked against the tree).
+- DECISIONS: nine "(coordinator)" rows dated 2026-11-22 (M1, B1+S4, M2, M3+point 7, S2+point 6, S5+point 1,
+  S7+point 4, point 3+S3, point 2). The `plan_refused`-not-`gone` choice for a vanished session is argued there.
+- Point 2: B4 in `M3_DESIGN.json`, T2 in `M3_DESIGN.md` and `m3-notes/undo.md` say "outside Purge's store"; new
+  purge-exec test `an_unindexed_recovery_whose_journal_changed_after_the_preview_is_not_as_shown`.
+- Nits fixed: N1 (no remove before the fingerprint rename), N2 and N8 (comments), N4 (threat row T17), N9 (exec.md,
+  broker-flow.md). Deferred with reasons in the Fixes table: N3 (needs a purge-exec bind API change), N5 (measure
+  the real dialog on the VM first), N6 (needs a fingerprint retention rule), N7 (changes the scan-claim rules).
+- Checks: fmt, clippy -D warnings, check-deps, gen-dto --check ok; broker 218 + 10 + 1, exec lib 464 (8 ignored);
+  `dotnet build ui\Purge.App -c Release` 0 warnings; UI tests 100/100. All unelevated.
+- **Still open from R2:** M2 residual: `route` accepts `powershell`/`pwsh` without `-File` (inline `-Command` or
+  `-EncodedCommand`) as loading no file, so it can be broker-route. The DECISIONS M2 row rules it `Medium` (safe
+  direction); change `command_loads_admin_only` in `bins/purge-engine/src/pipeline.rs` and get a Fable review
+  (route rule = critical). Also untested on its own: the S2 vanished-session refusal of `plan.create`; the History
+  page still shows sample data (S5 alerts only on the Leftovers result). The section "Still open from M3-R2" below
+  is superseded by this one.
+- Next: the M2 residual above, then M3 per the design (warm/first-launch bench rows, VM backlog below).
+
 ## COLD BENCH DONE 2026-11-22 04:00: PASS, p50 559.7 ms (limit 1000), 5 runs 544-584 ms, CPU 96-98 % idle.
 Committed `bench/launch/cold-DESKTOP-K1F333G.json`, row filled in docs/M3_BENCH.md. Attempt 1 measured nothing
 (script splat bug, `@args`; log kept as `C:\purge-build\cold\cold-attempt1-failed.log`); attempt 2 is the series.
@@ -148,7 +168,7 @@ before merging (or `git stash` if you want to inspect them). Untracked and harml
   `dotnet build ui\Purge.App -c Release` (0 warnings), `dotnet test ui\Purge.Client.Tests` (UI tests build the
   Rust pipe harness with `cargo`, so cargo must be on PATH), push, then build the Inno setup and hand it over.
 
-### Still open from M3-R2 (round 2 is done; these remain)
+### Still open from M3-R2 (DONE 2026-11-22 except the M2 residual; see the top section)
 - Point 2 phrasing: reword B4 in the design to "changes outside Purge's store" (recovery with nothing to change
   runs without a dialog).
 - N1-N9 nits (docs/reviews/m3/r2-review.md, Notes).
