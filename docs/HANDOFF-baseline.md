@@ -19,8 +19,7 @@ continued from any harness: read it, then `git log --oneline -15` and `git workt
 - **Still open from R2:** M2 residual: `route` accepts `powershell`/`pwsh` without `-File` (inline `-Command` or
   `-EncodedCommand`) as loading no file, so it can be broker-route. The DECISIONS M2 row rules it `Medium` (safe
   direction); change `command_loads_admin_only` in `bins/purge-engine/src/pipeline.rs` and get a Fable review
-  (route rule = critical). Also untested on its own: the S2 vanished-session refusal of `plan.create`; the History
-  page still shows sample data (S5 alerts only on the Leftovers result). The section "Still open from M3-R2" below
+  (route rule = critical). Also open: the History page still shows sample data (S5 alerts only on the Leftovers result). The section "Still open from M3-R2" below
   is superseded by this one.
 - Next: the M2 residual above, then M3 per the design (warm/first-launch bench rows, VM backlog below).
 
@@ -96,7 +95,8 @@ running; no VM was started this session.
      Not reproduced end to end over a real pipe (only the flag path).
    - S2: a successful run spends **every scan of the program** (`Scan.program` + `spent`); `plan.create` refuses a
      spent scan or a vanished session; `plan.execute` also refuses a plan pre-created from a sibling scan.
-     Test: `a_run_spends_every_scan_of_the_program`. Refusal kind for a vanished session is `plan_refused`
+     Tests: `a_run_spends_every_scan_of_the_program`,
+     `a_scan_whose_session_vanished_cannot_be_planned_until_scanned_again`. Refusal kind for a vanished session is `plan_refused`
      ("scan again"), not `gone` - a judgement call.
    - S5: reconcile alerts reach the client - `UndoResult.alerts[]` / `OutcomeResult.alerts[]`
      (`Alert { op, original_path, moved_back }`), `HistoryItem.alert` mark, shown on the Leftovers "Put back"
