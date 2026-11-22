@@ -1137,6 +1137,8 @@ fn recover(
         warnings: Vec::new(),
         alerts: Vec::new(),
     };
+    // The store's single writer from the first read on (see `storage`).
+    let _writer = env.roots.lock_writer()?;
     env.roots.check()?;
     let session = env.roots.open_session(id)?;
     let index = undo::read_index(env.roots, &mut out.warnings)?;
@@ -1585,6 +1587,7 @@ fn retry(
         index_updated: false,
         warnings: Vec::new(),
     };
+    let _writer = env.roots.lock_writer()?;
     env.roots.check()?;
     let dir = env.roots.open_session(session)?;
     let index = undo::read_index(env.roots, &mut out.warnings)?;

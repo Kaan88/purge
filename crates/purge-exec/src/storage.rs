@@ -7,7 +7,8 @@
 //! <data root>\                       DataRoot
 //!     sessions\                      Sessions
 //!         index.json                 Index        (Users: read)
-//!         <session>\                 Store        journal.jsonl, plan.scan.json, report.json
+//!         writer.lock                StoreFile    the single-writer lock, held open, never written
+//!         <session>\                Store        journal.jsonl, plan.scan.json, report.json
 //!             reg\<op>.regbackup.json, def\<op>.json
 //!     Quarantine\                    Store
 //!         <session>\<op>\<leaf>      Store        items moved from the data root's volume
@@ -49,6 +50,18 @@
 //!   [`StorageError::IndexLost`] (never an empty index), and an index held open by another process
 //!   is [`StorageError::IndexBusy`]; see [`StorageError::is_index_unavailable`] for what may go on
 //!   without it.
+//! - **One writer at a time** (DECISIONS 2026-11-22, single writer). Every operation that writes the
+//!   store (execute, undo, recovery, the retry of held items, expiry's purge) holds the store's
+//!   [`WriterLock`] from before its first read to its end: `sessions\writer.lock`, opened with no
+//!   sharing at all, so a second opener in this or any other process gets a sharing violation. The
+//!   operation waits up to [`WRITER_WAIT`] for it and is otherwise refused with
+//!   [`StorageError::WriterBusy`] before it reads or writes anything. The lock is the open handle,
+//!   not the file: Windows closes it when the process ends, however it ends, so a crash never
+//!   leaves the store locked, and the file that stays behind locks nothing. It has the admin-only
+//!   `Store` file descriptor inside the admin-only `sessions` directory (Users: traverse), so a
+//!   process without administrator rights can neither create it nor open it for data access, and so
+//!   cannot hold it to keep Purge from writing. Read-only callers ([`StorageRoots::read_index`],
+//!   `recover::pending`, the previews, `expiry::expiring`) never take it.
 
 mod at;
 mod cap;
@@ -93,6 +106,13 @@ pub use purge_guard::live::{QUARANTINE_DIR, SESSIONS_DIR, VOLUME_QUARANTINE_DIR}
 pub const INDEX_FILE: &str = "index.json";
 /// Name of the temporary file of the index's atomic rewrite, in the sessions directory.
 pub const INDEX_TEMP_FILE: &str = "index.json.tmp";
+/// Name of the store's writer lock ([`WriterLock`]) in the sessions directory.
+pub const WRITER_LOCK_FILE: &str = "writer.lock";
+/// How long a writer waits for another writer of the store before it is refused
+/// ([`StorageError::WriterBusy`]).
+pub const WRITER_WAIT: Duration = Duration::from_secs(2);
+/// The pause between two attempts to take the writer lock.
+const WRITER_POLL: Duration = Duration::from_millis(50);
 /// Name of the journal in a session directory.
 pub const JOURNAL_FILE: &str = "journal.jsonl";
 /// Name of the copy of the executed scan document in a session directory.
@@ -198,6 +218,14 @@ pub enum StorageError {
     #[error("{} is missing while sessions exist; rebuild it from the session journals", .path.display())]
     IndexLost {
         /// The index path.
+        path: PathBuf,
+    },
+    /// Another operation holds the store's writer lock ([`WriterLock`]): a run, an undo, a recovery
+    /// or a purge in this or another process (two brokers, review R3). Nothing was read or written;
+    /// the caller may try again when that operation has ended.
+    #[error("{} is held by another operation that changes the store; nothing was done", .path.display())]
+    WriterBusy {
+        /// The lock file.
         path: PathBuf,
     },
     /// A store file is larger than the reader accepts. Nothing of it was read.
@@ -891,6 +919,13 @@ fn split_rel(rel: &str) -> Result<(Option<&str>, &str), StorageError> {
     }
 }
 
+/// The store's writer lock (see the module documentation): an open handle on `sessions\writer.lock`
+/// that shares nothing. Dropping it, or the end of the process, releases it.
+#[derive(Debug)]
+pub struct WriterLock {
+    _file: File,
+}
+
 /// What a listing of the sessions directory found.
 #[derive(Debug, Default)]
 pub struct SessionListing {
@@ -1186,6 +1221,78 @@ impl StorageRoots {
         change(&mut index);
         self.write_index(&index)?;
         Ok(index)
+    }
+
+    /// Takes the store's writer lock ([`WriterLock`]), waiting up to [`WRITER_WAIT`] for another
+    /// writer to end; [`StorageError::WriterBusy`] when it does not. Every operation that writes the
+    /// store calls this first and holds the lock to its end.
+    pub fn lock_writer(&self) -> Result<WriterLock, StorageError> {
+        self.lock_writer_within(WRITER_WAIT)
+    }
+
+    /// [`StorageRoots::lock_writer`] with another wait (`Duration::ZERO`: one attempt).
+    pub fn lock_writer_within(&self, wait: Duration) -> Result<WriterLock, StorageError> {
+        let deadline = std::time::Instant::now() + wait;
+        loop {
+            if let Some(lock) = self.try_lock_writer()? {
+                return Ok(lock);
+            }
+            let now = std::time::Instant::now();
+            if now >= deadline {
+                return Err(StorageError::WriterBusy {
+                    path: self.sessions_path().join(WRITER_LOCK_FILE),
+                });
+            }
+            std::thread::sleep(WRITER_POLL.min(deadline - now));
+        }
+    }
+
+    /// Whether another operation holds the writer lock now. The lock is taken and released at once,
+    /// so the answer is only a hint (a caller uses it to refuse before it shows a dialog); the
+    /// operation itself still takes the lock.
+    pub fn writer_busy(&self) -> Result<bool, StorageError> {
+        Ok(self.try_lock_writer()?.is_none())
+    }
+
+    /// One attempt at the writer lock: `Ok(None)` when another handle holds it. The file is opened,
+    /// or created new with the `Store` file descriptor when missing, relative to the checked
+    /// `sessions` handle, with no sharing, and checked as a store file on that handle; one that fails
+    /// the check is renamed aside like any store object, and the next attempt creates a new one.
+    fn try_lock_writer(&self) -> Result<Option<WriterLock>, StorageError> {
+        let layout = self.layout()?;
+        let sessions = &layout.sessions;
+        let path = sessions.path.join(WRITER_LOCK_FILE);
+        let sddl = self.policy.sddl_for(ObjectKind::StoreFile);
+        let open = |create: Option<&str>| {
+            at::open_at(
+                &sessions.handle,
+                WRITER_LOCK_FILE,
+                at::Open {
+                    access: at::GENERIC_READ | at::READ_CONTROL,
+                    share: at::SHARE_NONE,
+                    create,
+                    kind: at::Kind::File,
+                },
+            )
+        };
+        // Two writers that both find the file missing race to create it: the loser opens the
+        // winner's file on the next turn.
+        for _ in 0..4 {
+            let handle = match open(None) {
+                Ok(handle) => handle,
+                Err(FsError::SharingViolation) => return Ok(None),
+                Err(FsError::NotFound) => match open(Some(&sddl)) {
+                    Ok(handle) => handle,
+                    Err(FsError::AlreadyExists) => continue,
+                    Err(FsError::SharingViolation) => return Ok(None),
+                    Err(e) => return Err(io("create", &path, e)),
+                },
+                Err(e) => return Err(io("open", &path, e)),
+            };
+            let (file, _) = self.verify_file(sessions, &path, ObjectKind::StoreFile, handle)?;
+            return Ok(Some(WriterLock { _file: file }));
+        }
+        Err(io("create", &path, FsError::AlreadyExists))
     }
 
     /// Checks the planned backup bytes of a run against the cap of each volume (see [`check_cap`]);

@@ -2337,6 +2337,8 @@ pub fn execute<R: RestorePointBackend>(
     env: ExecEnv<'_>,
     restore_points: R,
 ) -> Result<ExecOutput, ExecError> {
+    // The store's single writer for the whole run, its start and its end included.
+    let _writer = env.roots.lock_writer()?;
     let run = Run::start(request, env)?;
     drive(run, restore_points)
 }
@@ -2357,6 +2359,7 @@ pub fn execute_bound<R: RestorePointBackend>(
     env: ExecEnv<'_>,
     restore_points: R,
 ) -> Result<ExecOutput, ExecError> {
+    let _writer = env.roots.lock_writer()?;
     let run = Run::start_bound(plan, settings, Some(fingerprint), env)?;
     drive(run, restore_points)
 }
