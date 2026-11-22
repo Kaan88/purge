@@ -2178,3 +2178,124 @@ fn the_sweep_deletes_only_old_plain_files_it_opened_by_handle() {
     assert!(!held_path.exists());
     assert_eq!(fp.sweep(is_temp, cutoff), 0);
 }
+
+// ---- the local baseline cache: `baseline` (DECISIONS 2026-11-22, baseline checked) ----
+
+const PART: &str = "local-Professional-26100.1-s1-aaaaaaaaaaaaaaaa.tsv.gz";
+const PART_TEMP: &str = "local-Professional-26100.1-s1-aaaaaaaaaaaaaaaa.tsv.gz.4242.0.tmp";
+
+#[test]
+fn baseline_is_a_checked_store_directory_created_on_first_use() {
+    let (_s, roots) = fixture("bldir");
+    assert!(!roots.baseline_path().exists());
+    let dir = roots.baseline_dir().unwrap();
+    assert!(same_path(dir.path(), &roots.baseline_path()));
+    let sddl = sddl_of(&roots.baseline_path());
+    assert!(sddl.contains("D:P") && !sddl.contains(";BU)"), "{sddl}");
+    dir.replace(PART, PART_TEMP, b"part").unwrap();
+    assert_eq!(dir.read(PART, 16).unwrap().unwrap(), b"part");
+    assert_eq!(names(&roots.baseline_path()), [PART]);
+}
+
+#[test]
+fn a_junction_as_baseline_is_renamed_aside_and_never_followed() {
+    let (s, roots) = fixture("bljunction");
+    let canary = Canary::new(s.path("elsewhere"));
+    junction(&roots.baseline_path(), &canary.0);
+    let err = roots.baseline_dir().unwrap_err();
+    assert_renamed_reparse(&err, &roots.baseline_path());
+    canary.intact();
+    let dir = roots.baseline_dir().unwrap();
+    dir.replace(PART, PART_TEMP, b"part").unwrap();
+    canary.intact();
+}
+
+#[test]
+fn a_user_writable_or_inherited_baseline_is_detected_and_renamed_aside() {
+    let (_s, roots) = fixture("blacl");
+    let open = format!(
+        "{}(A;OICI;0x1301bf;;;BU)",
+        roots.policy().sddl_for(ObjectKind::Store)
+    );
+    fs_write::create_dir_secure(&ext(&roots.baseline_path()).unwrap(), &open).unwrap();
+    std::fs::write(roots.baseline_path().join(PART), b"planted").unwrap();
+    let err = roots.baseline_dir().unwrap_err();
+    assert_renamed(
+        &err,
+        &roots.baseline_path(),
+        |f| matches!(f, IntegrityFailure::ForeignAccess { sid: Some(sid), .. } if sid == "S-1-5-32-545"),
+    );
+    // The next use starts an empty, admin-only cache: nothing of the planted one is read.
+    let dir = roots.baseline_dir().unwrap();
+    assert_eq!(dir.read(PART, 16).unwrap(), None);
+    drop(dir);
+
+    // A cache directory an engine made by path (`create_dir`: inherited, unprotected DACL) is
+    // renamed aside once and replaced by a protected one.
+    std::fs::remove_dir(roots.baseline_path()).unwrap();
+    std::fs::create_dir(roots.baseline_path()).unwrap();
+    let err = roots.baseline_dir().unwrap_err();
+    assert_renamed(&err, &roots.baseline_path(), |f| {
+        matches!(f, IntegrityFailure::UnprotectedDacl)
+    });
+    roots.baseline_dir().unwrap();
+}
+
+#[test]
+fn listing_and_removal_follow_nothing() {
+    let (s, roots) = fixture("bllist");
+    let dir = roots.baseline_dir().unwrap();
+    let path = roots.baseline_path();
+    dir.replace(PART, PART_TEMP, b"part").unwrap();
+    let sets = "local-Professional-26100.1-s1-aaaaaaaaaaaaaaaa.sets";
+    dir.replace(
+        sets,
+        "local-Professional-26100.1-s1-aaaaaaaaaaaaaaaa.sets.1.0.tmp",
+        b"s",
+    )
+    .unwrap();
+    let canary = Canary::new(s.path("elsewhere"));
+    let outside = s.path("outside.txt");
+    std::fs::write(&outside, b"outside").unwrap();
+    let linked_dir = "local-Professional-26100.1-s2-aaaaaaaaaaaaaaaa.tsv.gz";
+    junction(&path.join(linked_dir), &canary.0);
+    let hard = "local-Professional-26100.1-s4-aaaaaaaaaaaaaaaa.tsv.gz";
+    std::fs::hard_link(&outside, path.join(hard)).unwrap();
+    std::fs::create_dir(path.join("shipped-x.sets")).unwrap();
+    let symlink = "shipped-y.sets";
+    let has_symlink = std::os::windows::fs::symlink_file(&outside, path.join(symlink)).is_ok();
+
+    // Only the plain files are listed, with their write times.
+    let mut listed: Vec<String> = dir.list().unwrap().into_iter().map(|(n, _)| n).collect();
+    listed.sort();
+    assert_eq!(listed, [sets, PART]);
+    let written = dir.list().unwrap()[0].1;
+    let age = std::time::SystemTime::now()
+        .duration_since(written)
+        .unwrap_or_default();
+    assert!(age < Duration::from_secs(600), "{age:?}");
+
+    // A removal deletes Purge's own file through its handle; anything else is renamed aside, its
+    // other name and its target untouched.
+    assert!(dir.remove(sets).unwrap());
+    assert!(!path.join(sets).exists());
+    assert!(!dir.remove(sets).unwrap());
+    let err = dir.remove(linked_dir).unwrap_err();
+    assert_renamed_reparse(&err, &path.join(linked_dir));
+    canary.intact();
+    let err = dir.remove(hard).unwrap_err();
+    assert_renamed(&err, &path.join(hard), |f| {
+        matches!(f, IntegrityFailure::HardLinked { .. })
+    });
+    assert_eq!(std::fs::read(&outside).unwrap(), b"outside");
+    if has_symlink {
+        let err = dir.remove(symlink).unwrap_err();
+        assert_renamed_reparse(&err, &path.join(symlink));
+        assert_eq!(std::fs::read(&outside).unwrap(), b"outside");
+    }
+    assert!(matches!(
+        dir.remove(r"..\x"),
+        Err(StorageError::InvalidPath(_))
+    ));
+    assert_eq!(dir.read(PART, 16).unwrap().unwrap(), b"part");
+}

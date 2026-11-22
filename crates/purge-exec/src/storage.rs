@@ -14,6 +14,7 @@
 //!         <session>\<op>\<leaf>      Store        items moved from the data root's volume
 //!     fp\                            Store        fp-<sha256>.json: the broker's stored fingerprints
 //!         msitables\                 Store        <sha256>.json: the broker's MSI table cache
+//!     baseline\                      Store        local-*.tsv.gz, *.sets: the broker's local baseline cache
 //! X:\.purge-q\<session>\<op>\<leaf>  Store        items from another fixed NTFS/ReFS volume
 //! ```
 //!
@@ -45,8 +46,8 @@
 //!   descriptor, written and flushed, then renamed over the index inside the checked `sessions`
 //!   directory, which is flushed too. A crash leaves the old or the new index, never a torn one.
 //! - Files are never opened by path. Every file inside the layout (the index, its temporary file,
-//!   the journal, reports, backups, definitions, the fingerprints and MSI table cache files of `fp`
-//!   and their temporary files, [`FpDir`]) is created or opened with `NtCreateFile` relative
+//!   the journal, reports, backups, definitions, the files of `fp`, `fp\msitables` and `baseline`
+//!   and their temporary files, [`DocDir`]) is created or opened with `NtCreateFile` relative
 //!   to the handle of its freshly checked directory, and its facts are checked on the handle that
 //!   is then used ([`StoreFile`]). Directories below a checked directory are created the same way.
 //! - The index is a convenience. A missing index while session directories exist is
@@ -68,7 +69,7 @@
 
 mod at;
 mod cap;
-mod fp;
+mod doc_dir;
 mod integrity;
 mod sys;
 
@@ -94,7 +95,7 @@ use purge_win::fs_write::{
 use purge_win::secure;
 
 pub use cap::{CAP_ABSOLUTE_BYTES, CAP_VOLUME_PERCENT, CapExceeded, cap_bytes, check_cap};
-pub use fp::{FP_DIR, FpDir, MSI_TABLES_DIR};
+pub use doc_dir::{BASELINE_DIR, DocDir, FP_DIR, MSI_TABLES_DIR};
 pub use integrity::{
     IntegrityFailure, IntegrityPolicy, ObjectFacts, ObjectKind, ROOT_TAKEOVER_RIGHTS,
     SDDL_DATA_ROOT, SDDL_INDEX, SDDL_SESSIONS, SDDL_STORE, SDDL_STORE_FILE, verdict,

@@ -95,7 +95,10 @@ pub use purge_harvest::harvest::Sources;
 
 pub mod baseline;
 
-pub use baseline::{LocalBuild, PipelineBaseline, local_cache, start_local_build};
+pub use baseline::{
+    LocalBuild, LocalCacheSource, PipelineBaseline, SharedLocalCacheSource, local_cache,
+    start_local_build,
+};
 
 /// Receives one progress line at a time (the CLI writes them to stderr).
 pub type Progress<'a> = &'a mut dyn FnMut(&str);
@@ -153,6 +156,12 @@ pub struct Settings {
     /// (BASELINE_LOCAL_DESIGN.md §5). `None`: no local baseline is read or built. See
     /// [`baseline::local_cache`] for when the directory is used.
     pub local_baseline_dir: Option<PathBuf>,
+    /// The local baseline cache's source when it is not reached by path: the broker's checked
+    /// `baseline` directory (DECISIONS 2026-11-22, "baseline checked"). When set, [`local_cache`]
+    /// takes the cache from it and never opens [`Settings::local_baseline_dir`] by path (which then
+    /// only names the cache in warnings, and still says that a cache is configured). `None` in the
+    /// engine.
+    pub local_baseline_source: Option<SharedLocalCacheSource>,
     /// Purge's machine data root, `<ProgramData>\Purge` (session index, quarantine). `None`: the
     /// executor's store is not located. Read-only users of the index (the medium engine's
     /// `history.index`) need it; nothing in the pipeline writes here.

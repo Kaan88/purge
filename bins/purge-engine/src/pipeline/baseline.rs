@@ -195,6 +195,34 @@ fn user_writable_warning(file: &Path) -> String {
     )
 }
 
+/// Where an engine call gets its local baseline cache when the cache is not a directory opened by
+/// path ([`Settings::local_baseline_source`]): the broker's, whose files are reached relative to the
+/// checked handle of its store's `baseline` directory (DECISIONS 2026-11-22, "baseline checked").
+pub trait LocalCacheSource: Send + Sync {
+    /// The cache, writable when `writable` (the engine is elevated); `None` when the source cannot
+    /// give one now (its directory failed its check, say): the step then has no cache.
+    fn open(&self, writable: bool) -> Option<LocalCache>;
+}
+
+/// A shared [`LocalCacheSource`], as [`Settings`] holds it. Two are equal when they are the same
+/// source.
+#[derive(Clone)]
+pub struct SharedLocalCacheSource(pub Arc<dyn LocalCacheSource>);
+
+impl fmt::Debug for SharedLocalCacheSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("SharedLocalCacheSource")
+    }
+}
+
+impl PartialEq for SharedLocalCacheSource {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::addr_eq(Arc::as_ptr(&self.0), Arc::as_ptr(&other.0))
+    }
+}
+
+impl Eq for SharedLocalCacheSource {}
+
 /// The local baseline cache of [`Settings::local_baseline_dir`], when the directory rule accepts it
 /// (`LocalCache::open`). The directory is created only by an elevated engine and only inside a data
 /// root (its parent, `<ProgramData>\Purge`) that exists and is itself admin-only writable; a
@@ -202,9 +230,15 @@ fn user_writable_warning(file: &Path) -> String {
 ///
 /// Elevated, the data root and the directory must also pass [`Settings::volume_rule`] (BL-R1 S4):
 /// a cache on another volume is never created, read or built into.
+///
+/// With [`Settings::local_baseline_source`] (the broker), the cache is the source's; nothing here
+/// touches the directory by path.
 pub fn local_cache(sources: Sources<'_>, settings: &Settings) -> Option<LocalCache> {
     let dir = settings.local_baseline_dir.as_deref()?;
     let elevated = sources.sys.elevated();
+    if let Some(source) = &settings.local_baseline_source {
+        return source.0.open(elevated);
+    }
     let admin_only = |p: &Path| {
         p.to_str()
             .is_some_and(|s| sources.fs.is_admin_only_writable(s) == Ok(true))
@@ -1398,6 +1432,95 @@ mod tests {
         assert_eq!(loaded.trust(), BaselineTrust::None);
         assert_eq!(loaded.view_ref(), None);
         assert_eq!(loaded.status(None).baseline_view, None);
+    }
+
+    /// Files held in memory: the files of a cache the broker would give through its checked store.
+    #[derive(Debug, Default)]
+    struct MemFiles(Mutex<std::collections::BTreeMap<String, Vec<u8>>>);
+
+    impl purge_index::local_baseline::CacheFiles for MemFiles {
+        fn list(&self) -> Vec<(String, SystemTime)> {
+            let files = self.0.lock().unwrap();
+            files
+                .keys()
+                .map(|n| (n.clone(), SystemTime::now()))
+                .collect()
+        }
+        fn read(&self, name: &str, _max: u64) -> std::io::Result<Vec<u8>> {
+            let files = self.0.lock().unwrap();
+            files
+                .get(name)
+                .cloned()
+                .ok_or_else(|| std::io::ErrorKind::NotFound.into())
+        }
+        fn replace(&self, name: &str, _temp: &str, bytes: &[u8]) -> std::io::Result<()> {
+            let mut files = self.0.lock().unwrap();
+            files.insert(name.to_owned(), bytes.to_vec());
+            Ok(())
+        }
+        fn remove(&self, name: &str) -> std::io::Result<()> {
+            let mut files = self.0.lock().unwrap();
+            files.remove(name);
+            Ok(())
+        }
+    }
+
+    struct MemSource {
+        dir: PathBuf,
+        files: Arc<MemFiles>,
+        opens: AtomicBool,
+    }
+
+    impl LocalCacheSource for MemSource {
+        fn open(&self, writable: bool) -> Option<LocalCache> {
+            self.opens
+                .load(Ordering::SeqCst)
+                .then(|| LocalCache::with_files(&self.dir, self.files.clone(), writable))
+        }
+    }
+
+    /// With a local cache source (the broker's checked `baseline`), the build stores into the
+    /// source's cache and the steps load from it; the directory of the settings is never created,
+    /// listed or opened by path. A source that gives no cache is a step without one.
+    #[test]
+    fn a_local_cache_source_replaces_the_path() {
+        let t = tree("source");
+        let f = t.machine(true, true);
+        let files = Arc::new(MemFiles::default());
+        let source = Arc::new(MemSource {
+            dir: t.cache.clone(),
+            files: files.clone(),
+            opens: AtomicBool::new(true),
+        });
+        let shared = SharedLocalCacheSource(source.clone());
+        assert_eq!(shared, shared.clone());
+        let settings = Settings {
+            local_baseline_source: Some(shared),
+            ..t.settings()
+        };
+        let end = build_to_end(&f, &settings);
+        assert!(matches!(end, BaselineBuild::Done { .. }), "{end:?}");
+        assert!(!t.cache.exists(), "created {}", t.cache.display());
+        let names = files.0.lock().unwrap().keys().cloned().collect::<Vec<_>>();
+        for part in ["-s1-", "-s2-", "-s4-"] {
+            assert!(names.iter().any(|n| n.contains(part)), "{names:?}");
+        }
+        let mut warnings = Vec::new();
+        let loaded = load(Sources::of(&f), &settings, &os(), &mut warnings);
+        let parts = loaded.parts.expect("the source's cache was read");
+        assert!(
+            parts
+                .iter()
+                .all(|(_, state)| matches!(state, PartState::Hit { .. })),
+            "{parts:?}"
+        );
+        assert!(!t.cache.exists());
+        source.opens.store(false, Ordering::SeqCst);
+        let mut warnings = Vec::new();
+        let loaded = load(Sources::of(&f), &settings, &os(), &mut warnings);
+        assert!(loaded.parts.is_none());
+        assert!(has(&warnings, "is not used"), "{warnings:?}");
+        assert!(!t.cache.exists());
     }
 
     /// A cache directory that fails the rule is ignored and never repaired, whatever it holds. The

@@ -10,12 +10,26 @@ continued from any harness: read it, then `git log --oneline -15` and `git workt
   the installer's descriptor, never checked at run time. A user-writable `fp` would let a junction to
   `\RPC Control` + object symlink turn the rename into an arbitrary overwrite and the sweep into an arbitrary
   delete.
-- Fix (purge-exec `storage/fp.rs`): `StorageRoots::fp_dir` / `msi_tables_dir` = checked `Store` directories
+- Second round (coordinator rulings): Q1 accepted (noted in the "fp checked" row); `<data root>\baseline` (local
+  baseline cache) made checked the same way, DECISIONS row "baseline checked". purge-exec: `storage/fp.rs` is now
+  `storage/doc_dir.rs`, `FpDir` is `DocDir` (+ `list`, `remove`), `StorageRoots::baseline_dir`. purge-index:
+  `LocalCache` reaches files only through the new `CacheFiles` trait (`PathFiles` by path for the engine,
+  `LocalCache::with_files` for the broker). Engine: `Settings::local_baseline_source` / `LocalCacheSource`.
+  Broker: `msitables.rs` is now `store_caches.rs` (`StoreTableCaches`, `StoreLocalCaches`, `CheckedCacheFiles`);
+  `Started::broker_settings` sets both sources. Merged origin/baseline (91a930c, the m3_stdio timing fix).
+  Checks after the merge: fmt, clippy (workspace, rig, mcp), check-deps, no-new-walks, gen-dto --check,
+  baseline-sites: ok; purge-exec lib 495 (8 ignored) + all integration; broker 228 + 10 + 1; index 170 + 12 + 42 +
+  21; engine default lib 70, engine 40, exec_cli 4; rig lib 75, engine 43, exec_cli 14 (parallel, all pass);
+  `bash truth/bl.sh --self-test` PASS (12 cases); `BL_RUNS=7zip bash truth/bl.sh replay` (runs from the main
+  checkout, output in a scratch dir): exact, none, merged, local exit 0; exact plan sha256 54c52a64... = the L3 ref;
+  merged and local L5 against none: 0 violations. (The replay injects its views, so it does not exercise the
+  cache files; the cache is covered by the unit tests.)
+- First round fix (purge-exec `storage/fp.rs`): `StorageRoots::fp_dir` / `msi_tables_dir` = checked `Store` directories
   (relative to the checked data root, created with `Store` when missing, failing ones renamed aside);
-  `check()` covers `fp`; `install_relaxed` creates it. `FpDir::{read, replace, sweep}` act relative to the
+  `check()` covers `fp`; `install_relaxed` creates it. `DocDir::{read, replace, sweep}` act relative to the
   checked handle only (files are `StoreFile`s; temp leftovers checked then deleted by handle; sweep only old
-  plain one-link files). `at::Facts` gained `last_write`. Broker: fingerprint read/write/sweep through `FpDir`
-  (`uninstall.rs`), MSI table cache `msitables::StoreTableCaches` via the new `Settings::msi_table_source`
+  plain one-link files). `at::Facts` gained `last_write`. Broker: fingerprint read/write/sweep through `DocDir`
+  (`uninstall.rs`), MSI table cache `store_caches::StoreTableCaches` via the new `Settings::msi_table_source`
   (`pipeline::table_cache` takes it before any path). purge-index: `encode_cache_file`/`decode_cache_file`/
   `temp_file_name` (same format, same names). Engine unchanged by path (justified in DECISIONS row "fp checked").
 - Effect on installs: an old `fp\msitables` (made by path, inherited DACL) is renamed aside once to
@@ -28,8 +42,8 @@ continued from any harness: read it, then `git log --oneline -15` and `git workt
   asserts a 50 ms wall clock and failed twice under the parallel run's load on this laptop, passes alone and
   single-threaded; it reads no fp/msitables).
 - Symlink case of the tests runs only where the account may create symbolic links (skipped otherwise).
-- Open: none blocking. `<data root>\baseline` (local baseline cache) is still written by path by the broker's
-  build thread (`pipeline::baseline`), guarded by its admin-only checks only: same class, out of scope here.
+- Open: none blocking. The engine (medium and elevated CLI) keeps `DiskTableCache` and `PathFiles` by path, behind
+  the admin-only directory rule (reasons in the two DECISIONS rows).
 
 ## BL-FIX-UFH (branch `bl-fix-ufh` off `baseline` 9f40cca, 2026-11-22; pushed, NOT merged, Fable review next)
 - Finding: the BL-GATE smoke (`truth/bl.sh replay`, frozen `7zip`, four views) had one S1 flip in the local view:

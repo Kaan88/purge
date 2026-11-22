@@ -1,16 +1,17 @@
-//! The broker's fingerprint store: `<data root>\fp` and `fp\msitables` as checked `Store` directories
-//! (DECISIONS 2026-11-22, "fp checked").
+//! The broker's document directories: `<data root>\fp`, `fp\msitables` and `<data root>\baseline` as
+//! checked `Store` directories (DECISIONS 2026-11-22, "fp checked" and "baseline checked").
 //!
-//! The broker writes, replaces and sweeps files in these two directories while elevated. They are
-//! admin-only on a correct install (`install.ps1` creates `fp` with the `Store` descriptor), but a
-//! directory a standard user could write (ACL drift, a restored backup, a future installer bug) would
-//! let a junction to `\RPC Control` and an object symbolic link turn a rename by path into an
-//! overwrite of any file, and a delete by path into a delete of any file. So both are checked like
+//! The broker writes, replaces, removes and sweeps files in these directories while elevated. They
+//! are admin-only on a correct install (`install.ps1` creates `fp` with the `Store` descriptor; the
+//! others are created by Purge), but a directory a standard user could write (ACL drift, a restored
+//! backup, a future installer bug) would let a junction to `\RPC Control` and an object symbolic link
+//! turn a rename by path into an overwrite of any file, and a delete by path into a delete of any
+//! file. So they are checked like
 //! `sessions` and `Quarantine`: opened relative to the checked data root, without following a reparse
 //! point, and judged by [`verdict`] as [`ObjectKind::Store`] on that handle (a failing object is
 //! renamed aside, [`StorageError::Integrity`]); and every file in them is created, opened, replaced
 //! and deleted relative to the directory's checked handle, a reparse point at the name opened itself,
-//! never followed ([`FpDir`]).
+//! never followed ([`DocDir`]).
 
 use std::fs::File;
 use std::io::{Read, Write};
@@ -28,6 +29,8 @@ use super::{
 pub const FP_DIR: &str = "fp";
 /// The MSI table cache directory under [`FP_DIR`].
 pub const MSI_TABLES_DIR: &str = "msitables";
+/// The local baseline cache directory under the data root (BASELINE_LOCAL_DESIGN.md §5).
+pub const BASELINE_DIR: &str = "baseline";
 
 /// `FILETIME` of the Unix epoch (100 ns ticks since 1601).
 const UNIX_EPOCH_FILETIME: i64 = 116_444_736_000_000_000;
@@ -46,10 +49,10 @@ impl StorageRoots {
     /// `<data root>\fp`, after checking the data root and `fp` (created with the `Store` descriptor
     /// when missing, as the installer does). A failing `fp` is renamed aside and refused this time; the
     /// next use creates a new one.
-    pub fn fp_dir(&self) -> Result<FpDir, StorageError> {
+    pub fn fp_dir(&self) -> Result<DocDir, StorageError> {
         let root = self.checked_data_root()?;
         let dir = self.fp_child(&root)?;
-        Ok(FpDir {
+        Ok(DocDir {
             roots: self.clone(),
             dir,
         })
@@ -57,7 +60,7 @@ impl StorageRoots {
 
     /// `<data root>\fp\msitables`, after checking the data root, `fp` and `msitables` (each created with
     /// the `Store` descriptor when missing).
-    pub fn msi_tables_dir(&self) -> Result<FpDir, StorageError> {
+    pub fn msi_tables_dir(&self) -> Result<DocDir, StorageError> {
         let root = self.checked_data_root()?;
         let fp = self.fp_child(&root)?;
         let dir = self
@@ -68,7 +71,31 @@ impl StorageRoots {
                 super::Create::IfAbsent,
             )?
             .ok_or_else(|| io("open", &self.msi_tables_path(), FsError::NotFound))?;
-        Ok(FpDir {
+        Ok(DocDir {
+            roots: self.clone(),
+            dir,
+        })
+    }
+
+    /// `<data root>\baseline`.
+    pub fn baseline_path(&self) -> PathBuf {
+        self.data_root.join(BASELINE_DIR)
+    }
+
+    /// `<data root>\baseline`, the local baseline cache, after checking the data root and `baseline`
+    /// (created with the `Store` descriptor when missing). A failing one is renamed aside and refused
+    /// this time; the next use creates a new one, and the cache is built again.
+    pub fn baseline_dir(&self) -> Result<DocDir, StorageError> {
+        let root = self.checked_data_root()?;
+        let dir = self
+            .child_dir(
+                &root,
+                BASELINE_DIR,
+                ObjectKind::Store,
+                super::Create::IfAbsent,
+            )?
+            .ok_or_else(|| io("open", &self.baseline_path(), FsError::NotFound))?;
+        Ok(DocDir {
             roots: self.clone(),
             dir,
         })
@@ -80,17 +107,17 @@ impl StorageRoots {
     }
 }
 
-/// A checked directory of the fingerprint store (`fp` or `fp\msitables`) and the handle it was checked
+/// A checked document directory (`fp`, `fp\msitables` or `baseline`) and the handle it was checked
 /// through. Every file is reached relative to that handle, by one plain name Purge generates
 /// (ASCII letters, digits, `.`, `_`, `-`), never by path. The files are [`ObjectKind::StoreFile`]s:
 /// a file, not a reparse point, one link, owner Administrators or SYSTEM, nobody else may write.
 #[derive(Debug)]
-pub struct FpDir {
+pub struct DocDir {
     roots: StorageRoots,
     dir: CheckedDir,
 }
 
-impl FpDir {
+impl DocDir {
     /// The path the directory was checked at, for messages.
     pub fn path(&self) -> &Path {
         self.dir.path()
@@ -197,6 +224,71 @@ impl FpDir {
         written
     }
 
+    /// The plain files of this directory (one link, not a directory, not a reparse point of any kind)
+    /// whose names Purge could have made, with their last write times: listed through the
+    /// directory's handle and each judged on a handle opened relative to it, without following
+    /// anything. Anything else is left out. An error only when the directory cannot be listed.
+    pub fn list(&self) -> Result<Vec<(String, SystemTime)>, StorageError> {
+        let names = at::open_at(
+            &self.dir.handle,
+            "",
+            at::Open {
+                access: at::FILE_LIST_DIRECTORY | at::FILE_READ_ATTRIBUTES,
+                share: at::SHARE_ALL,
+                create: None,
+                kind: at::Kind::Dir,
+            },
+        )
+        .and_then(|listing| at::list_names(&listing))
+        .map_err(|e| io("list", self.path(), e))?;
+        let mut files = Vec::with_capacity(names.len());
+        for name in names.into_iter().filter(|name| is_store_name(name)) {
+            let Ok(handle) = at::open_at(
+                &self.dir.handle,
+                &name,
+                at::Open {
+                    access: at::FILE_READ_ATTRIBUTES,
+                    share: at::SHARE_ALL,
+                    create: None,
+                    kind: at::Kind::File,
+                },
+            ) else {
+                continue;
+            };
+            let Ok(facts) = at::facts(&handle) else {
+                continue;
+            };
+            if !facts.is_dir && facts.reparse_tag == 0 && facts.n_links == 1 {
+                files.push((name, system_time(facts.last_write)));
+            }
+        }
+        Ok(files)
+    }
+
+    /// Deletes the file `leaf`, opened relative to the directory's handle and checked as a store file
+    /// on that handle, through that handle. `Ok(false)` when nothing has the name. An object that
+    /// fails the check (a link, a directory, a file someone else owns) is not deleted: it is renamed
+    /// aside ([`StorageError::Integrity`]).
+    pub fn remove(&self, leaf: &str) -> Result<bool, StorageError> {
+        let path = self.leaf_path(leaf)?;
+        let opened = self.roots.open_file_at(
+            &self.dir,
+            leaf,
+            ObjectKind::StoreFile,
+            at::Open {
+                access: at::DELETE | at::READ_CONTROL | at::FILE_READ_ATTRIBUTES,
+                share: at::SHARE_ALL,
+                create: None,
+                kind: at::Kind::File,
+            },
+        )?;
+        let Some((file, _)) = opened else {
+            return Ok(false);
+        };
+        at::dispose(&file).map_err(|e| io("delete", &path, e))?;
+        Ok(true)
+    }
+
     /// Deletes the files of this directory that `is_temp` accepts and that were last written before
     /// `before`: only names Purge generates, and only a plain file with one link (not a directory, not
     /// a reparse point of any kind), opened relative to the directory's handle without following
@@ -281,4 +373,10 @@ fn filetime(time: SystemTime) -> Option<i64> {
     let since = time.duration_since(UNIX_EPOCH).ok()?;
     let ticks = i64::try_from(since.as_nanos() / 100).ok()?;
     ticks.checked_add(UNIX_EPOCH_FILETIME)
+}
+
+/// A `FILETIME` as a [`SystemTime`]; one before 1970 is the Unix epoch.
+fn system_time(filetime: i64) -> SystemTime {
+    let ticks = u64::try_from(filetime.saturating_sub(UNIX_EPOCH_FILETIME)).unwrap_or(0);
+    UNIX_EPOCH + Duration::from_nanos(ticks.saturating_mul(100))
 }

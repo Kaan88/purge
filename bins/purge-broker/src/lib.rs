@@ -15,7 +15,7 @@
 //! | [`baseline`] | the local-baseline build as the loop sees it, `engine.hello` from the live machine |
 //! | [`consent`] | the consent view model and the dialog, four variants |
 //! | [`purge`] | `quarantine.expiring` and `quarantine.purge` through the purge dialog |
-//! | [`msitables`] | the MSI table cache in the store's checked `fp\msitables` |
+//! | [`store_caches`] | the MSI table cache and the local baseline cache in the store's checked `fp\msitables` and `baseline` |
 //! | [`wire`] | the named pipe, the TaskDialog and the parent handle |
 //!
 //! There is no cargo feature: the scripted fakes of the tests exist only under `cfg(test)`.
@@ -43,13 +43,13 @@ pub mod baseline;
 pub mod consent;
 pub mod lifetime;
 pub mod link;
-pub mod msitables;
 pub mod plan;
 pub mod purge;
 pub mod scan;
 pub mod serve;
 pub mod session;
 pub mod start;
+pub mod store_caches;
 pub mod uninstall;
 pub mod wire;
 

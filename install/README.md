@@ -91,6 +91,7 @@ panic-location marker (`purge-exec\src` or `purge-exec/src`): such an engine was
     Quarantine\                  Store          same-volume quarantine (purge-exec creates <session>\<op>)
     fp\                          Store          the broker's fingerprints (checked by purge-exec on every use, like Quarantine)
         msitables\               Store          the broker's MSI table cache (created and checked by purge-exec on first use)
+    baseline\                    Store          the local baseline cache (created and checked by purge-exec on first use)
     kb\                          Store          writable knowledge (learned packs; empty in M2)
 %ProgramData%\Microsoft\Windows\Start Menu\Programs\Purge.lnk
                                                 one all-users shortcut to %ProgramFiles%\Purge\Purge.exe
@@ -119,11 +120,12 @@ true; the left column names the code rule.
 | data root `%ProgramData%\Purge` passes the directory rule and `StorageRoots::check` (data root, `sessions`, `Quarantine`, `fp`) | `Install-Tree` creates the data layout (root, `sessions`, `Quarantine`, `fp`, `kb`, `sessions\index.json`) with its own protected descriptors |
 | KB and baselines are `<install dir>\kb`, `PURGE_KB_DIR` is not read | the layout above; the engine and broker use `<exe dir>\kb` |
 
-`fp` and `fp\msitables` are checked store directories (DECISIONS 2026-11-22, "fp checked"): the broker
-reaches every file in them relative to the handle they were checked through, never by path, and an `fp`
-or `msitables` that is a reparse point or that anyone but Administrators and SYSTEM may write is renamed
-aside to `<name>.rejected-<utc>` and replaced. A `msitables` an older broker created by path (inherited,
-unprotected DACL) is renamed aside once that way and its cache rebuilt.
+`fp`, `fp\msitables` and `baseline` are checked store directories (DECISIONS 2026-11-22, "fp checked"
+and "baseline checked"): the broker reaches every file in them relative to the handle they were checked
+through, never by path, and one that is a reparse point or that anyone but Administrators and SYSTEM may
+write is renamed aside to `<name>.rejected-<utc>` and replaced. A `msitables` or `baseline` an older
+broker or engine created by path (inherited, unprotected DACL) is renamed aside once that way and its
+cache rebuilt (the local baseline in the background, minutes).
 
 `-Check` re-runs both tree verdicts, the deployed-file rule, the shortcut target and the event-log source,
 so it fails when any row above would fail after the fact (a replaced binary, a `Users` write ACE added to

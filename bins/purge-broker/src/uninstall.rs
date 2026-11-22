@@ -23,7 +23,7 @@
 //! fingerprint again (best effort: the session in memory is what this broker scans with).
 //!
 //! `fp` is a checked store directory (DECISIONS 2026-11-22, "fp checked"): every read, write, rename
-//! and sweep goes through purge-exec's [`purge_exec::storage::FpDir`], relative to the handle `fp` was
+//! and sweep goes through purge-exec's [`purge_exec::storage::DocDir`], relative to the handle `fp` was
 //! checked through, never by path, so a user-writable or planted `fp`, or a link at a fingerprint's
 //! name, is refused and renamed aside instead of followed.
 //!
@@ -1074,7 +1074,7 @@ mod tests {
     }
 
     // The sweep itself (only old plain files with one link, opened relative to the checked `fp`
-    // handle; never a directory, junction, symbolic link or hard link) is purge-exec's `FpDir::sweep`,
+    // handle; never a directory, junction, symbolic link or hard link) is purge-exec's `DocDir::sweep`,
     // tested there (`the_sweep_deletes_only_old_plain_files_it_opened_by_handle`). The broker only
     // chooses which names are its temporary files.
     #[test]

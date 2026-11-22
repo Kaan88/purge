@@ -27,6 +27,8 @@ use std::path::{Path, PathBuf};
 use purge_engine::pipeline::{Settings, VolumeRule};
 use purge_exec::storage::StorageRoots;
 
+use crate::store_caches::{StoreLocalCaches, StoreTableCaches};
+
 /// The event source of the broker's start failures in the Application log.
 pub const EVENT_SOURCE: &str = "Purge";
 
@@ -126,15 +128,30 @@ impl<S> Started<S> {
         Settings {
             baseline_dir: Some(self.kb_dir.join("baselines")),
             purge_dirs: vec![path(&self.install_dir), path(&self.data_root)],
-            // Names the cache in the timing line only: the broker's cache is its store's checked
-            // `fp\msitables`, set by `main` (`msitables::StoreTableCaches`), never opened by path.
+            // The two cache directories name the caches in messages only: the broker's caches are
+            // its store's checked `fp\msitables` and `baseline` ([`Started::broker_settings`]),
+            // never opened by path.
             msi_table_dir: Some(self.data_root.join("fp").join("msitables")),
             msi_table_source: None,
             local_baseline_dir: Some(self.data_root.join("baseline")),
+            local_baseline_source: None,
             data_root: Some(self.data_root.clone()),
             check_shipped_dir: true,
             volume_rule: VolumeRule::On(self.system_volume.clone()),
             local_build: None,
+        }
+    }
+}
+
+impl Started<StorageRoots> {
+    /// [`Started::engine_settings`] with the MSI table cache and the local baseline cache in the
+    /// checked store (`store_caches`; DECISIONS 2026-11-22, "fp checked" and "baseline checked"):
+    /// what the broker's pipeline steps and its background build run with.
+    pub fn broker_settings(&self) -> Settings {
+        Settings {
+            msi_table_source: Some(StoreTableCaches::shared(self.store.clone())),
+            local_baseline_source: Some(StoreLocalCaches::shared(self.store.clone())),
+            ..self.engine_settings()
         }
     }
 }

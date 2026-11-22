@@ -28,7 +28,7 @@ pub use build::{
     LocalPartFile, S3_DENIED_BY_DESIGN, SealFloors, SourceStamp, build, build_part, file_stamps,
     iso_utc, read_s3,
 };
-pub use cache::{LoadedLocal, LocalCache, PartIds, PartState};
+pub use cache::{CacheFiles, LoadedLocal, LocalCache, PartIds, PartState, PathFiles};
 pub use file::{
     LocalBaseline, LocalBaselineError, LocalHeader, LocalSource, SourceLine, SourceStatus,
     local_file_name,
