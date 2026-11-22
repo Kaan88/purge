@@ -6,7 +6,7 @@
     "B1 Ids only: no broker request has a field for a path, target, fingerprint, scan or plan; unknown fields are refused.",
     "B2 Own evidence: the broker executes only plans it built from its own harvest and scan; nothing made at medium integrity is evidence (BL-R1 N5, N6).",
     "B3 One plan object: the consent dialog and the executor use the same frozen in-memory BoundPlan; nothing is derived a second time.",
-    "B4 Every mutating request ends in a TaskDialog shown by the broker; a declined dialog changes nothing.",
+    "B4 Every request that changes something outside Purge's store ends in a TaskDialog shown by the broker; a declined dialog changes nothing. A request that writes only Purge's own records (the harvest's fingerprint, a recovery with nothing to change on the machine) runs without one (review M3-R2 point 2).",
     "B5 Executor containment: purge-exec is linked by purge-broker, and by purge-engine only with rig-exec; purge-broker has no cargo feature.",
     "B6 No directory from the environment in an elevated process; the broker runs only from an admin-only directory on the system volume (BL-R1 S4).",
     "B7 Purge is never an elevation vehicle: a per-user or user-writable uninstaller runs at the user's level, in the medium engine.",

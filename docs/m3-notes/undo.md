@@ -48,8 +48,10 @@ holds one block of `pub mod` lines at its top, `Cargo.toml` two added dependenci
    the dialog says so); the call is the one asked. `done` = ops with a `done` record, `total` = header items.
 5. **Recovery with nothing to change runs without a dialog**: only Purge's own records are missing (index entry,
    report, `commit` after the last `done`), or every selected op is one the run leaves alone (the view says
-   `NothingToRun`). Without it a session in that state would block execute for ever. This is the one place "every one ends in
-   a dialog" has an exception; the preview's empty (or all-"leave alone") op list is what justifies it.
+   `NothingToRun`). Without it a session in that state would block execute for ever. B4 now reads "every request that
+   changes something outside Purge's store ends in a dialog" (review M3-R2 point 2), so this is within it: the preview's
+   empty (or all-"leave alone") op list is what justifies it, and the run is bound to the journal mark the preview read
+   (`an_unindexed_recovery_whose_journal_changed_after_the_preview_is_not_as_shown` in purge-exec).
 6. **`undo.run` with nothing to put back** is a `runtime` error ("nothing in the selection can be put back"), not a
    dialog over nothing and not a silent `complete`.
 7. **Pending**: `journal.pending` lists `Run`, `Undo` and `Retry` sessions (the ones with something to recover);

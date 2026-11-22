@@ -33,7 +33,8 @@ Branch `m3-exec`, cut from `baseline` ae35e06 and merged with `baseline` 3876f0d
    drawn from that frozen plan, names each package as an attention entry, changes to "Remove N ... K cannot be put back",
    and gates its button behind the verification box. **The dialog is the acknowledgement; the flag only lets it be
    asked.** A client that sets the flag cannot make anything run without the user ticking the box and clicking the
-   primary button. Conservative in that nothing irreversible is reachable without both the opt-in and the dialog, and
+   primary button. The UI must not set the flag by default: only an explicit user choice to remove packages may set
+   it (review M3-R2 point 6). Conservative in that nothing irreversible is reachable without both the opt-in and the dialog, and
    a plan without a runnable item opens no dialog (`NothingToRun`).
    Tests: `a_removal_without_undo_runs_only_after_a_dialog_that_names_it`, `a_plan_that_cannot_run_anything_opens_no_dialog`.
 3. **Dialog from the frozen plan.** `execute_plan` builds `view::view(&bound, &Facts)` from the `Arc<BoundPlan>` in the
@@ -69,13 +70,26 @@ failure, cancel or time-out forces the forced scan with nothing preselected even
 never skips the broker's verify-gone; an absent field keeps the old rule. Tests: `observed_outcome_can_only_make_the_scan_safer`,
 `observed_refuses_an_outcome_it_does_not_know`.
 
+Since M3-GLUE (ba1394d) and the M3-R2 fixes (65347f2), `observed` also records the **uninstall window** a `post` scan
+needs: from `window_start` (taken by `prepare` before its harvest) to the observation, both on the broker's clock, and
+only when the report is not a failure and verify-gone passed. Rules (review M3-R2 M3 and point 7):
+
+- a broker-route session is refused with `wrong_route` (`observed` is for the medium route only);
+- a session that already ran is never raised: `uninstaller_ok` may go from true to false only;
+- the first passing observation records the window; a later one leaves `t_end` where it is;
+- an observation more than 2 hours after `prepare` records no window, so the scan stays forced.
+
+Tests: `observed_records_the_window_a_post_scan_needs`, `a_failed_observation_records_no_window_and_scans_forced`,
+`observed_cannot_raise_a_failed_broker_run`, `an_observation_records_the_window_once`,
+`an_observation_never_raises_a_session_that_ran`, `an_observation_window_is_capped_at_two_hours`.
+
 ## Attack to code and test (M3-R2)
 
 | Attack | Code | Test |
 |---|---|---|
 | runs something the dialog did not show | one `Arc<BoundPlan>`: `execute::execute_plan` (view -> `describes_plan` -> code check -> ask -> `ExecJob.plan` is the same `Arc`); `execute_bound` binds nothing | `an_approved_plan_runs_the_plan_object_the_dialog_was_drawn_from`, `a_removal_without_undo_runs_only_after_a_dialog_that_names_it`, `a_plan_runs_its_own_scans_object_and_not_another`; purge-exec `execute_and_execute_bound_give_equal_reports` |
 | runs a plan from another scan | the plan table holds the frozen object per id; typed ids; `plan.create` accepts only ids of its own scan (BROKER-FLOW) | `a_plan_runs_its_own_scans_object_and_not_another`, `ids_that_are_not_this_brokers_plans_never_open_a_dialog` (foreign id, scan id, session id, a path, empty, extra member), flow `plan_create_refuses_ids_that_are_not_of_this_scan` |
-| runs a plan twice | `Table::take` in `execute::run`; the scan stays claimed after a run | `a_plan_id_runs_once_and_its_scan_is_spent`, `a_declined_dialog_changes_nothing_and_the_scan_can_be_planned_again`, `a_second_execute_while_the_dialog_is_open_is_busy_and_keeps_its_plan` |
+| runs a plan twice | `Table::take` in `execute::run`; the scan stays claimed after a run, and a run spends every scan of the same program (M3-R2 S2) | `a_plan_id_runs_once_and_its_scan_is_spent`, `a_run_spends_every_scan_of_the_program`, `a_declined_dialog_changes_nothing_and_the_scan_can_be_planned_again`, `a_second_execute_while_the_dialog_is_open_is_busy_and_keeps_its_plan` |
 | object replaced between scan and execute | `plan_in::unbound_objects` at `plan.create` and in `execute_bound` (digest + owner against the scan's fingerprint); act-time gates compare the live object (M2) | `a_system_object_the_fingerprint_does_not_vouch_for_is_never_planned` (none, other owner, replaced digest, vouched), `an_executor_that_refuses_to_start_changes_nothing_and_says_why`; purge-exec `a_selected_object_must_be_vouched_for_by_the_fingerprint_with_the_plans_digest`, `execute_bound_refuses_an_unvouched_object_before_a_session_exists`; the act-time comparison is M2's own (`act_service`, `act_task`, `act_firewall` tests) |
 | UI killed with the dialog open | `Ctx::consent` + `Closer`: Cancel, nothing runs | `a_dialog_closed_by_the_loss_of_the_pipe_runs_nothing`, `..._parent_runs_nothing` |
 | UI killed after the approval / during the run | the handler ignores cancellation after the approval; the serving loop waits for a running mutating request | `an_approved_run_finishes_when_the_ui_is_killed_during_it`, `..._parent_dies_during_it` |

@@ -104,5 +104,11 @@ items still takes the old path; only the executor's own act-time checks matter t
   the program gone was scanned `post` (the broker only saw verify-gone). **Resolved:** `ObservedParams`
   carries the outcome (M3-EXEC), and M3-GLUE records the uninstall window in `observed` from `prepare`'s
   harvest to the observation, so the medium route's `post` scan works without a broker `uninstall.run`.
+  Since M3-R2 (65347f2): `observed` answers `wrong_route` for a broker-route session, never raises a
+  session that already ran, records the window at the first passing observation only, and records none
+  more than 2 hours after `prepare` (rules and tests in `exec.md`, "`uninstall.observed` outcome").
+- `plan_in::bind` is called once per refused item at `plan.create` (one clone of the scan document
+  each; review M3-R2 N3). Bounded by the pipe limit and the scan size; collecting every
+  `NotSelectable` in one pass needs a `purge-exec` API change and is left for later.
 - The soft blockers (`BaselineInferred`, `InUse`, `ChangedSinceScan`) are not attention reasons in
   the view either; this package reports exactly what the view reports.
