@@ -56,7 +56,16 @@ Clean-Pro `rig-base-off`, `rig-base`, `m2-base`.
 - B7 G6/G7/G12 m3-e2e on the M1 apps (VS Code system + user, Git, Firefox+Thunderbird, Notepad++, 7-Zip, one M1b
   service/task app) + failed uninstaller 1603/3010. WRITE UIA driver, scorer. Broker timing records: written
   (branch `m3-timings`; collect with `vm/guest/broker-timings.ps1`, reduce with `cargo xtask broker-timings`).
-- B8 G8/G9 m3-owner, m3-recover (crash at every step), allow_irreversible, Restart Manager, System Restore. WRITE.
+- B8 G8/G9 m3-owner, m3-recover (crash at every step), allow_irreversible, Restart Manager, System Restore. Tooling:
+  done, branch m3-rig-recover (vm/RIG.md section 15; `vm\rig-m3-recover.ps1`, guest `m3-recover.ps1` + `m3rec.cs`,
+  scorer `vm\truth\m3-recover-score.ps1`; self-tests pass, not run in a VM yet). Release builds only (never a
+  fault-inject broker): the journal watcher suspends the release broker at each journal line, the host cuts the power.
+  ```
+  .\vm\rig-m3-recover.ps1 -Mode m3-owner   -Engine $t\release\purge-engine.exe -Broker $t\release\purge-broker.exe   # ~25 min
+  .\vm\rig-m3-recover.ps1 -Mode m3-recover -Engine ... -Broker ... -UiPublish $t\ui-publish   # ~6 min/round, 2N rounds (N = calibration journal lines)
+  .\vm\rig-m3-recover.ps1 -Mode m3-extras  -Engine ... -Broker ...   # ~45 min; needs vm\cache\inst\npp.exe (official)
+  powershell -NoProfile -File vm\truth\m3-recover-score.ps1 -Mode owner|recover|extras -Evidence E:\purge-build\gate-evidence\m3-<mode>\<run>
+  ```
 - B9 G11 m3-clean-start + Inno setup install/uninstall on Clean-Pro. WRITE.
 - B10 G13 re-run M1b scan + executor gates on the M3 commit (~10 h; cut allowed: G2 rig-base + G5 elevated).
 - B11 G14 M3-R3 Fable review, then docs/M3_GATE.md (M2_GATE format).
