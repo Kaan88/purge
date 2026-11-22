@@ -4,6 +4,29 @@ Branch `baseline`, pushed to `origin/baseline` (8c7142f). Design `docs/BASELINE_
 decision of this work is a row in `docs/DECISIONS.md` (Post-M1b). This file is kept current so the work can be
 continued from any harness: read it, then `git log --oneline -15` and `git worktree list`.
 
+## BL-GATE runbook (rig tooling on branch `bl-gate-rig`, 2026-11-22; not run on a VM yet)
+Rig rules apply (one VM at a time, VMPWFILE from the environment, never the clone/UT or DietPi). From the repo root,
+with `target\release\purge-engine.exe` and `vm\rigtool\target\release\rigtool.exe` built from this tree and the tree
+committed (m1b.sh BIND needs clean sources and rig inputs). Details: `vm\RIG.md` §8a (FirstRead) and §12.9 (R4).
+```
+$env:VMPWFILE = '<pw file>'
+# A0  W4 settled first read (BL-RM S7; budget 60 s on the rig VM) -> vm\truth\baseline-local\bl-r?-*-firstread.json
+.\vm\rig-baseline-local.ps1 -Mode R1 -FirstRead
+.\vm\rig-baseline-local.ps1 -Mode R2 -FirstRead
+# A3  exact smoke: first rig run with the BL-R1 M1 tree; run.json engine.hello must say asked/expected exact, ok true
+.\vm\rig.ps1 -Mode m1b-app -App 7zip -RunPrefix blx-
+# R4  Inbound (default VM): merged (exact hidden) and local (no shipped baseline), apps then traps
+.\vm\rig.ps1 -Mode m1b-apps  -Base rig-base -RunPrefix blm- -HideExact -ExpectTrust merged
+.\vm\rig.ps1 -Mode m1b-traps -Base rig-base -RunPrefix blm- -HideExact -ExpectTrust merged
+.\vm\rig.ps1 -Mode m1b-apps  -Base rig-base -RunPrefix bll- -NoBaselines -ExpectTrust local
+.\vm\rig.ps1 -Mode m1b-traps -Base rig-base -RunPrefix bll- -NoBaselines -ExpectTrust local
+# R4  Clean-Pro: the same four with -VmName Purge-CleanPro (runs blm-m1bcp-*, bll-m1bcp-*)
+```
+Then score with `vm/truth/m1b.sh` (prefixes via `M1B_CLEAN=blm-m1b M1B_CP=blm-m1bcp`, then `bll-...`; S1: `danger_listed = 0`, every trap expectation met, merged and local, both VMs),
+R3 replay (`--baseline-view` + `--l5-against`), W2/W3 from the plans; write `docs/BASELINE_LOCAL_GATE.md`.
+Open risks (RIG.md §12.9): MSI table cache files under `%ProgramData%\Purge` land in the app truths (recall only);
+an inbox Store update between warm-up and hello makes trust None (the run then fails its hello check).
+
 ## M3-R2 CLEANUP DONE 2026-11-22 (40e82ba code, 1f969c4 docs; pushed).
 - `docs/reviews/m3/r2-review.md` has its "Fixes" section: every B/M/S finding, flagged point and note mapped to its
   fix commit and tests (test names checked against the tree).

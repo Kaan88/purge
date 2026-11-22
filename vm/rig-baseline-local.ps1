@@ -7,6 +7,7 @@
     .\vm\rig-baseline-local.ps1 -Mode R1      # Purge-CleanPro: truth Professional-26340.9882, neighbour EnterpriseSEval-26100.1742
     .\vm\rig-baseline-local.ps1 -Mode R2      # Inbound-Win11-Test, 3D off: truth and neighbour the other way round
     .\vm\rig-baseline-local.ps1 -Mode R5      # this host, elevated, read-only; no VM, no VMPWFILE
+    .\vm\rig-baseline-local.ps1 -Mode R1 -FirstRead   # W4 settled first read (BL-GATE A0, review BL-RM S7); R2 too
 
   R1, R2 (run bl-r1-cleanpro, bl-r2-inbound): refuses unless the per-VM lock (vm\runs\.lock-<vm>) is free, VMPWFILE
   names a readable file, the VM exists and is not running (or paused, starting, ...), no other rig script for that VM
@@ -40,6 +41,16 @@
   0) or the run is INVALID (the passes' source ids differ: the source changed between them; or, R1/R2, the guest saw
   a network adapter up).
   -Library: define the functions and return (vm\guest\tests\rig-selftest.ps1).
+
+  -FirstRead (R1, R2 only; run bl-r1-cleanpro-firstread, bl-r2-inbound-firstread): the same checks, restore, offline
+  cable and push, but the guest job builds exactly once: after the same settle as the settled pass (Wait-BlSettle:
+  boot settle, quiet CPU, standby list emptied), as the first build of that boot (review BL-RM S7: the settled pass of
+  the three-pass job is the third read in one boot, after Defender scanned every manifest twice). No baseline-diff.
+  Evidence: vm\truth\baseline-local\<run>.json (purge.rig.baseline-local-firstread/1: duration, settle, uptime,
+  network, peak, file size, source id and #src lines) and <run>-build.json. Budget: "settled first build at most 60 s
+  on the rig VM" (BL-RM S7; design section 5 gives 120 s for the cold build on a 2-vCPU VM). Exit 3 when the build
+  failed, the settle did not hold (CPU not settled or standby list not emptied), the guest was online, or the build
+  took more than 60 s (the W4 number is still recorded).
 #>
 [CmdletBinding()]
 param(
@@ -47,12 +58,15 @@ param(
     [string] $Engine = '',
     [string] $RigTool = '',
     [switch] $AllowUnelevated,
+    [switch] $FirstRead,
     [switch] $Library
 )
 $ErrorActionPreference = 'Stop'
 
 # rig.ps1 has parameters of its own (Mode, Engine, ...): ours are kept here first.
-$B = [ordered]@{ mode = $Mode; engine = $Engine; rigtool = $RigTool; allow_unelevated = [bool]$AllowUnelevated }
+$B = [ordered]@{ mode = $Mode; engine = $Engine; rigtool = $RigTool; allow_unelevated = [bool]$AllowUnelevated; first_read = [bool]$FirstRead }
+# W4 settled first read, seconds on the rig VM (review BL-RM S7: "settled first build at most 60 s on the rig VM").
+$BlFirstReadBudgetSec = 60
 $BlRigDir = $PSScriptRoot
 $BlRepo = Split-Path -Parent $PSScriptRoot
 
@@ -222,8 +236,11 @@ function Get-BlVersionHash([string[]]$Lines) {
 # __DIR__ = the run directory as the builder sees it, __ENGINE__ = purge-engine.exe there and __RIGLIB__ = riglib.ps1
 # there (vm\guest\riglib.ps1, for Wait-M2BootSettle). Passes: cold (right after boot, as the broker may), warm (the
 # determinism pair), settled (after the guest settled and the standby list was emptied: W4 without boot-time I/O).
-function Get-BlBuildJob([string]$Dir, [string]$EnginePath, [string]$RigLibPath) {
+# -Passes first-read (-FirstRead): one build after the same settle as the settled pass, the first build of the boot.
+function Get-BlBuildJob([string]$Dir, [string]$EnginePath, [string]$RigLibPath, [string[]]$Passes = @('cold', 'warm', 'settled')) {
     foreach ($v in $Dir, $EnginePath, $RigLibPath) { if (-not $v -or $v.Contains("'") -or $v -match '[\r\n]') { throw "bad path for the build job: '$v'" } }
+    if (-not @($Passes).Count) { throw 'no pass for the build job' }
+    foreach ($p in $Passes) { if (@('cold', 'warm', 'settled', 'first-read') -cnotcontains $p) { throw "bad pass '$p'" } }
     $t = @'
 $ErrorActionPreference = 'Stop'
 $Dir = '__DIR__'
@@ -301,8 +318,8 @@ public static class BlSettle {
     } catch { $rec.error = $_.Exception.Message }
     $rec
 }
-foreach ($pass in 'cold', 'warm', 'settled') {
-    if ($pass -eq 'settled') {
+foreach ($pass in __PASSES__) {
+    if ($pass -eq 'settled' -or $pass -eq 'first-read') {
         $m.settle = Wait-BlSettle
         $m.network_up.settled = @(Get-BlNetUp)
     }
@@ -329,7 +346,7 @@ foreach ($pass in 'cold', 'warm', 'settled') {
 # A load of the file (baseline info: read, #end check, hashed sets): the warm-load proxy until BL-VIEW exists.
 $ErrorActionPreference = 'Continue'   # PS 5.1 turns a native program's stderr line into an error record under Stop
 $sw = [Diagnostics.Stopwatch]::StartNew()
-$info = & $Engine baseline info (Join-Path $Dir 'local-cold.tsv.gz') 2>&1 | ForEach-Object { "$_" }
+$info = & $Engine baseline info (Join-Path $Dir "local-$($m.passes[0].pass).tsv.gz") 2>&1 | ForEach-Object { "$_" }
 $sw.Stop()
 $ErrorActionPreference = 'Stop'
 [IO.File]::WriteAllLines((Join-Path $Dir 'info.txt'), [string[]]$info)
@@ -339,7 +356,7 @@ $m.finished = (Get-Date).ToString('o')
 "baseline-local build: $(($m.passes | ForEach-Object { '{0} exit {1} {2}s {3} MB peak {4} bytes' -f $_.pass, $_.exit, $_.seconds, $_.peak_working_set_mb, $_.file_bytes }) -join '; ')"
 "settle: $(if ($m.settle.boot) { "boot waited $($m.settle.boot.waited_sec) s, uptime $($m.settle.boot.uptime_sec) s; " })CPU $($m.settle.cpu_percent) % (settled $($m.settle.cpu_settled), waited $($m.settle.cpu_waited_sec) s); cache purged $($m.settle.cache_purged)$(if ($m.settle.error) { '; ' + $m.settle.error }); network up at start: $(@($m.network_up.start) -join ', ')"
 '@
-    $t.Replace("`r`n", "`n").Replace('__DIR__', $Dir).Replace('__ENGINE__', $EnginePath).Replace('__RIGLIB__', $RigLibPath)
+    $t.Replace("`r`n", "`n").Replace('__PASSES__', ((@($Passes) | ForEach-Object { "'$_'" }) -join ', ')).Replace('__DIR__', $Dir).Replace('__ENGINE__', $EnginePath).Replace('__RIGLIB__', $RigLibPath)
 }
 
 # The rigtool baseline-diff arguments (paths as given; the caller runs it from the repository root).
@@ -444,12 +461,44 @@ function Test-BlReport([string]$ReportPath, [string]$BuildPath, [string]$Expect,
     [pscustomobject]@{ lines = $lines; problems = $bad; ok = (-not $bad.Count); invalid = $invalid }
 }
 
+# -FirstRead: the evidence of the one build (purge.rig.baseline-local-firstread/1) from its build.json, and the
+# problems (exit 3): the build failed, the settle did not hold, the guest was online, or it took over $BudgetSec.
+# $Sources: [PurgeRig.BlHash]::HeaderAndSources of the file (source id, then the #src lines), or @().
+function Get-BlFirstReadEvidence($Build, $Spec, [int]$BudgetSec, [string[]]$Sources = @()) {
+    $p = @($Build.passes | Where-Object { $_.pass -eq 'first-read' } | Select-Object -First 1)
+    $bad = @()
+    if (@($Build.passes).Count -ne 1 -or -not $p.Count) { $bad += "expected exactly one pass 'first-read', got $(@($Build.passes | ForEach-Object { $_.pass }) -join ', ')" }
+    $p = $(if ($p.Count) { $p[0] } else { $null })
+    $st = $Build.settle
+    if ($p -and $p.exit -ne 0) { $bad += "the build exited $(Format-BlValue $p.exit)" }
+    if (-not $st -or -not $st.cpu_settled) { $bad += 'the CPU did not settle before the build (not a settled first read)' }
+    if (-not $st -or -not $st.cache_purged) { $bad += "the standby list was not emptied (not a read from disk)$(if ($st.error) { ': ' + $st.error })" }
+    foreach ($w in 'start', 'settled') { $up = @($Build.network_up.$w | Where-Object { $_ }); if ($up.Count) { $bad += "the guest had a network adapter up ($w`: $($up -join ', '))" } }
+    $sec = $(if ($p) { $p.seconds } else { $null })
+    $within = ($null -ne $sec -and [double]$sec -le $BudgetSec)
+    if ($null -ne $sec -and -not $within) { $bad += "W4 settled first read $sec s is over the budget of $BudgetSec s" }
+    $doc = [ordered]@{ schema = 'purge.rig.baseline-local-firstread/1'; mode = $Spec.mode; vm = $Spec.vm; run = $Spec.run
+        os = $Build.os; cpus = $Build.cpus; elevated = $Build.elevated; engine_sha256 = $Build.engine_sha256; started = $Build.started; finished = $Build.finished
+        seconds = $sec; exit = $(if ($p) { $p.exit } else { $null }); uptime_sec = $(if ($p) { $p.uptime_sec } else { $null })
+        peak_working_set_mb = $(if ($p) { $p.peak_working_set_mb } else { $null }); file_bytes = $(if ($p) { $p.file_bytes } else { $null })
+        total_line = $(if ($p) { $p.total_line } else { $null }); load_seconds = $Build.info.seconds
+        budget_sec = $BudgetSec; budget_source = 'review BL-RM S7: settled first build at most 60 s on the rig VM (design section 5: cold build at most 120 s on a 2-vCPU VM)'
+        within_budget = $within; settle = $st; network_up = $Build.network_up
+        source_id = $(if (@($Sources).Count) { $Sources[0] } else { $null }); src = @($Sources | Select-Object -Skip 1)
+        problems = $bad; ok = (-not $bad.Count) }
+    [pscustomobject]@{ doc = $doc; problems = $bad; ok = (-not $bad.Count) }
+}
+
 if ($Library) { return }
 
 # ------------------------------------------------------------------------------------------ host checks
 
 . (Join-Path $BlRigDir 'rig.ps1')
 $Spec = Get-BlRunSpec $B.mode
+if ($B.first_read) {
+    if (-not $Spec.vm) { Write-Host 'REFUSED: -FirstRead is for -Mode R1 or R2 (a rig VM restored and booted for it)'; exit 2 }
+    $Spec.run = "$($Spec.run)-firstread"
+}
 if ($Spec.vm) { $script:VmName = $Spec.vm }
 
 function Write-BlLines([string[]]$Lines) { foreach ($l in @($Lines)) { Write-RigLog $l } }
@@ -573,7 +622,8 @@ Add-Type -AssemblyName Microsoft.VisualBasic
 $avail = [int]((New-Object Microsoft.VisualBasic.Devices.ComputerInfo).AvailablePhysicalMemory / 1MB)
 if ($avail -lt 6144) { Stop-Bl 2 "REFUSED: only $avail MiB RAM available (need 6144 for a 4 GiB VM)" }
 
-$job = Get-BlBuildJob "C:\cr\out\$($Spec.run)" 'C:\cr\bin\purge-engine.exe' 'C:\cr\guest\riglib.ps1'
+$passes = $(if ($B.first_read) { @('first-read') } else { @('cold', 'warm', 'settled') })
+$job = Get-BlBuildJob "C:\cr\out\$($Spec.run)" 'C:\cr\bin\purge-engine.exe' 'C:\cr\guest\riglib.ps1' $passes
 Write-RigLog "== $($Spec.run) start $($started.ToString('o')) on $($Spec.vm); engine $((Get-FileHash -Algorithm SHA256 -LiteralPath $tools.engine).Hash.ToLower().Substring(0, 12)) ($($tools.engine)); truth $($Spec.truth); neighbour $($Spec.neighbour)"
 $rc = 1
 $script:BlNat = @()
@@ -584,12 +634,12 @@ try {
     # Offline for the whole build (gate M round 2): the rig reaches the guest through guestcontrol, not the network.
     $script:BlNat = @(Set-BlNatLink $Spec.vm 'off')
     Push-Tools -RigTool $tools.rigtool -Engine $tools.engine -NoBaselines
-    # Three passes and the settle wait before the third (Get-BlBuildJob).
+    # Three passes and the settle wait before the third (Get-BlBuildJob); -FirstRead: the settle, then one build.
     $j = Invoke-GuestJob -Text $job -Name "$($Spec.run)-build" -TimeoutSec 3600
     Write-BlLines @("$($j.log)" -split "`r?`n" | Where-Object { $_ -ne '' })
     if (-not $j.done) { throw 'the build job did not finish' }
     $got = @(Pull-Run -Run $Spec.run)
-    foreach ($n in 'local-cold.tsv.gz', 'local-warm.tsv.gz', 'local-settled.tsv.gz', 'build.json', 'build-cold.log', 'info.txt') {
+    foreach ($n in @($passes | ForEach-Object { "local-$_.tsv.gz" }) + @('build.json', "build-$($passes[0]).log", 'info.txt')) {
         if ($got -notcontains $n) { throw "not pulled: $n" }
     }
     $rc = 0
@@ -617,7 +667,22 @@ try {
     } catch { Write-RigLog "!! leaving the VM at rig-base failed: $($_.Exception.Message)" }
     Remove-PwTemp
 }
-if ($rc -eq 0) {
+if ($rc -eq 0 -and $B.first_read) {
+    # W4 settled first read: the evidence JSON, no baseline-diff (the three-pass run gives the coverage).
+    New-Item -ItemType Directory -Force $BlReportDir | Out-Null
+    $build = Join-Path $script:RunsDir "$($Spec.run)\build.json"
+    Copy-Item -LiteralPath $build -Destination (Join-Path $BlReportDir "$($Spec.run)-build.json") -Force
+    Initialize-BlNative
+    $srcs = @(); try { $srcs = @([PurgeRig.BlHash]::HeaderAndSources((Join-Path $script:RunsDir "$($Spec.run)\local-first-read.tsv.gz"))) } catch { Write-RigLog "!! reading the #src lines: $($_.Exception.Message)" }
+    $ev = Get-BlFirstReadEvidence (Read-BlJson $build) $Spec $BlFirstReadBudgetSec $srcs
+    $ev.doc.engine_path = $tools.engine
+    [IO.File]::WriteAllText((Join-Path $BlReportDir "$($Spec.run).json"), (ConvertTo-Json -InputObject $ev.doc -Depth 6), (New-Object System.Text.UTF8Encoding($false)))
+    $sd = $ev.doc.settle
+    Write-RigLog ("W4 settled first read: {0} s (budget {1} s, BL-RM S7) at uptime {2} s on {3} CPUs; peak {4} MB; file {5} bytes; CPU {6} % settled {7}; standby purged {8} -> $RRel\$($Spec.run).json" -f `
+        $ev.doc.seconds, $BlFirstReadBudgetSec, $ev.doc.uptime_sec, $ev.doc.cpus, $ev.doc.peak_working_set_mb, $ev.doc.file_bytes, $sd.cpu_percent, $sd.cpu_settled, $sd.cache_purged)
+    foreach ($b in $ev.problems) { Write-RigLog "PROBLEM: $b" }
+    $rc = $(if ($ev.ok) { 0 } else { 3 })
+} elseif ($rc -eq 0) {
     New-Item -ItemType Directory -Force $BlReportDir | Out-Null
     $out = "$RRel\$($Spec.run).json"
     Write-RigLog "== baseline-diff (host): truth $($Spec.truth), local vm\runs\$($Spec.run)\local-cold.tsv.gz, neighbour $($Spec.neighbour)"
