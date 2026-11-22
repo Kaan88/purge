@@ -864,17 +864,19 @@ fn is_absolute_path(path: &str) -> bool {
 const HOST_EXECUTABLES: &[&str] = &["cmd.exe", "rundll32.exe", "regsvr32.exe", "msiexec.exe"];
 
 /// Interpreters and script hosts (file name stems; `python` and `pythonw` with or without a version,
-/// `python3.12.exe`, are matched in [`is_interpreter`]). A command they run, or that `cmd /c` hands to them, is always medium: each loads
-/// code from places the command line does not name and a standard user can write, so judging the
-/// script is not enough (review M3-R2 M2; coordinator ruling after the fourth Fable review):
-/// - `powershell`/`pwsh`: the user's profile (`Documents\WindowsPowerShell\profile.ps1`, found through
+/// `python3.12.exe`, are matched in [`is_interpreter`]). A command they run, or whose arguments name
+/// one (a launcher such as `conhost --headless powershell ...`, `cmd /c`), is always medium: each
+/// loads code from places the command line does not name and a standard user can write, so judging
+/// the script is not enough (review M3-R2 M2; coordinator ruling after the fourth Fable review; M7):
+/// - `powershell`/`pwsh`/`powershell_ise`: the user's profile (`Documents\WindowsPowerShell\profile.ps1`, found through
 ///   the known folder in HKCU) unless `-NoProfile`, and even then modules auto-loaded from
 ///   `Documents\WindowsPowerShell\Modules` and from `PSModulePath` in `HKCU\Environment`, which
 ///   PowerShell reads from the registry itself; adding `-NoProfile` in the broker would run a command
 ///   other than the one shown (B1; H1, H2).
 /// - `python`/`py`: user site-packages (`%APPDATA%\Python`) and `.pth` files; `node`, `perl`, `ruby`,
 ///   `php`: per-user module and config paths; `java`/`javaw`: a jar manifest's `Class-Path` and the
-///   per-user JVM configuration load further code; `wsl`, `bash`, `sh`: a per-user Linux environment.
+///   per-user JVM configuration load further code; `dotnet`: per-user NuGet and runtime config;
+///   `wsl`, `bash`, `sh`: a per-user Linux environment.
 /// - `wscript`, `cscript`, `mshta`, `hh`, `msxsl`: script engines; `forfiles`: runs any command;
 ///   `msbuild`, `installutil`, `regasm`, `regsvcs`, `cmstp`: run code from a project, assembly or
 ///   profile; `sdbinst`: installs a compatibility database that changes how later programs start.
@@ -882,7 +884,9 @@ const HOST_EXECUTABLES: &[&str] = &["cmd.exe", "rundll32.exe", "regsvr32.exe", "
 /// Not modelled interpreters are plain executables to the route; this list is the place to add one.
 const INTERPRETERS: &[&str] = &[
     "powershell",
+    "powershell_ise",
     "pwsh",
+    "dotnet",
     "py",
     "pyw",
     "node",
@@ -1084,7 +1088,10 @@ fn command_loads_admin_only(command: &QuietCommand, fs: &dyn FileSystemSource) -
             }
         }
     }
-    if is_interpreter(&command.exe) {
+    // A launcher can start a host or an interpreter named in its arguments (`conhost --headless
+    // powershell ...`, `rundll32 shell32.dll,ShellExec_RunDLL powershell ...`, `cmd /c ...`), so any
+    // argument that names one makes the command medium, whatever the program is (review M3-R2 M7).
+    if is_interpreter(&command.exe) || tokens.iter().any(|token| token_names_a_host(token)) {
         return false;
     }
     if !is_host_executable(&command.exe) {
@@ -1098,6 +1105,22 @@ fn command_loads_admin_only(command: &QuietCommand, fs: &dyn FileSystemSource) -
         return file_name_lower(&command.exe) == "msiexec.exe";
     };
     is_absolute_path(&load) && fs.is_admin_only_executable(&load) == Ok(true)
+}
+
+/// Whether an argument token names a host or an interpreter ([`names_a_host`]): the token, each part
+/// [`path_parts`] gives (the value after `=`, the `;` parts) and each `,`-separated part of those
+/// (`dll,Entry`). A part counts only when its whole file name is a host's (`powershell`,
+/// `C:\x\node.exe`), not when it merely contains one (`--uninstall-node-modules`); a switch (`-x`, or a
+/// `/x` with no further separator) is not a file name.
+fn token_names_a_host(token: &str) -> bool {
+    path_parts(token)
+        .into_iter()
+        .flat_map(|part| part.split(','))
+        .any(|part| {
+            let switch = part.starts_with('-')
+                || (part.starts_with('/') && !part[1..].contains(['/', '\\']));
+            !part.is_empty() && !switch && names_a_host(part)
+        })
 }
 
 /// Whether one argument part, if it is a path, is one a standard user cannot supply (review M3-R2 M5).
@@ -2618,6 +2641,14 @@ mod tests {
             .file(r"C:\Windows\System32\wsl.exe", 1)
             .file(r"C:\Windows\System32\wscript.exe", 1)
             .file(r"C:\Windows\System32\regsvr32.exe", 1)
+            .file(r"C:\Windows\System32\conhost.exe", 1)
+            .file(r"C:\Windows\System32\shell32.dll", 1)
+            .file(
+                r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell_ise.exe",
+                1,
+            )
+            .file(r"C:\Program Files\dotnet\dotnet.exe", 1)
+            .file(r"C:\Program Files\App\app.dll", 1)
             .file(r"C:\Program Files\Vendor Tools\tools.dll", 1)
             .file(r"C:\ProgramData\My Vendor\uninstall.cmd", 1)
             .file(r"C:\ProgramData\My Vendor (x64)\uninstall.cmd", 1)
@@ -3058,6 +3089,83 @@ mod tests {
                 purge_rpc::methods::Route::Broker,
                 "{args}"
             );
+        }
+    }
+
+    #[test]
+    fn a_host_named_in_a_launchers_arguments_is_medium() {
+        // Review M3-R2 M7: the launcher is admin-only, the interpreter it starts is not judged.
+        for (exe, args) in [
+            (
+                r"C:\Windows\System32\conhost.exe",
+                r#"--headless powershell.exe -ExecutionPolicy Bypass -File "C:\Program Files\App\un.ps1""#,
+            ),
+            (
+                r"C:\Windows\System32\rundll32.exe",
+                r"C:\Windows\System32\shell32.dll,ShellExec_RunDLL powershell.exe -enc AAAA",
+            ),
+            (
+                CMD,
+                r"/d /c C:\Windows\System32\conhost.exe --headless powershell -enc AAAA",
+            ),
+            (
+                r"C:\Windows\System32\conhost.exe",
+                r#"--headless "C:\Program Files\nodejs\node.exe" x.js"#,
+            ),
+            (
+                r"C:\Windows\System32\rundll32.exe",
+                r"C:\Windows\System32\shell32.dll,ShellExec_RunDLL,python",
+            ),
+            (
+                r"C:\Program Files\App\unins000.exe",
+                r"/RUNAFTER=C:\Windows\System32\cmd.exe",
+            ),
+            (
+                r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell_ise.exe",
+                r#""C:\Program Files\App\un.ps1""#,
+            ),
+            (r"C:\Program Files\dotnet\dotnet.exe", "app.dll"),
+            (
+                r"C:\Program Files\dotnet\dotnet.exe",
+                r#""C:\Program Files\App\app.dll""#,
+            ),
+        ] {
+            assert_eq!(
+                shell_route(exe, args),
+                purge_rpc::methods::Route::Medium,
+                "{exe} {args}"
+            );
+        }
+        // Ordinary vendor arguments, and names that merely contain a host's, are not hosts.
+        for args in [
+            r#"/S /LOG="C:\Program Files\App\u.log""#,
+            "--uninstall /VERYSILENT /SUPPRESSMSGBOXES",
+            "--remove-node-modules /python-cleanup -sh",
+            r#""/D=C:\Program Files\App""#,
+        ] {
+            assert_eq!(
+                shell_route(r"C:\Program Files\App\unins000.exe", args),
+                purge_rpc::methods::Route::Broker,
+                "{args}"
+            );
+        }
+        for token in [
+            "powershell.exe",
+            r"C:\x\NODE.EXE",
+            "a.dll,Entry,pwsh",
+            "X=cscript",
+        ] {
+            assert!(token_names_a_host(token), "{token}");
+        }
+        for token in [
+            "/S",
+            "-py",
+            "/sh",
+            "--node",
+            "powershell-tools",
+            "unins000.exe",
+        ] {
+            assert!(!token_names_a_host(token), "{token}");
         }
     }
 
