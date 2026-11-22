@@ -79,6 +79,15 @@ function Test-DaclWriteOwner([string]$S) {
 
 # ------------------------------------------------------------------------------------------------- owner
 
+# The silent UAC each mode sets itself at start (guest phase uac-silent; coordinator ruling 2026-11-22: rig-base is at the
+# Windows defaults): the recorded set is ok, silent with LUA on, and uac-check after it saw the same. The snapshot's own
+# value (before) is recorded, never asserted.
+function Test-UacSilent($S, $Uac, $Want) {
+    $ok = ($S -and $S.ok -eq $true -and "$($S.after.ConsentPromptBehaviorAdmin)" -eq "$Want" -and "$($S.after.EnableLUA)" -eq '1')
+    Row 'uac made silent by the mode (recorded before/after)' $ok $(if ($S) { "before $($S.before.ConsentPromptBehaviorAdmin)/$($S.before.PromptOnSecureDesktop)/$($S.before.EnableLUA), after $($S.after.ConsentPromptBehaviorAdmin)/$($S.after.PromptOnSecureDesktop)/$($S.after.EnableLUA)" } else { 'no uac_silent record' })
+    Row 'uac silent when checked (ConsentPromptBehaviorAdmin)' ($Uac -and "$($Uac.ConsentPromptBehaviorAdmin)" -eq "$Want") "$(if ($Uac) { $Uac.ConsentPromptBehaviorAdmin })"
+}
+
 function Test-Owner([string]$Ev, $X) {
     $doc = Read-J (Join-Path $Ev 'guest\m3-owner.json')
     $sum = Read-J (Join-Path $Ev 'summary.json')
@@ -86,7 +95,7 @@ function Test-Owner([string]$Ev, $X) {
     Row 'evidence summary.json' ($null -ne $sum) $(if (-not $sum) { 'missing or unreadable' })
     if (-not $doc) { return }
     $o = $X.owner
-    Row 'uac silent (ConsentPromptBehaviorAdmin)' ((Has $doc 'uac') -and "$($doc.uac.ConsentPromptBehaviorAdmin)" -eq "$($X.uac_admin)") "$($doc.uac.ConsentPromptBehaviorAdmin)"
+    Test-UacSilent $doc.uac_silent $doc.uac $X.uac_admin
 
     $rec = "$($doc.exec.sddl_recorded)"
     $why = @()
@@ -188,6 +197,7 @@ function Test-Recover([string]$Ev, $X) {
     $xr = $X.recover
     $plan = $sum.plan
     $cd = Join-Path $Ev 'rounds\cal\guest\round'
+    Test-UacSilent (Read-J (Join-Path $Ev 'rounds\cal\guest\uac-silent.json')) (Read-J (Join-Path $Ev 'rounds\cal\guest\uac-check.json')) $X.uac_admin
     $cal = Read-J (Join-Path $cd 'arm.json')
     $pre = Read-J (Join-Path $cd 'truth-rec-pre.json')
     $complete = Read-J (Join-Path $cd 'truth-rec-complete.json')
@@ -293,7 +303,7 @@ function Test-Extras([string]$Ev, $X) {
     Row 'evidence guest\m3-extras.json' ($null -ne $doc) $(if (-not $doc) { 'missing or unreadable' })
     if (-not $doc) { return }
     $xe = $X.extras
-    Row 'uac silent (ConsentPromptBehaviorAdmin)' ((Has $doc 'uac') -and "$($doc.uac.ConsentPromptBehaviorAdmin)" -eq "$($X.uac_admin)") "$($doc.uac.ConsentPromptBehaviorAdmin)"
+    Test-UacSilent $doc.uac_silent $doc.uac $X.uac_admin
 
     # allow_irreversible
     $ir = $doc.irrev
@@ -383,6 +393,8 @@ function Test-Extras([string]$Ev, $X) {
     foreach ($case in 'off', 'disabled', 'created', 'throttled') {
         $s = $doc.sr.$case; $e = $xe.sr.$case
         $why = @()
+        # rig-base has System Restore off: the mode turns it on at start (sr-enable.json); every case needs that record.
+        if (-not ($doc.sr_enable -and $doc.sr_enable.ok -eq $true -and "$($doc.sr_enable.rp_session_interval_after)" -eq '1')) { $why += "System Restore not enabled at mode start (sr-enable: $(if ($doc.sr_enable) { "after $($doc.sr_enable.rp_session_interval_after)" } else { 'no record' }))" }
         if (-not $s) { $why += 'no record' }
         else {
             $rp = $s.exec_result.result.restore_point
@@ -442,6 +454,7 @@ function New-OwnerPass($X) {
     $tree = @('K|', "K|Parameters\Guarded|$rec", 'V|Parameters\Guarded|Level|DWord|1')
     $doc = [ordered]@{
         uac = [ordered]@{ ConsentPromptBehaviorAdmin = 0 }
+        uac_silent = [ordered]@{ ok = $true; before = [ordered]@{ ConsentPromptBehaviorAdmin = 5; PromptOnSecureDesktop = 1; EnableLUA = 1 }; after = [ordered]@{ ConsentPromptBehaviorAdmin = 0; PromptOnSecureDesktop = 1; EnableLUA = 1 } }
         fixture = [ordered]@{ service = [ordered]@{ guarded_sddl = $rec } }
         exec = [ordered]@{ session = '20261122T101500Z-0123456789abcdef'; sddl_recorded = $rec; tree_before = $tree; exec_result = [ordered]@{ result = [ordered]@{ outcome = 'complete' } }
                            service_after = $false; service_candidate = [ordered]@{ kind = 'service'; display_name = 'PurgeRigOwnSvc' } }
@@ -466,6 +479,8 @@ function New-RecoverPass($X, [string]$Dir, [int]$N = 3) {
     $cal = Join-Path $Dir 'rounds\cal\guest\round'
     Write-J ([ordered]@{ watch = [ordered]@{ state = 'recorded'; lines = $N }; store = [ordered]@{ index_listed = $true; index_state = 'Committed'; quarantine_ops = @([ordered]@{ op = '1'; files = 1 }, [ordered]@{ op = '2'; files = 1 }) } }) (Join-Path $cal 'arm.json')
     Write-J (New-Truth 'pre' 'pre') (Join-Path $cal 'truth-rec-pre.json')
+    Write-J ([ordered]@{ ok = $true; before = [ordered]@{ ConsentPromptBehaviorAdmin = 5; PromptOnSecureDesktop = 1; EnableLUA = 1 }; after = [ordered]@{ ConsentPromptBehaviorAdmin = 0; PromptOnSecureDesktop = 1; EnableLUA = 1 } }) (Join-Path (Split-Path -Parent $cal) 'uac-silent.json')
+    Write-J ([ordered]@{ ConsentPromptBehaviorAdmin = 0; PromptOnSecureDesktop = 1; EnableLUA = 1 }) (Join-Path (Split-Path -Parent $cal) 'uac-check.json')
     Write-J (New-Truth 'complete' 'complete') (Join-Path $cal 'truth-rec-complete.json')
     $rounds = @(); $keys = [ordered]@{}; $shots = @()
     for ($k = 1; $k -le $N; $k++) {
@@ -527,13 +542,19 @@ function New-ExtrasPass {
         throttled = [ordered]@{ exec_result = [ordered]@{ result = [ordered]@{ restore_point = [ordered]@{ kind = 'Throttled' } } }; plan_dialog = $dlgYes
                                 points_before = @([ordered]@{ sequence = 12 }); points_after = @([ordered]@{ sequence = 12 }) }
     }
-    [ordered]@{ uac = [ordered]@{ ConsentPromptBehaviorAdmin = 0 }; irrev = $irrev; rm = $rm; sr = $sr }
+    [ordered]@{ uac = [ordered]@{ ConsentPromptBehaviorAdmin = 0 }; uac_silent = [ordered]@{ ok = $true; before = [ordered]@{ ConsentPromptBehaviorAdmin = 5; PromptOnSecureDesktop = 1; EnableLUA = 1 }; after = [ordered]@{ ConsentPromptBehaviorAdmin = 0; PromptOnSecureDesktop = 1; EnableLUA = 1 } }; sr_enable = [ordered]@{ ok = $true; rp_session_interval_before = 0; rp_session_interval_after = 1 }; irrev = $irrev; rm = $rm; sr = $sr }
 }
 
 # Single defects; each must turn a passing evidence directory into a FAIL. owner and extras edit the guest document
 # (or the summary with sum=$true), recover edits files of the round tree (act gets the directory).
 function Get-Defects {
     @(
+        @{ mode = 'owner'; name = 'no uac-silent record'; act = { param($d) $d.uac_silent = $null } },
+        @{ mode = 'extras'; name = 'uac-silent left LUA off'; act = { param($d) $d.uac_silent.after.EnableLUA = 0 } },
+        @{ mode = 'extras'; name = 'uac not silent when checked'; act = { param($d) $d.uac.ConsentPromptBehaviorAdmin = 5 } },
+        @{ mode = 'recover'; name = 'no uac-silent record in the base'; act = { param($dir) Remove-Item -LiteralPath (Join-Path $dir 'rounds\cal\guest\uac-silent.json') } },
+        @{ mode = 'extras'; name = 'System Restore not enabled at start'; act = { param($d) $d.sr_enable.ok = $false; $d.sr_enable.rp_session_interval_after = 0 } },
+        @{ mode = 'extras'; name = 'no sr-enable record'; act = { param($d) $d.sr_enable = $null } },
         @{ mode = 'owner'; name = 'owner mismatch after the resume'; act = { param($d) $d.resume.sddl_after = ($d.resume.sddl_after -replace '^O:SY', 'O:BA') } },
         @{ mode = 'owner'; name = 'service tree differs'; act = { param($d) $d.resume.tree_after = @($d.resume.tree_after | Select-Object -SkipLast 1) } },
         @{ mode = 'owner'; name = 'privilege on in the process token'; act = { param($d) $d.resume.privmon.process_token_enabled_samples = 3 } },

@@ -2131,7 +2131,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File vm\guest\tests\rig-m3-recove
   scancodes with `VBoxManage controlvm keyboardputscancode`, with a screenshot after each key, until the dialog is
   gone. A dialog that does not have the keyboard focus is brought to the front by the agent first and that is recorded
   (`refocused=True`).
-- **`m3-owner`** (G8; from `rig-base`, UAC silent). Fixture `own`. `own-exec`: prepare, uninstall, scan, execute of
+- **Silent UAC and System Restore at mode start** (coordinator ruling 2026-11-22). `rig-base` is at the Windows UAC
+  defaults (section 13) and has System Restore off. `Initialize-RecGuest` (all three modes, and the live base snapshot of
+  m3-recover) runs guest phase `uac-silent` (`ConsentPromptBehaviorAdmin=0`, EnableLUA kept, before/after in
+  `uac-silent.json`) before `uac-check`; m3-extras then runs `sr-enable` (`Enable-ComputerRestore C:\`,
+  RPSessionInterval before/after in `sr-enable.json`). The scorer checks the recorded states: the silent set (owner,
+  extras, and the calibration round's copy for recover) and, in every System Restore row, the enabled state at start.
+  The scancode answers of the broker dialogs are unchanged.
+- **`m3-owner`** (G8; from `rig-base`, UAC made silent at start). Fixture `own`. `own-exec`: prepare, uninstall, scan, execute of
   every non-blocked candidate (autopress), the service gone. `own-undo-cut`: `undo.run`, and the watcher suspends and
   ends the broker at the line `{"rec":"undo_intent","op":<the DeleteService op>}`; then the rest of that first attempt
   is put in place as R8b M1 describes it (the service as the attempt creates it, `Guarded` re-created by Administrators

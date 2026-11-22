@@ -1926,6 +1926,13 @@ function Invoke-M2Script([string]$Script, [string]$Arguments = '', [int]$Timeout
     Check 'm3-sec: uac-silent is a guest phase that records before/after and sets only ConsentPromptBehaviorAdmin=0' (
         $guestText -match "(?m)^\s+'uac-silent' \{" -and $guestText -match "Name 'ConsentPromptBehaviorAdmin' -Value 0" -and $guestText -match "uac_silent = \(Read-Json \(Join-Path \`$Out 'uac-silent.json'\)\)" -and
         $guestText -notmatch "Name 'EnableLUA' -Value")
+    $recHost = [IO.File]::ReadAllText((Join-Path $Vm 'rig-m3-recover.ps1'))
+    $recGuest = [IO.File]::ReadAllText((Join-Path $Guest 'm3-recover.ps1'))
+    Check 'm3-recover: uac-silent before uac-check in Initialize-RecGuest; sr-enable at m3-extras start; both guest phases record' (
+        $recHost -match "(?s)function Initialize-RecGuest.*?Invoke-RecPhase 'uac-silent'.*?Invoke-RecPhase 'uac-check'.*?Assert-M3SecUac \`$u 0" -and
+        $recHost -match "(?s)function Invoke-RecExtras.*?Initialize-RecGuest.*?Invoke-RecPhase 'sr-enable'.*?Invoke-RecPhase 'sr'" -and
+        $recGuest -match "(?m)^\s+'uac-silent' \{" -and $recGuest -match "(?m)^\s+'sr-enable' \{" -and $recGuest -match "Enable-ComputerRestore -Drive 'C:\\' -ErrorAction Stop" -and
+        $recGuest -match "sr_enable = \(Read-Json \(Join-Path \`$Out 'sr-enable.json'\)\)")
     Check 'm3-sec: Start-M3Sec runs uac-silent for m3-broker / m3-consent and keeps the 5 check for m3-uac' (
         $startText -match "Invoke-M3SecPhase 'uac-silent'" -and $startText -match "Assert-M3SecUac \`$u 5" -and $startText -match "Invoke-M3SecPhase 'uac-check' 'silent'")
     Check 'm3-sec: m3sec.cs is ASCII (csc reads it in the guest code page)' (-not ([IO.File]::ReadAllText((Join-Path $Guest 'm3sec.cs')) -match '[^\x00-\x7F]'))

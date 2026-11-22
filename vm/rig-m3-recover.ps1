@@ -10,7 +10,7 @@
     .\vm\rig-m3-recover.ps1 -Mode m3-extras  -Engine ... -Broker ... [-NppInstaller <cached npp.exe>]
     powershell -NoProfile -File vm\truth\m3-recover-score.ps1 -Mode owner|recover|extras -Evidence <run dir>
 
-  m3-owner (G8, review R8b M1, threat T10). One boot of rig-base (UAC silent). Fixture PurgeRigOwn with the service
+  m3-owner (G8, review R8b M1, threat T10). One boot of rig-base (UAC made silent at start). Fixture PurgeRigOwn with the service
   PurgeRigOwnSvc whose Parameters\Guarded key is owned by SYSTEM and grants nobody WRITE_OWNER. Uninstall, scan and
   execute through the broker (every dialog answered from high integrity), then undo.run, cut by the journal watcher right
   after the service op's undo_intent (broker suspended and ended). The rest of that first attempt is put in place as R8b
@@ -161,13 +161,17 @@ function Push-RecFiles {
     Write-RigLog "  pushed $($RecGuestScripts -join ', '), install.ps1, payload.zip"
 }
 
-# Build, install, UAC check (silent: ConsentPromptBehaviorAdmin=0, the rig default these modes need) on the running VM.
+# Build, install, silent UAC on the running VM. rig-base is at the Windows UAC defaults (coordinator ruling 2026-11-22),
+# so the guest phase uac-silent sets ConsentPromptBehaviorAdmin=0 itself and records before/after (uac-silent.json);
+# uac-check then records the silent state the modes run with. The scancode answers of the broker dialogs stay as they are.
 function Initialize-RecGuest {
     Push-RecFiles
     $b = Invoke-RecPhase 'build'
     if ("$b" -notmatch '^M3R BUILD OK') { throw "the guest build of m3rec.exe failed: $b" }
     $i = Invoke-RecPhase 'install' -WaitSec 600
     if ("$i" -notmatch '^M3R INSTALL OK') { throw "install failed: $i" }
+    $s = Invoke-RecPhase 'uac-silent'
+    if ("$s" -notmatch '^M3R UAC-SILENT OK') { throw "could not make UAC silent: $s" }
     $u = Invoke-RecPhase 'uac-check'
     Assert-M3SecUac $u 0
 }
@@ -317,6 +321,9 @@ function Invoke-RecRecover {
 function Invoke-RecExtras {
     Restore-Base -Snapshot 'rig-base' -No3D
     Initialize-RecGuest
+    # rig-base has System Restore off; the restore-point cases need it on (recorded in sr-enable.json, the scorer checks it).
+    $sr = Invoke-RecPhase 'sr-enable'
+    if ("$sr" -notmatch '^M3R SR-ENABLE OK') { Write-RigLog "  !! System Restore not enabled: $sr (the restore-point rows fail)"; $script:M3Fail = $true }
     $npp = $(if ($RC.npp) { $RC.npp } else { Join-Path $script:CacheDir 'npp.exe' })
     if (Test-Path -LiteralPath $npp -PathType Leaf) {
         $r = Invoke-Guest @('copyto', $npp, 'C:\cr\inst\npp.exe')
