@@ -928,9 +928,11 @@ fn is_interpreter(program: &str) -> bool {
 
 /// The lowercase file name of `exe`.
 fn file_name_lower(exe: &str) -> String {
+    // Windows drops trailing dots and spaces from a file name: `powershell.exe.` is `powershell.exe`.
     exe.rsplit(['\\', '/'])
         .next()
         .unwrap_or(exe)
+        .trim_end_matches(['.', ' '])
         .to_ascii_lowercase()
 }
 
@@ -1091,7 +1093,14 @@ fn command_loads_admin_only(command: &QuietCommand, fs: &dyn FileSystemSource) -
     // A launcher can start a host or an interpreter named in its arguments (`conhost --headless
     // powershell ...`, `rundll32 shell32.dll,ShellExec_RunDLL powershell ...`, `cmd /c ...`), so any
     // argument that names one makes the command medium, whatever the program is (review M3-R2 M7).
-    if is_interpreter(&command.exe) || tokens.iter().any(|token| token_names_a_host(token)) {
+    // An 8.3 short name (`POWERS~1.EXE`) hides what the file is from the name checks, so one in the
+    // program's or any argument part's file name makes the command medium too.
+    if is_interpreter(&command.exe)
+        || is_short_name(&command.exe)
+        || tokens
+            .iter()
+            .any(|token| token_names_a_host(token) || token_has_a_short_name(token))
+    {
         return false;
     }
     if !is_host_executable(&command.exe) {
@@ -1107,20 +1116,58 @@ fn command_loads_admin_only(command: &QuietCommand, fs: &dyn FileSystemSource) -
     is_absolute_path(&load) && fs.is_admin_only_executable(&load) == Ok(true)
 }
 
-/// Whether an argument token names a host or an interpreter ([`names_a_host`]): the token, each part
-/// [`path_parts`] gives (the value after `=`, the `;` parts) and each `,`-separated part of those
-/// (`dll,Entry`). A part counts only when its whole file name is a host's (`powershell`,
-/// `C:\x\node.exe`), not when it merely contains one (`--uninstall-node-modules`); a switch (`-x`, or a
-/// `/x` with no further separator) is not a file name.
-fn token_names_a_host(token: &str) -> bool {
-    path_parts(token)
+/// The parts of an argument token that may name a program: each part [`path_parts`] gives (the
+/// token, the value after `=`, the `;` parts), each `,`-separated part of those (`dll,Entry`), and the
+/// text after each `:` of those that is not a drive letter's (`/RUN:powershell`; `C:\x` stays whole).
+fn program_parts(token: &str) -> Vec<&str> {
+    let mut parts: Vec<&str> = Vec::new();
+    let mut add = |part| {
+        if !parts.contains(&part) {
+            parts.push(part);
+        }
+    };
+    for part in path_parts(token)
         .into_iter()
         .flat_map(|part| part.split(','))
-        .any(|part| {
-            let switch = part.starts_with('-')
-                || (part.starts_with('/') && !part[1..].contains(['/', '\\']));
-            !part.is_empty() && !switch && names_a_host(part)
-        })
+    {
+        add(part);
+        let bytes = part.as_bytes();
+        for (at, _) in part.match_indices(':') {
+            // `X:` at the start of the part or right after another `:` (`/RUN:C:\x`) is a drive.
+            let drive_colon = at >= 1
+                && bytes[at - 1].is_ascii_alphabetic()
+                && (at == 1 || bytes[at - 2] == b':');
+            if !drive_colon {
+                add(&part[at + 1..]);
+            }
+        }
+    }
+    parts
+}
+
+/// Whether an argument token names a host or an interpreter ([`names_a_host`]) in one of its
+/// [`program_parts`]. A part counts only when its whole file name is a host's (`powershell`,
+/// `C:\x\node.exe`), not when it merely contains one (`--uninstall-node-modules`); a switch (`-x`, or a
+/// `/x` with no further separator) is not a file name. Review M3-R2 M7.
+fn token_names_a_host(token: &str) -> bool {
+    program_parts(token).into_iter().any(|part| {
+        let switch =
+            part.starts_with('-') || (part.starts_with('/') && !part[1..].contains(['/', '\\']));
+        !part.is_empty() && !switch && names_a_host(part)
+    })
+}
+
+/// Whether the file name of `path` looks like an 8.3 short name: a `~` followed by a digit.
+fn is_short_name(path: &str) -> bool {
+    file_name_lower(path)
+        .as_bytes()
+        .windows(2)
+        .any(|w| w[0] == b'~' && w[1].is_ascii_digit())
+}
+
+/// Whether one of the [`program_parts`] of an argument token has an 8.3 short file name.
+fn token_has_a_short_name(token: &str) -> bool {
+    program_parts(token).into_iter().any(is_short_name)
 }
 
 /// Whether one argument part, if it is a path, is one a standard user cannot supply (review M3-R2 M5).
@@ -3167,6 +3214,79 @@ mod tests {
         ] {
             assert!(!token_names_a_host(token), "{token}");
         }
+    }
+
+    #[test]
+    fn a_host_after_a_colon_or_behind_a_short_name_is_medium() {
+        // Fable's optional follow-ups to the sixth review: `:` parts and 8.3 names.
+        const UNINS: &str = r"C:\Program Files\App\unins000.exe";
+        for (exe, args) in [
+            (UNINS, "/RUN:powershell"),
+            (UNINS, "/RUN:powershell.exe -enc AAAA"),
+            (UNINS, r"--exec:C:\Windows\System32\cmd.exe"),
+            (UNINS, "-shell:pwsh"),
+            (
+                UNINS,
+                r"/RUN:C:\Windows\System32\WindowsPowerShell\v1.0\POWERS~1.EXE",
+            ),
+            (
+                r"C:\Windows\System32\conhost.exe",
+                "--headless POWERS~1.EXE",
+            ),
+            (
+                r"C:\Windows\System32\conhost.exe",
+                r"--headless C:\Windows\System32\WindowsPowerShell\v1.0\POWERS~1.EXE",
+            ),
+            (
+                r"C:\Windows\System32\WindowsPowerShell\v1.0\POWERS~1.EXE",
+                "-enc AAAA",
+            ),
+            (r"C:\Program Files\App\UNINST~1.EXE", "/S"),
+            (
+                r"C:\Windows\System32\conhost.exe",
+                "--headless powershell.exe.",
+            ),
+            (
+                r"C:\Windows\System32\conhost.exe",
+                r#"--headless "powershell.exe ""#,
+            ),
+        ] {
+            assert_eq!(
+                shell_route(exe, args),
+                purge_rpc::methods::Route::Medium,
+                "{exe} {args}"
+            );
+        }
+        for args in [
+            "/S",
+            "/x /S",
+            "-key:value /mode:silent",
+            "--url=http://example.com/a",
+            r#""/LOG=C:\Program Files\App\u.log""#,
+            r#"/LOG:"C:\Program Files\App\u.log""#,
+        ] {
+            assert_eq!(
+                shell_route(UNINS, args),
+                purge_rpc::methods::Route::Broker,
+                "{args}"
+            );
+        }
+        for name in [
+            "powershell.exe.",
+            "powershell.exe ",
+            r"C:\x\PowerShell.EXE. .",
+            "pwsh.",
+        ] {
+            assert!(is_interpreter(name), "{name:?}");
+        }
+        assert_eq!(
+            program_parts(r"/RUN:C:\x\a.exe"),
+            [r"/RUN:C:\x\a.exe", r"C:\x\a.exe"]
+        );
+        assert_eq!(program_parts(r"C:\x\a.exe"), [r"C:\x\a.exe"]);
+        assert!(is_short_name(r"C:\x\POWERS~1.EXE"));
+        assert!(!is_short_name(r"C:\PROGRA~1\App\unins000.exe"));
+        assert!(!is_short_name("a~b.txt"));
     }
 
     #[test]
