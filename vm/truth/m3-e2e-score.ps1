@@ -320,7 +320,7 @@ function New-PassEvidence($X, [string]$Dir) {
                 $steps['fail-check'] = [ordered]@{ ok = $true; arp_present = $true; fixture_key_present = $true; sessions_new = @(); quarantine_before = 3; quarantine_after = 3 }
             }
             'fail-3010' {
-                $steps['ui-wait-scan'] = [ordered]@{ ok = $true; state = 'review'; exit_codes = @(3010); seen = @('A restart is needed.', 'Finished, exit code 3010 · quiet mode') }
+                $steps['ui-wait-scan'] = [ordered]@{ ok = $true; state = 'review'; exit_codes = @(3010); seen = @('A restart is needed.', 'Finished, exit code 3010, quiet mode') }
                 $steps['fail-check'] = [ordered]@{ ok = $true; arp_present = $false; fixture_key_present = $false; sessions_new = @(); quarantine_before = 3; quarantine_after = 3 }
             }
             default {
