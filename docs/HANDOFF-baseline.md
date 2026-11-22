@@ -19,8 +19,9 @@ continued from any harness: read it, then `git log --oneline -15` and `git workt
 - **Still open from R2:** M2 residual: `route` accepts `powershell`/`pwsh` without `-File` (inline `-Command` or
   `-EncodedCommand`) as loading no file, so it can be broker-route. The DECISIONS M2 row rules it `Medium` (safe
   direction); change `command_loads_admin_only` in `bins/purge-engine/src/pipeline.rs` and get a Fable review
-  (route rule = critical). Also open: the History page still shows sample data (S5 alerts only on the Leftovers result). The section "Still open from M3-R2" below
-  is superseded by this one.
+  (route rule = critical). The S2 vanished-session test is merged (bc0d558); the History page is on real data
+  (merged from `r3-history`, `docs/m3-notes/ui-history.md`). The section "Still open from M3-R2" below is
+  superseded by this one.
 - Next: the M2 residual above, then M3 per the design (warm/first-launch bench rows, VM backlog below).
 
 ## COLD BENCH DONE 2026-11-22 04:00: PASS, p50 559.7 ms (limit 1000), 5 runs 544-584 ms, CPU 96-98 % idle.
@@ -100,7 +101,7 @@ running; no VM was started this session.
      ("scan again"), not `gone` - a judgement call.
    - S5: reconcile alerts reach the client - `UndoResult.alerts[]` / `OutcomeResult.alerts[]`
      (`Alert { op, original_path, moved_back }`), `HistoryItem.alert` mark, shown on the Leftovers "Put back"
-     result panel. HistoryView is still sample data, so the live History page does not render it yet.
+     result panel; the live History page renders it too since `r3-history` (`docs/m3-notes/ui-history.md`).
      RPC + fixtures + schemas + `RpcModels.cs` changed.
 2. `r2-m1` 743ca9a (parent 8c7142f) - M3-R2 M1 (broker consent dialog before `uninstall.run`), by Sonnet 5.5.
    Checks reported green (215 broker, 100 UI, gen-dto, 0 warnings). RPC: `RunParams.restore_point` (optional,

@@ -844,9 +844,7 @@ public sealed class LeftoversViewModel : INotifyPropertyChanged
     }
 
     /// <summary>The line a reconcile alert adds to the undone panel (review M3-R2 S5).</summary>
-    private static string AlertText(Alert alert) => alert.MovedBack
-        ? $"Purge found another file in quarantine and put it back at {alert.OriginalPath}."
-        : $"Purge found another file in quarantine and kept it there: {alert.OriginalPath}.";
+    private static string AlertText(Alert alert) => ReconcileAlert.Text(alert);
 
     private static string DescribeError(BrokerRpcException error)
     {

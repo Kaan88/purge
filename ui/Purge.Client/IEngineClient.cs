@@ -73,6 +73,12 @@ public interface IEngineClient : IAsyncDisposable
     /// </summary>
     Task<IReadOnlyList<LeftoverForecast>> GetForecastsAsync(IReadOnlyList<string> programIds, CancellationToken ct = default);
 
+    /// <summary>
+    /// <c>history.index</c>: the sessions of <c>sessions\index.json</c>, newest first, with quarantine usage and cap per
+    /// volume. The medium engine answers it, so showing History never starts the broker (design 6.3, page table).
+    /// </summary>
+    Task<Rpc.HistoryIndex> GetHistoryIndexAsync(CancellationToken ct = default);
+
     /// <summary><c>quarantine.status</c> (proposed): use per volume and one entry per cleanup.</summary>
     Task<QuarantineStatus> GetQuarantineAsync(CancellationToken ct = default);
 

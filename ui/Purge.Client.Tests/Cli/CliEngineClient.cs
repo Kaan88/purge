@@ -99,6 +99,18 @@ public sealed class CliEngineClient : IEngineClient
     public Task<IReadOnlyList<LeftoverForecast>> GetForecastsAsync(IReadOnlyList<string> programIds, CancellationToken ct = default) =>
         Task.FromResult<IReadOnlyList<LeftoverForecast>>([]);
 
+    /// <summary>The store's <c>sessions\index.json</c> read as <c>history.index</c> reads it (newest first, no volumes).</summary>
+    public async Task<Rpc.HistoryIndex> GetHistoryIndexAsync(CancellationToken ct = default)
+    {
+        await HelloAsync(ct).ConfigureAwait(false);
+        var index = ReadShared(Path.Combine(StoreRoot, "sessions", "index.json"));
+        if (index is null) return new Rpc.HistoryIndex();
+        var doc = JsonSerializer.Deserialize<Rpc.HistoryIndex>(index) ?? new Rpc.HistoryIndex();
+        doc.Sessions.Reverse();
+        doc.Volumes.Clear();
+        return doc;
+    }
+
     public async Task<QuarantineStatus> GetQuarantineAsync(CancellationToken ct = default)
     {
         await HelloAsync(ct).ConfigureAwait(false);

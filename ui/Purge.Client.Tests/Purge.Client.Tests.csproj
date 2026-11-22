@@ -23,5 +23,6 @@
     <Compile Include="..\Purge.App\Shell\IconLoader.cs" Link="Shell\IconLoader.cs" />
     <Compile Include="..\Purge.App\Shell\LeftoversRequest.cs" Link="Shell\LeftoversRequest.cs" />
     <Compile Include="..\Purge.App\Views\Leftovers\LeftoversModel.cs" Link="Leftovers\LeftoversModel.cs" />
+    <Compile Include="..\Purge.App\Views\HistoryModel.cs" Link="History\HistoryModel.cs" />
   </ItemGroup>
 </Project>
