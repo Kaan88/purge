@@ -17,7 +17,9 @@ use purge_scan::framework::{
     AppIdentityView, OtherApp, OtherApps, ScanCtx, ScanExt, ScanLimits, Scanner,
 };
 use purge_source::fixture::Fixture;
+use purge_source::registry::RegistrySource;
 use purge_source::system::SystemSource;
+use purge_source::types::{KeyInfo, RegData, RegValue, SourceError, SourceResult};
 
 pub const SID: &str = GuardEnv::SAMPLE_SID;
 pub const BUNDLE: &str = "{B0B0B0B0-1111-2222-3333-444444444444}";
@@ -295,6 +297,71 @@ impl World {
             "one candidate per target: {out:?}"
         );
         out
+    }
+
+    /// `scanner` over a registry that refuses a path through a link ([`LinkRefusing`]), with the
+    /// ownership index read through the same registry.
+    pub fn run_refusing_links(&mut self, scanner: &dyn Scanner) -> Vec<Candidate> {
+        let ix = OwnershipIndex::build(&OwnershipInput {
+            reg: &LinkRefusing(&self.fixture),
+            fs: &self.fixture,
+            sys: &self.fixture,
+            products: &[],
+            msi_only: &[],
+            cache: None,
+            threads: 1,
+        });
+        self.ext = ScanExt::new(ix, SysObjectIndex::default());
+        let reg = LinkRefusing(&self.fixture);
+        let app = AppIdentityView::from_fingerprint(&self.fp, &self.env);
+        let mut ctx = self.ctx();
+        ctx.reg = &reg;
+        let out = ctx.run(scanner, &app);
+        assert!(self.ext.take_faults().is_empty(), "no scanner fault");
+        out
+    }
+}
+
+/// A registry that refuses a path through a registry link the way the live one does: a read of a key
+/// below a link key is [`SourceError::ReparsePoint`], the link key itself is read. (The fixture alone
+/// answers below a link as if the link were an ordinary key.)
+pub struct LinkRefusing<'a>(pub &'a Fixture);
+
+impl LinkRefusing<'_> {
+    fn through_no_link(&self, key: &str) -> SourceResult<()> {
+        let mut at = key.trim_end_matches('\\');
+        while let Some((parent, _)) = at.rsplit_once('\\') {
+            if self.0.key_info(parent).is_ok_and(|info| info.is_link) {
+                return Err(SourceError::ReparsePoint);
+            }
+            at = parent;
+        }
+        Ok(())
+    }
+}
+
+impl RegistrySource for LinkRefusing<'_> {
+    fn key_info(&self, key: &str) -> SourceResult<KeyInfo> {
+        self.through_no_link(key)?;
+        self.0.key_info(key)
+    }
+    fn subkeys(&self, key: &str) -> SourceResult<Vec<String>> {
+        self.through_no_link(key)?;
+        self.0.subkeys(key)
+    }
+    fn values(&self, key: &str) -> SourceResult<Vec<RegValue>> {
+        self.through_no_link(key)?;
+        self.0.values(key)
+    }
+    fn value(&self, key: &str, name: &str) -> SourceResult<RegData> {
+        self.through_no_link(key)?;
+        self.0.value(key, name)
+    }
+    fn loaded_user_sids(&self) -> SourceResult<Vec<String>> {
+        self.0.loaded_user_sids()
+    }
+    fn current_control_set(&self) -> SourceResult<u32> {
+        self.0.current_control_set()
     }
 }
 

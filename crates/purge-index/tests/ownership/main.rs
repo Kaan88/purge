@@ -16,7 +16,8 @@ use purge_model::{
     WritableBy,
 };
 use purge_source::fixture::Fixture;
-use purge_source::types::RegData;
+use purge_source::registry::RegistrySource;
+use purge_source::types::{KeyInfo, RegData, RegValue, SourceError, SourceResult};
 
 /// A user SID with a loaded hive in the tests.
 pub const USER: &str = "S-1-5-21-1004336348-1177238915-682003330-1001";
@@ -159,4 +160,60 @@ impl Drop for TempDir {
 /// The test data directory of this suite.
 pub fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/data/ownership")
+}
+
+/// A registry that refuses a path through a registry link the way the live one does: a read of a key
+/// below a link key is [`SourceError::ReparsePoint`], the link key itself is read. (The fixture alone
+/// answers below a link as if the link were an ordinary key.)
+pub struct LinkRefusing<'a>(pub &'a Fixture);
+
+impl LinkRefusing<'_> {
+    fn through_no_link(&self, key: &str) -> SourceResult<()> {
+        let mut at = key.trim_end_matches('\\');
+        while let Some((parent, _)) = at.rsplit_once('\\') {
+            if self.0.key_info(parent).is_ok_and(|info| info.is_link) {
+                return Err(SourceError::ReparsePoint);
+            }
+            at = parent;
+        }
+        Ok(())
+    }
+}
+
+impl RegistrySource for LinkRefusing<'_> {
+    fn key_info(&self, key: &str) -> SourceResult<KeyInfo> {
+        self.through_no_link(key)?;
+        self.0.key_info(key)
+    }
+    fn subkeys(&self, key: &str) -> SourceResult<Vec<String>> {
+        self.through_no_link(key)?;
+        self.0.subkeys(key)
+    }
+    fn values(&self, key: &str) -> SourceResult<Vec<RegValue>> {
+        self.through_no_link(key)?;
+        self.0.values(key)
+    }
+    fn value(&self, key: &str, name: &str) -> SourceResult<RegData> {
+        self.through_no_link(key)?;
+        self.0.value(key, name)
+    }
+    fn loaded_user_sids(&self) -> SourceResult<Vec<String>> {
+        self.0.loaded_user_sids()
+    }
+    fn current_control_set(&self) -> SourceResult<u32> {
+        self.0.current_control_set()
+    }
+}
+
+/// Builds the index over one fixture whose registry is read through [`LinkRefusing`].
+pub fn build_refusing_links(fx: &Fixture) -> OwnershipIndex {
+    OwnershipIndex::build(&OwnershipInput {
+        reg: &LinkRefusing(fx),
+        fs: fx,
+        sys: fx,
+        products: &[],
+        msi_only: &[],
+        cache: None,
+        threads: 3,
+    })
 }
