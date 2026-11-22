@@ -78,12 +78,15 @@ method the page calls already existed. Broker consent path, purge-exec and undo 
    cleanups" (header button; starts the broker on the click) and (b) when a restore it started is refused with
    `needs_recovery` (the broker is up; no second prompt). A pending session the index lacks is listed from the
    journal ("N of M items done · found in the journals") with Resume and Roll back; one the index lists is marked
-   Interrupted. A recovered session leaves the pending set. Tests: `OpeningThePageNeverAsksForInterruptedSessions`,
+   Interrupted. The answer is shown once: the next index refresh drops its marks (a run that committed since is not
+   left Interrupted). While another broker writes the store the broker answers `busy` (it reads the list with the
+   writer lock held) and the page lists nothing ("Another Purge window is working on the quarantine"). Tests: `OpeningThePageNeverAsksForInterruptedSessions`,
    `CheckForInterruptedListsASessionTheIndexDoesNotHaveAndOffersItsRecovery`,
    `CheckForInterruptedMarksAnIndexedSessionWhoseReportWasNeverWritten`,
    `CheckForInterruptedSaysSoWhenNothingWasInterrupted`,
    `ARestoreRefusedForRecoveryListsTheInterruptedSessionsWithoutAnotherPrompt`,
-   `AnotherWriterOfTheStoreIsBusyNotAFailure`.
+   `AnotherWriterOfTheStoreIsBusyNotAFailure`, `TheNextRefreshDropsTheMarksOfAnEarlierCheck`,
+   `AnotherWindowAtWorkListsNoInterruptedSession`; Vault `AnotherWriterSaysNothingWasDeleted`.
 
 Still needs the VM: the Vault's "Put back…" and "Review and delete expired…" through a real UAC prompt and the
 broker's dialogs; "Check for interrupted cleanups" on a session interrupted by killing the broker mid-run; two

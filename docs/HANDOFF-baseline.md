@@ -20,8 +20,15 @@ continued from any harness: read it, then `git log --oneline -15` and `git workt
   (`journal.pending` on the click, or after a `needs_recovery` refusal). Notes: `m3-notes/ui-history.md` (R3
   section), `broker-core.md` point 5, M3_DESIGN 3.6, install/README layout.
 - Checks (unelevated, TEMP=C:\purge-build\tmp): fmt --check, clippy --workspace --all-targets -D warnings, rig clippy (rig-exec + test-support), check-deps, gen-dto --check (no RPC change), no-new-walks: ok. purge-exec (fault-inject + test-support) lib 481 (8 ignored) + every integration target incl. crash 16 and single_writer 2; purge-broker 223 + 10 + 1; purge-engine rig lib 73, exec_cli 43, engine 14. `dotnet build ui\Purge.App -c Release` 0 warnings; Purge.Client.Tests 130/130 (History 17, Vault 10, UiThread 3).
+- Fable review (lock sound; advisory layer) fixed: pending read with the lock held (`pending_at_rest`, `busy` for
+  `journal.pending` and the pre-execute check; UI lists nothing and drops stale marks on the next refresh); purge
+  probes before its first dialog; execute re-checks interrupted sessions under the lock (`ExecError::NeedsRecovery`/
+  `Damaged`); the probe retries 250 ms; stale fingerprint temporaries swept; two-process serialisation test, races of
+  resume vs rollback, pending at rest. CLI verified: it writes only through the locked entry points. Checks: fmt,
+  clippy (workspace, rig, mcp), check-deps, gen-dto ok; exec lib 484 + integration (single_writer 5); broker 227 +
+  10 + 1; engine rig 73/43/14; App Release 0 warnings; UI tests 133/133.
 - Open: one broker per app (ui-history.md); a fair queue instead of `busy` if users hit it; the VM rows in
-  ui-history.md. Next: Fable review of the three commits, then merge into `baseline`.
+  ui-history.md. Next: Fable re-review of the fixes, then merge into `baseline`.
 
 ## M3-R2 CLEANUP DONE 2026-11-22 (40e82ba code, 1f969c4 docs; pushed).
 - `docs/reviews/m3/r2-review.md` has its "Fixes" section: every B/M/S finding, flagged point and note mapped to its
