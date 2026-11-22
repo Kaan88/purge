@@ -1,0 +1,49 @@
+{
+  "schema": "purge.rig.m3sec.expect/1",
+  "about": "Expectations of the M3 security modes (vm/RIG.md section 14, scorer vm/truth/m3-sec-score.ps1). The m3-broker case list is also the list vm/rig-m3.ps1 runs, in this order.",
+  "broker": {
+    "uac_admin": 0,
+    "cases": [
+      { "id": "start-ok", "exit": 0, "hello": true, "second_client_error": 231, "threat": "control: the installed layout starts elevated and serves its own Purge.exe; a second client finds the one instance busy (3.3 step 2)" },
+      { "id": "copy-ok", "exit": 0, "hello": true, "threat": "control: an admin-only copy on the system volume starts, so each variant below fails for its one change" },
+      { "id": "not-elevated", "exit": 20, "reason_all": ["not_elevated (exit code 20)"], "threat": "3.4 elevation" },
+      { "id": "bad-args", "exit": 23, "reason_all": ["--pipe"], "threat": "3.3 step 1 arguments" },
+      { "id": "parent-pid", "exit": 26, "reason_all": ["the parent is not as claimed"], "threat": "T2 wrong pid (explorer's)" },
+      { "id": "parent-ctime", "exit": 26, "reason_all": ["the parent is not as claimed"], "threat": "T2 wrong creation time" },
+      { "id": "pipe-squat", "exit": 24, "reason_all": ["the pipe name exists already"], "server_check": "pid_mismatch", "threat": "T5 a medium process created the pipe first and serves it; the client's server check refuses it" },
+      { "id": "client-image", "exit": 25, "reason_all": ["client image is not Purge.exe in the install directory"], "reason_count": 3, "threat": "T2 a copy of Purge.exe elsewhere" },
+      { "id": "second-client", "exit": 25, "reason_all": ["client pid is not the parent"], "reason_count": 3, "threat": "T2 a second client (another instance of the installed Purge.exe)" },
+      { "id": "not-hello", "exit": 25, "reason_all": ["first request is not engine.hello"], "reason_count": 3, "threat": "3.3 step 6 hello first" },
+      { "id": "user-writable-copy", "exit": 21, "reason_all": ["install_untrusted", "can be written by a non-administrator"], "threat": "T6 / G10 a user-writable copy with a planted DLL" },
+      { "id": "off-volume", "exit": 21, "reason_all": ["install_untrusted", "not on the system volume"], "threat": "G10 / BL-R1 S4 a copy off the system volume" },
+      { "id": "junction", "exit": 21, "reason_all": ["install_untrusted", "is a reparse point"], "threat": "3.4 no reparse point on the path" },
+      { "id": "exe-user-writable", "exit": 21, "reason_all": ["purge-broker.exe: a non-administrator can write it"], "threat": "T6 a replaceable binary" },
+      { "id": "kb-user-writable", "exit": 21, "reason_all": ["install_untrusted", "kb: it or an ancestor can be written by a non-administrator"], "threat": "M3-R1 S7 kb directory" },
+      { "id": "kb-file-user-writable", "exit": 21, "reason_all": [".tsv.gz: a non-administrator can write it"], "threat": "M3-R1 S7 a baseline file" },
+      { "id": "client-image-user-writable", "exit": 21, "reason_all": ["Purge.exe: a non-administrator can write it"], "threat": "M3-R1 S7 the client image" },
+      { "id": "data-root-user-writable", "exit": 22, "reason_all": ["store_integrity (exit code 22)", "can be written by a non-administrator"], "threat": "3.4 data root" },
+      { "id": "index-user-writable", "exit": 22, "reason_all": ["store_integrity (exit code 22)"], "threat": "3.4 StorageRoots::check" },
+      { "id": "env-planted", "exit": 0, "hello": true, "planted_unchanged": true, "threat": "T7 / G10 ProgramData, ALLUSERSPROFILE, PURGE_KB_DIR, SystemDrive set to a planted tree in the caller's environment" },
+      { "id": "env-planted-hkcu", "exit": 0, "hello": true, "planted_unchanged": true, "threat": "T7 the same values in HKCU\\Environment" }
+    ],
+    "excluded": [
+      { "exit": 27, "code": "LINK_FAILED", "why": "the pipe itself failing while the broker waits for or reads a client (LinkError::Failed) cannot be caused from outside the broker; a client closing is PipeLost (exit 0). Covered by the serve and pipe tests of xtask ci." }
+    ]
+  },
+  "consent": {
+    "uac_admin": 0,
+    "methods": ["sendinput-key", "sendinput-mouse", "postmessage", "uia"],
+    "kinds": ["uninstall.run", "plan.execute"],
+    "min_medium_attempts": 24,
+    "plan_needs_verification_box": true,
+    "shot_patterns": { "shown": 10, "attack": 8, "control": 8, "approved": 2 }
+  },
+  "uac": {
+    "uac_admin": 5,
+    "prompt_on_secure_desktop": 1,
+    "min_plan_pages": 2,
+    "early_click_max_ms": 900,
+    "required_shots": ["u1-ui-1-prompt", "u1-ui-9-bar", "u2-no-1-prompt", "u3-yes-1-prompt", "u3-yes-c01-uninstall-dialog", "u3-yes-c02-page01", "u3-yes-c02-page02", "u3-yes-c02-armed", "u3-yes-c02-approved", "u4-std-1-prompt", "u4-std-2-after"],
+    "std_exit_codes": [0, 25]
+  }
+}

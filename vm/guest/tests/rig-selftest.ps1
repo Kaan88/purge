@@ -20,7 +20,7 @@ Write-Host "PowerShell $($PSVersionTable.PSVersion) ($($PSVersionTable.PSEdition
 
 try {
 # ------------------------------------------------------------------------------------------ parse
-foreach ($f in @(Get-ChildItem -LiteralPath $Guest -Filter '*.ps1') + @(Get-Item (Join-Path $Vm 'rig.ps1')) + @(Get-Item (Join-Path $Vm 'rig-baseline-local.ps1')) + @(Get-Item $PSCommandPath)) {
+foreach ($f in @(Get-ChildItem -LiteralPath $Guest -Filter '*.ps1') + @(Get-Item (Join-Path $Vm 'rig.ps1')) + @(Get-Item (Join-Path $Vm 'rig-baseline-local.ps1')) + @(Get-Item (Join-Path $Vm 'rig-m3.ps1')) + @(Get-Item (Join-Path $Vm 'truth\m3-sec-score.ps1')) + @(Get-Item $PSCommandPath)) {
     $tok = $null; $err = $null
     $null = [Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$tok, [ref]$err)
     Check "parse $($f.Name)" (@($err).Count -eq 0) (@($err | ForEach-Object { "line $($_.Extent.StartLineNumber): $($_.Message)" }) -join '; ')
@@ -1891,6 +1891,37 @@ function Invoke-M2Script([string]$Script, [string]$Arguments = '', [int]$Timeout
         Copy-Item -Path (Join-Path $script:RunsDir '*') -Destination $env:RIG_SELFTEST_M2_OUT -Recurse -Force
         Write-Host "M2 stub runs copied to $env:RIG_SELFTEST_M2_OUT"
     }
+}
+
+# ------------------------------------------------------- M3 security modes (rig-m3.ps1 section 14 helpers)
+& {
+    . (Join-Path $Vm 'rig-m3.ps1')
+    $ErrorActionPreference = 'Stop'
+    $expect = Join-Path $Vm 'truth\m3-sec-expect.json'
+    $ids = @(Get-M3SecCaseIds -ExpectFile $expect)
+    $x = Get-Content -LiteralPath $expect -Raw | ConvertFrom-Json
+    Check 'm3-sec: the case list is the expectations list, in order' ((($ids) -join ',') -eq (@($x.broker.cases | ForEach-Object { $_.id }) -join ','))
+    Check 'm3-sec: case ids are unique' (@($ids | Sort-Object -Unique).Count -eq $ids.Count)
+    Check 'm3-sec: every exit code 20-26 has a case, 27 is excluded with a reason' ((@(20..26 | Where-Object { @($x.broker.cases | ForEach-Object { [int]$_.exit }) -notcontains $_ }).Count -eq 0) -and (@($x.broker.excluded | Where-Object { [int]$_.exit -eq 27 -and $_.why }).Count -eq 1))
+    Check 'm3-sec: -Cases keeps the named cases in list order' ((@(Get-M3SecCaseIds -ExpectFile $expect -Only @('junction', 'start-ok')) -join ',') -eq 'start-ok,junction')
+    $threw = $false; try { $null = Get-M3SecCaseIds -ExpectFile $expect -Only @('no-such-case') } catch { $threw = $true }
+    Check 'm3-sec: an unknown -Cases name throws' $threw
+    Check 'm3-sec: base snapshots' ((Get-M3SecBase 'm3-broker') -eq 'rig-base' -and (Get-M3SecBase 'm3-consent') -eq 'rig-base' -and (Get-M3SecBase 'm3-uac') -eq 'm3-uac-on' -and (Get-M3SecBase 'm3-uac' 'x') -eq 'x')
+    Check 'm3-sec: phase job text' ((New-M3SecPhaseText 'consent-attack' '3' 'sendinput-key' 300) -eq "& 'C:\cr\guest\m3-sec.ps1' -Phase 'consent-attack' -Tag '3' -Method 'sendinput-key' -WaitSec 300")
+    $threw = $false; try { $null = New-M3SecPhaseText 'broker-case' "x'; Remove-Item C:\" } catch { $threw = $true }
+    Check 'm3-sec: a tag with quotes is refused' $threw
+    $ev = Join-Path $Work 'm3-evidence'
+    Check 'm3-sec: no evidence dir, nothing moved' ($null -eq (Move-M3EvidenceAside $ev))
+    New-Item -ItemType Directory -Force $ev | Out-Null
+    Check 'm3-sec: an empty evidence dir stays' ($null -eq (Move-M3EvidenceAside $ev) -and (Test-Path -LiteralPath $ev))
+    [IO.File]::WriteAllText((Join-Path $ev 'summary.json'), '{}')
+    $to = Move-M3EvidenceAside $ev
+    Check 'm3-sec: an evidence dir with files is moved aside' ($to -and -not (Test-Path -LiteralPath $ev) -and (Test-Path -LiteralPath (Join-Path $to 'summary.json')))
+    # The guest script knows every case of the list (each id has its own switch branch or pattern).
+    $guestText = [IO.File]::ReadAllText((Join-Path $Guest 'm3-sec.ps1'))
+    $unknown = @($ids | Where-Object { $guestText -notmatch ("'" + [regex]::Escape($_) + "'") })
+    Check 'm3-sec: m3-sec.ps1 has a branch for every case' ($unknown.Count -eq 0) ($unknown -join ', ')
+    Check 'm3-sec: m3sec.cs is ASCII (csc reads it in the guest code page)' (-not ([IO.File]::ReadAllText((Join-Path $Guest 'm3sec.cs')) -match '[^\x00-\x7F]'))
 }
 
 } catch {

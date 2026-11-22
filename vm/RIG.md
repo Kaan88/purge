@@ -1838,3 +1838,118 @@ $env:VMPWFILE = 'C:\path\to\pw.txt'
   or the lock `vm\runs\.lock-Inbound-Win11-Test` held. Exit 1 when a phase did not finish or wrote no result line.
 - **Not covered here**: the real broker dialog (`m3-consent` repeats this matrix against it), a standard-user account
   typing administrator credentials (T8, `m3-uac`), and the manual `SendInput` check of section 11.3.
+
+## 14. M3 security modes: `m3-broker`, `m3-consent`, `m3-uac` (`rig-m3.ps1`, gate G3, G4, G5, G10)
+
+docs/M3_DESIGN.md section 4 (T1, T2, T5-T8), 11.2, 11.3 and 12; docs/M3_FINISH_PLAN.md B4-B6 and the coordinator
+ruling that the manual `SendInput` test of 11.3 is automated from the elevated rig with screenshots. Host driver
+`vm\rig-m3.ps1 -Mode m3-*` (same refusals, lock and cleanup as section 13: one VM at a time, `rig-base` restored and
+left off at the end), guest side `vm\guest\m3-sec.ps1` (one agent job per phase, result lines `M3S ...`), the tool
+`vm\guest\m3sec.cs` (C# 5, compiled in the guest by phase `build` with the .NET Framework 4 `csc.exe`; ASCII only),
+expectations `vm\truth\m3-sec-expect.json`, scorer `vm\truth\m3-sec-score.ps1`.
+
+```powershell
+$env:VMPWFILE = 'C:\path\to\pw.txt'
+$rel = '<checkout>\target'                     # release builds (never the rig-exec engine)
+.\vm\rig-m3.ps1 -Mode m3-broker  -Engine $rel\release\purge-engine.exe -Broker $rel\release\purge-broker.exe
+.\vm\rig-m3.ps1 -Mode m3-consent -Engine $rel\release\purge-engine.exe -Broker $rel\release\purge-broker.exe
+.\vm\rig-m3.ps1 -Mode m3-uac     -Engine $rel\release\purge-engine.exe -Broker $rel\release\purge-broker.exe -UiPublish $rel\ui-publish
+powershell -NoProfile -File vm\truth\m3-sec-score.ps1 -Mode broker  -Evidence E:\purge-build\gate-evidence\m3-broker
+powershell -NoProfile -File vm\truth\m3-sec-score.ps1 -Mode consent -Evidence E:\purge-build\gate-evidence\m3-consent
+powershell -NoProfile -File vm\truth\m3-sec-score.ps1 -Mode uac     -Evidence E:\purge-build\gate-evidence\m3-uac
+powershell -NoProfile -File vm\truth\m3-sec-score.ps1 --self-test
+```
+
+- **Layout** (phase `install`): the host zips the release `purge-engine.exe`, `purge-broker.exe`, the repo's `kb\`
+  and, with `-UiPublish`, the UI publish folder; the guest runs `install\install.ps1 -SkipBuild` twice:
+  `C:\Program Files\Purge` with the **rig client as `Purge.exe`** (`m3sec.exe client`: the broker's client check of
+  design 3.3 step 4 accepts `<own directory>\Purge.exe`, which an administrator installed, so the rig can speak the
+  pipe protocol without UI automation), and `C:\Program Files\PurgeUI` with the real UI (only m3-uac's cancelled-bar
+  row uses it). `-Check` must pass for both. The data root is the machine's `C:\ProgramData\Purge` either way.
+- **The rig client** (`client <spec.json>`) does what `BrokerLauncher` does: the UI's own account pre-check is
+  recorded (`precheck`: `limited_admin`, `elevated`, `standard_user`), a 128-bit pipe name, `ShellExecuteExW("runas",
+  SEE_MASK_NOCLOSEPROCESS)` on an STA thread (owner = its window when it has one), the server pid check
+  (`GetNamedPipeServerProcessId` against the launched process), `SECURITY_IDENTIFICATION`, `engine.hello` first,
+  JSON-RPC lines. Before each consent request it writes `ready-<k>.json` and waits for `go-<k>` from the agent, calls
+  `AllowSetForegroundWindow(broker)`, and files `consent.shown` in `consent-shown-<k>.json` and the answer in
+  `consent-result-<k>.json`; after `consent_declined` it asks again (a new instance k+1; a declined plan is created
+  again). The broker's exit code is read through the launch handle (polled, `PROCESS_QUERY_LIMITED_INFORMATION`).
+- **Fixture program** "Purge Rig App" (`HKLM|64|PurgeRigApp`, `C:\Program Files\PurgeRigApp`, broker route): its
+  uninstaller (a copy of `m3sec.exe`, role `fixture-uninstall`) deletes only its ARP key and `app.exe` and writes
+  `C:\cr\out\m3-sec\fixture-uninstalled.json` (the proof that it ran); `data\`, `HKLM\SOFTWARE\PurgeRigApp`,
+  `HKCU\Software\PurgeRigApp` and `C:\ProgramData\PurgeRigApp` stay as leftovers. Variants: `plain3`, `lookalike3`
+  (three data files with a Cyrillic letter inside an ASCII name: attention entries, so the plan dialog has the
+  verification box), `lookalike45` (45 of them: the attention list pages at 40).
+- **`m3-broker`** (G3, G10; from `rig-base`, UAC silent, checked: `ConsentPromptBehaviorAdmin=0`). One phase
+  `broker-case -Tag <id>` per case of `m3-sec-expect.json`, in its order (`-Cases` runs a subset). Each case records
+  the client's `client.json`, the exit code, the Application events of source `Purge` since the case started, a listing
+  of `C:\ProgramData\Purge` before and after (path, size, last write, attributes: any difference is a write), and for
+  the planted cases the same listing of the planted tree; then it undoes its plant. Cases: `start-ok` (the installed
+  layout, hello at high, `broker.shutdown`; a second client meanwhile gets 231 = pipe busy), `copy-ok` (control: an
+  admin-only copy at `C:\Program Files\PurgeCase` starts, so each variant fails for its one change),
+  `not-elevated` (20, started by `CreateProcess` at medium), `bad-args` (23), `parent-pid` (26, explorer's pid),
+  `parent-ctime` (26), `pipe-squat` (24: the medium client creates `\\.\pipe\purge-<name>` first; its own server check
+  then refuses the squatter), `client-image` (25: a copy of Purge.exe under `C:\cr\m3sec\elsewhere` launches the
+  broker and is refused three times), `second-client` (25: another instance of the installed Purge.exe attaches to the
+  first one's broker), `not-hello` (25), `user-writable-copy` (21: `C:\PurgeUserCopy` with Users modify and a
+  `version.dll` planted beside the broker), `off-volume` (21: an admin-only copy on another NTFS volume: D: when the
+  snapshot has one, else a 256 MB VHDX made with diskpart and mounted as R:), `junction` (21: `C:\PurgeJ` -> the
+  install directory), `exe-user-writable`, `kb-user-writable`, `kb-file-user-writable`,
+  `client-image-user-writable` (21: one object of the admin-only copy given a Users write ACE),
+  `data-root-user-writable`, `index-user-writable` (22; the DACL is put back afterwards), `env-planted` and
+  `env-planted-hkcu` (T7: `ProgramData`, `ALLUSERSPROFILE`, `PURGE_KB_DIR`, `SystemDrive` pointed at a user-writable
+  planted tree `C:\PurgePlant` in the caller's environment, or in `HKCU\Environment`; the broker must start, answer
+  and leave the planted tree untouched). Exit 27 (`LINK_FAILED`, the pipe failing inside the broker) cannot be caused
+  from outside; the expectations list it as excluded with that reason. Output `guest\m3-broker.json`.
+- **`m3-consent`** (G4, T1; from `rig-base`, fixture `lookalike3`). The client (medium, with a window the agent puts
+  in front, as a user's click would) prepares the fixture and asks `uninstall.run`; later `leftovers.scan`,
+  `plan.create` with every non-blocked candidate selected, `plan.execute`. For each of the two real broker dialogs:
+  `consent-attack` runs, per method (`sendinput-key`: Alt+accelerator when the label has one, Tab Tab Space, Enter,
+  Space on the box, Tab Enter on Next, Esc; `sendinput-mouse`: a click at the centre of the box, Next, the primary
+  button, Cancel; `postmessage`: `TDM_CLICK_VERIFICATION`, `TDM_CLICK_BUTTON` 100 / 2 / 9001, `WM_COMMAND`, `BM_CLICK`
+  on the child button, `SendMessageTimeout`, `WM_CLOSE`; `uia`: the tree, `InvokePattern` on each button,
+  `TogglePattern` on the box), a medium driver (`m3sec drive`, task `PurgeRigM3Drive`) after the agent has put the
+  dialog in front; the agent (high) observes the dialog before and after (`m3sec observe`: buttons as child windows,
+  the UI Automation tree, the box state, the page, the footer code) and records the effects: dialog gone or replaced,
+  box toggled, page changed, primary enabled, an answer to the client, the journal changed (session directories and
+  the `index.json` hash), the uninstaller ran. Then `consent-control`, per method, the same driver at **high** presses
+  Cancel on a fresh instance: the answer `consent_declined` proves the method reaches the real dialog (and the journal
+  stays as it was). Then `consent-approve` (high, `TDM_CLICK_VERIFICATION` + `TDM_CLICK_BUTTON 100` after the arming
+  delay): the uninstaller runs; the plan executes and the journal has the session. The host takes a screenshot after
+  every step (`c<k>-<kind>-shown|attack-<m>|control-<m>|approved.png`). Output `guest\m3-consent.json`.
+- **`m3-uac`** (G5, T8, 8.1; from `m3-uac-on`, fixture `lookalike45`). (1) The real UI from `C:\Program Files\PurgeUI`
+  at medium; `m3sec ui` (UI Automation from high) selects "Purge Rig App", invokes Uninstall and Continue; the host
+  answers the secure desktop with Alt+N (Esc only while `consent.exe` is still up); the agent reads the bar "You
+  cancelled the admin prompt." and checks that no broker process exists, no `Purge` event was written, the data root
+  and the program are unchanged. (2) The rig client, No: `runas` fails with 1223, no broker. (3) The rig client, Yes
+  (Alt+Y): the broker runs at high (`m3sec procinfo`); the uninstall dialog's first appearance is polled every 30 ms
+  and clicked with real input (SendInput) about 300 ms later (`arm`: must do nothing; the button is enabled after 1.8
+  s), observed (footer code = `consent.shown` code, in front) and approved; the plan dialog is observed page by page
+  (`page-next`: Next by `TDM_CLICK_BUTTON 9001`; every page's footer code = the `plan.create` code = `consent.shown`;
+  the primary button only on the last page; over 40 attention entries), then on the last page Back and Next restart
+  the delay, the box is ticked at +100 ms and the button clicked at +300 ms (`arm-current`: nothing; enabled after the
+  delay), and the approval executes the plan. (4) A standard user `purgestd` (created with a random password, used
+  once, deleted afterwards) runs the rig client through `CreateProcessWithLogonW`; the host types the guest
+  password from `VMPWFILE` at the credential prompt (`controlvm keyboardputfile` of a temporary copy without a line
+  end, then Enter; `-StdUserKeys user-tab-password` types `tester` and Tab first); the client's pre-check says
+  `standard_user`, the broker runs as `tester` at high and serves nothing (the pipe's DACL refuses another account's
+  open with 5, or the broker refuses the client as `other_account`), it exits 0 (parent gone) or 25. Output
+  `guest\m3-uac.json`; screenshots `u1-ui-*`, `u2-no-*`, `u3-yes-*`, `u4-std-*`.
+- **Scorer** (`m3-sec-score.ps1`, fail-closed: a missing file, case, record, field or screenshot fails its row).
+  broker: every case of the list with its exit code (and the broker exited), an event with id = exit code naming the
+  reason (25: the refusal named three times), the data root unchanged in every refused case, an elevated hello and the
+  server check for the starting cases, 231 for the second client, `pid_mismatch` for the squatter, the planted tree
+  unchanged, UAC silent. consent: per dialog kind and method a medium record with the driver at medium, the dialog
+  high, every attempt not reached, zero effects, SendInput only with the dialog in front, the box present on the plan
+  dialog; a high control per kind and method that ended as `consent_declined` with the journal unchanged; both
+  approvals with their effect; at least 24 medium attempts; the screenshot counts. uac: UAC values 5/1/1; the UI row;
+  1223 without broker; the broker at high after Yes; the arming rows (early click under 900 ms answered nothing, the
+  button enabled after the delay); every page seen, the code on every page equal to the plan's, the primary button
+  only on the last page, at least 2 pages and 41 attention entries, the dialog in front; the execute result with a
+  journal; the standard-user row; the named screenshots. `--self-test` builds a passing synthetic evidence directory
+  per mode from the expectations and checks it passes, that an empty or missing directory fails, and that 31 single
+  defects each fail.
+- **Not settled without a run**: whether the scan of the fixture yields the look-alike files as absorbed children
+  with their own attention entries (the scorer fails the paging row otherwise); whether the first-elevation dialog and
+  the program row of the real UI are found by name; whether the credential prompt of this build focuses the password
+  box of the one administrator account; whether `SystemDrive` in `HKCU\Environment` reaches the task-started client.
