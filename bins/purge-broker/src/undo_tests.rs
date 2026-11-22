@@ -649,6 +649,27 @@ fn another_writer_of_the_store_makes_execute_busy_not_needs_recovery() {
     assert!(!rig.dialog_opens());
 }
 
+/// The pending list is read with the writer lock held; another writer that started after the probe makes
+/// the read `busy` (the live backend's `pending_at_rest`), and that is what `plan.execute` and
+/// `journal.pending` answer: a live run is never listed as interrupted.
+#[test]
+fn a_pending_read_refused_by_another_writer_is_busy_for_execute_and_journal_pending() {
+    let backend = FakeBackend::new();
+    *backend.pending.lock().unwrap() = Err(BackendError::Busy);
+    let rig = Rig::start(backend.clone());
+    let c = rig.client();
+
+    c.send_line(&request(
+        2,
+        "plan.execute",
+        &json!({ "plan_id": "p-0000000000000001", "restore_point": "off" }),
+    ));
+    assert_eq!(kind(&c.reply()), "busy");
+    c.send_line(&request(3, "journal.pending", &json!({})));
+    assert_eq!(kind(&c.reply()), "busy");
+    assert!(!rig.dialog_opens());
+}
+
 // ---------------------------------------------------------------------------------------------------
 // undo.run
 // ---------------------------------------------------------------------------------------------------

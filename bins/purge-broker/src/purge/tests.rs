@@ -111,6 +111,8 @@ struct Scripted {
     fail: Mutex<Option<StorageError>>,
     /// What `purge` refuses with, after recording the call.
     refuse: Mutex<Option<PurgeError>>,
+    /// What `writer_busy` answers.
+    writer_busy: Mutex<bool>,
     gate: Mutex<Option<Arc<Gate>>>,
     purge_started: Gate,
 }
@@ -165,6 +167,10 @@ impl Scripted {
 impl ExpirySource for Scripted {
     fn now(&self) -> FileTime {
         at(400)
+    }
+
+    fn writer_busy(&self) -> bool {
+        *self.writer_busy.lock().unwrap()
     }
 
     fn listing(&self, _now: FileTime) -> Result<Listing, StorageError> {
@@ -917,10 +923,31 @@ fn a_store_that_cannot_be_listed_purges_nothing() {
     live.finish();
 }
 
-/// A purge whose store lock another broker holds (single writer, review R3) is `busy`, and nothing was
-/// deleted.
+/// A purge while another broker writes the store (single writer, review R3) is `busy` before any dialog:
+/// the user is not asked to delete what would be refused, and nothing was deleted.
 #[test]
 fn a_purge_refused_by_another_writer_of_the_store_is_busy() {
+    let source = Arc::new(Scripted::new());
+    source.add_item(item(1, false));
+    *source.writer_busy.lock().unwrap() = true;
+    let live = Live::start(source.clone());
+    let one = live.wire(&expiry(1));
+
+    let reply = live.purge(2, &[one]);
+    assert_eq!(kind(&reply), "busy", "{reply}");
+    assert!(
+        !live.consent.wait_open(Duration::from_millis(150)),
+        "no dialog opens"
+    );
+    assert_eq!(source.call_count(), 0);
+    assert_eq!(source.held_ids(), vec![expiry(1)], "nothing was deleted");
+    live.finish();
+}
+
+/// Another writer that took the store between the dialog and the purge: the purge's own lock refuses it,
+/// `busy`, and nothing was deleted.
+#[test]
+fn a_purge_whose_lock_is_taken_after_the_dialog_is_busy_and_deletes_nothing() {
     let source = Arc::new(Scripted::new());
     source.add_item(item(1, false));
     *source.refuse.lock().unwrap() = Some(PurgeError::Store(StorageError::WriterBusy {

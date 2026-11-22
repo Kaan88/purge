@@ -34,7 +34,9 @@ pub fn pending(backend: &dyn Backend) -> Result<PendingList, ErrorObject> {
 /// journal is named first: it cannot be recovered, so `needs_recovery` would send the user nowhere.
 ///
 /// Another writer of the store comes before both: while another broker runs, its session reads as
-/// interrupted, so the answer is `busy`, not `needs_recovery` (review R3, single writer).
+/// interrupted, so the answer is `busy`, not `needs_recovery` (review R3, single writer). The probe
+/// answers early; the backend reads the pending list holding the writer lock, so a writer that starts
+/// between the probe and the read is `busy` too. Execute checks again once its run holds the lock.
 pub fn check_nothing_pending(backend: &dyn Backend) -> Result<(), ErrorObject> {
     if backend.writer_busy() {
         return Err(BackendError::Busy.into_error());

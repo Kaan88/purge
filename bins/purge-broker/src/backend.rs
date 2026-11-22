@@ -77,7 +77,8 @@ impl BackendError {
 /// The journal and the machine behind history, undo and recovery. Every method that reads or runs
 /// takes ids from the broker's own store; nothing a client sends is a path or a document.
 pub trait Backend: Send + Sync + 'static {
-    /// The sessions that need recovery (`journal.pending`).
+    /// The sessions that need recovery (`journal.pending`), read while no other writer works on the
+    /// store; [`BackendError::Busy`] while one does (a live run is not an interrupted one).
     fn pending(&self) -> Result<PendingReport, BackendError>;
 
     /// Whether another operation holds the store's writer lock now (another broker's run, undo,

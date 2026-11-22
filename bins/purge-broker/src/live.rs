@@ -41,6 +41,10 @@ use crate::backend::{Backend, BackendError, PendingReport};
 use crate::history::{display_name, kind_of, outcome_of};
 use crate::live_host::{LiveObjects, live_deny_list};
 
+/// How long `journal.pending` and the check before `plan.execute` wait for another writer of the store
+/// to end before they answer `busy`.
+const PENDING_LOCK_WAIT: std::time::Duration = std::time::Duration::from_millis(500);
+
 /// The backend over the store at `roots`. `purge_dirs` are Purge's own directories (the broker's
 /// engine settings): the guard protects them and the data root.
 pub struct LiveBackend {
@@ -300,7 +304,9 @@ impl Backend for LiveBackend {
     }
 
     fn pending(&self) -> Result<PendingReport, BackendError> {
-        let list = recover::pending(&self.roots).map_err(store_error)?;
+        // Read with the writer lock held for the moment of the read (released before any dialog): a
+        // run of another broker that works now is `busy`, never listed as interrupted (review R3).
+        let list = recover::pending_at_rest(&self.roots, PENDING_LOCK_WAIT).map_err(store_error)?;
         let index = self.roots.read_index().ok();
         let mut report = PendingReport::default();
         for s in list.sessions {
