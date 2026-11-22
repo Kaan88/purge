@@ -8,6 +8,7 @@ mod golden;
 mod msi;
 mod shapes;
 mod sys;
+mod view_subset;
 mod walks;
 
 use purge_harvest::harvest::{HarvestOpts, HarvestReport, Sources, harvest_report_with};

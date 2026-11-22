@@ -1,0 +1,226 @@
+{
+  "schema": "purge.plan/0",
+  "app": "firefox",
+  "tool": "purge",
+  "mode": "post",
+  "items": [
+    {
+      "target": {
+        "type": "FirewallRule",
+        "id": "{AC21D679-A9C1-47A0-B96F-A0625A9EE822}"
+      },
+      "band": "Likely",
+      "preselected": false,
+      "scanner": "SYS-FIREWALL",
+      "category": "System"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FeatureUsage\\AppBadgeUpdated",
+        "name": "308046B0AF4A39CB"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SYSTEM\\ControlSet001\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\FirewallRules",
+        "name": "{AC21D679-A9C1-47A0-B96F-A0625A9EE822}"
+      },
+      "band": "Blocked",
+      "preselected": false,
+      "scanner": "REF-ANY",
+      "category": "System"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Search\\JumplistData",
+        "name": "308046B0AF4A39CB"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Search\\JumplistData",
+        "name": "308046B0AF4A39CB;PrivateBrowsingAUMID"
+      },
+      "band": "Likely",
+      "preselected": false,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Classes\\CLSID\\{1814CEEB-49E2-407F-AF99-FA755A7D2607}\\InProcServer32",
+        "name": ""
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Classes\\Interface\\{0D68D6D0-D93D-4D08-A30D-F00DD1F45B24}\\ProxyStubClsid32",
+        "name": ""
+      },
+      "band": "Likely",
+      "preselected": false,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Classes\\Interface\\{1814CEEB-49E2-407F-AF99-FA755A7D2607}\\ProxyStubClsid32",
+        "name": ""
+      },
+      "band": "Likely",
+      "preselected": false,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKLM\\SOFTWARE\\Classes\\Interface\\{4E747BE5-2052-4265-8AF0-8ECAD7AAD1C0}\\ProxyStubClsid32",
+        "name": ""
+      },
+      "band": "Likely",
+      "preselected": false,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\WOW6432Node\\Mozilla\\Firefox"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REG-SOFTWARE",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Mozilla\\Firefox"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REG-SOFTWARE",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Mozilla\\Firefox"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REG-SOFTWARE",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Mozilla\\MaintenanceService"
+      },
+      "band": "Likely",
+      "preselected": false,
+      "scanner": "REG-SOFTWARE",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\WOW6432Node\\Mozilla"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REG-SOFTWARE",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Mozilla"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REG-SOFTWARE",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Local\\Mozilla\\Firefox"
+      },
+      "band": "Likely",
+      "preselected": false,
+      "scanner": "FS-APPDATA",
+      "category": "UserData"
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Roaming\\Mozilla\\Firefox"
+      },
+      "band": "Likely",
+      "preselected": false,
+      "scanner": "FS-APPDATA",
+      "category": "UserData"
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Local\\Mozilla"
+      },
+      "band": "Weak",
+      "preselected": false,
+      "scanner": "FS-VENDORPARENT",
+      "category": "AppData"
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Roaming\\Mozilla"
+      },
+      "band": "Weak",
+      "preselected": false,
+      "scanner": "FS-VENDORPARENT",
+      "category": "AppData"
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Mozilla-1de4eec8-1241-4177-a864-e594e8d1fb38\\updates\\308046B0AF4A39CB"
+      },
+      "band": "Likely",
+      "preselected": false,
+      "scanner": "FS-APPDATA",
+      "category": "Cache"
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\ProgramData\\Mozilla-1de4eec8-1241-4177-a864-e594e8d1fb38\\updates"
+      },
+      "band": "Weak",
+      "preselected": false,
+      "scanner": "FS-VENDORPARENT",
+      "category": "AppData"
+    }
+  ]
+}

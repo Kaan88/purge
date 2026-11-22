@@ -1,0 +1,18 @@
+{
+  "schema": "purge.plan/0",
+  "app": "7zip",
+  "tool": "purge",
+  "mode": "post",
+  "items": [
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\7-Zip"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REG-SOFTWARE",
+      "category": "Registration"
+    }
+  ]
+}

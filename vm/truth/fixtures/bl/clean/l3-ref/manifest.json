@@ -1,0 +1,7 @@
+{
+  "schema": "purge.rig.bl-l3-ref/1",
+  "note": "self-test fixture",
+  "plans": {
+    "7zip": "39fee117433d4ab2f87ca5f2a046c1c95d53604d87e92e61738dccab88b1c851"
+  }
+}
