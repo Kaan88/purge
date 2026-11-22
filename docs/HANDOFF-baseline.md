@@ -4,6 +4,20 @@ Branch `baseline`, pushed to `origin/baseline` (8c7142f). Design `docs/BASELINE_
 decision of this work is a row in `docs/DECISIONS.md` (Post-M1b). This file is kept current so the work can be
 continued from any harness: read it, then `git log --oneline -15` and `git worktree list`.
 
+## BL-FIX-UFH (branch `bl-fix-ufh` off `baseline` 9f40cca, 2026-11-22; pushed, NOT merged, Fable review next)
+- Finding: the BL-GATE smoke (`truth/bl.sh replay`, frozen `7zip`, four views) had one S1 flip in the local view:
+  `UFH\SHC` slot `0` (REF-ANY record, Likely, unticked), withheld by exact because the truth baseline holds it.
+  Not inferred absence: the no-baseline path, which the local view cannot correct because the local baseline has
+  no per-user state of a logged-on profile (S2 template, S3 `.DEFAULT`). Class over 10 local replays: 5 flips, all
+  `UFH\SHC` slots. DECISIONS row 2026-11-22 "BL-GATE smoke finding".
+- Fix (purge-scan only): `ScanCtx::in_baseline` takes a slot of a user's numbered-slot store
+  (`framework::USER_SLOT_STORES`) as Windows' own without an exact baseline of this Windows, at every view below
+  Exact and with none. Tests: `framework::a_user_slot_is_windows_own_below_exact`,
+  `ref_any::record::a_slot_record_is_not_offered_without_a_matching_baseline` (the old below-Exact record test now
+  uses a vendor key), `tests/privacy/ufh.rs::ufh_shc_below_exact_is_windows_own`,
+  `reg_privacy::the_slot_store_is_a_framework_slot_store`; `baseline-sites` row updated.
+- Re-check after merge: the full R3 replay (`bash truth/bl.sh replay`, 2.5-3 h) and `evaluate` with R4.
+
 ## BL-GATE runbook (rig tooling on branch `bl-gate-rig`, 2026-11-22; not run on a VM yet)
 Rig rules apply (one VM at a time, VMPWFILE from the environment, never the clone/UT or DietPi). From the repo root,
 with `target\release\purge-engine.exe` and `vm\rigtool\target\release\rigtool.exe` built from this tree and the tree
