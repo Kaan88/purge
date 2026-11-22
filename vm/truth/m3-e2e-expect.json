@@ -1,0 +1,40 @@
+{
+  "schema": "purge.rig.m3e2e-expect/1",
+  "about": "M3 end to end through the real UI (vm/RIG.md section 15; docs/M3_DESIGN.md 11.2, 12 G6, G7, G12, 9.1; docs/M3_FINISH_PLAN.md B7). The host driver vm/rig-m3.ps1 -Mode m3-e2e runs the apps of this list in this order (one boot of rig-base each); vm/truth/m3-e2e-score.ps1 scores the evidence against it. Lowering a gate here changes the score: the gates are the design's numbers, quoted below.",
+  "criteria": {
+    "design_11_2_m3_e2e": "UI automation from Uninstall click to undo on: VS Code (system), VS Code (user, medium route), Git, Firefox with Thunderbird installed, Notepad++, 7-Zip, and one M1b app with a service or task. Per app: the executed set equals the preselected set of the rig CLI plan on the same snapshot; collateral 0; undo through the UI; `undo_fidelity` 100 %.",
+    "G6": "End to end: 7 apps, executed set equals the preselected set of the rig plan, `danger` 0, `collateral` 0, `undo_fidelity` 100 %",
+    "G7": "Medium route: the per-user uninstaller ran at medium integrity; a broker-route program is refused by the medium engine and the reverse",
+    "G12": "Engine timing: harvest 3 s, scan 10 s, first progress 100 ms",
+    "9_1_harvest": "Harvest complete after the UAC click, VS Code | 3 s",
+    "9_1_scan": "Post-uninstall scan, cold broker | 10 s; first progress within 100 ms",
+    "failed_uninstaller": "M3_FINISH_PLAN B7: failed uninstaller 1603/3010. The UI (design 10, S2) shows the exit code with \"Run forced cleanup\" and \"Retry\" on a failure, and \"restart needed\" as text: 1603 is a failure outcome and nothing is purged; 3010 is a success that needs a restart (purge-model RunOutcome::SuccessReboot)."
+  },
+  "gates": {
+    "harvest_after_uac_ms": 3000,
+    "scan_ms": 10000,
+    "first_progress_ms": 100,
+    "harvest_apps": ["vscode", "vscode-user"]
+  },
+  "undo_apps": ["npp"],
+  "not_here": "G7's second half (a broker-route program refused by the medium engine, and the reverse) is not a UI flow: the UI never offers the wrong route. It is the wrong_route rows of the engine and broker tests and a rig row of its own.",
+  "apps": [
+    { "id": "vscode", "kind": "app", "label": "vscode", "route": "broker", "name_match": "^Microsoft Visual Studio Code$" },
+    { "id": "vscode-user", "kind": "app", "label": "vscode-user", "route": "medium", "name_match": "^Microsoft Visual Studio Code \\(User\\)$" },
+    { "id": "git", "kind": "app", "label": "git", "route": "broker", "name_match": "^Git" },
+    { "id": "firefox-tb", "kind": "app", "label": "firefox-tb", "route": "broker", "name_match": "^Mozilla Firefox" },
+    { "id": "npp", "kind": "app", "label": "npp", "route": "broker", "name_match": "^Notepad\\+\\+" },
+    { "id": "7zip", "kind": "app", "label": "7zip", "route": "broker", "name_match": "^7-Zip" },
+    { "id": "execapp", "kind": "fixture", "label": "e2e-execapp", "route": "broker", "name_match": "^PurgeExecApp$",
+      "about": "the M1b executor app PurgeExecApp (vm/guest/m1b-exec.ps1) with the service svc-full and the task task-simple of truth/m1b-exec-cases.json; its uninstaller (m3sec fixture-uninstall PurgeExecApp) leaves both" },
+    { "id": "msi1603", "kind": "fail-1603", "route": "broker", "exit": 1603, "name_match": "^Purge E2E Failing Uninstall$",
+      "about": "vm/guest/m3-e2e-msi.ps1: a type 19 custom action fails the uninstall; the product stays" },
+    { "id": "msi3010", "kind": "fail-3010", "route": "broker", "exit": 3010, "name_match": "^Purge E2E Reboot Uninstall$",
+      "about": "vm/guest/m3-e2e-msi.ps1: ScheduleReboot with REBOOT=ReallySuppress; the product goes, msiexec returns 3010" }
+  ],
+  "texts": {
+    "failed_bar": "The uninstaller failed.",
+    "restart_bar": "A restart is needed.",
+    "ready_step": "Ready for review"
+  }
+}

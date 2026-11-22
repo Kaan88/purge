@@ -1,0 +1,44 @@
+{
+  "id": "e2e-execapp",
+  "note": "m3-e2e (vm/RIG.md section 15): the M1b executor app PurgeExecApp planted by vm/guest/m1b-exec.ps1 (New-ExApp, Add-ExObject svc-full and task-simple of truth/m1b-exec-cases.json) after snap 0, uninstalled through the UI with its fixture uninstaller (m3sec fixture-uninstall PurgeExecApp: the ARP key and app.exe only). Hand-written: every rig-owned object of the app is its leftover; the helper build directory is the rig's.",
+  "include": [
+    "_os.json"
+  ],
+  "rules": [
+    {
+      "label": "rig",
+      "match": "^P:C:\\\\cr(\\\\.*)?$",
+      "why": "The rig's own tree (helper builds in C:\\cr\\work\\m1b-exec, outputs)."
+    },
+    {
+      "label": "leftover",
+      "match": "^P:C:\\\\Program Files\\\\PurgeExecApp(\\\\.*)?$",
+      "why": "The app folder: service exe, tool.exe, the COM server, the uninstaller."
+    },
+    {
+      "label": "leftover",
+      "match": "^[KVC]:HKLM\\\\SYSTEM\\\\(CurrentControlSet|ControlSet\\d{3})\\\\Services\\\\PurgeExecSvcA(\\\\[^|]*)?(\\|.*)?$",
+      "why": "The service svc-full (SYS-SERVICE)."
+    },
+    {
+      "label": "leftover",
+      "match": "^[KVC]:HKLM\\\\SOFTWARE\\\\Classes\\\\CLSID\\\\\\{9E3B5D17-4C2A-4F0B-8E61-7A2C5B9D0F34\\}(\\\\[^|]*)?(\\|.*)?$",
+      "why": "The app's COM class (InprocServer32 in the app folder)."
+    },
+    {
+      "label": "leftover",
+      "match": "^P:C:\\\\Windows\\\\System32\\\\Tasks\\\\PurgeExecApp(\\\\.*)?$",
+      "why": "The task task-simple (SYS-TASK), its definition file."
+    },
+    {
+      "label": "leftover",
+      "match": "^[KVC]:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Windows NT\\\\CurrentVersion\\\\Schedule\\\\TaskCache\\\\Tree\\\\PurgeExecApp(\\\\[^|]*)?(\\|.*)?$",
+      "why": "The task task-simple, its TaskCache tree entry."
+    },
+    {
+      "label": "leftover",
+      "match": "^[KVC]:HKLM\\\\SOFTWARE\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Uninstall\\\\PurgeExecApp(\\\\[^|]*)?(\\|.*)?$",
+      "why": "The ARP key (the fixture uninstaller deletes it)."
+    }
+  ]
+}

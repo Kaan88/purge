@@ -43,10 +43,23 @@
   picks what the host types at m3-uac's credential prompt (password, or user-tab-password: "tester", Tab, password).
   Evidence default: E:\purge-build\gate-evidence\<mode>\ (an existing non-empty one is moved aside first, so the
   scorer never reads an older run): rig-m3-<stamp>.log, *.png, jobs\*.log, guest\ (C:\cr\out\m3-sec\), summary.json.
+
+  M3 end to end (vm\RIG.md section 15; M3_DESIGN.md 11.2 row m3-e2e, gate G6, G7, G12; M3_FINISH_PLAN.md B7). Guest
+  side vm\guest\m3-e2e.ps1 (phases), m3-e2e-ui.ps1 (the UI Automation driver), m3-e2e-msi.ps1 (the 1603 / 3010 MSI
+  fixtures); expectations vm\truth\m3-e2e-expect.json; scorer vm\truth\m3-e2e-score.ps1. One boot of rig-base per app
+  (UAC silent in design 11.2; a prompt that comes up is answered by scancode), the real UI installed as C:\Program Files\Purge\Purge.exe, every step driven through the UI:
+
+    .\vm\rig-m3.ps1 -Mode m3-e2e -Engine ... -Broker ... -UiPublish <dir>\ui-publish [-Apps npp,msi1603] [-UndoApps npp]
+                    [-RunName <name>] [-UacOn]
+    powershell -File vm\truth\m3-e2e-score.ps1 -Evidence E:\purge-build\gate-evidence\m3-e2e\<run> -Collect
+
+  -UacOn boots m3-uac-on instead and answers each UAC prompt from the host by scancode (Alt+Y, then Left+Enter), with
+  screenshots. Evidence: E:\purge-build\gate-evidence\m3-e2e\<run>\ (run = -RunName or e2e-<stamp>): summary.json,
+  rig-m3-<stamp>.log, and per app <app>\ (NN-<step>.png, jobs\*.log, host.json, guest\ = C:\cr\out\m3-e2e\<app>\).
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('all', 'snapshot', 'probe', 'm3-broker', 'm3-consent', 'm3-uac')] [string] $Mode = 'all',
+    [ValidateSet('all', 'snapshot', 'probe', 'm3-broker', 'm3-consent', 'm3-uac', 'm3-e2e')] [string] $Mode = 'all',
     [string] $Evidence = '',
     [switch] $Rebuild,
     [string] $Engine = '',
@@ -54,14 +67,24 @@ param(
     [string] $UiPublish = '',
     [string[]] $Cases = @(),
     [string] $Base = '',
-    [ValidateSet('password', 'user-tab-password')] [string] $StdUserKeys = 'password'
+    [ValidateSet('password', 'user-tab-password')] [string] $StdUserKeys = 'password',
+    [string[]] $Apps = @(),
+    [string[]] $UndoApps = @(),
+    [string] $RunName = '',
+    [switch] $UacOn
 )
 $ErrorActionPreference = 'Stop'
 
 # rig.ps1 has parameters of its own (Mode, Engine, ...): ours are kept here first.
-if (-not $Evidence) { $Evidence = $(if ($Mode -like 'm3-*') { "E:\purge-build\gate-evidence\$Mode" } else { 'E:\purge-build\gate-evidence\m3-rig-uac' }) }
+if (-not $RunName) { $RunName = 'e2e-' + (Get-Date -Format 'yyyyMMdd-HHmmss') }
+if ($RunName -notmatch '^[A-Za-z0-9_.-]+$') { throw "bad -RunName '$RunName'" }
+if (-not $Evidence) {
+    $Evidence = $(if ($Mode -eq 'm3-e2e') { "E:\purge-build\gate-evidence\m3-e2e\$RunName" } elseif ($Mode -like 'm3-*') { "E:\purge-build\gate-evidence\$Mode" } else { 'E:\purge-build\gate-evidence\m3-rig-uac' })
+}
 $M3 = [ordered]@{ mode = $Mode; evidence = $Evidence; rebuild = [bool]$Rebuild; engine = $Engine; broker = $Broker; ui = $UiPublish
-                  cases = @($Cases | Where-Object { $_ }); base = $Base; std_keys = $StdUserKeys }
+                  cases = @($Cases | Where-Object { $_ }); base = $Base; std_keys = $StdUserKeys
+                  apps = @($Apps | ForEach-Object { "$_" -split ',' } | Where-Object { $_ }); undo_apps = @($UndoApps | ForEach-Object { "$_" -split ',' } | Where-Object { $_ })
+                  run = $RunName; uac_on = [bool]$UacOn }
 $M3Vm = 'Inbound-Win11-Test'
 $M3Snap = 'm3-uac-on'
 . (Join-Path $PSScriptRoot 'rig.ps1') -VmName $M3Vm
@@ -488,6 +511,229 @@ function Invoke-M3SecUac {
     Complete-M3Sec $base @{ keys = $keys }
 }
 
+# ----------------------------------------------------------------------------------- m3-e2e (RIG.md section 15)
+
+$M3E2eExpect = Join-Path $script:RigDir 'truth\m3-e2e-expect.json'
+$script:E2eDir = $null
+$script:E2eShots = $null
+$script:E2eLines = $null
+
+# Pure: the apps of the expectations file, in its order; -Only keeps those named (an unknown name throws).
+function Get-M3E2eApps([string]$ExpectFile = $M3E2eExpect, [string[]]$Only = @()) {
+    $x = Get-Content -LiteralPath $ExpectFile -Raw | ConvertFrom-Json
+    $apps = @($x.apps)
+    $ids = @($apps | ForEach-Object { "$($_.id)" })
+    $only = @($Only | Where-Object { $_ })
+    foreach ($o in $only) { if ($ids -notcontains $o) { throw "unknown m3-e2e app '$o' (known: $($ids -join ', '))" } }
+    if ($only.Count) { $apps = @($apps | Where-Object { $only -contains "$($_.id)" }) }
+    $apps
+}
+
+# Pure: the apps whose result is undone through the UI (-UndoApps, else the expectations' undo_apps); only apps that
+# execute (kind app or fixture) can be undone.
+function Get-M3E2eUndoApps([string]$ExpectFile = $M3E2eExpect, [string[]]$Override = @()) {
+    $x = Get-Content -LiteralPath $ExpectFile -Raw | ConvertFrom-Json
+    $list = @($(if (@($Override | Where-Object { $_ }).Count) { $Override } else { @($x.undo_apps) }) | Where-Object { $_ } | ForEach-Object { "$_" })
+    foreach ($u in $list) {
+        $a = @($x.apps | Where-Object { "$($_.id)" -eq $u })
+        if (-not $a.Count) { throw "undo app '$u' is not an m3-e2e app" }
+        if ("$($a[0].kind)" -notin 'app', 'fixture') { throw "undo app '$u' executes nothing (kind $($a[0].kind))" }
+    }
+    $list
+}
+
+# Pure: the job text of one guest phase of m3-e2e.ps1.
+function New-M3E2ePhaseText([string]$Phase, [string]$App, [string]$Step = '', [int]$WaitSec = 0) {
+    foreach ($v in $Phase, $App, $Step) { if ("$v" -notmatch '^[A-Za-z0-9_-]*$') { throw "bad phase argument '$v'" } }
+    if (-not $Phase -or -not $App) { throw 'a phase and an app are needed' }
+    $t = "& 'C:\cr\guest\m3-e2e.ps1' -Phase '$Phase' -App '$App'"
+    if ($Step) { $t += " -Step '$Step'" }
+    if ($WaitSec) { $t += " -WaitSec $WaitSec" }
+    $t
+}
+
+# Pure: the screenshot names an app's flow takes, in order (the scorer requires the same list, expectations
+# required_shots). Broker route: the uninstall consent; success flows: move, plan consent, result; undo app: undo.
+function Get-M3E2eShotNames($AppDef, [bool]$Undo) {
+    $n = @('01-programs-row', '02-uninstall-clicked', '03-confirm')
+    if ("$($AppDef.route)" -eq 'broker') { $n += '04-consent-run', '05-run-approved' }
+    $n += '06-scan-done'
+    if ("$($AppDef.kind)" -like 'fail-*') { return @($n + '07-failure') }
+    $n += '07-move-waiting', '08-consent-plan', '09-result'
+    if ($Undo) { $n += '10-undo-waiting', '11-consent-undo', '12-undone' }
+    $n
+}
+
+function Invoke-M3E2ePhase([string]$Phase, [string]$App, [string]$Step = '', [int]$WaitSec = 0, [int]$TimeoutSec = 900) {
+    $name = "e2e-$Phase$(if ($Step) { "-$Step" })"
+    $jobs = Join-Path $script:E2eDir 'jobs'
+    New-Item -ItemType Directory -Force $jobs | Out-Null
+    $j = Invoke-GuestJob -Text (New-M3E2ePhaseText $Phase $App $Step $WaitSec) -Name "$App-$name" -TimeoutSec $TimeoutSec -LogCopy (Join-Path $jobs "$name-$(Get-Date -Format 'HHmmss').log")
+    $lines = @("$($j.log)" -split "`r?`n" | Where-Object { $_ -match '^M3E ' })
+    foreach ($l in $lines) { Write-RigLog "  $l"; [void]$script:E2eLines.Add($l) }
+    if (-not $j.done) { Write-RigLog "  !! phase $name did not finish within $TimeoutSec s"; $script:M3Fail = $true }
+    elseif (-not $lines.Count) { Write-RigLog "  !! phase $name wrote no result line; log: $($j.log_file)"; $script:M3Fail = $true }
+    "$(@($lines) | Select-Object -First 1)"
+}
+
+function Save-M3E2eShot([string]$Name) {
+    $f = Join-Path $script:E2eDir "$Name.png"
+    $r = Invoke-VBox @('controlvm', $M3Vm, 'screenshotpng', $f)
+    $ok = ($r.code -eq 0 -and (Test-Path -LiteralPath $f))
+    if ($ok) { Write-RigLog "  screenshot $Name.png ($((Get-Item $f).Length) bytes)" } else { Write-RigLog "  !! screenshot $Name failed: $($r.out -join ' ')" }
+    [void]$script:E2eShots.Add([ordered]@{ name = $Name; file = $(if ($ok) { "$Name.png" }); bytes = $(if ($ok) { (Get-Item $f).Length } else { 0 }); t = (Get-Date).ToString('o') })
+}
+
+# The UAC prompt on the secure desktop, when one is up: screenshot, Alt+Y (Left+Enter only while it is still up),
+# screenshot. Returns the keys sent (empty when no prompt was up).
+function Invoke-M3E2eUac([string]$Tag) {
+    $sent = @()
+    $d = (Get-Date).AddSeconds(10)
+    while (-not (Test-M3ConsentUp) -and (Get-Date) -lt $d) { Start-Sleep -Seconds 1 }
+    if (-not (Test-M3ConsentUp)) { return $sent }
+    Save-M3E2eShot "$Tag-1-prompt"
+    $i = 2
+    foreach ($k in 'alt-y', 'left-enter') {
+        $null = Send-M3Keys $k; $sent += $k
+        Start-Sleep -Seconds 4
+        Save-M3E2eShot "$Tag-$i-after-$k"; $i++
+        if (-not (Test-M3ConsentUp)) { break }
+    }
+    $sent
+}
+
+function Push-M3E2eFiles($AppDef) {
+    $engine = $(if ($M3.engine) { $M3.engine } else { Join-Path $script:RepoRoot 'target\release\purge-engine.exe' })
+    $inst = @()
+    if ("$($AppDef.kind)" -eq 'app') { $inst = @(Get-CachedRunFiles -Id "$($AppDef.id)") }
+    Push-Tools -Engine $engine -Installers $inst
+    Push-M2Install
+    $null = Push-M2Ambient
+    foreach ($d in 'C:\cr\m3e2e', 'C:\cr\out') { $null = Invoke-Guest @('mkdir', '--parents', $d) }
+    $extra = @((Join-Path $script:RigDir 'guest\m3sec.cs'), (Join-Path $script:RigDir 'truth\m1b-exec-cases.json'))
+    $r = Invoke-Guest (@('copyto', '--target-directory', 'C:\cr\guest\') + $extra)
+    if ($r.code -ne 0) { throw "copy m3sec.cs / m1b-exec-cases.json failed: $($r.out -join ' ')" }
+    $zip = New-M3SecPayload
+    try {
+        $null = Invoke-GuestCmd 'del /f /q C:\cr\m3e2e\payload.zip'
+        $r = Invoke-Guest @('copyto', $zip, 'C:\cr\m3e2e\payload.zip')
+        if ($r.code -ne 0) { throw "copy payload failed: $($r.out -join ' ')" }
+    } finally { Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue }
+    Write-RigLog '  pushed m3sec.cs, m1b-exec-cases.json, payload.zip'
+}
+
+function Get-M3E2eField([string]$Line, [string]$Key) { Get-M3Field $Line $Key }
+
+# One app: one boot of the base snapshot, the whole flow through the UI, the evidence pulled to <evidence>\<app>\.
+function Invoke-M3E2eApp($AppDef, [bool]$Undo, [string]$Base) {
+    $id = "$($AppDef.id)"
+    $script:E2eDir = Join-Path $M3.evidence $id
+    New-Item -ItemType Directory -Force $script:E2eDir | Out-Null
+    $script:E2eShots = New-Object System.Collections.ArrayList
+    $script:E2eLines = New-Object System.Collections.ArrayList
+    $rec = [ordered]@{ app = $id; kind = "$($AppDef.kind)"; undo = $Undo; base = $Base; started = (Get-Date).ToString('o'); ended = $null; error = $null
+                       uac_keys = [ordered]@{}; shots = $script:E2eShots; lines = $script:E2eLines; pulled = $false }
+    Write-RigLog "m3-e2e app $id ($($AppDef.kind), route $($AppDef.route)$(if ($Undo) { ', undo' })) from $Base"
+    $booted = $false
+    try {
+        Restore-Base -Snapshot $Base -No3D
+        $booted = $true
+        Push-M3E2eFiles $AppDef
+        $l = Invoke-M3E2ePhase 'setup' $id -TimeoutSec 1200
+        if ($l -notmatch '^M3E SETUP OK') { throw "setup failed: $l" }
+        $l = Invoke-M3E2ePhase 'prepare' $id -TimeoutSec 5400
+        if ((Get-M3E2eField $l 'ok') -ne 'True') { throw "prepare failed: $l" }
+        $null = Invoke-M3E2ePhase 'ui-start' $id -TimeoutSec 900
+        Save-M3E2eShot '01-programs-row'
+        $l = Invoke-M3E2ePhase 'ui-uninstall' $id -TimeoutSec 900
+        Save-M3E2eShot '02-uninstall-clicked'
+        $rec.uac_keys.run = @(Invoke-M3E2eUac '02u-uac')
+        $null = Invoke-M3E2ePhase 'ui-await-confirm' $id -WaitSec 300 -TimeoutSec 900
+        Save-M3E2eShot '03-confirm'
+        $l = Invoke-M3E2ePhase 'ui-confirm' $id -TimeoutSec 600
+        if ((Get-M3E2eField $l 'route') -eq 'broker') {
+            $null = Invoke-M3E2ePhase 'consent-wait' $id 'run' -WaitSec 300 -TimeoutSec 900
+            Save-M3E2eShot '04-consent-run'
+            $null = Invoke-M3E2ePhase 'consent-approve' $id 'run' -TimeoutSec 600
+            Save-M3E2eShot '05-run-approved'
+        }
+        $l = Invoke-M3E2ePhase 'ui-wait-scan' $id -WaitSec 2400 -TimeoutSec 3300
+        Save-M3E2eShot '06-scan-done'
+        $state = Get-M3E2eField $l 'state'
+        if ("$($AppDef.kind)" -like 'fail-*') {
+            $null = Invoke-M3E2ePhase 'fail-check' $id -TimeoutSec 600
+            Save-M3E2eShot '07-failure'
+        } elseif ($state -in 'review', 'empty') {
+            $null = Invoke-M3E2ePhase 'capture-post' $id -TimeoutSec 5400
+            if ($state -eq 'review') {
+                $null = Invoke-M3E2ePhase 'ui-move' $id -TimeoutSec 1200
+                Save-M3E2eShot '07-move-waiting'
+                $rec.uac_keys.plan = @(Invoke-M3E2eUac '07u-uac')
+                $null = Invoke-M3E2ePhase 'consent-wait' $id 'plan' -WaitSec 300 -TimeoutSec 900
+                Save-M3E2eShot '08-consent-plan'
+                $null = Invoke-M3E2ePhase 'consent-approve' $id 'plan' -TimeoutSec 600
+                $null = Invoke-M3E2ePhase 'ui-wait-result' $id -WaitSec 1800 -TimeoutSec 2400
+                Save-M3E2eShot '09-result'
+                $null = Invoke-M3E2ePhase 'capture-exec' $id -TimeoutSec 5400
+                if ($Undo) {
+                    $null = Invoke-M3E2ePhase 'ui-undo' $id -TimeoutSec 900
+                    Save-M3E2eShot '10-undo-waiting'
+                    $rec.uac_keys.undo = @(Invoke-M3E2eUac '10u-uac')
+                    $null = Invoke-M3E2ePhase 'consent-wait' $id 'undo' -WaitSec 300 -TimeoutSec 900
+                    Save-M3E2eShot '11-consent-undo'
+                    $null = Invoke-M3E2ePhase 'consent-approve' $id 'undo' -TimeoutSec 600
+                    $null = Invoke-M3E2ePhase 'ui-wait-undone' $id -WaitSec 1800 -TimeoutSec 2400
+                    Save-M3E2eShot '12-undone'
+                    $null = Invoke-M3E2ePhase 'capture-undo' $id -TimeoutSec 3600
+                }
+            }
+        } else { Write-RigLog "  !! $id`: the scan ended '$state'; nothing more to drive"; $script:M3Fail = $true }
+    } catch {
+        $rec.error = $_.Exception.Message
+        Write-RigLog "  !! $id`: $($rec.error)"
+        $script:M3Fail = $true
+    } finally {
+        if ($booted -and (Get-VmState) -eq 'running') {
+            try {
+                $null = Invoke-M3E2ePhase 'finish' $id -TimeoutSec 1800
+                $zip = Join-Path $script:E2eDir 'guest.zip'
+                Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
+                $c = Invoke-Guest @('copyfrom', "C:\cr\out\m3-e2e-$id.zip", $zip)
+                if ($c.code -eq 0 -and (Test-Path -LiteralPath $zip)) {
+                    $g = Join-Path $script:E2eDir 'guest'
+                    if (Test-Path -LiteralPath $g) { Remove-Item -LiteralPath $g -Recurse -Force }
+                    Expand-Archive -LiteralPath $zip -DestinationPath $g
+                    Remove-Item -LiteralPath $zip -Force
+                    $rec.pulled = $true
+                    Write-RigLog "  guest outputs in $g"
+                } else { Write-RigLog "  !! copyfrom of the guest zip failed: $($c.out -join ' ')"; $script:M3Fail = $true }
+            } catch { Write-RigLog "  !! finish of $id`: $($_.Exception.Message)"; $script:M3Fail = $true }
+        }
+        $rec.ended = (Get-Date).ToString('o')
+        [IO.File]::WriteAllText((Join-Path $script:E2eDir 'host.json'), (ConvertTo-Json $rec -Depth 8), (New-Object System.Text.UTF8Encoding($false)))
+    }
+    $rec
+}
+
+function Invoke-M3E2e {
+    $ui = $(if ($M3.ui) { $M3.ui } else { Join-Path $script:RepoRoot 'target\ui-publish' })
+    if (-not (Test-Path -LiteralPath (Join-Path $ui 'Purge.exe') -PathType Leaf)) { throw "m3-e2e needs the UI publish folder (-UiPublish; no Purge.exe in $ui)" }
+    $base = $(if ($M3.base) { $M3.base } elseif ($M3.uac_on) { 'm3-uac-on' } else { 'rig-base' })
+    if ($base -eq 'm3-uac-on' -and -not (Test-M3Snapshot)) { throw "snapshot $M3Snap missing (rig-m3.ps1 -Mode snapshot)" }
+    $apps = @(Get-M3E2eApps -Only $M3.apps)
+    $undo = @(Get-M3E2eUndoApps -Override $M3.undo_apps)
+    $sum = [ordered]@{ schema = 'purge.rig.m3e2e.summary/1'; run = $M3.run; vm = $M3Vm; snapshot = $base; uac_on = $M3.uac_on; started = $script:M3Started
+                       engine = $M3.engine; broker = $M3.broker; ui = $ui; apps_asked = @($apps | ForEach-Object { "$($_.id)" }); undo_apps = $undo; apps = @() }
+    foreach ($a in $apps) {
+        $sum.apps += Invoke-M3E2eApp $a ($undo -contains "$($a.id)") $base
+        [IO.File]::WriteAllText((Join-Path $M3.evidence 'summary.json'), (ConvertTo-Json $sum -Depth 10), (New-Object System.Text.UTF8Encoding($false)))
+    }
+    $sum.ended = (Get-Date).ToString('o')
+    $sum.failed_step = $script:M3Fail
+    [IO.File]::WriteAllText((Join-Path $M3.evidence 'summary.json'), (ConvertTo-Json $sum -Depth 10), (New-Object System.Text.UTF8Encoding($false)))
+    Write-RigLog "summary: $(Join-Path $M3.evidence 'summary.json'); score: powershell -File vm\truth\m3-e2e-score.ps1 -Evidence $($M3.evidence) -Collect"
+}
+
 # ------------------------------------------------------------------------------------------------- main
 
 # Dot-sourced (the rig self-test): the functions only.
@@ -508,10 +754,11 @@ try {
     if ($M3.mode -eq 'm3-broker') { Invoke-M3SecBroker }
     if ($M3.mode -eq 'm3-consent') { Invoke-M3SecConsent }
     if ($M3.mode -eq 'm3-uac') { Invoke-M3SecUac }
+    if ($M3.mode -eq 'm3-e2e') { Invoke-M3E2e }
 } catch {
     Write-RigLog "!! $($_.Exception.Message)"
     $code = 1
-    if ($M3.mode -like 'm3-*' -and (Get-VmState) -eq 'running') {
+    if ($M3.mode -in 'm3-broker', 'm3-consent', 'm3-uac' -and (Get-VmState) -eq 'running') {
         # Keep what the guest has so far (the scorer fails the missing rows).
         $script:M3Fail = $true
         try { Complete-M3Sec (Get-M3SecBase $M3.mode $M3.base) @{ aborted = $_.Exception.Message } } catch { Write-RigLog "  !! partial evidence: $($_.Exception.Message)" }

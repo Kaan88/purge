@@ -1112,17 +1112,27 @@ static class M3Sec {
 
     // The fixture program's uninstaller: removes its ARP entry and its main exe (so verify-gone passes) and leaves
     // everything else as leftovers; writes C:\cr\out\m3-sec\fixture-uninstalled.json as the proof that it ran.
+    // m3-e2e (vm\RIG.md section 15) names another ARP key: "fixture-uninstall <Key>" (letters and digits only, HKLM
+    // 64-bit Uninstall\<Key>); its proof is then C:\cr\out\m3-e2e\fixture-<Key>.json. A first argument starting with
+    // '/' (m3-sec's quiet "/S") keeps the default key.
     static int FixtureUninstall(string[] a) {
-        const string Arp = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\PurgeRigApp";
-        var rec = new Dictionary<string, object> { { "t", Now() }, { "pid", (long)Process.GetCurrentProcess().Id }, { "il", MyIl() }, { "args", string.Join(" ", a) } };
+        string key = "PurgeRigApp";
+        string marker = @"C:\cr\out\m3-sec\fixture-uninstalled.json";
+        if (a.Length > 1 && !a[1].StartsWith("/")) {
+            if (!Regex.IsMatch(a[1], "^[A-Za-z0-9]{1,64}$")) return 2;
+            key = a[1];
+            marker = @"C:\cr\out\m3-e2e\fixture-" + key + ".json";
+        }
+        string Arp = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\" + key;
+        var rec = new Dictionary<string, object> { { "t", Now() }, { "pid", (long)Process.GetCurrentProcess().Id }, { "il", MyIl() }, { "args", string.Join(" ", a) }, { "key", key } };
         using (var hklm = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64)) {
             try { hklm.DeleteSubKeyTree(Arp, false); rec["arp_deleted"] = true; } catch (Exception e) { rec["arp_error"] = e.Message; }
         }
         string dir = Path.GetDirectoryName(Process.GetCurrentProcess().MainModule.FileName);
         try { File.Delete(Path.Combine(dir, "app.exe")); rec["app_deleted"] = true; } catch (Exception e) { rec["app_error"] = e.Message; }
         try {
-            Directory.CreateDirectory(@"C:\cr\out\m3-sec");
-            WriteJson(@"C:\cr\out\m3-sec\fixture-uninstalled.json", rec);
+            Directory.CreateDirectory(Path.GetDirectoryName(marker));
+            WriteJson(marker, rec);
         } catch { }
         return 0;
     }

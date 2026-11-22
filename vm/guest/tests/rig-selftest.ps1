@@ -20,7 +20,7 @@ Write-Host "PowerShell $($PSVersionTable.PSVersion) ($($PSVersionTable.PSEdition
 
 try {
 # ------------------------------------------------------------------------------------------ parse
-foreach ($f in @(Get-ChildItem -LiteralPath $Guest -Filter '*.ps1') + @(Get-Item (Join-Path $Vm 'rig.ps1')) + @(Get-Item (Join-Path $Vm 'rig-baseline-local.ps1')) + @(Get-Item (Join-Path $Vm 'rig-m3.ps1')) + @(Get-Item (Join-Path $Vm 'truth\m3-sec-score.ps1')) + @(Get-Item $PSCommandPath)) {
+foreach ($f in @(Get-ChildItem -LiteralPath $Guest -Filter '*.ps1') + @(Get-Item (Join-Path $Vm 'rig.ps1')) + @(Get-Item (Join-Path $Vm 'rig-baseline-local.ps1')) + @(Get-Item (Join-Path $Vm 'rig-m3.ps1')) + @(Get-Item (Join-Path $Vm 'truth\m3-sec-score.ps1')) + @(Get-Item (Join-Path $Vm 'truth\m3-e2e-score.ps1')) + @(Get-Item $PSCommandPath)) {
     $tok = $null; $err = $null
     $null = [Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$tok, [ref]$err)
     Check "parse $($f.Name)" (@($err).Count -eq 0) (@($err | ForEach-Object { "line $($_.Extent.StartLineNumber): $($_.Message)" }) -join '; ')
@@ -1922,6 +1922,76 @@ function Invoke-M2Script([string]$Script, [string]$Arguments = '', [int]$Timeout
     $unknown = @($ids | Where-Object { $guestText -notmatch ("'" + [regex]::Escape($_) + "'") })
     Check 'm3-sec: m3-sec.ps1 has a branch for every case' ($unknown.Count -eq 0) ($unknown -join ', ')
     Check 'm3-sec: m3sec.cs is ASCII (csc reads it in the guest code page)' (-not ([IO.File]::ReadAllText((Join-Path $Guest 'm3sec.cs')) -match '[^\x00-\x7F]'))
+}
+
+# ------------------------------------------------------------------------- m3-e2e (rig-m3.ps1, RIG.md section 15)
+& {
+    . (Join-Path $Vm 'rig-m3.ps1')
+    $ErrorActionPreference = 'Stop'
+    $expect = Join-Path $Vm 'truth\m3-e2e-expect.json'
+    $x = Get-Content -LiteralPath $expect -Raw | ConvertFrom-Json
+    $ids = @(Get-M3E2eApps -ExpectFile $expect | ForEach-Object { "$($_.id)" })
+    Check 'm3-e2e: the app list is the expectations list, in order' (($ids -join ',') -eq 'vscode,vscode-user,git,firefox-tb,npp,7zip,execapp,msi1603,msi3010') ($ids -join ',')
+    Check 'm3-e2e: seven executing apps (G6), the two failing uninstallers' (@($x.apps | Where-Object { $_.kind -in 'app', 'fixture' }).Count -eq 7 -and @($x.apps | Where-Object { $_.kind -like 'fail-*' }).Count -eq 2)
+    Check 'm3-e2e: exactly one medium-route app (vscode-user)' ((@($x.apps | Where-Object { $_.route -eq 'medium' } | ForEach-Object { $_.id }) -join ',') -eq 'vscode-user')
+    Check 'm3-e2e: the design gates (3 s, 10 s, 100 ms)' ([int]$x.gates.harvest_after_uac_ms -eq 3000 -and [int]$x.gates.scan_ms -eq 10000 -and [int]$x.gates.first_progress_ms -eq 100)
+    Check 'm3-e2e: -Apps keeps the named apps in list order' ((@(Get-M3E2eApps -ExpectFile $expect -Only @('msi1603', 'npp') | ForEach-Object { $_.id }) -join ',') -eq 'npp,msi1603')
+    $threw = $false; try { $null = Get-M3E2eApps -ExpectFile $expect -Only @('nope') } catch { $threw = $true }
+    Check 'm3-e2e: an unknown -Apps name throws' $threw
+    Check 'm3-e2e: undo apps default to the expectations (npp)' ((@(Get-M3E2eUndoApps -ExpectFile $expect) -join ',') -eq 'npp')
+    $threw = $false; try { $null = Get-M3E2eUndoApps -ExpectFile $expect -Override @('msi1603') } catch { $threw = $true }
+    Check 'm3-e2e: a failing uninstaller cannot be an undo app' $threw
+    Check 'm3-e2e: phase job text' ((New-M3E2ePhaseText 'consent-wait' 'npp' 'plan' 300) -eq "& 'C:\cr\guest\m3-e2e.ps1' -Phase 'consent-wait' -App 'npp' -Step 'plan' -WaitSec 300")
+    $threw = $false; try { $null = New-M3E2ePhaseText 'prepare' "npp'; Remove-Item C:\" } catch { $threw = $true }
+    Check 'm3-e2e: an app with quotes is refused' $threw
+    # The host's screenshot list and the scorer's required list agree for every app, with and without undo.
+    $sc = & { . (Join-Path $Vm 'truth\m3-e2e-score.ps1'); ${function:Get-E2eShotNames} }
+    $diff = @()
+    foreach ($a in $x.apps) { foreach ($u in $true, $false) { if ((@(Get-M3E2eShotNames $a $u) -join ',') -ne (@(& $sc $a $u) -join ',')) { $diff += "$($a.id)/$u" } } }
+    Check 'm3-e2e: host screenshot names == scorer required names' ($diff.Count -eq 0) ($diff -join ', ')
+    Check 'm3-e2e: broker-route apps have the consent shots, a failing one the failure shot' ((@(Get-M3E2eShotNames ($x.apps | Where-Object { $_.id -eq 'msi1603' }) $false) -join ',') -eq '01-programs-row,02-uninstall-clicked,03-confirm,04-consent-run,05-run-approved,06-scan-done,07-failure')
+    # Every phase the host calls exists in the guest script's phase set.
+    $guestText = [IO.File]::ReadAllText((Join-Path $Guest 'm3-e2e.ps1'))
+    $hostText = [IO.File]::ReadAllText((Join-Path $Vm 'rig-m3.ps1'))
+    $called = @([regex]::Matches($hostText, "Invoke-M3E2ePhase '([a-z-]+)'") | ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique)
+    $missing = @($called | Where-Object { $guestText -notmatch ("(?m)^\s+'" + [regex]::Escape($_) + "' \{") })
+    Check 'm3-e2e: every phase the host calls has a guest branch' ($called.Count -ge 15 -and $missing.Count -eq 0) "called $($called.Count); missing: $($missing -join ', ')"
+}
+
+# ------------------------------------------------------------- m3-e2e guest library (UI driver, MSI fixtures)
+& {
+    . (Join-Path $Guest 'm3-e2e-ui.ps1')
+    $ErrorActionPreference = 'Stop'
+    Check 'm3-e2e-ui: a row of the name' (Test-E2eRowText "Notepad++ (64-bit x64)`r`nNotepad++ Team" 'Notepad++ (64-bit x64)')
+    Check 'm3-e2e-ui: a row with the new tag' (Test-E2eRowText "7-Zip 24.08 (x64 edition)new`nIgor Pavlov" '7-Zip 24.08 (x64 edition)')
+    Check 'm3-e2e-ui: the user VS Code is not the system one' (-not (Test-E2eRowText "Microsoft Visual Studio Code (User)new`nMicrosoft Corporation" 'Microsoft Visual Studio Code'))
+    Check 'm3-e2e-ui: a longer name is not the row' (-not (Test-E2eRowText 'Gitnew' 'Git ') -and -not (Test-E2eRowText 'GitHub Desktop' 'Git'))
+    Check 'm3-e2e-ui: the row name drops the tag' ((Get-E2eRowName "Gitnew`r`nThe Git Development Community") -eq 'Git')
+    Check 'm3-e2e-ui: exit code from a step detail' ((Get-E2eExitCodeFromText 'Finished, exit code 3010 · quiet mode') -eq 3010 -and $null -eq (Get-E2eExitCodeFromText 'Confirmed gone'))
+    Check 'm3-e2e-ui: target keys' ((Get-E2eTargetKey ([pscustomobject]@{ type = 'RegValue'; path = 'HKU\S-1\Software\X'; name = 'Y' })) -eq 'RegValue|hku\s-1\software\x|y|' -and (Get-E2eTargetKey ([pscustomobject]@{ type = 'Task'; path = '\PurgeExecApp\Simple Update' })) -eq 'Task|\purgeexecapp\simple update')
+    $c = Compare-E2eSets @('a', 'b') @('b', 'a')
+    $d = Compare-E2eSets @('a', 'b') @('a', 'c')
+    $f = Compare-E2eSets @('FirewallRule|Ab') @('FirewallRule|ab')
+    Check 'm3-e2e-ui: set compare (order-free; missing and extra; a rule id keeps its case)' ($c.equal -and -not $d.equal -and ($d.missing -join ',') -eq 'b' -and ($d.extra -join ',') -eq 'c' -and -not $f.equal)
+}
+& {
+    . (Join-Path $Guest 'm3-e2e-msi.ps1')
+    $ErrorActionPreference = 'Stop'
+    $md = Join-Path $Work 'msi'
+    foreach ($v in '1603', '3010') {
+        $r = New-E2eMsi $v (Join-Path $md "purge-e2e-$v.msi")
+        $b = Read-E2eMsi $r.path
+        $seq = $b.sequence
+        $base = ($b.property.ALLUSERS -eq '1' -and $b.property.REBOOT -eq 'ReallySuppress' -and $b.template -eq 'x64;1033' -and $b.property.ProductCode -eq $r.product -and
+                 [int]$seq['InstallInitialize'][1] -eq 1500 -and [int]$seq['InstallFinalize'][1] -eq 6600 -and $seq.Contains('RegisterProduct') -and $seq.Contains('RemoveRegistryValues'))
+        if ($v -eq '1603') {
+            $ok = ($base -and $b.custom['PurgeE2eFail'][0] -eq '19' -and $seq['PurgeE2eFail'][0] -eq 'REMOVE="ALL"' -and [int]$seq['PurgeE2eFail'][1] -gt 1500 -and -not $seq.Contains('ScheduleReboot'))
+            Check 'm3-e2e-msi: 1603 fixture (type 19 on REMOVE="ALL" after InstallInitialize)' $ok
+        } else {
+            $ok = ($base -and $seq['ScheduleReboot'][0] -eq 'REMOVE="ALL"' -and [int]$seq['ScheduleReboot'][1] -lt 6600 -and $b.custom.Count -eq 0)
+            Check 'm3-e2e-msi: 3010 fixture (ScheduleReboot on REMOVE="ALL", REBOOT=ReallySuppress)' $ok
+        }
+    }
 }
 
 } catch {
