@@ -19,7 +19,11 @@
   consent dialog, 45 of them make it page).
 
   Phases:
-    build, install -Tag <fixture>, uac-check, pack
+    build, install -Tag <fixture>, uac-check, uac-silent, pack
+  uac-silent (m3-broker, m3-consent; coordinator ruling 2026-11-22): rig-base is at the Windows UAC defaults (5/1/1),
+  so these two modes make UAC silent themselves: ConsentPromptBehaviorAdmin=0 (design 11.2 'silent'). EnableLUA stays 1,
+  so medium and high integrity still differ; PromptOnSecureDesktop is left as it is (a silent elevation shows no prompt).
+  The values before and after go to uac-silent.json, which both summaries carry as uac_silent.
     m3-broker:  broker-case -Tag <case id>, broker-summary
     m3-consent: consent-start, consent-next -Tag k, consent-attack -Tag k -Method m, consent-control -Tag k -Method m,
                 consent-approve -Tag k, client-end -Tag consent
@@ -29,7 +33,7 @@
 #>
 param(
     [Parameter(Mandatory)]
-    [ValidateSet('build', 'install', 'uac-check', 'pack', 'broker-case', 'broker-summary',
+    [ValidateSet('build', 'install', 'uac-check', 'uac-silent', 'pack', 'broker-case', 'broker-summary',
                  'consent-start', 'consent-next', 'consent-attack', 'consent-control', 'consent-approve', 'client-end',
                  'ui-start', 'ui-result', 'flow-start', 'flow-launch', 'arm-next', 'page-next', 'arm-current',
                  'std-start', 'std-result', 'uac-summary')]
@@ -507,6 +511,16 @@ switch ($Phase) {
         Write-JsonFile $v (Join-Path $Out "uac-check$(if ($Tag) { "-$Tag" }).json")
         "M3S UAC-CHECK $(ConvertTo-Json $v -Compress)"
     }
+    'uac-silent' {
+        $before = Get-UacValues
+        $err = $null
+        try { Set-ItemProperty -LiteralPath $PolKey -Name 'ConsentPromptBehaviorAdmin' -Value 0 -Type DWord -ErrorAction Stop } catch { $err = $_.Exception.Message }
+        $after = Get-UacValues
+        $ok = (-not $err -and "$($after.ConsentPromptBehaviorAdmin)" -eq '0' -and "$($after.EnableLUA)" -eq '1')
+        $rec = [ordered]@{ t = (NowIso); set = [ordered]@{ ConsentPromptBehaviorAdmin = 0 }; before = $before; after = $after; error = $err; ok = $ok }
+        Write-JsonFile $rec (Join-Path $Out 'uac-silent.json') 8
+        "M3S UAC-SILENT $(if ($ok) { 'OK' } else { 'FAIL' }) before=$($before.ConsentPromptBehaviorAdmin)/$($before.PromptOnSecureDesktop)/$($before.EnableLUA) after=$($after.ConsentPromptBehaviorAdmin)/$($after.PromptOnSecureDesktop)/$($after.EnableLUA) error=$err"
+    }
     'pack' {
         $zip = 'C:\cr\out\m3-sec.zip'
         Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
@@ -525,7 +539,7 @@ switch ($Phase) {
     }
     'broker-summary' {
         $cases = @(Get-ChildItem -LiteralPath (Join-Path $Out 'broker-cases') -Filter '*.json' -ErrorAction SilentlyContinue | Sort-Object Name | ForEach-Object { Read-Json $_.FullName })
-        $sum = [ordered]@{ schema = 'purge.rig.m3sec.broker/1'; t = (NowIso); uac = (Get-UacValues); install = (Read-Json (Join-Path $Out 'install.json')); cases = $cases }
+        $sum = [ordered]@{ schema = 'purge.rig.m3sec.broker/1'; t = (NowIso); uac = (Get-UacValues); uac_silent = (Read-Json (Join-Path $Out 'uac-silent.json')); install = (Read-Json (Join-Path $Out 'install.json')); cases = $cases }
         Write-JsonFile $sum (Join-Path $Out 'm3-broker.json') 14
         "M3S BROKER-SUMMARY cases=$($cases.Count)"
     }
@@ -637,7 +651,7 @@ switch ($Phase) {
         $client = Read-Json (Join-Path $CDir 'client.json')
         $col = { param($p) @(Get-ChildItem -LiteralPath $CDir -Filter $p -ErrorAction SilentlyContinue | Sort-Object Name | ForEach-Object { [ordered]@{ file = $_.Name; data = (Read-Json $_.FullName) } }) }
         $sum = [ordered]@{
-            schema = "purge.rig.m3sec.$Tag/1"; t = (NowIso); uac = (Get-UacValues); install = (Read-Json (Join-Path $Out 'install.json'))
+            schema = "purge.rig.m3sec.$Tag/1"; t = (NowIso); uac = (Get-UacValues); uac_silent = (Read-Json (Join-Path $Out 'uac-silent.json')); install = (Read-Json (Join-Path $Out 'install.json'))
             start = (Read-Json (Join-Path $CDir 'start.json')); launched = (Read-Json (Join-Path $CDir 'launched.json')); client = $client
             dialogs = (& $col 'dialog-*.json'); shown = (& $col 'consent-shown-*.json'); ready = (& $col 'ready-*.json'); results = (& $col 'consent-result-*.json')
             attacks = (& $col 'attack-*.json'); controls = (& $col 'control-[0-9]*.json'); approves = (& $col 'approve-*.json'); arms = (& $col 'arm-*.json')

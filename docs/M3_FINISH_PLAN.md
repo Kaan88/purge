@@ -56,6 +56,16 @@ Clean-Pro `rig-base-off`, `rig-base`, `m2-base`.
 - B7 G6/G7/G12 m3-e2e on the M1 apps (VS Code system + user, Git, Firefox+Thunderbird, Notepad++, 7-Zip, one M1b
   service/task app) + failed uninstaller 1603/3010. WRITE UIA driver, scorer. Broker timing records: written
   (branch `m3-timings`; collect with `vm/guest/broker-timings.ps1`, reduce with `cargo xtask broker-timings`).
+  Tooling done, branch m3-e2e (vm/RIG.md section 17; not run yet): `rig-m3.ps1 -Mode m3-e2e` (one rig-base boot per
+  app, the real UI driven by UI Automation ids from `vm/guest/m3-e2e-ui.ps1`, UAC answered by scancode when a prompt
+  is up, the broker dialogs approved by the elevated `m3sec press`), the M1b app = PurgeExecApp with svc-full +
+  task-simple, MSI fixtures 1603 / 3010 written with the Windows Installer automation interface
+  (`vm/guest/m3-e2e-msi.ps1`, no WiX in the repo), scorer `vm/truth/m3-e2e-score.ps1 -Collect` (rigtool truth/score
+  for danger, execdiff collateral, fidelity, `xtask broker-timings`), `--self-test` 41/41. Run:
+  ```
+  .\vm\rig-m3.ps1 -Mode m3-e2e -Engine $t\release\purge-engine.exe -Broker $t\release\purge-broker.exe -UiPublish $t\ui-publish   # ~9 boots
+  powershell -NoProfile -File vm\truth\m3-e2e-score.ps1 -Evidence E:\purge-build\gate-evidence\m3-e2e\<run> -Collect
+  ```
 - B8 G8/G9 m3-owner, m3-recover (crash at every step), allow_irreversible, Restart Manager, System Restore. WRITE.
 - B9 G11 m3-clean-start + Inno setup install/uninstall on Clean-Pro. Tooling: done, branch m3-rig-clean (vm/RIG.md
   section 15; `vm\rig-m3-clean.ps1`, guest `vm\guest\m3-clean.ps1`, scorer `vm\truth\m3-clean-score.ps1`, not run

@@ -1880,7 +1880,14 @@ powershell -NoProfile -File vm\truth\m3-sec-score.ps1 --self-test
   `HKCU\Software\PurgeRigApp` and `C:\ProgramData\PurgeRigApp` stay as leftovers. Variants: `plain3`, `lookalike3`
   (three data files with a Cyrillic letter inside an ASCII name: attention entries, so the plan dialog has the
   verification box), `lookalike45` (45 of them: the attention list pages at 40).
-- **`m3-broker`** (G3, G10; from `rig-base`, UAC silent, checked: `ConsentPromptBehaviorAdmin=0`). One phase
+- **Silent UAC** (m3-broker, m3-consent; coordinator ruling 2026-11-22). `rig-base` is at the Windows UAC defaults (5/1/1,
+  section 13), so these two modes do not assume design 11.2's silent UAC: right after the install push, guest phase
+  `uac-silent` sets `ConsentPromptBehaviorAdmin=0` (EnableLUA stays 1, so medium and high integrity still differ;
+  PromptOnSecureDesktop is left: a silent elevation shows no prompt), records the values before and after in
+  `uac-silent.json` (both summaries carry it as `uac_silent`), and the host re-checks 0 with `uac-check silent`. The
+  scorer checks the recorded state (set ok, after 0 with LUA on, still 0 at the summary), never the snapshot's value.
+  m3-uac keeps `m3-uac-on` and its 5/1/1 check.
+- **`m3-broker`** (G3, G10; from `rig-base`, UAC made silent as above). One phase
   `broker-case -Tag <id>` per case of `m3-sec-expect.json`, in its order (`-Cases` runs a subset). Each case records
   the client's `client.json`, the exit code, the Application events of source `Purge` since the case started, a listing
   of `C:\ProgramData\Purge` before and after (path, size, last write, attributes: any difference is a write), and for
@@ -2124,7 +2131,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File vm\guest\tests\rig-m3-recove
   scancodes with `VBoxManage controlvm keyboardputscancode`, with a screenshot after each key, until the dialog is
   gone. A dialog that does not have the keyboard focus is brought to the front by the agent first and that is recorded
   (`refocused=True`).
-- **`m3-owner`** (G8; from `rig-base`, UAC silent). Fixture `own`. `own-exec`: prepare, uninstall, scan, execute of
+- **Silent UAC and System Restore at mode start** (coordinator ruling 2026-11-22). `rig-base` is at the Windows UAC
+  defaults (section 13) and has System Restore off. `Initialize-RecGuest` (all three modes, and the live base snapshot of
+  m3-recover) runs guest phase `uac-silent` (`ConsentPromptBehaviorAdmin=0`, EnableLUA kept, before/after in
+  `uac-silent.json`) before `uac-check`; m3-extras then runs `sr-enable` (`Enable-ComputerRestore C:\`,
+  RPSessionInterval before/after in `sr-enable.json`). The scorer checks the recorded states: the silent set (owner,
+  extras, and the calibration round's copy for recover) and, in every System Restore row, the enabled state at start.
+  The scancode answers of the broker dialogs are unchanged.
+- **`m3-owner`** (G8; from `rig-base`, UAC made silent at start). Fixture `own`. `own-exec`: prepare, uninstall, scan, execute of
   every non-blocked candidate (autopress), the service gone. `own-undo-cut`: `undo.run`, and the watcher suspends and
   ends the broker at the line `{"rec":"undo_intent","op":<the DeleteService op>}`; then the rest of that first attempt
   is put in place as R8b M1 describes it (the service as the attempt creates it, `Guarded` re-created by Administrators
@@ -2194,3 +2208,124 @@ powershell -NoProfile -ExecutionPolicy Bypass -File vm\guest\tests\rig-m3-recove
   (else the privmon sample must carry the positive row); whether Notepad++'s installer registers its sparse package in
   the snapshot's build and the forced scan offers it; whether the RM ladder takes the boot-time move for the Program
   Files file; the restore-point outcomes on this VM (System Restore off by default in rig-base).
+
+
+## 17. M3 end to end through the UI: `m3-e2e` (`rig-m3.ps1`, gate G6, G7, G12; M3_FINISH_PLAN B7)
+
+docs/M3_DESIGN.md 11.2 (row `m3-e2e`), 12 (G6, G7, G12) and 9.1 (timing rows); the ENGINE_PLAN 11.1 exit line "End-to-end
+on the M1 apps via UI automation". Host driver `vm\rig-m3.ps1 -Mode m3-e2e`; guest side `vm\guest\m3-e2e.ps1` (one agent
+job per phase, result lines `M3E ...`), the UI Automation driver `vm\guest\m3-e2e-ui.ps1` (PowerShell,
+UIAutomationClient), the MSI fixtures `vm\guest\m3-e2e-msi.ps1`; expectations `vm\truth\m3-e2e-expect.json`; scorer
+`vm\truth\m3-e2e-score.ps1`; label files `truth\labels\e2e-execapp.json` and `truth\labels\_m3-e2e.json`.
+
+```powershell
+$env:VMPWFILE = 'C:\path\to\pw.txt'
+$t = '<checkout>\target'                        # release builds (never the rig-exec engine) + the UI publish folder
+.\vm\rig-m3.ps1 -Mode m3-e2e -Engine $t\release\purge-engine.exe -Broker $t\release\purge-broker.exe -UiPublish $t\ui-publish
+#   -Apps npp,msi1603 (a subset), -UndoApps npp (default: the expectations' undo_apps), -RunName <name>, -UacOn (m3-uac-on)
+powershell -NoProfile -File vm\truth\m3-e2e-score.ps1 -Evidence E:\purge-build\gate-evidence\m3-e2e\<run> -Collect
+powershell -NoProfile -File vm\truth\m3-e2e-score.ps1 --self-test
+```
+
+**Pass criteria** (quoted; the expectations file holds the same quotes and the gate numbers):
+
+- 11.2 `m3-e2e`: "UI automation from Uninstall click to undo on: VS Code (system), VS Code (user, medium route), Git,
+  Firefox with Thunderbird installed, Notepad++, 7-Zip, and one M1b app with a service or task. Per app: the executed set
+  equals the preselected set of the rig CLI plan on the same snapshot; collateral 0; undo through the UI;
+  `undo_fidelity` 100 %."
+- G6: "End to end: 7 apps, executed set equals the preselected set of the rig plan, `danger` 0, `collateral` 0,
+  `undo_fidelity` 100 %". G7: "Medium route: the per-user uninstaller ran at medium integrity; a broker-route program is
+  refused by the medium engine and the reverse". G12: "Engine timing: harvest 3 s, scan 10 s, first progress 100 ms".
+- 9.1: "Harvest complete after the UAC click, VS Code | 3 s"; "Post-uninstall scan, cold broker | 10 s; first progress
+  within 100 ms" (measured as 9.1 says, from the broker's timing marks: `harvest_complete` of `uninstall.prepare` since
+  the broker process was created; `scan_complete - scan_start` and `first_progress - scan_start` of its first
+  `leftovers.scan`).
+- B7 failed uninstallers: 1603 is reported as a failure (the error bar with the exit code) and nothing is purged; 3010
+  is reported as restart-needed (the "A restart is needed." bar) and is not a failure.
+
+**Apps** (in this order, one boot of `rig-base` each; the expectations file is the list): `vscode`, `vscode-user`
+(medium route), `git`, `firefox-tb` (Thunderbird installed before snap 0, as M1a), `npp`, `7zip` (apps.ps1, official
+installers: the host cache files are pushed with their manifest and checked by SHA-256, else the rig-base copy, else
+the vendor URL; the installer's hash and signature are recorded), `execapp` (the M1b executor app `PurgeExecApp` of
+`m1b-exec.ps1` with the service `svc-full` and the task `task-simple` of `truth\m1b-exec-cases.json`; its uninstaller is
+`m3sec.exe fixture-uninstall PurgeExecApp`, which deletes only the ARP key and `app.exe`, so the service, the task and
+the folder are the leftovers), `msi1603`, `msi3010` (below). Undo through the UI: `npp` by default (`-UndoApps`).
+
+**MSI fixtures.** The repo has no WiX and no MSI fixture, so `m3-e2e-msi.ps1` writes both packages with the Windows
+Installer automation interface (database in create mode, SQL `CREATE TABLE` / `INSERT`, summary stream `x64;1033`,
+schema 200): a per-machine product with one registry-only component (`HKLM\SOFTWARE\PurgeE2eMsi\<variant>`, its key
+path) and the standard execute sequence; `REBOOT=ReallySuppress` in the Property table. `1603`: a type 19 custom action
+(error, then failure) at 1550, condition `REMOVE="ALL"`: `msiexec /x` returns 1603, rolls back, the product stays.
+`3010`: `ScheduleReboot` at 6590, condition `REMOVE="ALL"`: the product goes, no restart, msiexec returns 3010. Codes
+are fixed. Built in the guest at install time; the rig self-test builds both on the host and reads them back.
+
+**Flow per app** (host phases, a screenshot after each step into `<evidence>\<app>\NN-<step>.png`):
+`setup` (m3sec.exe built, `install.ps1 -SkipBuild` with the release engine, the broker and the real UI as
+`C:\Program Files\Purge\Purge.exe`, Edge update and telemetry paused) - `prepare` (pre-apps, Defender idle, lists/snap
+0, install or plant, launch at medium, lists/snap 1, rig CLI `inventory` and `harvest <program id> -o fp.json`) -
+`ui-start` (the UI at medium through a one-shot task; `ProgramList` scrolled page by page with ScrollPattern until the
+row whose text is the ARP DisplayName is realized, then SelectionItemPattern.Select; `01-programs-row`) - `ui-uninstall`
+(`UninstallButton` invoked, the first-elevation dialog's `Continue` invoked; `02-uninstall-clicked`) - the UAC prompt
+when one is up: the host answers the secure desktop by scancode (Alt+Y, Left+Enter only while `consent.exe` is still
+up; `02u-uac-1-prompt`, `02u-uac-2-after-alt-y`) - `ui-await-confirm` (`03-confirm`), `ui-confirm` (the steps, the
+command and the quiet toggle read, `PrimaryButton` "Uninstall" invoked; the route from the step text "Run its
+uninstaller at your level" / "as administrator") - broker route: `consent-wait run` (`m3sec observe`, `04-consent-run`)
+and `consent-approve run` (`m3sec press`: TDM_CLICK_VERIFICATION + TDM_CLICK_BUTTON 100 after the arming delay, from
+the elevated agent; `05-run-approved`) - `ui-wait-scan` (until `MoveButton` or `EmptyTitle` exists, or a failure bar;
+every text seen on the way is kept; the uninstaller processes started meanwhile are recorded with their integrity,
+`m3sec procinfo`; `06-scan-done`) - executing apps: `capture-post` (lists/snap 2, run.json `entries_left`, the rig CLI
+`scan --fp fp.json --mode post|forced` of the same machine state -> `plan-purge.json`, its preselected set (every
+preselected, non-Blocked item, as the review page ticks it), the deep scope of those targets, the settle wait, snap A,
+deep A) - `ui-move` (`MoveButton` invoked; waits for "Confirm in the Purge security prompt."; `07-move-waiting`) -
+`consent-wait plan` (`08-consent-plan`), `consent-approve plan` - `ui-wait-result` (`ResultTitleText`; `09-result`) -
+`capture-exec` (snap B, deep B, the new session's `journal.jsonl` and `report.json` copied, `rigtool execdiff` with the
+M2 ambient set -> `execdiff.json`, the executed set = every item of the session's report, compared by target key with
+the CLI's preselected set -> `run\executed.json`) - undo app: `ui-undo` (`UndoAllButton`; `10-undo-waiting`),
+`consent-wait undo` (`11-consent-undo`), `consent-approve undo`, `ui-wait-undone` (`UndoTitleText` "Put back";
+`12-undone`), `capture-undo` (deep C, `rigtool fidelity` deep A / deep C over the journal -> `fidelity.json`) - failing
+uninstallers: `fail-check` (ARP entry, fixture key, new sessions, quarantine listing; the pipeline page stays shown for
+`07-failure`) - `finish` (the broker's timing lines of the run, `broker-timings.ps1`; the UI closed; `e2e.json` with
+every step record; the rigtool run directory copied in as `run\`; zipped and pulled to `<evidence>\<app>\guest\`). A
+phase that throws still gets `finish` and the pull; the scorer fails the missing rows.
+
+**UAC and the consent dialog.** (Ruling 2026-11-22: approving the broker's consent dialogs with the elevated
+`m3sec press` is accepted: a high-integrity click is what the user's click is.) Design 11.2 runs `m3-e2e` UAC-silent; section 13 found `rig-base` at the Windows
+defaults (5/1/1). The flow works either way: whenever `consent.exe` is up after a step that can start the broker, the
+host answers it by scancode, and the scorer checks one UAC value per run and, with 5, the scancode answer and the
+prompt screenshot per app. The broker's TaskDialog is approved by the elevated agent (`m3sec press`), the route the
+design gives the rig ("an elevated driver can click the consent dialog"; m3-consent and m3-uac approve the same way),
+not by host scancodes: the plan dialog's verification box has no accelerator and the primary custom button is not the
+default (Cancel is), so a keyboard answer would need the focus placed on it by a program first, which is the same
+elevated driver again.
+
+**Scorer** (`m3-e2e-score.ps1`, fail-closed). `-Collect` (host, once per run): per app `cargo xtask broker-timings
+<app>\guest\timings.jsonl --out <app>\timings.json` (`-Xtask <exe>` for a built xtask); per executing app
+`<evidence>\runs\<app>\` from the pulled run directory, `rigtool truth` with `labels\<label>.json`, `_m3-e2e.json`
+(Purge's own data root, install, settings, event source and prefetch are ambient while Purge runs), `_os-servicing.json`
+and `_m1b-noise.json`, `truth\ambient.json`, `deny.json`; `plans\purge.json` (the CLI plan with its sidecar's actions, as
+m1a.sh) and `plans\ui.json` (the executed set, preselected Safe, the CLI's action for the same target); one
+`rigtool score --set ... --classes` -> `score-rigtool.json`. Rows per executing app: evidence pulled; the screenshots of
+its flow; the UI steps (row, Uninstall, confirm, uninstall consent on the broker route); the route; the UAC answer
+(scancode with 5, none with 0); G7 for `vscode-user` (at least one uninstaller process at medium, none high or system);
+review, Move, plan consent, result "Moved ..."; **executed set == the CLI's preselected set** (by target key, both
+non-empty); session `Committed`; **danger 0** (rigtool tool `ui`: `danger_offered` and `danger_preselected` 0; tool
+`purge`: `danger_blocking` 0); **collateral 0** (`execdiff.json` `collateral` and `guard_escapes` 0); G12 cold scan
+<= 10 s and first progress <= 100 ms, harvest after UAC <= 3 s for `vscode` and `vscode-user`; the undo app: undo
+through the UI and **undo_fidelity 100 %** (`fidelity.json` ok, every row pass). `msi1603`: the failure bar with exit
+code 1603, the scan never reached (no review, no Move, no result), no new session, quarantine unchanged, the ARP entry
+and the fixture key still there. `msi3010`: the restart bar with exit code 3010 and no failure bar, the scan reached,
+the product gone, nothing executed, the G12 scan rows. Plus: one UAC value for the run; at least one undo app. Writes
+`score-m3-e2e.json`; exit 0 PASS, 1 FAIL, 3 every row passes but `-Apps` scored a subset. `--self-test`: a synthetic
+passing evidence directory (UAC silent, and UAC on answered by scancode) passes, empty / missing fail, and 34 single
+defects each fail (among them a collateral item, missing timings, a 1603 shown as success, a 3010 without its bar, a
+set mismatch, danger, a failing fidelity row, the medium-route uninstaller at high).
+
+**Not settled without a VM run**: whether WinUI exposes the x:Name ids (`ProgramList`, `MoveButton`, ...) and the
+ContentDialog part `PrimaryButton` as UI Automation ids (the driver falls back to the button name, never to
+coordinates); whether ScrollPattern on the virtualized `ProgramList` realizes every row; whether the restart bar is
+still on the pipeline page when the driver reads it after the scan; whether the Inno uninstaller of `vscode-user` lives
+long enough to have its integrity read (the scorer needs one medium record); whether the UI's and the broker's own
+writes in the exec window (Application log, `%LOCALAPPDATA%\Purge`) show up as execdiff collateral, which the M2 ambient
+set (taken without a UI) does not cover; whether Windows Installer returns 3010 for the fixture with
+`REBOOT=ReallySuppress` (it should, as `/norestart` does). Snap A and B stay in the guest (only their execdiff leaves).
+G7's second half (wrong-route refusals) is not a UI flow and is not scored here.

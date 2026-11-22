@@ -17,16 +17,16 @@
   whose DACL grants nobody WRITE_OWNER (review R8b M1). rm: two files held open by running lockers.
 
   Phases:
-    common:     build, install, uac-check, fixture -Fix f, truth -Fix f -Tag label, pack -Tag name, flush
+    common:     build, install, uac-silent, uac-check, fixture -Fix f, truth -Fix f -Tag label, pack -Tag name, flush
     m3-recover: crash-arm -Tag k (0 = calibration, nothing suspended), after-boot -Tag k, ui-check -Tag k,
                 recover-start -Tag k-after -Via ui|client, dialog-focus -Tag name, recover-result -Tag k-after,
                 bookkeeping -Tag k
     m3-owner:   own-exec, own-undo-cut, own-resume-start, own-resume-result (dialog-focus between)
-    m3-extras:  npp-install, irrev, rm-exec, rm-retry, rm-after-reboot, sr -Tag off|disabled|created|throttled, extras-summary
+    m3-extras:  sr-enable, npp-install, irrev, rm-exec, rm-retry, rm-after-reboot, sr -Tag off|disabled|created|throttled, extras-summary
 #>
 param(
     [Parameter(Mandatory)]
-    [ValidateSet('build', 'install', 'uac-check', 'fixture', 'truth', 'pack', 'flush',
+    [ValidateSet('build', 'install', 'uac-silent', 'uac-check', 'sr-enable', 'fixture', 'truth', 'pack', 'flush',
                  'crash-arm', 'after-boot', 'ui-check', 'recover-start', 'dialog-focus', 'recover-result', 'bookkeeping',
                  'own-exec', 'own-undo-cut', 'own-resume-start', 'own-resume-result',
                  'npp-install', 'irrev', 'rm-exec', 'rm-retry', 'rm-after-reboot', 'sr', 'extras-summary')]
@@ -416,6 +416,32 @@ switch ($Phase) {
         Write-JsonFile $rec (Join-Path $Out 'install.json') 8
         "M3R INSTALL $(if ($ok) { 'OK' } else { 'FAIL' }) ui=$($rec.ui)"
     }
+    'uac-silent' {
+        # Coordinator ruling 2026-11-22: rig-base is at the Windows UAC defaults (5/1/1), so these modes make UAC silent
+        # themselves (ConsentPromptBehaviorAdmin=0, design 11.2; EnableLUA stays 1, PromptOnSecureDesktop is left) and
+        # record the values before and after; the summaries carry uac-silent.json as uac_silent.
+        $pk = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+        $get = { $p = Get-ItemProperty -LiteralPath $pk -ErrorAction SilentlyContinue; [ordered]@{ ConsentPromptBehaviorAdmin = $p.ConsentPromptBehaviorAdmin; PromptOnSecureDesktop = $p.PromptOnSecureDesktop; EnableLUA = $p.EnableLUA } }
+        $before = & $get
+        $err = $null
+        try { Set-ItemProperty -LiteralPath $pk -Name 'ConsentPromptBehaviorAdmin' -Value 0 -Type DWord -ErrorAction Stop } catch { $err = $_.Exception.Message }
+        $after = & $get
+        $ok = (-not $err -and "$($after.ConsentPromptBehaviorAdmin)" -eq '0' -and "$($after.EnableLUA)" -eq '1')
+        Write-JsonFile ([ordered]@{ t = (NowIso); set = [ordered]@{ ConsentPromptBehaviorAdmin = 0 }; before = $before; after = $after; error = $err; ok = $ok }) (Join-Path $Out 'uac-silent.json') 8
+        "M3R UAC-SILENT $(if ($ok) { 'OK' } else { 'FAIL' }) before=$($before.ConsentPromptBehaviorAdmin)/$($before.PromptOnSecureDesktop)/$($before.EnableLUA) after=$($after.ConsentPromptBehaviorAdmin)/$($after.PromptOnSecureDesktop)/$($after.EnableLUA) error=$err"
+    }
+    'sr-enable' {
+        # m3-extras: rig-base has System Restore off; the restore-point cases need it on C: (the 'disabled' case turns it
+        # off again on purpose). RPSessionInterval 1 = System Restore on (setup-m2.ps1 reads it the same way).
+        $srk = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore'
+        $before = (Get-ItemProperty -LiteralPath $srk -ErrorAction SilentlyContinue).RPSessionInterval
+        $err = $null
+        try { Enable-ComputerRestore -Drive 'C:\' -ErrorAction Stop } catch { $err = $_.Exception.Message }
+        $after = (Get-ItemProperty -LiteralPath $srk -ErrorAction SilentlyContinue).RPSessionInterval
+        $ok = ("$after" -eq '1')
+        Write-JsonFile ([ordered]@{ t = (NowIso); drive = 'C:\'; rp_session_interval_before = $before; rp_session_interval_after = $after; error = $err; ok = $ok }) (Join-Path $Out 'sr-enable.json') 6
+        "M3R SR-ENABLE $(if ($ok) { 'OK' } else { 'FAIL' }) before=$before after=$after error=$err"
+    }
     'uac-check' {
         $p = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -ErrorAction SilentlyContinue
         $cv = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
@@ -746,7 +772,7 @@ switch ($Phase) {
         $null = Save-Truth 'own' 'after'
         Write-JsonFile $rec (Join-Path $Out 'own-resume-result.json') 14
         $sum = [ordered]@{ schema = 'purge.rig.m3rec.owner/1'; t = (NowIso); install = (Read-Json (Join-Path $Out 'install.json')); fixture = (Read-Json (Join-Path $Out 'fixture-own.json'))
-                           exec = $ex; cut = $cut; resume = $rec; uac = (Read-Json (Join-Path $Out 'uac-check.json')) }
+                           exec = $ex; cut = $cut; resume = $rec; uac = (Read-Json (Join-Path $Out 'uac-check.json')); uac_silent = (Read-Json (Join-Path $Out 'uac-silent.json')) }
         Write-JsonFile $sum (Join-Path $Out 'm3-owner.json') 18
         "M3R OWN-RESULT sddl_after=$($rec.sddl_after) equal=$($rec.sddl_after -ceq $rec.sddl_recorded) pending_after=$(@($rec.pending_after.sessions).Count) audit=$(@($rec.audit).Count) privmon_thread_enabled=$($rec.privmon.thread_restore_enabled_samples)"
     }
@@ -890,6 +916,7 @@ switch ($Phase) {
     }
     'extras-summary' {
         $sum = [ordered]@{ schema = 'purge.rig.m3rec.extras/1'; t = (NowIso); install = (Read-Json (Join-Path $Out 'install.json')); uac = (Read-Json (Join-Path $Out 'uac-check.json'))
+                           uac_silent = (Read-Json (Join-Path $Out 'uac-silent.json')); sr_enable = (Read-Json (Join-Path $Out 'sr-enable.json'))
                            npp = (Read-Json (Join-Path $Out 'npp.json')); irrev = (Read-Json (Join-Path $Out 'irrev.json'))
                            rm = [ordered]@{ exec = (Read-Json (Join-Path $Out 'rm-exec.json')); retry = (Read-Json (Join-Path $Out 'rm-retry.json')); boot = (Read-Json (Join-Path $Out 'rm-after-reboot.json')) }
                            sr = [ordered]@{ off = (Read-Json (Join-Path $Out 'sr-off.json')); disabled = (Read-Json (Join-Path $Out 'sr-disabled.json'))

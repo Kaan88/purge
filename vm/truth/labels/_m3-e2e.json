@@ -1,0 +1,46 @@
+{
+  "id": "_m3-e2e",
+  "note": "m3-e2e (vm/RIG.md section 17): added to every app's labels by vm/truth/m3-e2e-score.ps1 -Collect. Purge itself is installed and running in the e2e runs (installed before snap 0, used between snap 1 and snap 2), so its own data root, install, settings, event source and traces are ambient for the app under test, never the app's leftover. Hand-written.",
+  "rules": [
+    {
+      "label": "ambient",
+      "match": "^P:C:\\\\ProgramData\\\\Purge(\\\\.*)?$",
+      "why": "Purge's data root (sessions, quarantine, fingerprints, baseline cache)."
+    },
+    {
+      "label": "ambient",
+      "match": "^P:C:\\\\Program Files\\\\Purge(\\\\.*)?$",
+      "why": "Purge's install (UI, engine, broker, kb)."
+    },
+    {
+      "label": "ambient",
+      "match": "^P:C:\\\\Users\\\\[^\\\\]+\\\\AppData\\\\Local\\\\Purge(\\\\.*)?$",
+      "why": "The UI's settings, inventory list and icon atlas."
+    },
+    {
+      "label": "ambient",
+      "match": "^P:C:\\\\Windows\\\\Prefetch\\\\(PURGE|PURGE-BROKER|PURGE-ENGINE|M3SEC)\\.EXE-[0-9A-F]{8}\\.pf$",
+      "why": "Prefetch traces of Purge's programs and the rig's m3sec.exe."
+    },
+    {
+      "label": "ambient",
+      "match": "^[KVC]:HKLM\\\\SYSTEM\\\\(CurrentControlSet|ControlSet\\d{3})\\\\Services\\\\EventLog\\\\Application\\\\Purge(\\\\[^|]*)?(\\|.*)?$",
+      "why": "Purge's event source."
+    },
+    {
+      "label": "ambient",
+      "match": "^P:C:\\\\ProgramData\\\\Microsoft\\\\Windows\\\\Start Menu\\\\Programs\\\\Purge(\\.lnk|\\\\.*)?$",
+      "why": "Purge's Start menu entry."
+    },
+    {
+      "label": "ambient",
+      "match": "^[KVC]:HKU\\\\[^\\\\]+\\\\Software\\\\Microsoft\\\\RestartManager(\\\\[^|]*)?(\\|.*)?$",
+      "why": "Restart Manager sessions of the broker's lock queries (RIG.md 11.8 engine-rm)."
+    },
+    {
+      "label": "rig",
+      "match": "^P:C:\\\\cr(\\\\.*)?$",
+      "why": "The rig's own tree."
+    }
+  ]
+}
