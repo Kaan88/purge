@@ -89,6 +89,63 @@ public sealed class LeftoversBrokerTests
         Assert.Contains("\"session\":\"sess-1\"", requests.Single(r => r.Contains("\"journal.retry_held\"", StringComparison.Ordinal)));
     }
 
+    /// <summary>
+    /// The broker's optional <c>timings</c> member (design 9.1, gate G12) is read when present, a mark name or member
+    /// the client does not know changes nothing, and a result without it reads as before (null).
+    /// </summary>
+    [Fact]
+    public async Task TheTimingsMemberIsReadWhenPresentAndIgnoredWhenAbsent()
+    {
+        const string timings = ",\"timings\":{\"process_created_unix_ms\":1795000000000,\"later\":1,\"marks\":[" +
+                               "{\"mark\":\"pipe_connected\",\"ms\":180,\"wall_unix_ms\":1795000000180}," +
+                               "{\"mark\":\"scan_start\",\"ms\":9020,\"wall_unix_ms\":1795000009020}," +
+                               "{\"mark\":\"a_mark_of_a_later_broker\",\"ms\":9030,\"wall_unix_ms\":1795000009030}," +
+                               "{\"mark\":\"scan_complete\",\"ms\":12310,\"wall_unix_ms\":1795000012310}]}";
+        await using var peer = await Peer.StartAsync((line, p) =>
+        {
+            var (id, method) = Peer.RequestOf(line);
+            var withTimings = line.Contains("\"forced\":true", StringComparison.Ordinal);
+            switch (method)
+            {
+                case "leftovers.scan":
+                    p.Send($"{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":{{\"scan_id\":\"scan-1\",\"mode\":\"forced\"," +
+                           "\"counts\":{\"safe\":1,\"likely\":0,\"weak\":0,\"blocked\":0,\"preselected\":1}," +
+                           "\"baseline_trust\":\"Exact\",\"warnings\":[]" + (withTimings ? timings : "") + "}}");
+                    break;
+                case "plan.execute":
+                    p.Send($"{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":{{\"outcome\":\"complete\",\"session\":\"sess-1\"," +
+                           "\"counts\":{\"done\":1,\"vanished\":0},\"held\":[]," +
+                           "\"restore_point\":{\"kind\":\"Created\",\"sequence\":7}" + timings + "}}");
+                    break;
+            }
+        });
+        await using var rpc = BrokerRpcClient.Over(peer.Client, ownsStream: true);
+        var broker = new LeftoversBroker(rpc);
+
+        var timed = await broker.ScanSessionAsync("us-1", forced: true, progress: null, CancellationToken.None);
+        Assert.Equal("scan-1", timed.ScanId);
+        Assert.NotNull(timed.Timings);
+        Assert.Equal(1795000000000UL, timed.Timings!.ProcessCreatedUnixMs);
+        Assert.Equal(["pipe_connected", "scan_start", "a_mark_of_a_later_broker", "scan_complete"],
+            timed.Timings.Marks.Select(m => m.Mark));
+        Assert.Equal(12310UL - 9020UL, timed.Timings.Marks[3].Ms - timed.Timings.Marks[1].Ms);
+
+        var plain = await broker.ScanSessionAsync("us-1", forced: false, progress: null, CancellationToken.None);
+        Assert.Equal("scan-1", plain.ScanId);
+        Assert.Equal(ScanMode.Forced, plain.Mode);
+        Assert.Null(plain.Timings);
+
+        var result = await broker.ExecuteAsync("p-1", RestorePoint.Off, null, CancellationToken.None);
+        Assert.Equal(Outcome.Complete, result.Outcome);
+        Assert.Equal(4, result.Timings!.Marks.Count);
+
+        // Read and written back, an absent member stays absent.
+        var (_, scanResult) = RpcFixtures.All.Single(f => f.Stem == "pipe.leftovers.scan.result");
+        var written = scanResult("{\"scan_id\":\"scan-1\",\"mode\":\"forced\",\"counts\":{\"safe\":1,\"likely\":0," +
+                                 "\"weak\":0,\"blocked\":0,\"preselected\":1},\"baseline_trust\":\"Exact\",\"warnings\":[]}");
+        Assert.DoesNotContain("timings", written, StringComparison.Ordinal);
+    }
+
     private sealed class Peer : IAsyncDisposable
     {
         private readonly NamedPipeServerStream _server;

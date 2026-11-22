@@ -13,6 +13,7 @@
 //! | [`sets`] | [`sets::CapSet`], [`sets::Transport`] and its fixed [`sets::SetMask`], the line limits |
 //! | [`error`] | [`error::Outcome`], [`error::ErrorData`] (`error.data.kind`), [`error::ErrorObject`] |
 //! | [`methods`] | broker ids, params, results, notifications, [`methods::StdioCall`], [`methods::PipeCall`], [`methods::dtos`] |
+//! | [`timing`] | the broker's timing marks: the optional `timings` member of four results, and its event-log line (gate G12) |
 //!
 //! Present before M3: the result of `engine.hello` ([`EngineHello`]), because the baseline view reports
 //! through it (BASELINE_LOCAL_DESIGN.md, package BL-CACHE). Agent `Propose` methods come in M6.
@@ -22,6 +23,7 @@ pub mod frame;
 pub mod methods;
 pub mod sets;
 pub mod table;
+pub mod timing;
 
 use purge_model::{BaselineTrust, BaselineViewRef};
 use schemars::JsonSchema;
@@ -181,9 +183,26 @@ mod api_tests {
     use crate::table::{
         CallSet, Dispatcher, METHODS, Method, Notify, Routed, route, serve, write_response,
     };
+    use crate::timing::{TIMING_LINE_KIND, TimingLine, TimingMark, TimingName, Timings};
 
     fn v<T: Serialize>(value: T) -> Value {
         serde_json::to_value(value).unwrap()
+    }
+
+    /// A `timings` member: the process was created at a fixed wall time, each mark `ms` after it.
+    fn timings(marks: &[(TimingName, u64)]) -> Timings {
+        const CREATED: u64 = 1_795_000_000_000;
+        Timings {
+            process_created_unix_ms: Some(CREATED),
+            marks: marks
+                .iter()
+                .map(|&(mark, ms)| TimingMark {
+                    mark,
+                    ms,
+                    wall_unix_ms: CREATED + ms,
+                })
+                .collect(),
+        }
     }
 
     fn ne<T>(items: Vec<T>) -> NonEmpty<T> {
@@ -631,6 +650,7 @@ mod api_tests {
                         },
                         warnings: vec![warning()],
                     }],
+                    timings: None,
                 }),
             );
             put(
@@ -667,6 +687,13 @@ mod api_tests {
                     },
                     baseline_trust: BaselineTrust::Exact,
                     warnings: vec![],
+                    timings: Some(timings(&[
+                        (TimingName::BrokerStart, 41),
+                        (TimingName::PipeConnected, 180),
+                        (TimingName::ScanStart, 9_020),
+                        (TimingName::FirstProgress, 9_034),
+                        (TimingName::ScanComplete, 12_310),
+                    ])),
                 }),
             );
             put(
@@ -716,6 +743,7 @@ mod api_tests {
                         reasons: vec![AttentionReason::UserData, AttentionReason::NotPreselected],
                     }],
                     warnings: vec![],
+                    timings: None,
                 }),
             );
             put(
@@ -738,6 +766,14 @@ mod api_tests {
                         }],
                     }],
                     restore_point: RestorePointOutcome::Created { sequence: 42 },
+                    timings: Some(timings(&[
+                        (TimingName::BrokerStart, 41),
+                        (TimingName::PipeConnected, 180),
+                        (TimingName::ConsentShown, 14_002),
+                        (TimingName::ConsentAnswered, 16_480),
+                        (TimingName::ExecuteStart, 16_481),
+                        (TimingName::ExecuteComplete, 19_900),
+                    ])),
                 }),
             );
             put(
@@ -1723,5 +1759,45 @@ mod api_tests {
         assert_eq!(method, "scan.progress");
         assert_eq!(ServerNotification::decode(&method, params).unwrap(), note);
         assert!(ServerNotification::decode("plan.execute", json!({})).is_err());
+    }
+
+    #[test]
+    fn timings_are_optional_both_ways_and_a_line_is_flat() {
+        // A result without the member reads as `None` and is written without it.
+        let mut scan = samples()["pipe.leftovers.scan.result"].clone();
+        scan.as_object_mut().unwrap().remove("timings");
+        let read: ScanResult = serde_json::from_value(scan.clone()).unwrap();
+        assert_eq!(read.timings, None);
+        assert_eq!(v(&read), scan);
+        // A newer member inside `timings` is ignored like any unknown result member.
+        let mut with = samples()["pipe.leftovers.scan.result"].clone();
+        with["timings"]["later"] = json!(1);
+        let read: ScanResult = serde_json::from_value(with).unwrap();
+        assert_eq!(read.timings.unwrap().marks.len(), 5);
+
+        let line = TimingLine {
+            kind: TIMING_LINE_KIND.into(),
+            pid: 4242,
+            process_created_unix_ms: Some(1_000),
+            request: Some(RequestId(3)),
+            method: Some("leftovers.scan".into()),
+            mark: TimingMark {
+                mark: TimingName::FirstProgress,
+                ms: 12,
+                wall_unix_ms: 1_012,
+            },
+        };
+        let text = serde_json::to_value(&line).unwrap();
+        assert_eq!(
+            text,
+            json!({
+                "kind": "purge.broker.timing/1", "pid": 4242, "process_created_unix_ms": 1_000,
+                "request": 3, "method": "leftovers.scan", "mark": "first_progress", "ms": 12,
+                "wall_unix_ms": 1_012
+            })
+        );
+        assert_eq!(serde_json::from_value::<TimingLine>(text).unwrap(), line);
+        assert!(TimingName::PipeConnected.is_process_mark());
+        assert!(!TimingName::ScanStart.is_process_mark());
     }
 }

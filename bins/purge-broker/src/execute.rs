@@ -64,6 +64,7 @@ use purge_rpc::methods::{
     CandidateRef, ExecResult, HeldItem, PlanExecuteParams, Progress, RestorePoint,
     ServerNotification,
 };
+use purge_rpc::timing::TimingName;
 use purge_win::taskdialog::Outcome as Answer;
 use serde_json::Value;
 
@@ -258,9 +259,14 @@ fn execute_plan<H: FlowHandler>(
         },
         fingerprint: Arc::clone(&plan.fingerprint),
     };
+    ctx.mark(TimingName::ExecuteStart);
     let output = backend.execute(job, &progress).map_err(failure_error)?;
+    ctx.mark(TimingName::ExecuteComplete);
     ran.set(true);
-    let result = result_of(&output, plan.bound());
+    let result = ExecResult {
+        timings: ctx.timings(),
+        ..result_of(&output, plan.bound())
+    };
     serde_json::to_value(result).map_err(|e| ErrorObject::runtime(e.to_string()))
 }
 
@@ -312,6 +318,7 @@ fn result_of(output: &ExecOutput, plan: &BoundPlan) -> ExecResult {
         counts: report.counts,
         held,
         restore_point: report.restore_point.clone(),
+        timings: None,
     }
 }
 

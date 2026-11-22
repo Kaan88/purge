@@ -782,6 +782,13 @@ public sealed class ExecResult
     [JsonPropertyName("session")]
     public string Session { get; set; } = "";
 
+    /// <summary>
+    /// The broker's timing marks (M3_DESIGN.md §9.1): for measurement only; a client ignores it.
+    /// </summary>
+    [JsonPropertyName("timings")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Timings? Timings { get; set; }
+
 }
 
 /// <summary>
@@ -1321,6 +1328,13 @@ public sealed class PlanCreated
     [JsonPropertyName("plan_id")]
     public string PlanId { get; set; } = "";
 
+    /// <summary>
+    /// The broker's timing marks (M3_DESIGN.md §9.1): for measurement only; a client ignores it.
+    /// </summary>
+    [JsonPropertyName("timings")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Timings? Timings { get; set; }
+
     [JsonPropertyName("warnings")]
     public System.Collections.Generic.List<Warning> Warnings { get; set; } = new();
 
@@ -1381,6 +1395,13 @@ public sealed class PrepareResult
 {
     [JsonPropertyName("programs")]
     public System.Collections.Generic.List<Prepared> Programs { get; set; } = new();
+
+    /// <summary>
+    /// The broker's timing marks (M3_DESIGN.md §9.1): for measurement only; a client ignores it.
+    /// </summary>
+    [JsonPropertyName("timings")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Timings? Timings { get; set; }
 
 }
 
@@ -1803,6 +1824,13 @@ public sealed class ScanResult
     [JsonPropertyName("scan_id")]
     public string ScanId { get; set; } = "";
 
+    /// <summary>
+    /// The broker's timing marks (M3_DESIGN.md §9.1): for measurement only; a client ignores it.
+    /// </summary>
+    [JsonPropertyName("timings")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Timings? Timings { get; set; }
+
     [JsonPropertyName("warnings")]
     public System.Collections.Generic.List<Warning> Warnings { get; set; } = new();
 
@@ -1949,6 +1977,52 @@ public sealed class StoredResult
 {
     [JsonPropertyName("stored")]
     public System.Collections.Generic.List<string> Stored { get; set; } = new();
+
+}
+
+/// <summary>
+/// One timing mark of the broker (M3_DESIGN.md §9.1).
+/// </summary>
+public sealed class TimingMark
+{
+    /// <summary>
+    /// The step (`broker_start`, `harvest_complete`, ...). A string, not an enum: a mark a later broker adds
+    /// must not make the result unreadable.
+    /// </summary>
+    [JsonPropertyName("mark")]
+    public string Mark { get; set; } = "";
+
+    /// <summary>
+    /// Milliseconds since the broker process was created, on a monotonic clock.
+    /// </summary>
+    [JsonPropertyName("ms")]
+    public ulong Ms { get; set; }
+
+    /// <summary>
+    /// The wall clock at the mark, milliseconds since the Unix epoch (UTC).
+    /// </summary>
+    [JsonPropertyName("wall_unix_ms")]
+    public ulong WallUnixMs { get; set; }
+
+}
+
+/// <summary>
+/// The `timings` member of a broker result: for measurement only (M3_DESIGN.md §9.1); a client ignores it.
+/// </summary>
+public sealed class Timings
+{
+    /// <summary>
+    /// The process marks, then the marks of this request, in the order they were taken.
+    /// </summary>
+    [JsonPropertyName("marks")]
+    public System.Collections.Generic.List<TimingMark> Marks { get; set; } = new();
+
+    /// <summary>
+    /// When the broker process was created, milliseconds since the Unix epoch; absent when unknown.
+    /// </summary>
+    [JsonPropertyName("process_created_unix_ms")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ulong? ProcessCreatedUnixMs { get; set; }
 
 }
 

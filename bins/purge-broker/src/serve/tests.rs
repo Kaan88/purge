@@ -853,6 +853,7 @@ fn a_full_event_channel_does_not_block_the_pipe_broken_signal() {
         stop: AtomicBool::new(false),
         broken: AtomicBool::new(false),
         events,
+        timings: Arc::new(crate::timing::Timings::default()),
     });
 
     let worker = shared.clone();

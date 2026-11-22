@@ -28,6 +28,7 @@ use purge_rpc::methods::{
     BandCounts, CandidateRef, CandidateRow, CandidatesPage, CandidatesParams, ExplainParams,
     Explanation, ItemKind, LeftoversScanParams, ScanResult, UninstallSessionId, Warning,
 };
+use purge_rpc::timing::TimingName;
 use serde_json::Value;
 
 use crate::serve::Ctx;
@@ -159,6 +160,7 @@ pub(crate) fn handle<H: FlowHandler>(
     ctx: &Ctx<'_, H>,
     params: LeftoversScanParams,
 ) -> Result<Value, ErrorObject> {
+    ctx.mark(TimingName::ScanStart);
     let machine = flow.machine();
     let (fingerprint, mode, session) = match params {
         LeftoversScanParams::Session(params) => {
@@ -233,12 +235,14 @@ pub(crate) fn handle<H: FlowHandler>(
         spent: std::sync::atomic::AtomicBool::new(false),
     };
     let scan_id = ctx.add_scan(scan)?;
+    ctx.mark(TimingName::ScanComplete);
     serde_json::to_value(ScanResult {
         scan_id,
         mode,
         counts,
         baseline_trust,
         warnings,
+        timings: ctx.timings(),
     })
     .map_err(|e| ErrorObject::runtime(e.to_string()))
 }
