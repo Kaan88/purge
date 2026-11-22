@@ -123,7 +123,7 @@ The result files are committed under `bench/launch/` and summarised here.
 | Warm, Purge | TBD | TBD | TBD | TBD | TBD |
 | Warm, bare control | TBD | TBD | TBD | TBD | TBD |
 | First launch after install | TBD | TBD | TBD | n/a | TBD |
-| Cold after reboot (N = 5) | TBD | TBD | TBD | n/a | TBD |
+| Cold after reboot (N = 5) | 2026-11-22 | `bench/launch/cold-DESKTOP-K1F333G.json` (laptop, fe444fd publish) | 559.7 ms | n/a | PASS (limit 1000 ms; runs 544-584 ms, CPU 96-98 % idle) |
 | XAML changes, one at a time | TBD | TBD | TBD | TBD | TBD |
 
 ## Result locations

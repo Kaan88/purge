@@ -4,7 +4,12 @@ Branch `baseline`, pushed to `origin/baseline` (8c7142f). Design `docs/BASELINE_
 decision of this work is a row in `docs/DECISIONS.md` (Post-M1b). This file is kept current so the work can be
 continued from any harness: read it, then `git log --oneline -15` and `git worktree list`.
 
-## COLD BENCH SERIES RUNNING (started 2026-11-22 ~03:40, unattended; user asleep). Read this first.
+## COLD BENCH DONE 2026-11-22 04:00: PASS, p50 559.7 ms (limit 1000), 5 runs 544-584 ms, CPU 96-98 % idle.
+Committed `bench/launch/cold-DESKTOP-K1F333G.json`, row filled in docs/M3_BENCH.md. Attempt 1 measured nothing
+(script splat bug, `@args`; log kept as `C:\purge-build\cold\cold-attempt1-failed.log`); attempt 2 is the series.
+Next: the M3-R2 cleanup ("Still open from M3-R2" below). Warm and first-launch rows of M3_BENCH are still TBD.
+
+## (older) COLD BENCH SERIES RUNNING (started 2026-11-22 ~03:40, unattended; user asleep).
 - The user's desktop-PC trial PASSED: the fe444fd installer installs, finds leftovers and deletes them.
 - The user said "push as you go" (pushing no longer needs asking).
 - Cold-after-reboot bench (M3_BENCH 9.2(e)) runs by itself: Startup-folder entry `purge-cold-bench.cmd` runs

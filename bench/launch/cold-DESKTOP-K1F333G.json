@@ -1,0 +1,122 @@
+[
+  {
+    "at": "2026-11-22T03:47:07",
+    "markers": {
+      "engine_ready": 87.7,
+      "first_row": 429.9,
+      "first_tick": 471.6,
+      "list_reply": 121.2,
+      "main": 87.4,
+      "module_init": 84.7,
+      "on_launched": 126.1,
+      "presented": 544.3,
+      "programs_ctor": 352.5,
+      "programs_enter": 345.5,
+      "programs_xaml": 351.9,
+      "rows_set": 368.1,
+      "w_backdrop": 163.3,
+      "w_icon": 339.4,
+      "w_size": 343.0,
+      "w_titlebar": 338.1,
+      "window_ctor": 160.3
+    },
+    "presented": 544.3,
+    "uptime_s": 121.0
+  },
+  {
+    "at": "2026-11-22T03:50:04",
+    "markers": {
+      "engine_ready": 83.0,
+      "first_row": 468.7,
+      "first_tick": 509.2,
+      "list_reply": 141.8,
+      "main": 82.7,
+      "module_init": 79.8,
+      "on_launched": 142.0,
+      "presented": 559.7,
+      "programs_ctor": 386.8,
+      "programs_enter": 379.9,
+      "programs_xaml": 386.3,
+      "rows_set": 402.8,
+      "w_backdrop": 179.3,
+      "w_icon": 374.1,
+      "w_size": 377.5,
+      "w_titlebar": 372.8,
+      "window_ctor": 176.2
+    },
+    "presented": 559.7,
+    "uptime_s": 121.0
+  },
+  {
+    "at": "2026-11-22T03:53:01",
+    "markers": {
+      "engine_ready": 96.6,
+      "first_row": 462.0,
+      "first_tick": 501.6,
+      "list_reply": 136.4,
+      "main": 96.4,
+      "module_init": 93.6,
+      "on_launched": 131.9,
+      "presented": 556.0,
+      "programs_ctor": 378.2,
+      "programs_enter": 370.8,
+      "programs_xaml": 377.6,
+      "rows_set": 393.7,
+      "w_backdrop": 169.9,
+      "w_icon": 364.1,
+      "w_size": 368.6,
+      "w_titlebar": 362.7,
+      "window_ctor": 166.8
+    },
+    "presented": 556.0,
+    "uptime_s": 121.0
+  },
+  {
+    "at": "2026-11-22T03:55:58",
+    "markers": {
+      "engine_ready": 83.4,
+      "first_row": 471.2,
+      "first_tick": 513.6,
+      "list_reply": 139.8,
+      "main": 83.1,
+      "module_init": 80.3,
+      "on_launched": 141.6,
+      "presented": 571.5,
+      "programs_ctor": 386.4,
+      "programs_enter": 378.6,
+      "programs_xaml": 385.9,
+      "rows_set": 402.5,
+      "w_backdrop": 179.6,
+      "w_icon": 371.9,
+      "w_size": 375.7,
+      "w_titlebar": 370.4,
+      "window_ctor": 176.6
+    },
+    "presented": 571.5,
+    "uptime_s": 121.0
+  },
+  {
+    "at": "2026-11-22T03:58:55",
+    "markers": {
+      "engine_ready": 84.9,
+      "first_row": 471.1,
+      "first_tick": 513.5,
+      "list_reply": 110.9,
+      "main": 84.6,
+      "module_init": 81.7,
+      "on_launched": 121.0,
+      "presented": 583.6,
+      "programs_ctor": 392.1,
+      "programs_enter": 385.2,
+      "programs_xaml": 391.5,
+      "rows_set": 408.2,
+      "w_backdrop": 161.3,
+      "w_icon": 378.1,
+      "w_size": 382.5,
+      "w_titlebar": 376.6,
+      "window_ctor": 157.7
+    },
+    "presented": 583.6,
+    "uptime_s": 121.0
+  }
+]
