@@ -45,6 +45,10 @@ progress is not interrupted). No cargo feature anywhere.
    parent, clock, build) and a thread per other request. One mutating request (set `Execute`) at a time, else `busy`;
    at most 8 non-mutating at once, else `busy`; a request id that is running is `-32600`. A job's end is
    queued *before* its answer is written, so a client that sends its next request at once is never `busy`.
+   Across brokers (review R3, DECISIONS 2026-11-22): purge-exec's writing operations hold the store's writer lock
+   (`sessions\writer.lock`, share mode 0, admin-only, released by the OS with the process); a second writer waits
+   2 s and is `StorageError::WriterBusy`, answered `busy`. `Backend::writer_busy` is asked before the
+   `plan.execute`, `undo.run` and recovery dialogs, so another broker's live run is `busy`, not `needs_recovery`.
 6. **Ending**: completed change = `plan.execute`, `undo.run`, `journal.resume|rollback|retry_held`,
    `quarantine.purge` returning `Ok` with no session left in the tables: result, wait up to 5 s for the client to
    close, exit. The handler removes a session when its change is done (`tables.sessions.remove`). Idle is 10 minutes

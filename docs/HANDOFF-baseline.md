@@ -4,6 +4,25 @@ Branch `baseline`, pushed to `origin/baseline` (8c7142f). Design `docs/BASELINE_
 decision of this work is a row in `docs/DECISIONS.md` (Post-M1b). This file is kept current so the work can be
 continued from any harness: read it, then `git log --oneline -15` and `git worktree list`.
 
+## R3 SINGLE WRITER + UI FOLLOW-UPS 2026-11-22 (branch `r3-single-writer` from baseline a0f208b; pushed, NOT merged: Fable review first).
+- Verdict: two brokers (Leftovers' and History's/Vault's) could write one store at once with no guard. The index's
+  read-modify-write lost entries and failed its read-back (measured: 6 unlocked writers x 4 updates, 18 sharing
+  violations on `index.json.tmp`, 3 of 6 sessions gone from the index), so a finished cleanup could vanish from
+  History or read as `Unindexed` and block every execute; one broker's recovery could `remove_unstarted` another's
+  just-created session or write its report/index entry concurrently; two cap checks could both pass. A session's
+  journal was already single-writer (append handle shares read only): no interleaved journal, no double restore.
+- Fix (purge-exec, 3f9252d): `StorageRoots::lock_writer` = `sessions\writer.lock`, share mode 0, admin-only store
+  file, OS-released on process death; taken by execute, undo, recovery, retry_held and purge for their whole run;
+  2 s wait, then `StorageError::WriterBusy`. Broker (9468b56): `busy` for it, `writer_busy` probe before the execute,
+  undo and recovery dialogs; fingerprint temp names per process. DECISIONS: two "(coordinator)" rows (R3).
+- UI (eeb6806): models stay on the UI thread; Quarantine vault on `history.index` + `undo.run` +
+  `quarantine.expiring/purge` (no sample data, no Empty quarantine); History "Check for interrupted cleanups"
+  (`journal.pending` on the click, or after a `needs_recovery` refusal). Notes: `m3-notes/ui-history.md` (R3
+  section), `broker-core.md` point 5, M3_DESIGN 3.6, install/README layout.
+- Checks (unelevated, TEMP=C:\purge-build\tmp): fmt --check, clippy --workspace --all-targets -D warnings, rig clippy (rig-exec + test-support), check-deps, gen-dto --check (no RPC change), no-new-walks: ok. purge-exec (fault-inject + test-support) lib 481 (8 ignored) + every integration target incl. crash 16 and single_writer 2; purge-broker 223 + 10 + 1; purge-engine rig lib 73, exec_cli 43, engine 14. `dotnet build ui\Purge.App -c Release` 0 warnings; Purge.Client.Tests 130/130 (History 17, Vault 10, UiThread 3).
+- Open: one broker per app (ui-history.md); a fair queue instead of `busy` if users hit it; the VM rows in
+  ui-history.md. Next: Fable review of the three commits, then merge into `baseline`.
+
 ## M3-R2 CLEANUP DONE 2026-11-22 (40e82ba code, 1f969c4 docs; pushed).
 - `docs/reviews/m3/r2-review.md` has its "Fixes" section: every B/M/S finding, flagged point and note mapped to its
   fix commit and tests (test names checked against the tree).

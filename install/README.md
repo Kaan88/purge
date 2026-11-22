@@ -87,6 +87,7 @@ panic-location marker (`purge-exec\src` or `purge-exec/src`): such an engine was
 %ProgramData%\Purge\             DataRoot
     sessions\                    Sessions       one directory per session (created by purge-exec)
         index.json               Index          created as the 2-byte document {} (UTF-8, no BOM)
+        writer.lock              (store file)   created by purge-exec on first use; the single-writer lock, held open
     Quarantine\                  Store          same-volume quarantine (purge-exec creates <session>\<op>)
     fp\                          Store          fingerprints
     kb\                          Store          writable knowledge (learned packs; empty in M2)
@@ -314,6 +315,9 @@ HKLM, which is exactly what cannot be verified by compiling it.
   SYSTEM and Administrators ACEs).
 - `index.json` starts as `{}`: the session-index reader must accept an empty object (all fields
   defaulted).
+- `sessions\writer.lock` is created by purge-exec, not by the setup, with the admin-only store file
+  descriptor. Every writing operation holds it open with no sharing; the setup and uninstall need not
+  know it (a leftover file locks nothing).
 
 ## Tests
 
