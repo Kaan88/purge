@@ -251,6 +251,13 @@ public static partial class BrokerLauncher
         return GetExitCodeProcess(process.DangerousGetHandle(), out exitCode) && (uint)exitCode != StillActive;
     }
 
+    /// <summary>
+    /// Best effort only. The handle <c>ShellExecuteExW</c> returns for an elevated process does not let a
+    /// medium caller terminate it, so for a real broker this call is refused and ignored; the broker then
+    /// ends by itself: when this process exits (parent lost), or after ten minutes without an accepted
+    /// client (idle). Nothing runs meanwhile: it acts only on requests from a client that passed its
+    /// check and sent <c>engine.hello</c> (review M3-R2 N2).
+    /// </summary>
     private static void Terminate(SafeProcessHandle process)
     {
         if (!TryExitCode(process, out _)) _ = TerminateProcess(process.DangerousGetHandle(), 1);

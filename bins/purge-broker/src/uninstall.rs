@@ -255,10 +255,9 @@ impl Machine for LiveMachine {
         let temp = path.with_extension("json.tmp");
         std::fs::write(&temp, &bytes)
             .map_err(|e| ErrorObject::runtime(format!("cannot write {}: {e}", temp.display())))?;
-        // A rename over an existing file fails on Windows; the fingerprint is only ever read whole, so
-        // removing the old one first is safe (a crash between the two loses it, and the next harvest
-        // writes it again).
-        let _ = std::fs::remove_file(&path);
+        // `std::fs::rename` replaces an existing file on Windows (`MOVEFILE_REPLACE_EXISTING`), so the
+        // old fingerprint stays until the new one takes its place; no removal first, which would open
+        // a window in which a crash loses it (review M3-R2 N1).
         std::fs::rename(&temp, &path)
             .map_err(|e| ErrorObject::runtime(format!("cannot replace {}: {e}", path.display())))
     }

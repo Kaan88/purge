@@ -3517,6 +3517,46 @@ fn the_ops_a_run_goes_through_beyond_the_preview_change_nothing() {
     assert!(exists(&real));
 }
 
+/// M3-R2 point 2: a recovery with nothing to change on the machine runs without a dialog, so it must
+/// be bound to the journal its preview read. An `Unindexed` session (its run ended, its report was
+/// never written) whose journal changed after the preview is refused before anything is written.
+#[test]
+fn an_unindexed_recovery_whose_journal_changed_after_the_preview_is_not_as_shown() {
+    use crate::recover::{self, PendingKind, Want};
+    let mut rig = Rig::new("m3undo-unindexed");
+    let (id, [a, _b, other, app]) = directory_session(&mut rig);
+    let read = rig.journal(&id);
+    std::fs::remove_file(rig.session(&id).path().join(REPORT_FILE)).unwrap();
+    let preview = recover::preview(&rig.roots, &id, Want::Resume).unwrap();
+    assert_eq!(preview.kind, Some(PendingKind::Unindexed));
+    assert!(
+        preview.ops.is_empty(),
+        "only Purge's own records are missing"
+    );
+    assert_eq!(preview.mark, read.state.mark());
+
+    // The journal moved on after the preview.
+    {
+        let session = rig.session(&id);
+        let mut journal = JournalWriter::open_append(&session).unwrap();
+        journal
+            .undo_plan(crate::storage::now(), vec![op_of(&read, "c-other")])
+            .unwrap();
+    }
+    let changed = rig.journal(&id).state.mark();
+    assert_ne!(changed, preview.mark);
+    for run in [recover::resume_expecting, recover::rollback_expecting] {
+        let err = run(&id, rig.recover_env(), &preview.mark).unwrap_err();
+        assert!(matches!(err, recover::RecoverError::NotAsShown), "{err}");
+    }
+    assert!(!exists(&a) && !exists(&other) && !exists(&app));
+    assert_eq!(
+        rig.journal(&id).state.mark(),
+        changed,
+        "nothing was written"
+    );
+}
+
 /// A session of three files whose run stopped after the first intent.
 fn crashed_session(rig: &mut Rig) -> (SessionId, [String; 3]) {
     let files = [1, 2, 3].map(|n| rig.s.file(&format!(r"app\f{n}.txt"), b"data"));

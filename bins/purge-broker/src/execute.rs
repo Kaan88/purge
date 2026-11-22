@@ -99,7 +99,11 @@ pub trait ExecBackend: Send + Sync + 'static {
     ///
     /// # Errors
     ///
-    /// The run did not start and nothing outside Purge's store was changed.
+    /// The run did not start and nothing outside Purge's store was changed. `Err` does not mean that no
+    /// executor session exists: `purge_exec`'s `Run::start_bound` can fail after `create_session` and
+    /// then removes the session only when that is safe, so a session directory may stay in the store
+    /// for `check_nothing_pending` and recovery to judge. The handler gives the scan's claim back on
+    /// `Err` because nothing on the machine changed (review M3-R2 N8).
     fn execute(
         &self,
         job: ExecJob,
