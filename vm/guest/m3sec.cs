@@ -34,7 +34,13 @@ using System.Windows.Automation;
 using Microsoft.Win32;
 using Microsoft.Win32.SafeHandles;
 
-static class M3Sec {
+// partial: vm\guest\m3rec.cs (modes m3-owner, m3-recover, m3-extras of vm\rig-m3-recover.ps1) adds roles and client
+// steps through ExtMain and ExtStep when it is compiled with this file; built alone, both hooks are empty.
+static partial class M3Sec {
+    static partial void ExtMain(string[] a, ref int code);
+    static partial void ExtStep(RpcLink link, Dictionary<string, object> st, Dictionary<string, object> r, uint brokerPid,
+                                Dictionary<string, object> spec, ref string session, ref string scan, List<string> candidates, ref bool handled);
+
     // ------------------------------------------------------------------------------------------ Win32
     const int WM_USER = 0x400, WM_COMMAND = 0x111, WM_CLOSE = 0x10, BM_CLICK = 0xF5, BM_GETCHECK = 0xF0;
     const int TDM_CLICK_BUTTON = WM_USER + 102, TDM_CLICK_VERIFICATION = WM_USER + 113;
@@ -122,7 +128,9 @@ static class M3Sec {
                 case "inputdesk": return InputDesk(a[1]);
                 case "fixture-uninstall": return FixtureUninstall(a);
             }
-            return 2;
+            int code = 2;
+            ExtMain(a, ref code);
+            return code;
         } catch (Exception e) {
             try {
                 string dir = a.Length > 1 ? (Directory.Exists(a[a.Length - 1]) ? a[a.Length - 1] : Path.GetDirectoryName(Path.GetFullPath(a[a.Length - 1]))) : ".";
@@ -900,7 +908,12 @@ static class M3Sec {
                         return p;
                     });
                     break;
-                default: r["error"] = "unknown op"; break;
+                default: {
+                    bool handled = false;
+                    ExtStep(link, st, r, brokerPid, spec, ref session, ref scan, candidates, ref handled);
+                    if (!handled) r["error"] = "unknown op";
+                    break;
+                }
             }
         }
         ClientNote("progress.json", srec);
@@ -1112,7 +1125,7 @@ static class M3Sec {
 
     // The fixture program's uninstaller: removes its ARP entry and its main exe (so verify-gone passes) and leaves
     // everything else as leftovers; writes C:\cr\out\m3-sec\fixture-uninstalled.json as the proof that it ran.
-    // m3-e2e (vm\RIG.md section 16) names another ARP key: "fixture-uninstall <Key>" (letters and digits only, HKLM
+    // m3-e2e (vm\RIG.md section 17) names another ARP key: "fixture-uninstall <Key>" (letters and digits only, HKLM
     // 64-bit Uninstall\<Key>); its proof is then C:\cr\out\m3-e2e\fixture-<Key>.json. A first argument starting with
     // '/' (m3-sec's quiet "/S") keeps the default key.
     static int FixtureUninstall(string[] a) {

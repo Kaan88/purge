@@ -1924,7 +1924,7 @@ function Invoke-M2Script([string]$Script, [string]$Arguments = '', [int]$Timeout
     Check 'm3-sec: m3sec.cs is ASCII (csc reads it in the guest code page)' (-not ([IO.File]::ReadAllText((Join-Path $Guest 'm3sec.cs')) -match '[^\x00-\x7F]'))
 }
 
-# ------------------------------------------------------------------------- m3-e2e (rig-m3.ps1, RIG.md section 16)
+# ------------------------------------------------------------------------- m3-e2e (rig-m3.ps1, RIG.md section 17)
 & {
     . (Join-Path $Vm 'rig-m3.ps1')
     $ErrorActionPreference = 'Stop'

@@ -1,4 +1,4 @@
-# Purge rig, M3 e2e: the two failing-uninstaller MSI fixtures (vm\RIG.md section 16; docs\M3_FINISH_PLAN.md B7).
+# Purge rig, M3 e2e: the two failing-uninstaller MSI fixtures (vm\RIG.md section 17; docs\M3_FINISH_PLAN.md B7).
 # Windows PowerShell 5.1, functions only (dot-sourced by m3-e2e.ps1 in the guest and by the host self-test, which
 # builds both packages in %TEMP% and reads them back; building needs no elevation, installing does).
 #

@@ -1,5 +1,5 @@
 <#
-  Scorer of m3-e2e (vm\RIG.md section 16; docs\M3_DESIGN.md 11.2, gate G6, G7, G12; docs\M3_FINISH_PLAN.md B7).
+  Scorer of m3-e2e (vm\RIG.md section 17; docs\M3_DESIGN.md 11.2, gate G6, G7, G12; docs\M3_FINISH_PLAN.md B7).
   Windows PowerShell 5.1 or pwsh 7. Reads the evidence directory vm\rig-m3.ps1 -Mode m3-e2e wrote and
   vm\truth\m3-e2e-expect.json.
 
