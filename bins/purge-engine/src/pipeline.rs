@@ -89,6 +89,7 @@ use purge_scan::framework::{
 use purge_source::filesystem::FileSystemSource;
 use purge_source::registry::RegistrySource;
 use purge_source::sysobj::MsiTables;
+use purge_source::types::SourceError;
 use purge_win::env::{EnvMap, expand_with};
 
 pub use purge_harvest::harvest::Sources;
@@ -1041,12 +1042,12 @@ fn first_operand_filtered(tokens: &[&str]) -> Option<String> {
 fn command_loads_admin_only(command: &QuietCommand, fs: &dyn FileSystemSource) -> bool {
     let tokens = arg_tokens(&command.args);
     let tokens: Vec<&str> = tokens.iter().map(String::as_str).collect();
-    // Any absolute path in the arguments that exists and fails the run rule is enough to stay medium.
+    // Every path in the arguments must be one a standard user cannot supply (`argument_path_admin_only`).
     // Each token is checked whole and in parts (`path_parts`), so a split can only add a check, never
     // replace one.
     for token in &tokens {
         for path in path_parts(token) {
-            if is_absolute_path(path) && fs.is_admin_only_executable(path) == Ok(false) {
+            if !argument_path_admin_only(path, fs) {
                 return false;
             }
         }
@@ -1062,6 +1063,59 @@ fn command_loads_admin_only(command: &QuietCommand, fs: &dyn FileSystemSource) -
         return file_name_lower(&command.exe) == "msiexec.exe";
     };
     is_absolute_path(&load) && fs.is_admin_only_executable(&load) == Ok(true)
+}
+
+/// Whether one argument part, if it is a path, is one a standard user cannot supply (review M3-R2 M5).
+///
+/// - A fully qualified path (`X:\...`, `X:/...`, `\\server\...`) that exists must pass the run rule
+///   (`is_admin_only_executable`). One that does not exist is judged by its nearest existing ancestor,
+///   which must be an admin-only directory (`is_admin_only_writable`, whose leaf mask also refuses
+///   "add file"): otherwise a user could create the file while the consent dialog is open (a
+///   `/LOADINF=` the uninstaller then reads), or plant a link where an elevated log is written. Any
+///   other error is not provably safe.
+/// - A drive-relative or `//` part (`C:foo`, `x:1`) keeps the earlier rule: only one that exists and
+///   fails the run rule counts, so switches and values with a colon in second place are not judged.
+/// - Anything else (`/S`, `-key:value`, `http://...`, a GUID, a relative name) is not a path here.
+fn argument_path_admin_only(part: &str, fs: &dyn FileSystemSource) -> bool {
+    let bytes = part.as_bytes();
+    let fully_qualified = (bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'\\' | b'/'))
+        || part.starts_with(r"\\");
+    if !fully_qualified {
+        return !(is_absolute_path(part) && fs.is_admin_only_executable(part) == Ok(false));
+    }
+    match fs.is_admin_only_executable(part) {
+        Ok(admin_only) => admin_only,
+        Err(SourceError::NotFound) => nearest_existing_dir_admin_only(part, fs),
+        Err(_) => false,
+    }
+}
+
+/// Whether the nearest existing ancestor of the missing `path` is an admin-only directory.
+fn nearest_existing_dir_admin_only(path: &str, fs: &dyn FileSystemSource) -> bool {
+    let mut dir = path;
+    loop {
+        let trimmed = dir.trim_end_matches(['\\', '/']);
+        let Some(cut) = trimmed.rfind(['\\', '/']) else {
+            return false;
+        };
+        // Keep the separator of a drive root (`C:\`); each step is strictly shorter.
+        let parent = if cut == 2 && trimmed.as_bytes()[1] == b':' {
+            &trimmed[..=cut]
+        } else {
+            &trimmed[..cut]
+        };
+        if parent.is_empty() {
+            return false;
+        }
+        match fs.is_admin_only_writable(parent) {
+            Ok(admin_only) => return admin_only,
+            Err(SourceError::NotFound) => dir = parent,
+            Err(_) => return false,
+        }
+    }
 }
 
 /// The parts of an argument token that may name a file: the token, the value of a `NAME=value` token
@@ -2953,6 +3007,46 @@ mod tests {
         ] {
             assert_eq!(
                 shell_route(CMD, args),
+                purge_rpc::methods::Route::Broker,
+                "{args}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_missing_argument_file_is_judged_by_its_nearest_existing_folder() {
+        // Review M3-R2 M5: a file that does not exist yet can be created while the dialog is open.
+        const UNINS: &str = r"C:\Program Files\App\unins000.exe";
+        for args in [
+            r"/LOADINF=C:\Users\tester\AppData\Local\App\new.inf",
+            r"/LOADINF=C:\Users\tester\new\deeper\new.inf",
+            r#""/LOG=C:\Users\tester\AppData\Local\App\uninstall.log""#,
+            // `C:\ProgramData` lets users add files and folders.
+            r"/LOG=C:\ProgramData\uninstall.log",
+            r"/LOG=C:\ProgramData\NewVendor\uninstall.log",
+            r"/LOADINF=\\server\share\new.inf",
+            r"/LOADINF=Q:\nowhere\new.inf",
+            // Unquoted with a space: the uninstaller reads `C:\Program`, whose folder is `C:\`.
+            r"/LOADINF=C:\Program Files\App\new.inf",
+        ] {
+            assert_eq!(
+                shell_route(UNINS, args),
+                purge_rpc::methods::Route::Medium,
+                "{args}"
+            );
+        }
+        for args in [
+            r#""/LOADINF=C:\Program Files\App\new.inf""#,
+            r#""/LOG=C:\Program Files\App\logs\deeper\uninstall.log""#,
+            r#"/LOG="C:/Program Files/App/uninstall.log""#,
+            // Not paths: switches, values with a colon, URLs, a GUID, a relative name.
+            "/S /VERYSILENT",
+            "-key:value --mode:quiet x:1 /D=x:1",
+            "--url=http://example.com/a;https://example.com/b //example.com/c",
+            "{11111111-1111-1111-1111-111111111111} logs\\uninstall.log",
+        ] {
+            assert_eq!(
+                shell_route(UNINS, args),
                 purge_rpc::methods::Route::Broker,
                 "{args}"
             );
