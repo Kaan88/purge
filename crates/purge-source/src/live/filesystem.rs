@@ -274,6 +274,11 @@ impl FileSystemSource for LiveFileSystem {
         let p = win32_path(path)?;
         sid::is_admin_only_writable(&p.path).map_err(map_win32)
     }
+
+    fn is_admin_only_executable(&self, path: &str) -> SourceResult<bool> {
+        let p = win32_path(path)?;
+        sid::is_admin_only_executable(&p.path).map_err(map_win32)
+    }
 }
 
 #[cfg(test)]

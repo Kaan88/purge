@@ -59,7 +59,8 @@ pub enum Op {
     FsSignerCn,
     /// [`FileSystemSource::read_shortcut`].
     FsReadShortcut,
-    /// [`FileSystemSource::is_admin_only_writable`].
+    /// [`FileSystemSource::is_admin_only_writable`] and
+    /// [`FileSystemSource::is_admin_only_executable`].
     FsAdminOnly,
     /// Every [`SystemSource`] call not counted under a kind of its own.
     System,
@@ -406,6 +407,12 @@ impl FileSystemSource for MeteredFileSystem<'_> {
     fn is_admin_only_writable(&self, path: &str) -> SourceResult<bool> {
         self.meter.time(Op::FsAdminOnly, none, || {
             self.inner.is_admin_only_writable(path)
+        })
+    }
+
+    fn is_admin_only_executable(&self, path: &str) -> SourceResult<bool> {
+        self.meter.time(Op::FsAdminOnly, none, || {
+            self.inner.is_admin_only_executable(path)
         })
     }
 }

@@ -65,6 +65,8 @@
 //!   NTFS/ReFS, or on no declared volume when some are declared, is `Unknown`.
 //! - `admin_only_roots` and per-entry `admin_only_writable` drive `is_admin_only_writable`: the nearest
 //!   explicit flag on the path or an ancestor wins, otherwise a path under an admin-only root is admin-only.
+//!   `is_admin_only_executable` is that answer for the path *and* its parent directory (a directory
+//!   flagged `false` is one a non-administrator may add files to).
 //! - `unknown_file_facts: true` makes missing version info, signer and shortcut data `NotCaptured` instead
 //!   of "none" (set by snapshot fixtures, which do not record them).
 //! - `msi_tables` maps `LocalPackage` paths (compared like file paths: case-insensitive, `/` = `\`) to
@@ -1383,18 +1385,51 @@ impl FileSystemSource for Fixture {
     }
 
     fn is_admin_only_writable(&self, path: &str) -> SourceResult<bool> {
-        let mut cur = self.fs_find(path)?;
+        if !self.on_local_fixed_volume(&Self::fs_folded(path)?) {
+            return Ok(false);
+        }
+        let node = self.fs_find(path)?;
+        Ok(self.admin_only_at(node, &Self::fs_folded(path)?))
+    }
+
+    fn is_admin_only_executable(&self, path: &str) -> SourceResult<bool> {
+        let folded = Self::fs_folded(path)?;
+        if !self.on_local_fixed_volume(&folded) {
+            return Ok(false);
+        }
+        let node = self.fs_find(path)?;
+        let parent = self.fs.nodes[node].parent;
+        let parent_ok = parent == 0
+            || folded.len() < 2
+            || self.admin_only_at(parent, &folded[..folded.len() - 1]);
+        Ok(self.admin_only_at(node, &folded) && parent_ok)
+    }
+}
+
+impl Fixture {
+    /// Whether `folded` is on a drive letter whose declared volume, if any, is fixed: a UNC path or a
+    /// volume declared not fixed (mapped, removable) is never admin-only, as in
+    /// `purge_win::sid` (review M3-R2 M6). A drive with no declared volume counts as fixed.
+    fn on_local_fixed_volume(&self, folded: &[String]) -> bool {
+        !folded.first().is_some_and(|root| root.starts_with(r"\\"))
+            && self.volume_for(folded).is_none_or(|v| v.fixed)
+    }
+
+    /// The admin-only answer for filesystem node `node` at `folded`: the nearest explicit flag on it or
+    /// an ancestor, else whether it lies under an admin-only root. For a directory this is the leaf
+    /// rule, so it also says whether a non-administrator may add files to it, which is what
+    /// `is_admin_only_executable` asks of the parent.
+    fn admin_only_at(&self, node: usize, folded: &[String]) -> bool {
+        let mut cur = node;
         while cur != 0 {
             if let Some(flag) = self.fs.nodes[cur].data.admin_only_writable {
-                return Ok(flag);
+                return flag;
             }
             cur = self.fs.nodes[cur].parent;
         }
-        let folded = Self::fs_folded(path)?;
-        Ok(self
-            .admin_only_roots_f
+        self.admin_only_roots_f
             .iter()
-            .any(|r| starts_with(&folded, r)))
+            .any(|r| starts_with(folded, r))
     }
 }
 
@@ -3613,6 +3648,60 @@ mod tests {
         assert_eq!(
             f.is_admin_only_writable("C:\\Program Files\\Nope"),
             Err(SourceError::NotFound)
+        );
+    }
+
+    #[test]
+    fn admin_only_executable_also_asks_the_parent() {
+        let f = Fixture::builder()
+            .admin_only_roots(&["C:\\Program Files", "C:\\ProgramData"])
+            .file("C:\\Program Files\\App\\unins000.exe", 1)
+            // Users may add files to the vendor folder; the uninstaller itself is admin-only.
+            .file("C:\\ProgramData\\Vendor\\unins000.exe", 1)
+            .admin_only_writable("C:\\ProgramData\\Vendor", false)
+            .admin_only_writable("C:\\ProgramData\\Vendor\\unins000.exe", true)
+            .file("C:\\Users\\tester\\x.exe", 1)
+            .build();
+        let both = |p: &str| {
+            (
+                f.is_admin_only_writable(p).unwrap(),
+                f.is_admin_only_executable(p).unwrap(),
+            )
+        };
+        assert_eq!(both("C:\\Program Files\\App\\unins000.exe"), (true, true));
+        assert_eq!(both("C:\\ProgramData\\Vendor\\unins000.exe"), (true, false));
+        assert_eq!(both("C:\\Users\\tester\\x.exe"), (false, false));
+        // `C:\` is under no admin-only root here, so nothing directly in it passes the run rule.
+        assert_eq!(both("C:\\Program Files"), (true, false));
+        assert_eq!(
+            f.is_admin_only_executable("C:\\Program Files\\Nope"),
+            Err(SourceError::NotFound)
+        );
+    }
+
+    #[test]
+    fn remote_and_non_fixed_volumes_are_never_admin_only() {
+        // Review M3-R2 M6: `M:` stands for a mapped (not fixed) drive whose ACLs look admin-only.
+        let f = Fixture::builder()
+            .admin_only_roots(&["C:\\Program Files", "M:\\App", "\\\\nas\\deploy"])
+            .volume("C:\\", Some(1), true, "NTFS")
+            .volume("M:\\", Some(2), false, "NTFS")
+            .file("C:\\Program Files\\App\\unins000.exe", 1)
+            .file("M:\\App\\unins000.exe", 1)
+            .file("\\\\nas\\deploy\\App\\unins000.exe", 1)
+            .build();
+        for path in [
+            "M:\\App\\unins000.exe",
+            "\\\\nas\\deploy\\App\\unins000.exe",
+            "\\\\?\\M:\\App\\unins000.exe",
+        ] {
+            assert_eq!(f.is_admin_only_writable(path), Ok(false), "{path}");
+            assert_eq!(f.is_admin_only_executable(path), Ok(false), "{path}");
+        }
+        assert_eq!(
+            f.is_admin_only_executable("C:\\Program Files\\App\\unins000.exe"),
+            Ok(true),
+            "a fixed drive"
         );
     }
 

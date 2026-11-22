@@ -45,6 +45,12 @@ pub trait FileSystemSource: Send + Sync {
     /// Whether only administrators (and the system) can write the path and every ancestor; feeds
     /// `SourceTrust` (ENGINE_PLAN.md §5.2 Rule T).
     fn is_admin_only_writable(&self, path: &str) -> SourceResult<bool>;
+
+    /// [`is_admin_only_writable`](Self::is_admin_only_writable) for a file about to be run elevated:
+    /// in addition, no non-administrator may add a file or folder to its directory, where the loader
+    /// looks first for the DLLs it imports (`purge_win::sid::is_admin_only_executable`, review M3-R2
+    /// H3). Feeds the uninstall route, not `SourceTrust`.
+    fn is_admin_only_executable(&self, path: &str) -> SourceResult<bool>;
 }
 
 /// The segments of an absolute file path: the drive (`C:`) or UNC host (`\\server`) first, then each

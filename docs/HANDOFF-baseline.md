@@ -45,6 +45,36 @@ continued from any harness: read it, then `git log --oneline -15` and `git workt
 - Open: none blocking. The engine (medium and elevated CLI) keeps `DiskTableCache` and `PathFiles` by path, behind
   the admin-only directory rule (reasons in the two DECISIONS rows).
 
+## M3-R2 M2: APPROVED 2026-11-22 (branch `r2-m2-inline`, pushed; the coordinator merges it).
+- Fifth Fable review of 518b48b: changes needed (M7); M6, L4, interpreters, PATH closed → M7 fixed in 6e0d958;
+  sixth Fable review of 9126b48: approved; optional follow-ups (`:` split, 8.3 names) in 2eb3360 (no further
+  review needed). `origin/baseline` merged into the branch first (fea1208).
+- Follow-ups: an argument part after a non-drive `:` is judged as a program name too (`/RUN:powershell` →
+  `Medium`); an 8.3 short file name (`~` + digit, `POWERS~1.EXE`) in the program or any argument part → `Medium`;
+  trailing dots and spaces are trimmed from file names (`powershell.exe.`).
+- M7: any argument token naming a host or interpreter (`conhost --headless powershell ...`, `rundll32
+  shell32.dll,ShellExec_RunDLL powershell ...`) makes the command `Medium`, for every program; `powershell_ise`
+  and `dotnet` added to `INTERPRETERS`.
+- Earlier round (fourth Fable review of f9bc039: changes needed (M6, L4); M5 + PATH filter closed → M6, L4,
+  interpreter hosts fixed in 5268a09):
+- M6: `sid` refuses any path not on a local fixed drive (UNC incl. `\\?\UNC\` and `\\localhost\c$`, mapped,
+  `subst`, removable) for both the run and the data rule (DECISIONS H3 row). L4: a leading `//` is UNC in the
+  argument check. Interpreter hosts (`pipeline::INTERPRETERS`: python, node, java, wsl, wscript, mshta, ...) are
+  always `Medium`, also under `cmd /c`; `cmd`, `rundll32`, `regsvr32`, `msiexec` keep their judged rules.
+- Earlier round (third Fable review of 3a135ed: changes needed (M5); H3, M3, M4, L3 closed → fixed in d3178fd):
+- M5: a fully qualified argument path that does not exist is judged by its nearest existing folder, which must be
+  admin-only (`is_admin_only_writable`); any other error is `Medium`. Drive-relative or `//` parts keep the old
+  rule; switches, `-key:value`, URLs and GUIDs are not judged.
+- PATH: an elevated run's machine `PATH` keeps only admin-only directories, in order (DECISIONS B1+S4 row); the
+  command text is unchanged (B1). Medium runs unchanged.
+- Earlier round (Fable re-review of 113b721: changes needed (M3, M4, L3; H3 in sid.rs) → fixed in 5a902e3):
+- M3: `cmd` reads the raw line; `/s`, quotes cmd could strip differently, or `&<>()@^|` in the program → `Medium`.
+  M4: a `cmd` program without an extension → `Medium`. L3: `NAME=value` values and `;`-parts are judged.
+- H3 (new DECISIONS row): `sid::is_admin_only_executable` = the old chain rule + the file's parent directory grants
+  no non-admin add-file/add-subdirectory. Used by the route, `should_run_medium` and the broker's `trusted_file`;
+  the data rule `is_admin_only_writable` is unchanged for every other caller (`C:\ProgramData\Purge` would fail the
+  run rule). Cost: vendor uninstallers in ProgramData folders that inherit the Users add right run at `Medium`.
+
 ## BL-FIX-UFH (branch `bl-fix-ufh` off `baseline` 9f40cca, 2026-11-22; pushed, NOT merged, Fable review next)
 - Finding: the BL-GATE smoke (`truth/bl.sh replay`, frozen `7zip`, four views) had one S1 flip in the local view:
   `UFH\SHC` slot `0` (REF-ANY record, Likely, unticked), withheld by exact because the truth baseline holds it.
@@ -120,6 +150,14 @@ an inbox Store update between warm-up and hello makes trust None (the run then f
   the real dialog on the VM first), N6 (needs a fingerprint retention rule), N7 (changes the scan-claim rules).
 - Checks: fmt, clippy -D warnings, check-deps, gen-dto --check ok; broker 218 + 10 + 1, exec lib 464 (8 ignored);
   `dotnet build ui\Purge.App -c Release` 0 warnings; UI tests 100/100. All unelevated.
+- M2 residual: REWORKED PER FABLE, PENDING RE-REVIEW on branch `r2-m2-inline` (pushed, not merged). Fable's review
+  of 6167e25 asked for changes (H1, H2, M1, M2, L1); the rework makes every `powershell`/`pwsh` line `Medium`
+  (profile and HKCU module paths load even with `-File`/`-NoProfile`), `cmd` `Medium` without `/d` before `/c` or
+  when it runs another host or a second program, and makes the comma handling quote-aware (DECISIONS M2 row).
+  Cost: PowerShell and `cmd`-without-`/d` uninstallers that need admin run at medium and may fail visibly. Still
+  untested on its own: the S2 vanished-session refusal of `plan.create`; the History page still shows sample data
+  (S5 alerts only on the Leftovers result). The section "Still open from M3-R2" below is superseded by this one.
+- Next: Fable re-review of `r2-m2-inline`, merge, then M3 per the design (warm/first-launch bench rows, VM backlog).
 - **Still open from R2:** M2 residual: `route` accepts `powershell`/`pwsh` without `-File` (inline `-Command` or
   `-EncodedCommand`) as loading no file, so it can be broker-route. The DECISIONS M2 row rules it `Medium` (safe
   direction); change `command_loads_admin_only` in `bins/purge-engine/src/pipeline.rs` and get a Fable review
@@ -273,7 +311,7 @@ before merging (or `git stash` if you want to inspect them). Untracked and harml
   `dotnet build ui\Purge.App -c Release` (0 warnings), `dotnet test ui\Purge.Client.Tests` (UI tests build the
   Rust pipe harness with `cargo`, so cargo must be on PATH), push, then build the Inno setup and hand it over.
 
-### Still open from M3-R2 (DONE 2026-11-22 except the M2 residual; see the top section)
+### Still open from M3-R2 (DONE 2026-11-22; the M2 residual is reworked on `r2-m2-inline`, pending re-review, see the top section)
 - Point 2 phrasing: reword B4 in the design to "changes outside Purge's store" (recovery with nothing to change
   runs without a dialog).
 - N1-N9 nits (docs/reviews/m3/r2-review.md, Notes).

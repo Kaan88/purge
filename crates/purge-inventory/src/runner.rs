@@ -137,7 +137,8 @@ pub struct Routing {
     /// How the engine ran the command.
     pub ran_as: RanAs,
     /// The entry should run in the medium engine: it is a per-user entry (`HKU` key or user-writable key),
-    /// or its uninstaller is not provably writable by administrators only.
+    /// or its uninstaller is not provably writable by administrators only, its directory included
+    /// (`is_admin_only_executable`).
     pub should_run_medium: bool,
 }
 
@@ -372,7 +373,7 @@ fn routing(
     sys: &dyn SystemSource,
 ) -> Routing {
     let per_user = entry.hive_sid.is_some() || entry.writable_by == WritableBy::User;
-    let exe_admin_only = matches!(fs.is_admin_only_writable(exe), Ok(true));
+    let exe_admin_only = matches!(fs.is_admin_only_executable(exe), Ok(true));
     Routing {
         ran_as: if sys.elevated() {
             RanAs::Elevated
@@ -387,8 +388,22 @@ fn routing(
 /// `HKLM\...\Session Manager\Environment`) plus the interactive user's profile variables. It never
 /// carries a value from `HKCU\Environment`, so a medium process cannot choose `SystemRoot`, `PATH`,
 /// `ComSpec`, `ProgramData` and the like through that key (review M3-R2 B1/S4).
-fn uninstaller_environment(sys: &dyn SystemSource) -> BTreeMap<String, String> {
+///
+/// The machine `PATH` keeps only the entries that are admin-only directories (`is_admin_only_writable`,
+/// whose leaf mask also refuses "add file"), in their order: a bare name in a vendor script, or a DLL
+/// the loader does not find earlier, must not resolve into a folder a standard user can write. A
+/// user-writable, missing, relative, empty or unreadable entry is dropped (review M3-R2, third Fable
+/// review). Only the environment is filtered; the command text stays the one shown (B1).
+fn uninstaller_environment(
+    sys: &dyn SystemSource,
+    fs: &dyn FileSystemSource,
+) -> BTreeMap<String, String> {
     let mut env = sys.machine_env().unwrap_or_default();
+    for (name, value) in env.iter_mut() {
+        if name.eq_ignore_ascii_case("PATH") {
+            *value = admin_only_path(value, fs);
+        }
+    }
     let user = sys.env().unwrap_or_default();
     let profile = sys
         .user_sid()
@@ -418,6 +433,18 @@ fn uninstaller_environment(sys: &dyn SystemSource) -> BTreeMap<String, String> {
         }
     }
     env
+}
+
+/// The entries of the `;`-separated `path` that are admin-only directories, in their order. Quotes
+/// around an entry are ignored for the check and kept in the result.
+fn admin_only_path(path: &str, fs: &dyn FileSystemSource) -> String {
+    path.split(';')
+        .filter(|entry| {
+            let dir = entry.trim().trim_matches('"');
+            Path::new(dir).is_absolute() && fs.is_admin_only_writable(dir) == Ok(true)
+        })
+        .collect::<Vec<_>>()
+        .join(";")
 }
 
 /// Runs the quiet uninstall command of `req.entry` and waits for it (see the module documentation).
@@ -464,7 +491,7 @@ pub fn run_uninstall(
     // An elevated uninstaller must not inherit the broker's environment or working directory
     // (review M3-R2 S4). A medium run keeps the engine's own environment: that is the user's.
     let elevated = sys.elevated();
-    let clean_environment = elevated.then(|| uninstaller_environment(sys));
+    let clean_environment = elevated.then(|| uninstaller_environment(sys, fs));
     let working_dir = elevated
         .then(|| Path::new(&command.exe).parent())
         .flatten()
@@ -1035,12 +1062,41 @@ mod tests {
     }
 
     #[test]
+    fn the_live_machine_path_keeps_the_expanded_system32() {
+        // `%SystemRoot%\system32` in the registry's PATH arrives expanded and survives the filter.
+        use purge_source::live::{LiveFileSystem, LiveSystem};
+        let env = LiveSystem::new().machine_env().unwrap();
+        let path = env.get("PATH").expect("a machine PATH");
+        let system32 = format!(r"{}\system32", env.get("SYSTEMROOT").expect("SystemRoot"));
+        let has_system32 = |p: &str| {
+            p.split(';')
+                .any(|e| e.trim_end_matches('\\').eq_ignore_ascii_case(&system32))
+        };
+        assert!(has_system32(path), "{path}");
+        let kept = admin_only_path(path, &LiveFileSystem::new());
+        assert!(has_system32(&kept), "{kept}");
+        assert!(!kept.contains('%'), "{kept}");
+    }
+
+    #[test]
     fn an_elevated_run_gets_the_machine_environment_and_the_uninstaller_directory() {
         let mut c = Case::new(secs(1), 0, Some(0));
+        c.fixture.add_dir(r"C:\Windows\system32");
+        c.fixture
+            .add_dir(r"C:\Windows\System32\WindowsPowerShell\v1.0");
+        c.fixture.add_dir(r"C:\Tools\bin");
+        c.fixture.add_dir(r"C:\Program Files\Vendor\bin");
+        c.fixture
+            .set_admin_only_roots(vec![r"C:\Program Files".into(), r"C:\Windows".into()]);
         let facts = c.fixture.system_mut();
         facts.elevated = true;
+        // An admin-only dir, a user-writable dir, a missing dir, an empty entry, a relative entry and a
+        // quoted admin-only dir: only the admin-only ones survive, in their order.
         facts.machine_env = [
-            ("PATH", r"C:\Windows\system32;C:\Windows"),
+            (
+                "PATH",
+                r#"C:\Windows\system32;C:\Tools\bin;;C:\Missing\bin;bin;"C:\Program Files\Vendor\bin";C:\Windows;C:\WINDOWS\System32\WindowsPowerShell\v1.0\"#,
+            ),
             ("PROGRAMDATA", r"C:\ProgramData"),
             ("COMSPEC", r"C:\Windows\system32\cmd.exe"),
         ]
@@ -1083,8 +1139,10 @@ mod tests {
         let environment = environment.as_ref().expect("a clean environment");
         assert_eq!(
             environment.get("PATH").map(String::as_str),
-            Some(r"C:\Windows\system32;C:\Windows"),
-            "the user's PATH was inherited"
+            Some(
+                r#"C:\Windows\system32;"C:\Program Files\Vendor\bin";C:\Windows;C:\WINDOWS\System32\WindowsPowerShell\v1.0\"#
+            ),
+            "the user's PATH was inherited, or a writable or missing machine PATH entry kept"
         );
         assert_eq!(
             environment.get("PROGRAMDATA").map(String::as_str),

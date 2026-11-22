@@ -89,6 +89,7 @@ use purge_scan::framework::{
 use purge_source::filesystem::FileSystemSource;
 use purge_source::registry::RegistrySource;
 use purge_source::sysobj::MsiTables;
+use purge_source::types::SourceError;
 use purge_win::env::{EnvMap, expand_with};
 
 pub use purge_harvest::harvest::Sources;
@@ -787,15 +788,33 @@ pub fn uninstall_commands(
 /// medium, whatever its path; that is the rule that keeps Purge from being an elevation vehicle for a
 /// command a standard user can replace. A machine-scope entry is broker only when **every** command the
 /// entry names (the interactive and the quiet one) is writable by administrators alone; a path that
-/// cannot be read or does not exist is not provably admin-only and therefore stays medium.
+/// cannot be read or does not exist is not provably admin-only and therefore stays medium. "Writable by
+/// administrators alone" is the run rule (`is_admin_only_executable`): the file and its ancestors, and
+/// also no non-administrator may add a file to its directory, where the loader looks first for the DLLs
+/// the program imports. A vendor folder under `C:\ProgramData` inherits that right for BUILTIN\Users,
+/// so an uninstaller there is medium-route (review M3-R2 H3).
 ///
 /// `env` is the interactive user's environment and `machine_env` the machine's. The command is expanded
 /// with both; any difference between the two strings would let a value in `HKCU\Environment` change the
 /// command after it was shown, so it makes the route medium. A `%NAME%` neither map defines is medium
-/// for the same reason (review M3-R2 B1). A known host executable (`cmd`, `rundll32`, `wscript`,
-/// `cscript`, `powershell`, `mshta`, `regsvr32`, `msiexec`, `java`, `sdbinst`) is judged on the script,
-/// DLL or package it is told to load as well; a load path that is user-writable, cannot be found or
-/// cannot be worked out makes the route medium (review M3-R2 M2).
+/// for the same reason (review M3-R2 B1). A known host executable (`cmd`, `rundll32`, `regsvr32`,
+/// `msiexec`) is judged on the script, DLL or package it is told to load as well; a load path that is
+/// user-writable, cannot be found or cannot be worked out makes the route medium (review M3-R2 M2).
+/// Narrower still:
+/// - an interpreter or script host ([`INTERPRETERS`]: `powershell`, `python`, `node`, `java`,
+///   `wscript`, `mshta`, `wsl`, ...) is always medium, whatever it is told to run: it also loads code
+///   from per-user places the command line does not name (the PowerShell profile and `PSModulePath`,
+///   Python's user site-packages, ...), which no argument or environment cleaning shuts off.
+/// - `cmd` is medium unless `/d` comes before `/c` (`/k`, `/r`), since without it cmd runs the
+///   `AutoRun` value in `HKCU\Software\Microsoft\Command Processor`; it is also medium when the program
+///   it runs is itself a host or has no extension, the command text can run a second program (`&`,
+///   `|`, ...), or cmd's quote handling could cut the program somewhere else (`/s`, more than two
+///   quotes, a quoted program with `(`, `)`, `@` and the like in it).
+/// - `msiexec` with a ProductCode and no package path stays admin-only (it runs the cached package).
+///
+/// Every absolute path in the arguments that exists and fails the run rule makes the route medium too;
+/// the value of a `NAME=value` token and each `;`-separated part are judged as well
+/// (`TRANSFORMS=a.mst;b.mst`).
 pub fn route(
     entry: &InventoryEntry,
     fs: &dyn FileSystemSource,
@@ -832,7 +851,7 @@ pub fn route(
     }
     let exes_admin_only = exes
         .iter()
-        .all(|exe| fs.is_admin_only_writable(exe) == Ok(true));
+        .all(|exe| fs.is_admin_only_executable(exe) == Ok(true));
     let loads_admin_only = [commands.command.as_ref(), commands.quiet.as_ref()]
         .into_iter()
         .flatten()
@@ -887,74 +906,218 @@ fn arg_tokens(args: &str) -> Vec<String> {
     out
 }
 
-/// A token as a file path: no quotes, and for `rundll32` no `,EntryPoint` suffix.
-fn path_token(token: &str) -> &str {
-    token
-        .trim_matches('"')
-        .split_once(',')
-        .map_or_else(|| token.trim_matches('"'), |(path, _)| path)
-}
-
 /// Whether `path` starts at a drive or a UNC share.
 fn is_absolute_path(path: &str) -> bool {
     let bytes = path.as_bytes();
     (bytes.len() >= 2 && bytes[1] == b':') || path.starts_with(r"\\") || path.starts_with("//")
 }
 
-/// The file names whose arguments name a file that decides what runs, under the Windows directory.
-fn is_host_executable(exe: &str) -> bool {
-    let name = exe.rsplit(['\\', '/']).next().unwrap_or(exe);
-    [
-        "cmd.exe",
-        "rundll32.exe",
-        "wscript.exe",
-        "cscript.exe",
-        "powershell.exe",
-        "pwsh.exe",
-        "mshta.exe",
-        "regsvr32.exe",
-        "msiexec.exe",
-        "java.exe",
-        "javaw.exe",
-        "sdbinst.exe",
-    ]
-    .iter()
-    .any(|host| name.eq_ignore_ascii_case(host))
+/// The hosts whose load file is worked out from the arguments and judged (`host_load_path`): the
+/// route may still be broker for them. Every other program that runs code it is told to load is in
+/// [`INTERPRETERS`] and always medium.
+const HOST_EXECUTABLES: &[&str] = &["cmd.exe", "rundll32.exe", "regsvr32.exe", "msiexec.exe"];
+
+/// Interpreters and script hosts (file name stems; `python` and `pythonw` with or without a version,
+/// `python3.12.exe`, are matched in [`is_interpreter`]). A command they run, or whose arguments name
+/// one (a launcher such as `conhost --headless powershell ...`, `cmd /c`), is always medium: each
+/// loads code from places the command line does not name and a standard user can write, so judging
+/// the script is not enough (review M3-R2 M2; coordinator ruling after the fourth Fable review; M7):
+/// - `powershell`/`pwsh`/`powershell_ise`: the user's profile (`Documents\WindowsPowerShell\profile.ps1`, found through
+///   the known folder in HKCU) unless `-NoProfile`, and even then modules auto-loaded from
+///   `Documents\WindowsPowerShell\Modules` and from `PSModulePath` in `HKCU\Environment`, which
+///   PowerShell reads from the registry itself; adding `-NoProfile` in the broker would run a command
+///   other than the one shown (B1; H1, H2).
+/// - `python`/`py`: user site-packages (`%APPDATA%\Python`) and `.pth` files; `node`, `perl`, `ruby`,
+///   `php`: per-user module and config paths; `java`/`javaw`: a jar manifest's `Class-Path` and the
+///   per-user JVM configuration load further code; `dotnet`: per-user NuGet and runtime config;
+///   `wsl`, `bash`, `sh`: a per-user Linux environment.
+/// - `wscript`, `cscript`, `mshta`, `hh`, `msxsl`: script engines; `forfiles`: runs any command;
+///   `msbuild`, `installutil`, `regasm`, `regsvcs`, `cmstp`: run code from a project, assembly or
+///   profile; `sdbinst`: installs a compatibility database that changes how later programs start.
+///
+/// Not modelled interpreters are plain executables to the route; this list is the place to add one.
+const INTERPRETERS: &[&str] = &[
+    "powershell",
+    "powershell_ise",
+    "pwsh",
+    "dotnet",
+    "py",
+    "pyw",
+    "node",
+    "java",
+    "javaw",
+    "perl",
+    "ruby",
+    "php",
+    "wsl",
+    "bash",
+    "sh",
+    "forfiles",
+    "hh",
+    "mshta",
+    "wscript",
+    "cscript",
+    "msbuild",
+    "installutil",
+    "regasm",
+    "regsvcs",
+    "cmstp",
+    "msxsl",
+    "sdbinst",
+];
+
+/// Whether `program` (with or without a directory, with or without `.exe`) is in [`INTERPRETERS`] or
+/// a versioned `python` name.
+fn is_interpreter(program: &str) -> bool {
+    let name = file_name_lower(program);
+    let stem = name.strip_suffix(".exe").unwrap_or(&name);
+    // `python`, `pythonw`, `python3`, `python3.12`, ...; not Python's own installer
+    // (`python-3.12.0-amd64.exe`), which Package Cache keeps admin-only.
+    let python = ["pythonw", "python"].iter().any(|prefix| {
+        stem.strip_prefix(prefix)
+            .is_some_and(|version| version.chars().all(|c| c.is_ascii_digit() || c == '.'))
+    });
+    python || INTERPRETERS.contains(&stem)
 }
 
-/// The path a known host is told to load. `None` means it cannot be worked out from the arguments.
-fn host_load_path(exe: &str, tokens: &[&str]) -> Option<String> {
-    let name = exe.rsplit(['\\', '/']).next().unwrap_or(exe);
-    let lower = name.to_ascii_lowercase();
+/// The lowercase file name of `exe`.
+fn file_name_lower(exe: &str) -> String {
+    // Windows drops trailing dots and spaces from a file name: `powershell.exe.` is `powershell.exe`.
+    exe.rsplit(['\\', '/'])
+        .next()
+        .unwrap_or(exe)
+        .trim_end_matches(['.', ' '])
+        .to_ascii_lowercase()
+}
+
+/// Whether `exe` is a known host executable (its file name, with the `.exe`).
+fn is_host_executable(exe: &str) -> bool {
+    HOST_EXECUTABLES.contains(&file_name_lower(exe).as_str())
+}
+
+/// Whether `program`, as `cmd.exe` would be told to run it, names a known host or an interpreter: with
+/// or without the `.exe`, with or without a directory.
+fn names_a_host(program: &str) -> bool {
+    let name = file_name_lower(program);
+    is_interpreter(program)
+        || HOST_EXECUTABLES
+            .iter()
+            .any(|host| name == *host || host.strip_suffix(".exe") == Some(name.as_str()))
+}
+
+/// The path a known host is told to load. `None` means it cannot be worked out from the arguments, or
+/// the host is one whose load cannot be judged from a path at all.
+fn host_load_path(exe: &str, args: &str, tokens: &[&str]) -> Option<String> {
     let first_operand = || {
         tokens
             .iter()
             .find(|t| !t.starts_with('/') && !t.starts_with('-'))
-            .map(|t| path_token(t).to_owned())
+            .map(|t| (*t).to_owned())
     };
-    let after_switch = |switch: &str| {
-        tokens
-            .iter()
-            .position(|t| t.eq_ignore_ascii_case(switch))
-            .and_then(|at| tokens.get(at + 1))
-            .map(|t| path_token(t).to_owned())
-    };
-    match lower.as_str() {
-        "cmd.exe" => after_switch("/c").or_else(|| after_switch("/k")),
-        "rundll32.exe" => first_operand(),
-        "wscript.exe" | "cscript.exe" | "mshta.exe" | "regsvr32.exe" | "sdbinst.exe" => {
-            first_operand()
-        }
-        "powershell.exe" | "pwsh.exe" => after_switch("-file").or_else(|| after_switch("-f")),
+    match file_name_lower(exe).as_str() {
+        "cmd.exe" => cmd_program(args),
+        "rundll32.exe" => rundll32_dll(args),
+        "regsvr32.exe" => first_operand(),
         "msiexec.exe" => tokens
             .iter()
-            .map(|t| path_token(t))
-            .find(|p| p.to_ascii_lowercase().ends_with(".msi"))
-            .map(str::to_owned)
+            .find(|t| t.to_ascii_lowercase().ends_with(".msi"))
+            .map(|t| (*t).to_owned())
             .or_else(|| first_operand_filtered(tokens)),
-        "java.exe" | "javaw.exe" => after_switch("-jar"),
         _ => None,
     }
+}
+
+/// The program `cmd.exe` is told to run with `/c` (`/k`, `/r`), or `None` when the line is not provably
+/// limited to that program (review M3-R2 M2, M1 M2):
+///
+/// - Without `/d` before `/c`, cmd first runs the `AutoRun` value of
+///   `HKCU\Software\Microsoft\Command Processor`, which a standard user writes. Only the documented
+///   switches may come before `/c`; anything after it (a `/d` included) is command text.
+/// - A program that is itself a host (`cmd /c powershell ...`, `cmd /c msiexec ...`) is not followed:
+///   its own load is not judged here.
+/// - Command operators (`&` `|` `<` `>` `^`) or `!` (delayed expansion) anywhere in the command text can
+///   run a second program.
+/// - cmd's own quote handling (`cmd /?`) keeps the quotes of the command text only when there is no
+///   `/s`, exactly two quotes, no `&<>()@^|` between them and the quoted string names an executable;
+///   otherwise it strips the first quote and the *last* one, so `"C:\ProgramData\My Vendor\u.cmd" "/x"`
+///   runs `C:\ProgramData\My`. The line is followed only when that cannot change the program: no `/s`,
+///   and either no quote at all or exactly two that enclose the program at the start of the text, with
+///   none of those characters in it (review M3-R2 M3, read from the raw line as [`rundll32_dll`] does).
+/// - The program must carry an extension: without one cmd tries each `PATHEXT` extension in turn, and
+///   the file it finds is not the one judged (M4).
+/// - A program holding a cmd delimiter (`,` `;` `=`) or a `/` is not split here the way cmd splits it.
+fn cmd_program(args: &str) -> Option<String> {
+    let mut autorun_off = false;
+    let mut rest = args;
+    loop {
+        rest = rest.trim_start();
+        let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+        let (token, after) = rest.split_at(end);
+        if token.contains('"') {
+            return None;
+        }
+        match token.to_ascii_lowercase().as_str() {
+            "/c" | "/k" | "/r" => return autorun_off.then(|| cmd_text_program(after)).flatten(),
+            "/d" => autorun_off = true,
+            "/a" | "/u" | "/q" | "/x" | "/y" => {}
+            s if ["/e:", "/f:", "/v:", "/t:"]
+                .iter()
+                .any(|prefix| s.starts_with(prefix)) => {}
+            // `/s` (cmd then always strips the first and the last quote, M3), and anything cmd does
+            // not document.
+            _ => return None,
+        }
+        rest = after;
+    }
+}
+
+/// The program the command text after `/c` (`/k`, `/r`) runs, under the rules of [`cmd_program`].
+fn cmd_text_program(text: &str) -> Option<String> {
+    const OPERATORS: [char; 6] = ['&', '|', '<', '>', '^', '!'];
+    // The characters `cmd /?` names for its quote rule, besides the operators.
+    const QUOTE_SPECIALS: [char; 8] = ['&', '<', '>', '(', ')', '@', '^', '|'];
+    let text = text.trim_start();
+    if text.contains(OPERATORS) {
+        return None;
+    }
+    let (program, after) = match text.matches('"').count() {
+        0 => text.split_at(text.find(char::is_whitespace).unwrap_or(text.len())),
+        2 => {
+            let inner = text.strip_prefix('"')?;
+            let close = inner.find('"')?;
+            (&inner[..close], &inner[close + 1..])
+        }
+        _ => return None,
+    };
+    let name = program.rsplit('\\').next().unwrap_or(program);
+    let has_extension = name
+        .rsplit_once('.')
+        .is_some_and(|(stem, ext)| !stem.is_empty() && !ext.is_empty());
+    if program.is_empty()
+        || (!after.is_empty() && !after.starts_with(char::is_whitespace))
+        || program.contains([',', ';', '=', '/'])
+        || program.contains(QUOTE_SPECIALS)
+        || !has_extension
+        || names_a_host(program)
+    {
+        return None;
+    }
+    Some(program.to_owned())
+}
+
+/// The DLL `rundll32` is told to load, read from the raw argument string so a comma inside a quoted
+/// path stays part of the path: a quoted first argument is the path up to its closing quote, an
+/// unquoted one ends at the first comma or space. A path whose file name has no extension is not
+/// worked out (the loader would add `.dll` to it).
+fn rundll32_dll(args: &str) -> Option<String> {
+    let args = args.trim_start();
+    let dll = if let Some(quoted) = args.strip_prefix('"') {
+        &quoted[..quoted.find('"')?]
+    } else {
+        args.split([',', ' ', '\t']).next()?
+    };
+    let name = dll.rsplit(['\\', '/']).next().unwrap_or(dll);
+    (name.contains('.') && !dll.is_empty()).then(|| dll.to_owned())
 }
 
 /// The first operand of `msiexec` that looks like a path, so `/x C:\pkg.msi` is judged even without
@@ -962,9 +1125,8 @@ fn host_load_path(exe: &str, tokens: &[&str]) -> Option<String> {
 fn first_operand_filtered(tokens: &[&str]) -> Option<String> {
     tokens
         .iter()
-        .map(|t| path_token(t))
-        .find(|p| is_absolute_path(p))
-        .map(str::to_owned)
+        .find(|t| is_absolute_path(t))
+        .map(|t| (*t).to_owned())
 }
 
 /// Whether the file `command` is told to load, if any, is writable by administrators alone. A known
@@ -972,28 +1134,165 @@ fn first_operand_filtered(tokens: &[&str]) -> Option<String> {
 fn command_loads_admin_only(command: &QuietCommand, fs: &dyn FileSystemSource) -> bool {
     let tokens = arg_tokens(&command.args);
     let tokens: Vec<&str> = tokens.iter().map(String::as_str).collect();
-    // Any absolute path in the arguments that exists and is user-writable is enough to stay medium.
+    // Every path in the arguments must be one a standard user cannot supply (`argument_path_admin_only`).
+    // Each token is checked whole and in parts (`path_parts`), so a split can only add a check, never
+    // replace one.
     for token in &tokens {
-        let path = path_token(token);
-        if is_absolute_path(path) && fs.is_admin_only_writable(path) == Ok(false) {
-            return false;
+        for path in path_parts(token) {
+            if !argument_path_admin_only(path, fs) {
+                return false;
+            }
         }
+    }
+    // A launcher can start a host or an interpreter named in its arguments (`conhost --headless
+    // powershell ...`, `rundll32 shell32.dll,ShellExec_RunDLL powershell ...`, `cmd /c ...`), so any
+    // argument that names one makes the command medium, whatever the program is (review M3-R2 M7).
+    // An 8.3 short name (`POWERS~1.EXE`) hides what the file is from the name checks, so one in the
+    // program's or any argument part's file name makes the command medium too.
+    if is_interpreter(&command.exe)
+        || is_short_name(&command.exe)
+        || tokens
+            .iter()
+            .any(|token| token_names_a_host(token) || token_has_a_short_name(token))
+    {
+        return false;
     }
     if !is_host_executable(&command.exe) {
         return true;
     }
-    let Some(load) = host_load_path(&command.exe, &tokens) else {
-        // A host that names no script, DLL or package: `msiexec` with a ProductCode and a shell with
-        // an inline command load no file of their own, everything else is undetermined.
-        let name = command
-            .exe
-            .rsplit(['\\', '/'])
-            .next()
-            .unwrap_or(&command.exe)
-            .to_ascii_lowercase();
-        return matches!(name.as_str(), "msiexec.exe" | "powershell.exe" | "pwsh.exe");
+    let Some(load) = host_load_path(&command.exe, &command.args, &tokens) else {
+        // A host that names no script, DLL or package: only `msiexec` with a ProductCode loads no
+        // client-chosen file (it runs the cached package). Everything else is undetermined: `cmd`
+        // without `/d` or running another host, an interpreter or more than one
+        // program, and a load path that is missing from the arguments (review M3-R2 M2).
+        return file_name_lower(&command.exe) == "msiexec.exe";
     };
-    is_absolute_path(&load) && fs.is_admin_only_writable(&load) == Ok(true)
+    is_absolute_path(&load) && fs.is_admin_only_executable(&load) == Ok(true)
+}
+
+/// The parts of an argument token that may name a program: each part [`path_parts`] gives (the
+/// token, the value after `=`, the `;` parts), each `,`-separated part of those (`dll,Entry`), and the
+/// text after each `:` of those that is not a drive letter's (`/RUN:powershell`; `C:\x` stays whole).
+fn program_parts(token: &str) -> Vec<&str> {
+    let mut parts: Vec<&str> = Vec::new();
+    let mut add = |part| {
+        if !parts.contains(&part) {
+            parts.push(part);
+        }
+    };
+    for part in path_parts(token)
+        .into_iter()
+        .flat_map(|part| part.split(','))
+    {
+        add(part);
+        let bytes = part.as_bytes();
+        for (at, _) in part.match_indices(':') {
+            // `X:` at the start of the part or right after another `:` (`/RUN:C:\x`) is a drive.
+            let drive_colon = at >= 1
+                && bytes[at - 1].is_ascii_alphabetic()
+                && (at == 1 || bytes[at - 2] == b':');
+            if !drive_colon {
+                add(&part[at + 1..]);
+            }
+        }
+    }
+    parts
+}
+
+/// Whether an argument token names a host or an interpreter ([`names_a_host`]) in one of its
+/// [`program_parts`]. A part counts only when its whole file name is a host's (`powershell`,
+/// `C:\x\node.exe`), not when it merely contains one (`--uninstall-node-modules`); a switch (`-x`, or a
+/// `/x` with no further separator) is not a file name. Review M3-R2 M7.
+fn token_names_a_host(token: &str) -> bool {
+    program_parts(token).into_iter().any(|part| {
+        let switch =
+            part.starts_with('-') || (part.starts_with('/') && !part[1..].contains(['/', '\\']));
+        !part.is_empty() && !switch && names_a_host(part)
+    })
+}
+
+/// Whether the file name of `path` looks like an 8.3 short name: a `~` followed by a digit.
+fn is_short_name(path: &str) -> bool {
+    file_name_lower(path)
+        .as_bytes()
+        .windows(2)
+        .any(|w| w[0] == b'~' && w[1].is_ascii_digit())
+}
+
+/// Whether one of the [`program_parts`] of an argument token has an 8.3 short file name.
+fn token_has_a_short_name(token: &str) -> bool {
+    program_parts(token).into_iter().any(is_short_name)
+}
+
+/// Whether one argument part, if it is a path, is one a standard user cannot supply (review M3-R2 M5).
+///
+/// - A fully qualified path (`X:\...`, `X:/...`, `\\server\...`, `//server/...`; a remote one never
+///   passes, M6) that exists must pass the run rule (`is_admin_only_executable`). One that does not exist is judged by its nearest existing ancestor,
+///   which must be an admin-only directory (`is_admin_only_writable`, whose leaf mask also refuses
+///   "add file"): otherwise a user could create the file while the consent dialog is open (a
+///   `/LOADINF=` the uninstaller then reads), or plant a link where an elevated log is written. Any
+///   other error is not provably safe.
+/// - A drive-relative part (`C:foo`, `x:1`) keeps the earlier rule: only one that exists and
+///   fails the run rule counts, so switches and values with a colon in second place are not judged.
+/// - Anything else (`/S`, `-key:value`, `http://...`, a GUID, a relative name) is not a path here.
+fn argument_path_admin_only(part: &str, fs: &dyn FileSystemSource) -> bool {
+    let bytes = part.as_bytes();
+    let fully_qualified = (bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'\\' | b'/'))
+        || part.starts_with(r"\\")
+        || part.starts_with("//");
+    if !fully_qualified {
+        return !(is_absolute_path(part) && fs.is_admin_only_executable(part) == Ok(false));
+    }
+    match fs.is_admin_only_executable(part) {
+        Ok(admin_only) => admin_only,
+        Err(SourceError::NotFound) => nearest_existing_dir_admin_only(part, fs),
+        Err(_) => false,
+    }
+}
+
+/// Whether the nearest existing ancestor of the missing `path` is an admin-only directory.
+fn nearest_existing_dir_admin_only(path: &str, fs: &dyn FileSystemSource) -> bool {
+    let mut dir = path;
+    loop {
+        let trimmed = dir.trim_end_matches(['\\', '/']);
+        let Some(cut) = trimmed.rfind(['\\', '/']) else {
+            return false;
+        };
+        // Keep the separator of a drive root (`C:\`); each step is strictly shorter.
+        let parent = if cut == 2 && trimmed.as_bytes()[1] == b':' {
+            &trimmed[..=cut]
+        } else {
+            &trimmed[..cut]
+        };
+        if parent.is_empty() {
+            return false;
+        }
+        match fs.is_admin_only_writable(parent) {
+            Ok(admin_only) => return admin_only,
+            Err(SourceError::NotFound) => dir = parent,
+            Err(_) => return false,
+        }
+    }
+}
+
+/// The parts of an argument token that may name a file: the token, the value of a `NAME=value` token
+/// (`TRANSFORMS=...`, `/LOG=...`), each `;`-separated part of either (`a.mst;b.mst`), and each of those
+/// cut at its first comma (`dll,Entry`). Review M3-R2 L1, L3.
+fn path_parts(token: &str) -> Vec<&str> {
+    let value = token.split_once('=').map(|(_, value)| value);
+    let mut parts = Vec::new();
+    for whole in std::iter::once(token).chain(value) {
+        for part in std::iter::once(whole).chain(whole.split(';')) {
+            parts.push(part);
+            if let Some((before_comma, _)) = part.split_once(',') {
+                parts.push(before_comma);
+            }
+        }
+    }
+    parts
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -2457,17 +2756,76 @@ mod tests {
     }
 
     /// A machine with admin-only interpreters and one user-writable script and DLL.
+    ///
+    /// `C:\ProgramData` is as Windows ships it: Users may add files and folders, and a vendor folder
+    /// below it inherits that (`Open`), while the files in it are admin-only themselves (review M3-R2
+    /// H3). `Vendor`, `My Vendor` and `My Vendor (x64)` are vendor folders with a protected ACL of their
+    /// own, so the cmd quoting cases there turn on the command line alone.
     fn route_fixture() -> Fixture {
-        Fixture::builder()
+        const ADMIN_ONLY_FILES: [&str; 4] = [
+            r"C:\ProgramData\Open\unins000.exe",
+            r"C:\ProgramData\Open\uninstall.cmd",
+            r"C:\ProgramData\Open\vendor.dll",
+            r"C:\ProgramData\Open\vendor.msi",
+        ];
+        let mut builder = Fixture::builder()
             .admin_only_roots(&[r"C:\Windows", r"C:\Program Files", r"C:\ProgramData"])
+            .file(r"C:\Program Files\App\uninstall.cmd", 1)
+            .file(r"C:\Program Files\App\uninstall.py", 1)
+            .file(r"C:\Program Files\App\uninstall.js", 1)
+            .file(r"C:\Program Files\App\uninstall.vbs", 1)
+            .file(r"C:\Program Files\App\uninstall.jar", 1)
+            .file(r"C:\Program Files\App\vendor.dll", 1)
+            .file(r"C:\Program Files\Python312\python.exe", 1)
+            .file(r"C:\Program Files\Python312\python3.12.exe", 1)
+            .file(r"C:\Program Files\nodejs\node.exe", 1)
+            .file(r"C:\Program Files\Java\bin\java.exe", 1)
+            .file(r"C:\Windows\System32\wsl.exe", 1)
+            .file(r"C:\Windows\System32\wscript.exe", 1)
+            .file(r"C:\Windows\System32\regsvr32.exe", 1)
+            .file(r"C:\Windows\System32\conhost.exe", 1)
+            .file(r"C:\Windows\System32\shell32.dll", 1)
+            .file(
+                r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell_ise.exe",
+                1,
+            )
+            .file(r"C:\Program Files\dotnet\dotnet.exe", 1)
+            .file(r"C:\Program Files\App\app.dll", 1)
+            .file(r"C:\Program Files\Vendor Tools\tools.dll", 1)
+            .file(r"C:\ProgramData\My Vendor\uninstall.cmd", 1)
+            .file(r"C:\ProgramData\My Vendor (x64)\uninstall.cmd", 1)
+            // No extension: cmd would try `uninstall.com`, `uninstall.exe`, ... (M4).
+            .file(r"C:\ProgramData\Vendor\uninstall", 1)
+            .file(r"C:\ProgramData\Vendor\vendor.mst", 1)
+            .file(r"C:\Users\tester\AppData\Local\App\evil.mst", 1)
+            .admin_only_writable(r"C:\ProgramData", false)
+            .admin_only_writable(r"C:\ProgramData\Vendor", true)
+            .admin_only_writable(r"C:\ProgramData\My Vendor", true)
+            .admin_only_writable(r"C:\ProgramData\My Vendor (x64)", true);
+        for file in ADMIN_ONLY_FILES {
+            builder = builder.file(file, 1).admin_only_writable(file, true);
+        }
+        builder
             .file(r"C:\Windows\System32\cmd.exe", 1)
             .file(r"C:\Windows\System32\rundll32.exe", 1)
             .file(r"C:\Windows\System32\msiexec.exe", 1)
+            .file(
+                r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+                1,
+            )
+            .file(r"C:\Program Files\PowerShell\7\pwsh.exe", 1)
             .file(r"C:\Program Files\App\unins000.exe", 1)
             .file(r"C:\ProgramData\Vendor\uninstall.cmd", 1)
+            .file(r"C:\ProgramData\Vendor\uninstall.ps1", 1)
             .file(r"C:\Users\tester\AppData\Local\App\evil.cmd", 1)
             .file(r"C:\Users\tester\AppData\Local\App\evil.dll", 1)
             .file(r"C:\Users\tester\AppData\Local\App\evil.ini", 1)
+            .file(r"C:\ProgramData\Vendor\vendor.dll", 1)
+            // A user-writable folder whose name, cut at the comma, is an admin-only one.
+            .file(r"C:\ProgramData\Vendor,x\evil.msi", 1)
+            .file(r"C:\ProgramData\Vendor,x\evil.cmd", 1)
+            .file(r"C:\ProgramData\Vendor,x\evil.dll", 1)
+            .admin_only_writable(r"C:\ProgramData\Vendor,x", false)
             .build()
     }
 
@@ -2489,8 +2847,9 @@ mod tests {
         let fs = route_fixture();
         let machine = env(&[("PROGRAMDATA", r"C:\ProgramData")]);
         let user = env(&[("PROGRAMDATA", r"C:\Users\tester\planted")]);
-        let command =
-            route_entry(r#""C:\Windows\System32\cmd.exe" /c "%ProgramData%\Vendor\uninstall.cmd""#);
+        let command = route_entry(
+            r#""C:\Windows\System32\cmd.exe" /d /c "%ProgramData%\Vendor\uninstall.cmd""#,
+        );
         assert_eq!(
             route(&command, &fs, &user, &machine),
             purge_rpc::methods::Route::Medium,
@@ -2502,7 +2861,7 @@ mod tests {
         );
 
         let undefined =
-            route_entry(r#""C:\Windows\System32\cmd.exe" /c "%X%\Vendor\uninstall.cmd""#);
+            route_entry(r#""C:\Windows\System32\cmd.exe" /d /c "%X%\Vendor\uninstall.cmd""#);
         assert_eq!(
             route(&undefined, &fs, &machine, &machine),
             purge_rpc::methods::Route::Medium,
@@ -2515,7 +2874,7 @@ mod tests {
         let fs = route_fixture();
         let machine = env(&[("PROGRAMDATA", r"C:\ProgramData")]);
         for command in [
-            r#""C:\Windows\System32\cmd.exe" /c "C:\Users\tester\AppData\Local\App\evil.cmd""#,
+            r#""C:\Windows\System32\cmd.exe" /d /c "C:\Users\tester\AppData\Local\App\evil.cmd""#,
             r#""C:\Windows\System32\rundll32.exe" "C:\Users\tester\AppData\Local\App\evil.dll",Entry"#,
             r#""C:\Program Files\App\unins000.exe" --config "C:\Users\tester\AppData\Local\App\evil.ini""#,
         ] {
@@ -2528,7 +2887,7 @@ mod tests {
         assert_eq!(
             route(
                 &route_entry(
-                    r#""C:\Windows\System32\cmd.exe" /c "C:\ProgramData\Vendor\uninstall.cmd""#
+                    r#""C:\Windows\System32\cmd.exe" /d /c "C:\ProgramData\Vendor\uninstall.cmd""#
                 ),
                 &fs,
                 &machine,
@@ -2540,7 +2899,7 @@ mod tests {
         assert_eq!(
             route(
                 &route_entry(
-                    r#""C:\Windows\System32\cmd.exe" /c "C:\ProgramData\Vendor\missing.cmd""#
+                    r#""C:\Windows\System32\cmd.exe" /d /c "C:\ProgramData\Vendor\missing.cmd""#
                 ),
                 &fs,
                 &machine,
@@ -2560,6 +2919,624 @@ mod tests {
             ),
             purge_rpc::methods::Route::Broker,
             "msiexec with a ProductCode loads no client-chosen file"
+        );
+    }
+
+    const POWERSHELLS: [&str; 2] = [
+        r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+        r"C:\Program Files\PowerShell\7\pwsh.exe",
+    ];
+
+    fn shell_route(exe: &str, args: &str) -> purge_rpc::methods::Route {
+        let machine = env(&[("PROGRAMDATA", r"C:\ProgramData")]);
+        route(
+            &route_entry(&format!(r#""{exe}" {args}"#)),
+            &route_fixture(),
+            &machine,
+            &machine,
+        )
+    }
+
+    #[test]
+    fn inline_powershell_command_text_is_medium() {
+        for exe in POWERSHELLS {
+            for args in [
+                r#"-NoProfile -Command ". .\cleanup.ps1""#,
+                r#"-command "Import-Module VendorTools; Remove-VendorApp""#,
+                r#"-c "& $env:LOCALAPPDATA\App\undo.ps1""#,
+                "-ExecutionPolicy Bypass -Command Remove-Item x",
+            ] {
+                assert_eq!(
+                    shell_route(exe, args),
+                    purge_rpc::methods::Route::Medium,
+                    "{exe} {args}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn encoded_powershell_command_is_medium() {
+        // `Remove-Item x` as UTF-16LE base64; its content is never read.
+        let b64 = "UgBlAG0AbwB2AGUALQBJAHQAZQBtACAAeAA=";
+        for exe in POWERSHELLS {
+            for switch in ["-EncodedCommand", "-encodedcommand", "-enc", "-ec", "-e"] {
+                assert_eq!(
+                    shell_route(exe, &format!("-NoProfile {switch} {b64}")),
+                    purge_rpc::methods::Route::Medium,
+                    "{exe} {switch}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn positional_powershell_command_text_is_medium() {
+        for exe in POWERSHELLS {
+            for args in [
+                r#""& .\uninstall.ps1""#,
+                "Remove-VendorApp -Force",
+                // Command text before a `-File`: the `-File` is part of the command, not a load path.
+                r#"". .\evil.ps1" -File "C:\ProgramData\Vendor\uninstall.ps1""#,
+                r#"-c ". .\evil.ps1" -File "C:\ProgramData\Vendor\uninstall.ps1""#,
+                r#"/File "C:\ProgramData\Vendor\uninstall.ps1""#,
+            ] {
+                assert_eq!(
+                    shell_route(exe, args),
+                    purge_rpc::methods::Route::Medium,
+                    "{exe} {args}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn powershell_with_an_admin_only_file_is_still_medium() {
+        // The profile and the auto-loaded modules are user-writable whatever the script is.
+        for exe in POWERSHELLS {
+            for args in [
+                r#"-File "C:\ProgramData\Vendor\uninstall.ps1""#,
+                r#"-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -file "C:\ProgramData\Vendor\uninstall.ps1" -Quiet"#,
+                r#"-nop -ep Bypass -f "C:\ProgramData\Vendor\uninstall.ps1""#,
+                r#"-NoProfile -File "C:\ProgramData\Vendor\uninstall.ps1""#,
+                r#"-File "C:\Users\tester\AppData\Local\App\evil.cmd""#,
+                r"-File .\uninstall.ps1",
+                "-File",
+            ] {
+                assert_eq!(
+                    shell_route(exe, args),
+                    purge_rpc::methods::Route::Medium,
+                    "{exe} {args}"
+                );
+            }
+        }
+        assert_eq!(
+            shell_route(
+                r"C:\Windows\System32\msiexec.exe",
+                "/x {11111111-1111-1111-1111-111111111111} /qn"
+            ),
+            purge_rpc::methods::Route::Broker,
+            "msiexec with a ProductCode is unchanged"
+        );
+        assert_eq!(
+            shell_route(
+                r"C:\Windows\System32\msiexec.exe",
+                "/X{11111111-1111-1111-1111-111111111111}"
+            ),
+            purge_rpc::methods::Route::Broker,
+            "msiexec with a ProductCode is unchanged"
+        );
+    }
+
+    const CMD: &str = r"C:\Windows\System32\cmd.exe";
+
+    #[test]
+    fn cmd_without_d_before_c_is_medium() {
+        // Without `/d` cmd runs HKCU's Command Processor AutoRun first.
+        for args in [
+            r#"/c "C:\ProgramData\Vendor\uninstall.cmd""#,
+            r#"/k "C:\ProgramData\Vendor\uninstall.cmd""#,
+            r#"/r "C:\ProgramData\Vendor\uninstall.cmd""#,
+            r#"/q /c "C:\ProgramData\Vendor\uninstall.cmd""#,
+            // `/d` after `/c` is command text.
+            r#"/c /d "C:\ProgramData\Vendor\uninstall.cmd""#,
+            r#"/C "C:\ProgramData\Vendor\uninstall.cmd" /D"#,
+            // A switch spelling cmd does not document ends the walk.
+            r#"/d/c "C:\ProgramData\Vendor\uninstall.cmd""#,
+            r#"-d /c "C:\ProgramData\Vendor\uninstall.cmd""#,
+            r#""C:\ProgramData\Vendor\uninstall.cmd""#,
+        ] {
+            assert_eq!(
+                shell_route(CMD, args),
+                purge_rpc::methods::Route::Medium,
+                "{args}"
+            );
+        }
+        for args in [
+            r#"/d /c "C:\ProgramData\Vendor\uninstall.cmd""#,
+            r#"/D /C "C:\ProgramData\Vendor\uninstall.cmd""#,
+            r#"/q /d /e:on /v:off /c "C:\ProgramData\Vendor\uninstall.cmd" /silent"#,
+            r#"/d /k "C:\ProgramData\Vendor\uninstall.cmd""#,
+            r#"/d /r "C:\ProgramData\Vendor\uninstall.cmd""#,
+        ] {
+            assert_eq!(
+                shell_route(CMD, args),
+                purge_rpc::methods::Route::Broker,
+                "an admin-only script with /d first stays broker-route: {args}"
+            );
+        }
+    }
+
+    #[test]
+    fn cmd_running_another_host_or_a_second_program_is_medium() {
+        let b64 = "UgBlAG0AbwB2AGUALQBJAHQAZQBtACAAeAA=";
+        for args in [
+            format!("/d /c powershell -NoProfile -EncodedCommand {b64}"),
+            format!(
+                r#"/d /c "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe" -enc {b64}"#
+            ),
+            r#"/d /c "C:\Program Files\PowerShell\7\pwsh.exe" -File "C:\ProgramData\Vendor\uninstall.ps1""#.into(),
+            r"/d /c C:\Windows\System32\cmd.exe /c C:\ProgramData\Vendor\uninstall.cmd".into(),
+            r"/d /c CMD /d /c C:\ProgramData\Vendor\uninstall.cmd".into(),
+            r"/d /c msiexec /x {11111111-1111-1111-1111-111111111111}".into(),
+            r"/d /c rundll32.exe C:\ProgramData\Vendor\vendor.dll,Entry".into(),
+            r"/d /c C:\ProgramData\Vendor\uninstall.cmd & evil.cmd".into(),
+            r"/d /c C:\ProgramData\Vendor\uninstall.cmd&&evil.cmd".into(),
+            r"/d /c C:\ProgramData\Vendor\uninstall.cmd | more".into(),
+            r"/d /c C:\ProgramData\Vendor\uninstall.cmd,evil".into(),
+        ] {
+            assert_eq!(
+                shell_route(CMD, &args),
+                purge_rpc::methods::Route::Medium,
+                "{args}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_comma_never_turns_a_user_writable_load_path_admin_only() {
+        // `C:\ProgramData\Vendor,x` is user-writable; cut at the comma it reads `C:\ProgramData\Vendor`,
+        // which is admin-only.
+        for (exe, args) in [
+            (
+                r"C:\Windows\System32\msiexec.exe",
+                r#"/i "C:\ProgramData\Vendor,x\evil.msi" /qn"#,
+            ),
+            (CMD, r#"/d /c "C:\ProgramData\Vendor,x\evil.cmd""#),
+            (
+                r"C:\Windows\System32\rundll32.exe",
+                r#""C:\ProgramData\Vendor,x\evil.dll",Entry"#,
+            ),
+        ] {
+            assert_eq!(
+                shell_route(exe, args),
+                purge_rpc::methods::Route::Medium,
+                "{exe} {args}"
+            );
+        }
+        for args in [
+            r#""C:\ProgramData\Vendor\vendor.dll",Entry"#,
+            r"C:\ProgramData\Vendor\vendor.dll,Entry",
+        ] {
+            assert_eq!(
+                shell_route(r"C:\Windows\System32\rundll32.exe", args),
+                purge_rpc::methods::Route::Broker,
+                "an admin-only DLL stays broker-route: {args}"
+            );
+        }
+        for args in [
+            // No extension: the loader would add `.dll`, so the path is not the one judged.
+            r"C:\ProgramData\Vendor,Entry",
+            r#""C:\ProgramData\Vendor\vendor.dll"#,
+            "",
+            // Unquoted with a space: `C:\Program` is not the admin-only DLL.
+            r"C:\Program Files\Vendor Tools\tools.dll,Entry",
+        ] {
+            assert_eq!(
+                shell_route(r"C:\Windows\System32\rundll32.exe", args),
+                purge_rpc::methods::Route::Medium,
+                "{args}"
+            );
+        }
+        assert_eq!(
+            shell_route(
+                r"C:\Windows\System32\rundll32.exe",
+                r#""C:\Program Files\Vendor Tools\tools.dll",Entry"#
+            ),
+            purge_rpc::methods::Route::Broker,
+            "the same DLL quoted"
+        );
+    }
+
+    #[test]
+    fn a_file_in_a_folder_users_may_add_to_is_medium() {
+        // Review M3-R2 H3: the files under `C:\ProgramData\Open` are admin-only, the folder is not.
+        for (exe, args) in [
+            (r"C:\ProgramData\Open\unins000.exe", "/S"),
+            (CMD, r"/d /c C:\ProgramData\Open\uninstall.cmd"),
+            (
+                r"C:\Windows\System32\rundll32.exe",
+                r"C:\ProgramData\Open\vendor.dll,Entry",
+            ),
+            (
+                r"C:\Windows\System32\msiexec.exe",
+                r"/i C:\ProgramData\Open\vendor.msi /qn",
+            ),
+            (
+                r"C:\Program Files\App\unins000.exe",
+                r"/config=C:\ProgramData\Open\vendor.dll",
+            ),
+        ] {
+            assert_eq!(
+                shell_route(exe, args),
+                purge_rpc::methods::Route::Medium,
+                "{exe} {args}"
+            );
+        }
+        // Under a Program Files-like folder the same commands are broker-route.
+        for (exe, args) in [
+            (r"C:\Program Files\App\unins000.exe", "/S"),
+            (CMD, r#"/d /c "C:\Program Files\App\uninstall.cmd""#),
+            (CMD, r#"/d /c "C:\Program Files\App\uninstall.cmd" /silent"#),
+        ] {
+            assert_eq!(
+                shell_route(exe, args),
+                purge_rpc::methods::Route::Broker,
+                "{exe} {args}"
+            );
+        }
+    }
+
+    #[test]
+    fn cmd_quote_stripping_that_could_change_the_program_is_medium() {
+        // Review M3-R2 M3: without these, cmd keeps the quotes; with them it strips the first and the
+        // last quote, and `C:\ProgramData\My` is what runs.
+        for args in [
+            r#"/d /s /c "C:\ProgramData\My Vendor\uninstall.cmd""#,
+            r#"/s /d /c "C:\ProgramData\My Vendor\uninstall.cmd""#,
+            r#"/d /c "C:\ProgramData\My Vendor\uninstall.cmd" "/log""#,
+            r#"/d /c "C:\ProgramData\My Vendor (x64)\uninstall.cmd""#,
+            r#"/d /c C:\ProgramData\Vendor\uninstall.cmd "/log""#,
+            r#"/d /c "C:\ProgramData\Vendor\uninstall.cmd"/log"#,
+            r#"/d /c "C:\ProgramData\Vendor\uninstall.cmd"#,
+            r"/d /c @C:\ProgramData\Vendor\uninstall.cmd",
+            // M4: no extension.
+            r"/d /c C:\ProgramData\Vendor\uninstall",
+            r#"/d /c "C:\ProgramData\Vendor\uninstall""#,
+            // A relative program is found through the current directory and `PATH`.
+            "/d /c uninstall.cmd",
+            r"/d /c Vendor\uninstall.cmd",
+            // Delayed expansion.
+            "/d /v:on /c x.cmd !X!",
+            r"/d /v:on /c C:\ProgramData\Vendor\uninstall.cmd !X!",
+            // A host, quoted and without `.exe`.
+            r#"/d /c "C:\Windows\System32\WindowsPowerShell\v1.0\powershell""#,
+            r#"/d /c "C:\Windows\System32\WindowsPowerShell\v1.0\powershell" -enc AAAA"#,
+            // A quote in a switch before `/c`.
+            r#"/d "/c" C:\ProgramData\Vendor\uninstall.cmd"#,
+        ] {
+            assert_eq!(
+                shell_route(CMD, args),
+                purge_rpc::methods::Route::Medium,
+                "{args}"
+            );
+        }
+        for args in [
+            r#"/d /c "C:\ProgramData\My Vendor\uninstall.cmd""#,
+            r#"/d /c "C:\ProgramData\My Vendor\uninstall.cmd" /log"#,
+            r"/d /c C:\ProgramData\Vendor\uninstall.cmd /log",
+        ] {
+            assert_eq!(
+                shell_route(CMD, args),
+                purge_rpc::methods::Route::Broker,
+                "{args}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_host_named_in_a_launchers_arguments_is_medium() {
+        // Review M3-R2 M7: the launcher is admin-only, the interpreter it starts is not judged.
+        for (exe, args) in [
+            (
+                r"C:\Windows\System32\conhost.exe",
+                r#"--headless powershell.exe -ExecutionPolicy Bypass -File "C:\Program Files\App\un.ps1""#,
+            ),
+            (
+                r"C:\Windows\System32\rundll32.exe",
+                r"C:\Windows\System32\shell32.dll,ShellExec_RunDLL powershell.exe -enc AAAA",
+            ),
+            (
+                CMD,
+                r"/d /c C:\Windows\System32\conhost.exe --headless powershell -enc AAAA",
+            ),
+            (
+                r"C:\Windows\System32\conhost.exe",
+                r#"--headless "C:\Program Files\nodejs\node.exe" x.js"#,
+            ),
+            (
+                r"C:\Windows\System32\rundll32.exe",
+                r"C:\Windows\System32\shell32.dll,ShellExec_RunDLL,python",
+            ),
+            (
+                r"C:\Program Files\App\unins000.exe",
+                r"/RUNAFTER=C:\Windows\System32\cmd.exe",
+            ),
+            (
+                r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell_ise.exe",
+                r#""C:\Program Files\App\un.ps1""#,
+            ),
+            (r"C:\Program Files\dotnet\dotnet.exe", "app.dll"),
+            (
+                r"C:\Program Files\dotnet\dotnet.exe",
+                r#""C:\Program Files\App\app.dll""#,
+            ),
+        ] {
+            assert_eq!(
+                shell_route(exe, args),
+                purge_rpc::methods::Route::Medium,
+                "{exe} {args}"
+            );
+        }
+        // Ordinary vendor arguments, and names that merely contain a host's, are not hosts.
+        for args in [
+            r#"/S /LOG="C:\Program Files\App\u.log""#,
+            "--uninstall /VERYSILENT /SUPPRESSMSGBOXES",
+            "--remove-node-modules /python-cleanup -sh",
+            r#""/D=C:\Program Files\App""#,
+        ] {
+            assert_eq!(
+                shell_route(r"C:\Program Files\App\unins000.exe", args),
+                purge_rpc::methods::Route::Broker,
+                "{args}"
+            );
+        }
+        for token in [
+            "powershell.exe",
+            r"C:\x\NODE.EXE",
+            "a.dll,Entry,pwsh",
+            "X=cscript",
+        ] {
+            assert!(token_names_a_host(token), "{token}");
+        }
+        for token in [
+            "/S",
+            "-py",
+            "/sh",
+            "--node",
+            "powershell-tools",
+            "unins000.exe",
+        ] {
+            assert!(!token_names_a_host(token), "{token}");
+        }
+    }
+
+    #[test]
+    fn a_host_after_a_colon_or_behind_a_short_name_is_medium() {
+        // Fable's optional follow-ups to the sixth review: `:` parts and 8.3 names.
+        const UNINS: &str = r"C:\Program Files\App\unins000.exe";
+        for (exe, args) in [
+            (UNINS, "/RUN:powershell"),
+            (UNINS, "/RUN:powershell.exe -enc AAAA"),
+            (UNINS, r"--exec:C:\Windows\System32\cmd.exe"),
+            (UNINS, "-shell:pwsh"),
+            (
+                UNINS,
+                r"/RUN:C:\Windows\System32\WindowsPowerShell\v1.0\POWERS~1.EXE",
+            ),
+            (
+                r"C:\Windows\System32\conhost.exe",
+                "--headless POWERS~1.EXE",
+            ),
+            (
+                r"C:\Windows\System32\conhost.exe",
+                r"--headless C:\Windows\System32\WindowsPowerShell\v1.0\POWERS~1.EXE",
+            ),
+            (
+                r"C:\Windows\System32\WindowsPowerShell\v1.0\POWERS~1.EXE",
+                "-enc AAAA",
+            ),
+            (r"C:\Program Files\App\UNINST~1.EXE", "/S"),
+            (
+                r"C:\Windows\System32\conhost.exe",
+                "--headless powershell.exe.",
+            ),
+            (
+                r"C:\Windows\System32\conhost.exe",
+                r#"--headless "powershell.exe ""#,
+            ),
+        ] {
+            assert_eq!(
+                shell_route(exe, args),
+                purge_rpc::methods::Route::Medium,
+                "{exe} {args}"
+            );
+        }
+        for args in [
+            "/S",
+            "/x /S",
+            "-key:value /mode:silent",
+            "--url=http://example.com/a",
+            r#""/LOG=C:\Program Files\App\u.log""#,
+            r#"/LOG:"C:\Program Files\App\u.log""#,
+        ] {
+            assert_eq!(
+                shell_route(UNINS, args),
+                purge_rpc::methods::Route::Broker,
+                "{args}"
+            );
+        }
+        for name in [
+            "powershell.exe.",
+            "powershell.exe ",
+            r"C:\x\PowerShell.EXE. .",
+            "pwsh.",
+        ] {
+            assert!(is_interpreter(name), "{name:?}");
+        }
+        assert_eq!(
+            program_parts(r"/RUN:C:\x\a.exe"),
+            [r"/RUN:C:\x\a.exe", r"C:\x\a.exe"]
+        );
+        assert_eq!(program_parts(r"C:\x\a.exe"), [r"C:\x\a.exe"]);
+        assert!(is_short_name(r"C:\x\POWERS~1.EXE"));
+        assert!(!is_short_name(r"C:\PROGRA~1\App\unins000.exe"));
+        assert!(!is_short_name("a~b.txt"));
+    }
+
+    #[test]
+    fn interpreters_and_script_hosts_are_medium() {
+        // Coordinator ruling after the fourth Fable review: an interpreter also loads code from
+        // per-user places (Python's user site-packages, ...), so an admin-only script is not enough.
+        for (exe, args) in [
+            (
+                r"C:\Program Files\Python312\python.exe",
+                r#""C:\Program Files\App\uninstall.py""#,
+            ),
+            (
+                r"C:\Program Files\Python312\python3.12.exe",
+                r#"-I "C:\Program Files\App\uninstall.py""#,
+            ),
+            (
+                r"C:\Program Files\nodejs\node.exe",
+                r#""C:\Program Files\App\uninstall.js""#,
+            ),
+            (
+                r"C:\Program Files\Java\bin\java.exe",
+                r#"-jar "C:\Program Files\App\uninstall.jar""#,
+            ),
+            (r"C:\Windows\System32\wsl.exe", "-e /opt/app/uninstall.sh"),
+            (
+                r"C:\Windows\System32\wscript.exe",
+                r#""C:\Program Files\App\uninstall.vbs""#,
+            ),
+            (CMD, r#"/d /c python "C:\Program Files\App\uninstall.py""#),
+            (
+                CMD,
+                r#"/d /c "C:\Program Files\nodejs\node.exe" "C:\Program Files\App\uninstall.js""#,
+            ),
+            (CMD, r"/d /c wsl.exe -e /opt/app/uninstall.sh"),
+        ] {
+            assert_eq!(
+                shell_route(exe, args),
+                purge_rpc::methods::Route::Medium,
+                "{exe} {args}"
+            );
+        }
+        for name in [
+            "python",
+            "PYTHONW.EXE",
+            "python3.11.exe",
+            "py",
+            r"C:\x\node.exe",
+            "forfiles",
+            "msbuild.exe",
+            "cmstp",
+            "sdbinst.exe",
+        ] {
+            assert!(is_interpreter(name), "{name}");
+        }
+        for name in [
+            "unins000.exe",
+            "cmd.exe",
+            "msiexec",
+            "rundll32.exe",
+            "pyinstaller-app.exe",
+            "python-3.12.0-amd64.exe",
+        ] {
+            assert!(!is_interpreter(name), "{name}");
+        }
+        // The judged hosts keep their rules.
+        assert_eq!(
+            shell_route(
+                r"C:\Windows\System32\regsvr32.exe",
+                r#"/u /s "C:\Program Files\App\vendor.dll""#
+            ),
+            purge_rpc::methods::Route::Broker,
+            "regsvr32 with an admin-only DLL"
+        );
+    }
+
+    #[test]
+    fn a_missing_argument_file_is_judged_by_its_nearest_existing_folder() {
+        // Review M3-R2 M5: a file that does not exist yet can be created while the dialog is open.
+        const UNINS: &str = r"C:\Program Files\App\unins000.exe";
+        for args in [
+            r"/LOADINF=C:\Users\tester\AppData\Local\App\new.inf",
+            r"/LOADINF=C:\Users\tester\new\deeper\new.inf",
+            r#""/LOG=C:\Users\tester\AppData\Local\App\uninstall.log""#,
+            // `C:\ProgramData` lets users add files and folders.
+            r"/LOG=C:\ProgramData\uninstall.log",
+            r"/LOG=C:\ProgramData\NewVendor\uninstall.log",
+            r"/LOADINF=\\server\share\new.inf",
+            r"/LOADINF=Q:\nowhere\new.inf",
+            // L4: a leading `//` is a UNC path too.
+            "/LOADINF=//localhost/c$/Users/tester/new.inf",
+            "//example.com/c",
+            // Unquoted with a space: the uninstaller reads `C:\Program`, whose folder is `C:\`.
+            r"/LOADINF=C:\Program Files\App\new.inf",
+        ] {
+            assert_eq!(
+                shell_route(UNINS, args),
+                purge_rpc::methods::Route::Medium,
+                "{args}"
+            );
+        }
+        for args in [
+            r#""/LOADINF=C:\Program Files\App\new.inf""#,
+            r#""/LOG=C:\Program Files\App\logs\deeper\uninstall.log""#,
+            r#"/LOG="C:/Program Files/App/uninstall.log""#,
+            // Not paths: switches, values with a colon, URLs, a GUID, a relative name.
+            "/S /VERYSILENT",
+            "-key:value --mode:quiet x:1 /D=x:1",
+            "--url=http://example.com/a;https://example.com/b",
+            "{11111111-1111-1111-1111-111111111111} logs\\uninstall.log",
+        ] {
+            assert_eq!(
+                shell_route(UNINS, args),
+                purge_rpc::methods::Route::Broker,
+                "{args}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_user_writable_file_in_a_name_value_argument_is_medium() {
+        // Review M3-R2 L3: the value after `=` and each `;`-separated part are judged.
+        for args in [
+            r"/x {11111111-1111-1111-1111-111111111111} TRANSFORMS=C:\Users\tester\AppData\Local\App\evil.mst;b.mst",
+            r"/x {11111111-1111-1111-1111-111111111111} TRANSFORMS=C:\Users\tester\AppData\Local\App\evil.mst",
+            r"/x {11111111-1111-1111-1111-111111111111} TRANSFORMS=C:\ProgramData\Vendor\vendor.mst;C:\Users\tester\AppData\Local\App\evil.mst",
+            r#"/x {11111111-1111-1111-1111-111111111111} "TRANSFORMS=C:\ProgramData\Vendor\vendor.mst;C:\Users\tester\AppData\Local\App\evil.mst""#,
+        ] {
+            assert_eq!(
+                shell_route(r"C:\Windows\System32\msiexec.exe", args),
+                purge_rpc::methods::Route::Medium,
+                "{args}"
+            );
+        }
+        assert_eq!(
+            shell_route(
+                r"C:\Windows\System32\msiexec.exe",
+                r"/x {11111111-1111-1111-1111-111111111111} TRANSFORMS=C:\ProgramData\Vendor\vendor.mst /qn"
+            ),
+            purge_rpc::methods::Route::Broker,
+            "an admin-only transform"
+        );
+        assert_eq!(
+            path_parts(r"A=C:\a;C:\b,c"),
+            [
+                r"A=C:\a;C:\b,c",
+                r"A=C:\a;C:\b",
+                r"A=C:\a",
+                r"C:\b,c",
+                r"C:\b",
+                r"C:\a;C:\b,c",
+                r"C:\a;C:\b",
+                r"C:\a",
+                r"C:\b,c",
+                r"C:\b",
+            ]
         );
     }
 

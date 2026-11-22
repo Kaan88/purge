@@ -164,6 +164,9 @@ impl FileSystemSource for Switch {
     fn is_admin_only_writable(&self, path: &str) -> SourceResult<bool> {
         self.now().is_admin_only_writable(path)
     }
+    fn is_admin_only_executable(&self, path: &str) -> SourceResult<bool> {
+        self.now().is_admin_only_executable(path)
+    }
 }
 
 impl SystemSource for Switch {

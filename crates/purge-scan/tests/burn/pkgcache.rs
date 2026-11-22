@@ -188,6 +188,9 @@ impl FileSystemSource for Recording<'_> {
     fn is_admin_only_writable(&self, path: &str) -> SourceResult<bool> {
         self.inner.is_admin_only_writable(path)
     }
+    fn is_admin_only_executable(&self, path: &str) -> SourceResult<bool> {
+        self.inner.is_admin_only_executable(path)
+    }
 }
 
 /// R2a S7 (hostile): a recorded path naming another bundle's or product's folder of the cache (a
