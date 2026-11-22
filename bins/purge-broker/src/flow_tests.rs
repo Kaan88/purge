@@ -981,7 +981,7 @@ fn a_planted_user_environment_keeps_a_machine_command_medium() {
         &key,
         "UninstallString",
         RegData::from_sz(
-            r#""C:\Windows\System32\cmd.exe" /c "%ProgramData%\Vendor\uninstall.cmd""#,
+            r#""C:\Windows\System32\cmd.exe" /d /c "%ProgramData%\Vendor\uninstall.cmd""#,
         ),
     );
     let id = ProgramId::machine(View::K64, "Planted App_is1").expect("program id");
@@ -1026,7 +1026,7 @@ fn a_user_writable_script_under_an_admin_only_interpreter_is_medium() {
         &key,
         "UninstallString",
         RegData::from_sz(
-            r#""C:\Windows\System32\cmd.exe" /c "C:\Users\tester\AppData\Local\Planted\uninstall.cmd""#,
+            r#""C:\Windows\System32\cmd.exe" /d /c "C:\Users\tester\AppData\Local\Planted\uninstall.cmd""#,
         ),
     );
     let id = ProgramId::machine(View::K64, "Planted Script_is1").expect("program id");

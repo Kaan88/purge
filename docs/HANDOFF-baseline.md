@@ -16,12 +16,14 @@ continued from any harness: read it, then `git log --oneline -15` and `git workt
   the real dialog on the VM first), N6 (needs a fingerprint retention rule), N7 (changes the scan-claim rules).
 - Checks: fmt, clippy -D warnings, check-deps, gen-dto --check ok; broker 218 + 10 + 1, exec lib 464 (8 ignored);
   `dotnet build ui\Purge.App -c Release` 0 warnings; UI tests 100/100. All unelevated.
-- M2 residual (inline `powershell`/`pwsh` broker-route) FIXED on branch `r2-m2-inline` (6167e25, pushed, not
-  merged): inline, encoded or positional command text is `Medium`; pending a Fable review (route rule = critical)
-  before the merge into `baseline`. Still untested on its own: the S2 vanished-session refusal of `plan.create`;
-  the History page still shows sample data (S5 alerts only on the Leftovers result). The section "Still open from
-  M3-R2" below is superseded by this one.
-- Next: Fable review of `r2-m2-inline`, merge, then M3 per the design (warm/first-launch bench rows, VM backlog).
+- M2 residual: REWORKED PER FABLE, PENDING RE-REVIEW on branch `r2-m2-inline` (pushed, not merged). Fable's review
+  of 6167e25 asked for changes (H1, H2, M1, M2, L1); the rework makes every `powershell`/`pwsh` line `Medium`
+  (profile and HKCU module paths load even with `-File`/`-NoProfile`), `cmd` `Medium` without `/d` before `/c` or
+  when it runs another host or a second program, and makes the comma handling quote-aware (DECISIONS M2 row).
+  Cost: PowerShell and `cmd`-without-`/d` uninstallers that need admin run at medium and may fail visibly. Still
+  untested on its own: the S2 vanished-session refusal of `plan.create`; the History page still shows sample data
+  (S5 alerts only on the Leftovers result). The section "Still open from M3-R2" below is superseded by this one.
+- Next: Fable re-review of `r2-m2-inline`, merge, then M3 per the design (warm/first-launch bench rows, VM backlog).
 
 ## COLD BENCH DONE 2026-11-22 04:00: PASS, p50 559.7 ms (limit 1000), 5 runs 544-584 ms, CPU 96-98 % idle.
 Committed `bench/launch/cold-DESKTOP-K1F333G.json`, row filled in docs/M3_BENCH.md. Attempt 1 measured nothing
@@ -167,7 +169,7 @@ before merging (or `git stash` if you want to inspect them). Untracked and harml
   `dotnet build ui\Purge.App -c Release` (0 warnings), `dotnet test ui\Purge.Client.Tests` (UI tests build the
   Rust pipe harness with `cargo`, so cargo must be on PATH), push, then build the Inno setup and hand it over.
 
-### Still open from M3-R2 (DONE 2026-11-22; the M2 residual is fixed on `r2-m2-inline`, see the top section)
+### Still open from M3-R2 (DONE 2026-11-22; the M2 residual is reworked on `r2-m2-inline`, pending re-review, see the top section)
 - Point 2 phrasing: reword B4 in the design to "changes outside Purge's store" (recovery with nothing to change
   runs without a dialog).
 - N1-N9 nits (docs/reviews/m3/r2-review.md, Notes).
