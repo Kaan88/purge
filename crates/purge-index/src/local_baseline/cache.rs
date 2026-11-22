@@ -8,6 +8,11 @@
 //! an elevated engine opens the cache writable; every write goes to a temporary name in the directory
 //! and is renamed.
 //!
+//! Every file of the directory is reached through [`CacheFiles`], by its name: by path for the engine
+//! ([`PathFiles`], behind the rule above), relative to the checked handle of the store's `baseline`
+//! directory for the broker ([`LocalCache::with_files`]; DECISIONS 2026-11-22, "baseline checked").
+//! The names, the formats and what a load decides are the same either way.
+//!
 //! # Parts, keyed per source
 //!
 //! The local baseline is stored as one text file per source, each in the local baseline file format
@@ -116,6 +121,137 @@ const TEMP_SUFFIX: &str = ".tmp";
 
 /// Distinguishes the temporary files of concurrent writers in one process.
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+// ---------------------------------------------------------------------------------------------------
+// The files of the directory
+
+/// How the cache reaches the files of its directory: every read, write, rename and removal of the
+/// cache goes through this, by a file name in the directory, never by a path of its own.
+///
+/// [`LocalCache::open`] uses [`PathFiles`], by path, for the engine: its directory passed the
+/// admin-only rule just before (the directory and every ancestor, owner included, no reparse point on
+/// the chain), so a standard user cannot have planted anything in it. The broker gives
+/// [`LocalCache::with_files`] its store's checked `baseline` directory instead, whose files are reached
+/// relative to the checked handle without following anything (DECISIONS 2026-11-22, "baseline
+/// checked").
+pub trait CacheFiles: std::fmt::Debug + Send + Sync {
+    /// The plain files of the directory (no directory, no link), with their last write times. A
+    /// directory that cannot be listed lists nothing.
+    fn list(&self) -> Vec<(String, SystemTime)>;
+    /// The bytes of the file `name`: [`io::ErrorKind::NotFound`] when there is none,
+    /// [`io::ErrorKind::InvalidData`] when it has more than `max` bytes.
+    fn read(&self, name: &str, max: u64) -> io::Result<Vec<u8>>;
+    /// Writes `bytes` to the new file `temp` and renames it over `name`.
+    fn replace(&self, name: &str, temp: &str, bytes: &[u8]) -> io::Result<()>;
+    /// Removes the file `name`.
+    fn remove(&self, name: &str) -> io::Result<()>;
+}
+
+/// A rule a cache file must pass before [`PathFiles`] reads it ([`admin_only_file`] for an elevated
+/// engine).
+pub type FileRule = std::sync::Arc<dyn Fn(&Path) -> bool + Send + Sync>;
+
+/// Whether the file at `path` can be changed by administrators and the system alone, it and every
+/// ancestor (`purge_win::sid::is_admin_only_writable`: owner included, no reparse point on the chain),
+/// and has one name: the rule an elevated engine reads a cache file by path under, as
+/// `shipped_file_trusted` judges a shipped baseline. The directory rule does not cover a file: one
+/// moved into the directory keeps its own owner and DACL, and a hard link shares them with its other
+/// name.
+pub fn admin_only_file(path: &Path) -> bool {
+    purge_win::sid::is_admin_only_writable(path) == Ok(true)
+        && purge_win::fs::metadata(path).is_ok_and(|m| m.n_links == 1 && m.reparse_tag == 0)
+}
+
+/// [`CacheFiles`] by path, in a directory that passed the admin-only rule ([`LocalCache::open`]).
+/// With a [`FileRule`], a file that fails it is not read ([`io::ErrorKind::PermissionDenied`]; the
+/// load takes it as a miss, so the view only loses presence).
+#[derive(Clone)]
+pub struct PathFiles {
+    dir: PathBuf,
+    rule: Option<FileRule>,
+}
+
+impl std::fmt::Debug for PathFiles {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PathFiles")
+            .field("dir", &self.dir)
+            .field("rule", &self.rule.is_some())
+            .finish()
+    }
+}
+
+impl PathFiles {
+    /// The files of `dir`, read without a per-file rule.
+    pub fn new(dir: &Path) -> PathFiles {
+        PathFiles {
+            dir: dir.to_path_buf(),
+            rule: None,
+        }
+    }
+
+    /// The files of `dir`; each must pass `rule` before it is read.
+    pub fn with_rule(dir: &Path, rule: FileRule) -> PathFiles {
+        PathFiles {
+            dir: dir.to_path_buf(),
+            rule: Some(rule),
+        }
+    }
+}
+
+impl CacheFiles for PathFiles {
+    fn list(&self) -> Vec<(String, SystemTime)> {
+        let Ok(entries) = fs::read_dir(&self.dir) else {
+            return Vec::new();
+        };
+        entries
+            .flatten()
+            .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+            .filter_map(|e| {
+                let modified = fs::metadata(e.path())
+                    .and_then(|m| m.modified())
+                    .unwrap_or(SystemTime::UNIX_EPOCH);
+                Some((e.file_name().into_string().ok()?, modified))
+            })
+            .collect()
+    }
+
+    fn read(&self, name: &str, max: u64) -> io::Result<Vec<u8>> {
+        let path = self.dir.join(name);
+        if let Some(rule) = &self.rule {
+            // A missing file stays a missing file; one that is there must pass the rule.
+            fs::symlink_metadata(&path)?;
+            if !rule(&path) {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "a standard user can write it, it has more than one name or it is a link",
+                ));
+            }
+        }
+        read_capped(&path, max)
+    }
+
+    fn replace(&self, name: &str, temp: &str, bytes: &[u8]) -> io::Result<()> {
+        let temp = self.dir.join(temp);
+        let written = (|| {
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temp)?;
+            file.write_all(bytes)?;
+            file.sync_all()?;
+            drop(file);
+            fs::rename(&temp, self.dir.join(name))
+        })();
+        if written.is_err() {
+            let _ = fs::remove_file(&temp);
+        }
+        written
+    }
+
+    fn remove(&self, name: &str) -> io::Result<()> {
+        fs::remove_file(self.dir.join(name))
+    }
+}
 
 // ---------------------------------------------------------------------------------------------------
 // Ids
@@ -357,6 +493,7 @@ struct Part {
 #[derive(Debug, Clone)]
 pub struct LocalCache {
     dir: PathBuf,
+    files: std::sync::Arc<dyn CacheFiles>,
     writable: bool,
 }
 
@@ -370,6 +507,17 @@ impl LocalCache {
     /// `writable`: the engine is elevated and may store. A writable cache removes the temporary
     /// files a writer left behind.
     pub fn open(dir: &Path, fs: &dyn FileSystemSource, writable: bool) -> Option<LocalCache> {
+        Self::open_with_rule(dir, fs, writable, None)
+    }
+
+    /// [`LocalCache::open`], reading each file only when it passes `rule` ([`PathFiles::with_rule`]):
+    /// the elevated live engine passes [`admin_only_file`].
+    pub fn open_with_rule(
+        dir: &Path,
+        fs: &dyn FileSystemSource,
+        writable: bool,
+        rule: Option<FileRule>,
+    ) -> Option<LocalCache> {
         let path = dir.to_str()?;
         // The directory itself is asked without following it: `Path::is_dir` would say yes to a
         // junction that leads somewhere else.
@@ -377,14 +525,27 @@ impl LocalCache {
         if fs.is_admin_only_writable(path) != Ok(true) || !plain_dir {
             return None;
         }
+        let files = match rule {
+            Some(rule) => PathFiles::with_rule(dir, rule),
+            None => PathFiles::new(dir),
+        };
+        Some(Self::with_files(dir, std::sync::Arc::new(files), writable))
+    }
+
+    /// The cache whose files `files` reaches, in the directory `dir` (named in messages and in the
+    /// path [`LocalCache::store_part`] returns; never opened by this value). The caller vouches for the
+    /// directory: the broker passes its store's checked `baseline` directory. A writable cache removes
+    /// the temporary files a writer left behind.
+    pub fn with_files(dir: &Path, files: std::sync::Arc<dyn CacheFiles>, writable: bool) -> Self {
         let cache = LocalCache {
             dir: dir.to_path_buf(),
+            files,
             writable,
         };
         if writable {
             cache.sweep_temporary(TEMP_MAX_AGE);
         }
-        Some(cache)
+        cache
     }
 
     /// The cache directory.
@@ -647,8 +808,7 @@ impl LocalCache {
         any_revision: bool,
         notes: &mut Vec<String>,
     ) -> Option<Part> {
-        let path = self.dir.join(name);
-        let bytes = match read_capped(&path, MAX_FILE_BYTES as u64) {
+        let bytes = match self.files.read(name, MAX_FILE_BYTES as u64) {
             Ok(bytes) => bytes,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return None,
             Err(e) => {
@@ -661,7 +821,7 @@ impl LocalCache {
             None => id_in_name(name)?,
         };
         let sha: [u8; 32] = Sha256::digest(&bytes).into();
-        let sets_path = self.dir.join(sets_name(name));
+        let sets_file = sets_name(name);
         let mut bytes = Some(bytes);
         if source == LocalSource::S1
             && let Some((header, lines)) = bytes.as_deref().and_then(read_head)
@@ -670,7 +830,7 @@ impl LocalCache {
             // The text is not held while the sets are read (the load's peak memory); it is read
             // again, and must be the same bytes, when the sets turn out not to be its.
             bytes = None;
-            if let Some(sets) = read_sets(&sets_path, &sha) {
+            if let Some(sets) = self.read_sets(&sets_file, &sha) {
                 let line = lines.into_iter().next()?;
                 return Some(Part {
                     header,
@@ -684,7 +844,7 @@ impl LocalCache {
         let bytes = match bytes {
             Some(bytes) => bytes,
             None => {
-                let again = read_capped(&path, MAX_FILE_BYTES as u64).ok()?;
+                let again = self.files.read(name, MAX_FILE_BYTES as u64).ok()?;
                 if Sha256::digest(&again).as_slice() != sha {
                     notes.push(format!("{name} changed while it was read"));
                     return None;
@@ -775,8 +935,7 @@ impl LocalCache {
     pub fn neighbour(&self, file: &NeighbourFile) -> Result<Neighbour, BaselineError> {
         let bytes = fs::read(&file.path)?;
         let sha: [u8; 32] = Sha256::digest(&bytes).into();
-        let sets_path = self.dir.join(shipped_sets_name(file));
-        if let Some(sets) = read_sets(&sets_path, &sha)
+        if let Some(sets) = self.read_sets(&shipped_sets_name(file), &sha)
             && let Ok(n) = Neighbour::from_hashed_sets(&file.edition, file.build, file.ubr, sets)
         {
             return Ok(n);
@@ -796,31 +955,26 @@ impl LocalCache {
         if !self.writable {
             return;
         }
-        for (name, path) in self.files() {
+        for (name, _) in self.files.list() {
             if name.starts_with("shipped-") && name.ends_with(SETS_SUFFIX) && !keep.contains(&name)
             {
-                let _ = fs::remove_file(path);
+                let _ = self.files.remove(&name);
             }
         }
     }
 
-    /// The regular files of the directory, as (name, path).
-    fn files(&self) -> Vec<(String, PathBuf)> {
-        let Ok(entries) = fs::read_dir(&self.dir) else {
-            return Vec::new();
-        };
-        entries
-            .flatten()
-            .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
-            .filter_map(|e| Some((e.file_name().into_string().ok()?, e.path())))
-            .collect()
+    /// The sets of the derived file `name` when it is bound to `bound`; `None` for a missing or bad
+    /// file (the caller parses the text).
+    fn read_sets(&self, name: &str, bound: &[u8; 32]) -> Option<HashedSets> {
+        decode_sets(&self.files.read(name, MAX_SETS_BYTES).ok()?, bound)
     }
 
     /// The part files of one source (any Windows), newest first.
     fn part_files(&self, source: LocalSource) -> Vec<PartFileEntry> {
         let marker = format!("-{}-", source.tag().to_ascii_lowercase());
         let mut found: Vec<PartFileEntry> = self
-            .files()
+            .files
+            .list()
             .into_iter()
             .filter(|(name, _)| {
                 name.starts_with("local-")
@@ -828,16 +982,7 @@ impl LocalCache {
                     && id_in_name(name).is_some()
                     && name[..name.len() - PART_SUFFIX.len() - 16].ends_with(&marker)
             })
-            .map(|(name, path)| {
-                let modified = fs::metadata(&path)
-                    .and_then(|m| m.modified())
-                    .unwrap_or(SystemTime::UNIX_EPOCH);
-                PartFileEntry {
-                    name,
-                    path,
-                    modified,
-                }
-            })
+            .map(|(name, modified)| PartFileEntry { name, modified })
             .collect();
         found.sort_by(|a, b| {
             b.modified
@@ -858,15 +1003,18 @@ impl LocalCache {
             if kept < KEEP_PARTS {
                 kept += 1;
             } else {
-                let _ = fs::remove_file(&file.path);
+                let _ = self.files.remove(&file.name);
             }
         }
-        for (name, path) in self.files() {
+        let files = self.files.list();
+        for (name, _) in &files {
             if let Some(stem) = name.strip_suffix(SETS_SUFFIX)
                 && name.starts_with("local-")
-                && !self.dir.join(format!("{stem}{PART_SUFFIX}")).is_file()
             {
-                let _ = fs::remove_file(path);
+                let text = format!("{stem}{PART_SUFFIX}");
+                if !files.iter().any(|(other, _)| *other == text) {
+                    let _ = self.files.remove(name);
+                }
             }
         }
     }
@@ -875,15 +1023,12 @@ impl LocalCache {
     /// ever reads one.
     fn sweep_temporary(&self, max_age: Duration) {
         let now = SystemTime::now();
-        for (name, path) in self.files() {
+        for (name, modified) in self.files.list() {
             if !name.ends_with(TEMP_SUFFIX) {
                 continue;
             }
-            let old = fs::metadata(&path)
-                .and_then(|m| m.modified())
-                .is_ok_and(|t| now.duration_since(t).is_ok_and(|age| age >= max_age));
-            if old {
-                let _ = fs::remove_file(path);
+            if now.duration_since(modified).is_ok_and(|age| age >= max_age) {
+                let _ = self.files.remove(&name);
             }
         }
     }
@@ -896,31 +1041,35 @@ impl LocalCache {
                 "the local baseline cache is written only by an elevated engine",
             ));
         }
-        let temp = self.dir.join(format!(
-            "{name}.{}.{}{TEMP_SUFFIX}",
-            std::process::id(),
-            TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
-        ));
-        let written = (|| {
-            let mut file = fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&temp)?;
-            file.write_all(bytes)?;
-            file.sync_all()?;
-            drop(file);
-            fs::rename(&temp, self.dir.join(name))
-        })();
-        if written.is_err() {
-            let _ = fs::remove_file(&temp);
-        }
-        written
+        self.files.replace(name, &cache_temp_name(name), bytes)
     }
+}
+
+/// The temporary name a write of `name` goes to: `<name>.<pid>.<n>.tmp`, `n` counting this process's
+/// writes.
+pub fn cache_temp_name(name: &str) -> String {
+    format!(
+        "{name}.{}.{}{TEMP_SUFFIX}",
+        std::process::id(),
+        TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
+/// The name of the `source` part of `os` with this id (`None` for an edition the cache does not
+/// name), and the name of its derived sets file: what the cache stores, for the store's tests.
+pub fn part_file_names(os: &OsInfo, source: LocalSource, id: &str) -> Option<(String, String)> {
+    let part = part_name(&os_tag(os)?, source, id);
+    let sets = sets_name(&part);
+    Some((part, sets))
+}
+
+/// The name of the derived sets file of a shipped neighbour.
+pub fn shipped_sets_file_name(file: &NeighbourFile) -> String {
+    shipped_sets_name(file)
 }
 
 struct PartFileEntry {
     name: String,
-    path: PathBuf,
     modified: SystemTime,
 }
 
@@ -1299,12 +1448,6 @@ fn decode_sets(bytes: &[u8], bound: &[u8; 32]) -> Option<HashedSets> {
     }
     sets.check().ok()?;
     Some(sets)
-}
-
-/// The sets of the derived file at `path` when it is bound to `bound`; `None` for a missing or bad
-/// file (the caller parses the text).
-fn read_sets(path: &Path, bound: &[u8; 32]) -> Option<HashedSets> {
-    decode_sets(&read_capped(path, MAX_SETS_BYTES).ok()?, bound)
 }
 
 #[cfg(test)]
@@ -2331,7 +2474,11 @@ mod tests {
             ubr: 1,
         };
         let sha: [u8; 32] = Sha256::digest(fs::read(&near.path).unwrap()).into();
-        assert!(read_sets(&dir.join("shipped-Professional-26100.1.sets"), &sha).is_some());
+        assert!(
+            reader
+                .read_sets("shipped-Professional-26100.1.sets", &sha)
+                .is_some()
+        );
         assert_eq!(
             keys(&load_neighbours(
                 Some(&reader),
@@ -2375,5 +2522,130 @@ mod tests {
         let (line, records) = read_live_s3(&Fixture::new());
         assert_eq!(line.status, SourceStatus::Failed);
         assert!(records.is_empty());
+    }
+
+    /// With a file rule, a part file that fails it is not read: a miss with a note, never an error,
+    /// and the other parts still load. A missing file stays a plain miss.
+    #[test]
+    fn a_file_that_fails_the_rule_is_a_miss() {
+        let dir = scratch("file-rule");
+        stored(&dir);
+        let rule: FileRule = std::sync::Arc::new(|p: &Path| !p.to_string_lossy().contains("-s1-"));
+        let c =
+            LocalCache::open_with_rule(&dir, &fs_saying(&dir, true), false, Some(rule)).unwrap();
+        let loaded = c.load(&os(), &ids(ID_A, ID_A, ID_A), s3());
+        let s = states(&loaded);
+        assert!(!matches!(s[0], PartState::Hit { .. }), "{s:?}");
+        assert!(matches!(s[1], PartState::Hit { .. }), "{s:?}");
+        assert!(matches!(s[2], PartState::Hit { .. }), "{s:?}");
+        assert!(
+            loaded.notes.iter().any(|n| n.contains("cannot be read")),
+            "{:?}",
+            loaded.notes
+        );
+        let missing = c.load(&os(), &ids(ID_B, ID_A, ID_A), s3());
+        assert!(
+            !missing
+                .notes
+                .iter()
+                .any(|n| n.contains(&format!("{ID_B}.tsv.gz cannot be read"))),
+            "{:?}",
+            missing.notes
+        );
+        // The live rule: a file in a temp directory a standard user can write fails it.
+        let part = fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .find(|p| p.to_string_lossy().ends_with(".tsv.gz"))
+            .unwrap();
+        assert!(!admin_only_file(&part));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Files held in memory, for [`LocalCache::with_files`]: nothing on disk exists.
+    #[derive(Debug, Default)]
+    struct MemFiles(std::sync::Mutex<std::collections::BTreeMap<String, Vec<u8>>>);
+
+    impl MemFiles {
+        fn names(&self) -> Vec<String> {
+            self.0.lock().unwrap().keys().cloned().collect()
+        }
+    }
+
+    impl CacheFiles for MemFiles {
+        fn list(&self) -> Vec<(String, SystemTime)> {
+            self.0
+                .lock()
+                .unwrap()
+                .keys()
+                .map(|name| (name.clone(), SystemTime::now()))
+                .collect()
+        }
+        fn read(&self, name: &str, max: u64) -> io::Result<Vec<u8>> {
+            let files = self.0.lock().unwrap();
+            let bytes = files.get(name).ok_or(io::ErrorKind::NotFound)?;
+            if bytes.len() as u64 > max {
+                return Err(io::ErrorKind::InvalidData.into());
+            }
+            Ok(bytes.clone())
+        }
+        fn replace(&self, name: &str, temp: &str, bytes: &[u8]) -> io::Result<()> {
+            assert!(temp.starts_with(&format!("{name}.")) && temp.ends_with(TEMP_SUFFIX));
+            self.0
+                .lock()
+                .unwrap()
+                .insert(name.to_owned(), bytes.to_vec());
+            Ok(())
+        }
+        fn remove(&self, name: &str) -> io::Result<()> {
+            self.0
+                .lock()
+                .unwrap()
+                .remove(name)
+                .map(drop)
+                .ok_or_else(|| io::ErrorKind::NotFound.into())
+        }
+    }
+
+    /// The broker's cache reaches its directory only through [`CacheFiles`] (its store's checked
+    /// `baseline` handle): with files held in memory and a directory that does not exist, it stores,
+    /// derives, loads and prunes exactly as the cache by path does, under the same names.
+    #[test]
+    fn a_cache_with_its_own_files_never_touches_the_directory_by_path() {
+        let nowhere =
+            std::env::temp_dir().join(format!("purge-local-cache-{}-nowhere", std::process::id()));
+        let _ = fs::remove_dir_all(&nowhere);
+        let files = std::sync::Arc::new(MemFiles::default());
+        let mem = LocalCache::with_files(&nowhere, files.clone(), true);
+        let dir = scratch("with-files");
+        let by_path = cache(&dir, true);
+        for c in [&mem, &by_path] {
+            for (source, key) in [
+                (LocalSource::S1, r"HKLM\SOFTWARE\S1Key"),
+                (LocalSource::S2, r"HKU\S-1-5-21-0-0-0-1000\S2Key"),
+                (LocalSource::S4, r"HKLM\SOFTWARE\S4Key"),
+            ] {
+                for id in [ID_A, ID_B, ID_C] {
+                    c.store_part(&os(), &part(source, id, &[key])).unwrap();
+                }
+            }
+        }
+        assert_eq!(files.names(), names(&dir));
+        let a = mem.load(&os(), &ids(ID_C, ID_C, ID_C), s3());
+        let b = by_path.load(&os(), &ids(ID_C, ID_C, ID_C), s3());
+        assert_eq!(states(&a), states(&b));
+        assert!(
+            states(&a)
+                .iter()
+                .all(|s| matches!(s, PartState::Hit { .. })),
+            "{:?}",
+            states(&a)
+        );
+        assert_eq!(
+            a.local.as_ref().unwrap().header().source_id,
+            b.local.as_ref().unwrap().header().source_id
+        );
+        assert!(!nowhere.exists());
+        let _ = fs::remove_dir_all(&dir);
     }
 }

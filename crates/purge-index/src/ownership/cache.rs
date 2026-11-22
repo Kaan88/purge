@@ -11,6 +11,13 @@
 //!   so [`DiskTableCache::open`] refuses any other directory. A file that cannot be read, is larger than
 //!   [`MAX_CACHE_FILE`], does not parse, has another schema than [`CACHE_SCHEMA`] or another key is a miss:
 //!   never an error and never partial data.
+//!
+//! [`DiskTableCache`] works by path and is the engine's (the medium engine, unelevated, whose writes to
+//! an admin-only directory fail; an elevated engine CLI): `open`'s admin-only check of the directory and
+//! every ancestor is what keeps a path a standard user can redirect out of its reach. The broker does
+//! not use it: it reads and writes `<data root>\fp\msitables` relative to purge-exec's checked handle on
+//! that directory (DECISIONS 2026-11-22, "fp checked"), in the same format ([`encode_cache_file`],
+//! [`decode_cache_file`], [`temp_file_name`]).
 
 use std::collections::HashMap;
 use std::fs;
@@ -134,6 +141,44 @@ struct CacheFileIn {
     tables: MsiTables,
 }
 
+/// The bytes of `key`'s cache file holding `tables`, or `None` when they would pass
+/// [`MAX_CACHE_FILE`] (such tables are not cached). The format every writer of a cache directory uses:
+/// [`DiskTableCache`] by path, the broker relative to its checked `fp\msitables` handle.
+pub fn encode_cache_file(key: &CacheKey, tables: &MsiTables) -> Option<Vec<u8>> {
+    let bytes = serde_json::to_vec(&CacheFileOut {
+        schema: CACHE_SCHEMA,
+        key,
+        tables,
+    })
+    .ok()?;
+    (bytes.len() as u64 <= MAX_CACHE_FILE).then_some(bytes)
+}
+
+/// The tables of a cache file's `bytes` read for `key`: `None` (a miss) when they pass
+/// [`MAX_CACHE_FILE`], do not parse, have another schema than [`CACHE_SCHEMA`] or another key. The
+/// limits every source enforces hold for cached tables too.
+pub fn decode_cache_file(key: &CacheKey, bytes: &[u8]) -> Option<MsiTables> {
+    if bytes.len() as u64 > MAX_CACHE_FILE {
+        return None;
+    }
+    let parsed: CacheFileIn = serde_json::from_slice(bytes).ok()?;
+    if parsed.schema != CACHE_SCHEMA || !parsed.key.same(key) {
+        return None;
+    }
+    Some(parsed.tables.limited())
+}
+
+/// A temporary name for writing `key`'s cache file in this process:
+/// `<file name>.<pid>.<n>.tmp`, `n` counting this process's writes.
+pub fn temp_file_name(key: &CacheKey) -> String {
+    format!(
+        "{}.{}.{}.tmp",
+        key.file_name(),
+        std::process::id(),
+        TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
 /// A [`TableCache`] of one JSON file per key in an admin-only directory.
 #[derive(Debug)]
 pub struct DiskTableCache {
@@ -173,33 +218,15 @@ impl DiskTableCache {
         }
         let mut bytes = Vec::new();
         file.take(MAX_CACHE_FILE + 1).read_to_end(&mut bytes).ok()?;
-        if bytes.len() as u64 > MAX_CACHE_FILE {
-            return None;
-        }
-        let parsed: CacheFileIn = serde_json::from_slice(&bytes).ok()?;
-        if parsed.schema != CACHE_SCHEMA || !parsed.key.same(key) {
-            return None;
-        }
-        // The limits every source enforces hold for cached tables too.
-        Some(parsed.tables.limited())
+        decode_cache_file(key, &bytes)
     }
 
     fn write(&self, key: &CacheKey, tables: &MsiTables) -> std::io::Result<()> {
-        let bytes = serde_json::to_vec(&CacheFileOut {
-            schema: CACHE_SCHEMA,
-            key,
-            tables,
-        })?;
-        if bytes.len() as u64 > MAX_CACHE_FILE {
+        let Some(bytes) = encode_cache_file(key, tables) else {
             return Ok(());
-        }
+        };
         let target = self.file(key);
-        let temp = self.dir.join(format!(
-            "{}.{}.{}.tmp",
-            key.file_name(),
-            std::process::id(),
-            TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
-        ));
+        let temp = self.dir.join(temp_file_name(key));
         let result = (|| {
             let mut file = fs::File::create_new(&temp)?;
             file.write_all(&bytes)?;
@@ -257,6 +284,30 @@ mod tests {
             a.file_name(),
             key(r"C:\Windows\Installer\1a.msi", 10, 21).file_name()
         );
+    }
+
+    #[test]
+    fn cache_file_bytes_round_trip_for_their_key_only() {
+        let k = key(r"C:\Windows\Installer\1a.msi", 1, 2);
+        let tables = MsiTables {
+            custom_action_count: 4,
+            ..MsiTables::default()
+        };
+        let bytes = encode_cache_file(&k, &tables).unwrap();
+        let text = String::from_utf8(bytes.clone()).unwrap();
+        assert!(
+            text.starts_with(r#"{"schema":"purge.msitables/1","key":"#),
+            "{text}"
+        );
+        assert_eq!(decode_cache_file(&k, &bytes), Some(tables.limited()));
+        assert_eq!(
+            decode_cache_file(&key(r"C:\Windows\Installer\1a.msi", 1, 3), &bytes),
+            None
+        );
+        assert_eq!(decode_cache_file(&k, b"{"), None);
+        let name = temp_file_name(&k);
+        assert!(name.starts_with(&format!("{}.{}.", k.file_name(), std::process::id())));
+        assert!(name.ends_with(".tmp") && name != temp_file_name(&k));
     }
 
     #[test]

@@ -96,7 +96,10 @@ pub use purge_harvest::harvest::Sources;
 
 pub mod baseline;
 
-pub use baseline::{LocalBuild, PipelineBaseline, local_cache, start_local_build};
+pub use baseline::{
+    LocalBuild, LocalCacheSource, PipelineBaseline, SharedLocalCacheSource, local_cache,
+    start_local_build,
+};
 
 /// Receives one progress line at a time (the CLI writes them to stderr).
 pub type Progress<'a> = &'a mut dyn FnMut(&str);
@@ -145,10 +148,21 @@ pub struct Settings {
     /// The directory of the on-disk MSI table cache, `<ProgramData>\Purge\fp\msitables` (D17). `None`:
     /// the cache is in memory for the run. See [`table_cache`] for when the directory is used.
     pub msi_table_dir: Option<PathBuf>,
+    /// The MSI table cache's source when it is not reached by path: the broker's checked
+    /// `fp\msitables` (DECISIONS 2026-11-22, "fp checked"). When set, [`table_cache`] takes the cache
+    /// from it and never opens [`Settings::msi_table_dir`] by path (which then only names the cache in
+    /// the timing line). `None` in the engine.
+    pub msi_table_source: Option<SharedTableCacheSource>,
     /// The directory of the local baseline cache, `<ProgramData>\Purge\baseline`
     /// (BASELINE_LOCAL_DESIGN.md §5). `None`: no local baseline is read or built. See
     /// [`baseline::local_cache`] for when the directory is used.
     pub local_baseline_dir: Option<PathBuf>,
+    /// The local baseline cache's source when it is not reached by path: the broker's checked
+    /// `baseline` directory (DECISIONS 2026-11-22, "baseline checked"). When set, [`local_cache`]
+    /// takes the cache from it and never opens [`Settings::local_baseline_dir`] by path (which then
+    /// only names the cache in warnings, and still says that a cache is configured). `None` in the
+    /// engine.
+    pub local_baseline_source: Option<SharedLocalCacheSource>,
     /// Purge's machine data root, `<ProgramData>\Purge` (session index, quarantine). `None`: the
     /// executor's store is not located. Read-only users of the index (the medium engine's
     /// `history.index`) need it; nothing in the pipeline writes here.
@@ -214,6 +228,37 @@ pub(crate) fn volume_admits(sources: Sources<'_>, settings: &Settings, dir: &Pat
     !sources.sys.elevated() || settings.volume_rule.admits(dir)
 }
 
+/// Where an engine call gets its MSI table cache when the cache is not a directory opened by path
+/// ([`Settings::msi_table_source`]): the broker's, which reads and writes the files relative to the
+/// checked handle of its store's `fp\msitables`.
+pub trait TableCacheSource: Send + Sync {
+    /// The cache of one engine call, or `None` when the source cannot give one now (its directory
+    /// failed its check, say): the call then caches in memory.
+    fn open(&self) -> Option<Box<dyn TableCache>>;
+}
+
+/// A shared [`TableCacheSource`], as [`Settings`] holds it. Two are equal when they are the same
+/// source.
+#[derive(Clone)]
+pub struct SharedTableCacheSource(pub std::sync::Arc<dyn TableCacheSource>);
+
+impl fmt::Debug for SharedTableCacheSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("SharedTableCacheSource")
+    }
+}
+
+impl PartialEq for SharedTableCacheSource {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::addr_eq(
+            std::sync::Arc::as_ptr(&self.0),
+            std::sync::Arc::as_ptr(&other.0),
+        )
+    }
+}
+
+impl Eq for SharedTableCacheSource {}
+
 /// Which MSI table cache an engine call uses ([`table_cache`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TableCacheKind {
@@ -235,6 +280,9 @@ pub enum TableCacheKind {
 ///
 /// Elevated, the data root and the directory must also pass [`Settings::volume_rule`] (BL-R1 S4): a
 /// cache on another volume is never created, read or written.
+///
+/// With [`Settings::msi_table_source`] (the broker), the cache is the source's, or memory when it
+/// gives none; nothing here touches the directory by path.
 pub fn table_cache(
     sources: Sources<'_>,
     settings: &Settings,
@@ -242,6 +290,12 @@ pub fn table_cache(
     let memory = || -> (Box<dyn TableCache>, TableCacheKind) {
         (Box::new(MemTableCache::new()), TableCacheKind::Memory)
     };
+    if let Some(source) = &settings.msi_table_source {
+        return match source.0.open() {
+            Some(cache) => (cache, TableCacheKind::Disk),
+            None => memory(),
+        };
+    }
     let Some(dir) = settings.msi_table_dir.as_deref() else {
         return memory();
     };
@@ -2581,6 +2635,47 @@ mod tests {
 
         let (_, kind) = table_cache(Sources::of(&unelevated), &Settings::default());
         assert_eq!(kind, TableCacheKind::Memory);
+    }
+
+    /// With a table cache source (the broker's checked `fp\msitables`), the cache is the source's, or
+    /// memory when it gives none, and the directory of the settings is never created or opened by path,
+    /// even elevated under an admin-only data root.
+    #[test]
+    fn pipeline_table_cache_source_replaces_the_path() {
+        struct Source(std::sync::atomic::AtomicBool);
+        impl TableCacheSource for Source {
+            fn open(&self) -> Option<Box<dyn TableCache>> {
+                self.0
+                    .load(Ordering::SeqCst)
+                    .then(|| Box::new(MemTableCache::new()) as Box<dyn TableCache>)
+            }
+        }
+        let base = std::env::temp_dir().join(format!("purge-tcs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let root = base.join("Purge");
+        std::fs::create_dir_all(&root).unwrap();
+        let dir = root.join("fp").join("msitables");
+        let root_text = root.to_str().unwrap();
+        let elevated = probe_machine()
+            .elevated(true)
+            .dir(root_text)
+            .admin_only_writable(root_text, true)
+            .build();
+        let source = std::sync::Arc::new(Source(std::sync::atomic::AtomicBool::new(true)));
+        let shared = SharedTableCacheSource(source.clone());
+        assert_eq!(shared, shared.clone());
+        let settings = Settings {
+            msi_table_dir: Some(dir.clone()),
+            msi_table_source: Some(shared),
+            ..Settings::default()
+        };
+        let (_, kind) = table_cache(Sources::of(&elevated), &settings);
+        assert_eq!(kind, TableCacheKind::Disk);
+        source.0.store(false, Ordering::SeqCst);
+        let (_, kind) = table_cache(Sources::of(&elevated), &settings);
+        assert_eq!(kind, TableCacheKind::Memory);
+        assert!(!root.join("fp").exists(), "created {}", dir.display());
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// BL-R1 S4: elevated, the MSI table cache is made and used only on the volume of the rule. The

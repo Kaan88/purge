@@ -140,6 +140,7 @@ dependencies = [
  "purge-guard",
  "purge-harvest",
  "purge-identity",
+ "purge-index",
  "purge-inventory",
  "purge-model",
  "purge-plan",
@@ -179,8 +180,10 @@ name = "purge-exec"
 version = "0.1.0"
 dependencies = [
  "purge-guard",
+ "purge-index",
  "purge-model",
  "purge-plan",
+ "purge-source",
  "purge-win",
  "serde",
  "serde_json",
