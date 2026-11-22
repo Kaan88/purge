@@ -53,6 +53,7 @@ use purge_rpc::methods::{
     StoredResult,
 };
 use purge_rpc::table::CallSet;
+use purge_rpc::timing::TimingName;
 use purge_source::live::Live;
 use purge_source::types::ProcessInfo;
 use purge_win::taskdialog::Outcome as Answer;
@@ -620,6 +621,7 @@ fn prepare<H: FlowHandler>(
     ctx: &Ctx<'_, H>,
     params: &ProgramsParams,
 ) -> Result<Value, ErrorObject> {
+    ctx.mark(TimingName::HarvestStart);
     let machine = flow.machine();
     let sources = machine.sources();
     let env = sources.sys.env().unwrap_or_default();
@@ -721,8 +723,12 @@ fn prepare<H: FlowHandler>(
                 .collect(),
         });
     }
-    serde_json::to_value(PrepareResult { programs })
-        .map_err(|e| ErrorObject::runtime(e.to_string()))
+    ctx.mark(TimingName::HarvestComplete);
+    serde_json::to_value(PrepareResult {
+        programs,
+        timings: ctx.timings(),
+    })
+    .map_err(|e| ErrorObject::runtime(e.to_string()))
 }
 
 fn pipeline_error(error: PipelineError) -> ErrorObject {

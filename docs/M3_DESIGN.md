@@ -507,6 +507,21 @@ Rules:
 
 No broker and no UAC at launch. The baseline build never runs at launch, only in a started broker.
 
+**How the engine rows are measured (gate G12; DECISIONS 2026-11-22, `purge_rpc::timing`).** The broker takes
+timing marks, each in ms since the broker *process was created* (`GetProcessTimes`; monotonic after one wall-clock
+offset) plus the wall clock. They come back in an optional `timings` member of the results of
+`uninstall.prepare`, `leftovers.scan`, `plan.create` and `plan.execute`, and as one Application-log line per mark
+(source `Purge`, event id 100), which `vm/guest/broker-timings.ps1` collects and `cargo xtask broker-timings`
+reduces.
+
+| Row | Measured as |
+|---|---|
+| Harvest complete after the UAC click | `harvest_complete` of `uninstall.prepare`, ms since process creation. The broker process is created when the user clicks Yes, so this counts the start checks, the UI's connect, server check and hello (`pipe_connected`), and the harvest itself (`harvest_start` to `harvest_complete`, reported too). The UI's launch-to-connected (from its `ShellExecuteExW` call) is not used: with UAC on it holds the human's click. |
+| Post-uninstall scan, cold broker | `scan_complete - scan_start` of the broker's first `leftovers.scan` (the e2e flow starts one broker per app, so its scan is a cold one) |
+| First progress within 100 ms | `first_progress - scan_start`; `first_progress` is taken when the request's first `scan.progress` line has been written to the pipe |
+
+Marks never fail or change a request: a mark the clock cannot give is left out.
+
 ### 9.2 `xtask bench-launch`
 
 - Runs the published `Purge.exe` and the bare-WinUI control in turn, N = 21 each, first run dropped.

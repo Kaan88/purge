@@ -33,6 +33,17 @@
       "description": "The plan, for `plan.execute`.",
       "$ref": "#/$defs/PlanId"
     },
+    "timings": {
+      "description": "The broker's timing marks (M3_DESIGN.md §9.1): for measurement only; a client ignores it.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Timings"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "warnings": {
       "description": "Warnings.",
       "type": "array",
@@ -251,6 +262,123 @@
     "Sha256Hex": {
       "type": "string",
       "pattern": "^[0-9a-f]{64}$"
+    },
+    "TimingMark": {
+      "description": "One mark.",
+      "type": "object",
+      "properties": {
+        "mark": {
+          "description": "The step.",
+          "$ref": "#/$defs/TimingName"
+        },
+        "ms": {
+          "description": "Milliseconds since the broker process was created, on a monotonic clock.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "wall_unix_ms": {
+          "description": "The wall clock at the mark, milliseconds since the Unix epoch (UTC).",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "mark",
+        "ms",
+        "wall_unix_ms"
+      ]
+    },
+    "TimingName": {
+      "description": "A step of the elevated flow the broker times.",
+      "oneOf": [
+        {
+          "description": "`main` passed the DLL-search and working-directory restriction (process mark).",
+          "type": "string",
+          "const": "broker_start"
+        },
+        {
+          "description": "The client passed the pipe checks and its `engine.hello` was answered (process mark).",
+          "type": "string",
+          "const": "pipe_connected"
+        },
+        {
+          "description": "`uninstall.prepare` began.",
+          "type": "string",
+          "const": "harvest_start"
+        },
+        {
+          "description": "`uninstall.prepare` harvested every program, stored each fingerprint and opened the sessions.",
+          "type": "string",
+          "const": "harvest_complete"
+        },
+        {
+          "description": "`leftovers.scan` began.",
+          "type": "string",
+          "const": "scan_start"
+        },
+        {
+          "description": "The first `*.progress` line of the request was written to the pipe.",
+          "type": "string",
+          "const": "first_progress"
+        },
+        {
+          "description": "`leftovers.scan` built its scan and counted the bands.",
+          "type": "string",
+          "const": "scan_complete"
+        },
+        {
+          "description": "`plan.create` bound and froze the plan.",
+          "type": "string",
+          "const": "plan_ready"
+        },
+        {
+          "description": "The consent dialog was up and could be answered.",
+          "type": "string",
+          "const": "consent_shown"
+        },
+        {
+          "description": "The consent dialog ended (any answer).",
+          "type": "string",
+          "const": "consent_answered"
+        },
+        {
+          "description": "`plan.execute` handed the approved plan to the executor.",
+          "type": "string",
+          "const": "execute_start"
+        },
+        {
+          "description": "The executor returned its run.",
+          "type": "string",
+          "const": "execute_complete"
+        }
+      ]
+    },
+    "Timings": {
+      "description": "The `timings` member of a result: for measurement only (M3_DESIGN.md §9.1); a client ignores it.",
+      "type": "object",
+      "properties": {
+        "marks": {
+          "description": "The process marks, then the marks of this request, in the order they were taken.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TimingMark"
+          }
+        },
+        "process_created_unix_ms": {
+          "description": "When the broker process was created (`GetProcessTimes`), milliseconds since the Unix epoch;\nabsent when it could not be read (the marks then count from the broker's own start).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "marks"
+      ]
     },
     "Warning": {
       "description": "A warning for the user. `code` is stable for the client to switch on; `message` is shown.",

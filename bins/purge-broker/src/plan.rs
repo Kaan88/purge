@@ -28,6 +28,7 @@ use purge_rpc::methods::{
     AttentionItem, AttentionReason, CandidateRef, ConfirmCode, PlanCounts, PlanCreateParams,
     PlanCreated, PlanId, ScanId, UninstallSessionId, Warning,
 };
+use purge_rpc::timing::TimingName;
 use serde_json::Value;
 
 use crate::consent::view::{self, Facts, Reason};
@@ -300,6 +301,7 @@ pub(crate) fn create<H: crate::uninstall::FlowHandler>(
             reason: "a plan of this scan exists already; execute it or scan again".into(),
         }]));
     }
+    ctx.mark(TimingName::PlanReady);
     serde_json::to_value(PlanCreated {
         plan_id,
         plan_hash,
@@ -308,6 +310,7 @@ pub(crate) fn create<H: crate::uninstall::FlowHandler>(
         bytes,
         attention,
         warnings: scan.warnings.clone(),
+        timings: ctx.timings(),
     })
     .map_err(|e| ErrorObject::runtime(e.to_string()))
 }

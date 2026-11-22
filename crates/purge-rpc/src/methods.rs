@@ -41,6 +41,7 @@ use crate::error::ErrorObject;
 use crate::frame::{NotificationLine, RequestId};
 use crate::sets::Transport;
 use crate::table::{CallSet, Method, Notice};
+use crate::timing::Timings;
 use crate::{BaselineBuild, EngineHello};
 
 // ---------------------------------------------------------------------------------------------------
@@ -952,6 +953,9 @@ pub struct Prepared {
 pub struct PrepareResult {
     /// One entry per program, in request order.
     pub programs: Vec<Prepared>,
+    /// The broker's timing marks (M3_DESIGN.md §9.1): for measurement only; a client ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timings: Option<Timings>,
 }
 
 /// `uninstall.run`.
@@ -1008,6 +1012,9 @@ pub struct ScanResult {
     pub baseline_trust: BaselineTrust,
     /// Warnings.
     pub warnings: Vec<Warning>,
+    /// The broker's timing marks (M3_DESIGN.md §9.1): for measurement only; a client ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timings: Option<Timings>,
 }
 
 /// One candidate of a `scan.candidates` page.
@@ -1103,6 +1110,9 @@ pub struct PlanCreated {
     pub attention: Vec<AttentionItem>,
     /// Warnings.
     pub warnings: Vec<Warning>,
+    /// The broker's timing marks (M3_DESIGN.md §9.1): for measurement only; a client ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timings: Option<Timings>,
 }
 
 /// An item left in place because it is locked.
@@ -1129,6 +1139,9 @@ pub struct ExecResult {
     pub held: Vec<HeldItem>,
     /// What became of the restore point.
     pub restore_point: RestorePointOutcome,
+    /// The broker's timing marks (M3_DESIGN.md §9.1): for measurement only; a client ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timings: Option<Timings>,
 }
 
 /// One item of `history.get`.

@@ -41,7 +41,7 @@ use crate::flow_tests::{
 use crate::lifetime::{Exit, ExitReason};
 use crate::plan::Plan;
 use crate::purge::{ExpirySource, Listing, Purger};
-use crate::serve::{Ctx, Handler, Wiring, run};
+use crate::serve::{Ctx, Handler, Wiring, run_timed};
 use crate::session::ScanSlot;
 use crate::testkit::{
     Client, FakeBuild, FakeClock, FakeHost, FakeParent, Gate, HELLO, ME, MemNet, SECS,
@@ -357,6 +357,10 @@ struct Rig {
 
 impl Rig {
     fn start() -> Rig {
+        Rig::start_timed(crate::timing::Timings::default())
+    }
+
+    fn start_timed(timings: crate::timing::Timings) -> Rig {
         let net = MemNet::default();
         let clock = Arc::new(FakeClock::default());
         let parent = Arc::new(FakeParent::default());
@@ -395,7 +399,8 @@ impl Rig {
             settings: Settings::default(),
             limits: test_limits(),
         };
-        let join = std::thread::spawn(move || run(wiring));
+        let timings = Arc::new(timings);
+        let join = std::thread::spawn(move || run_timed(wiring, timings));
         Rig {
             net,
             parent,
@@ -745,6 +750,136 @@ fn an_approved_plan_runs_the_plan_object_the_dialog_was_drawn_from() {
     // A completed change with no session left ends the broker once the client closes.
     c.close();
     assert_eq!(rig.exit(SECS).reason, ExitReason::CompletedChange);
+}
+
+/// The marks of a result's `timings` (design 9.1): name and ms, after a check that they never go back.
+fn timing_marks(reply: &Value) -> Vec<(String, u64)> {
+    let marks: Vec<(String, u64)> = reply["result"]["timings"]["marks"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no timings in {reply}"))
+        .iter()
+        .map(|m| {
+            (
+                m["mark"].as_str().unwrap().to_owned(),
+                m["ms"].as_u64().unwrap(),
+            )
+        })
+        .collect();
+    assert!(
+        marks.windows(2).all(|w| w[0].1 <= w[1].1),
+        "the marks go back: {marks:?}"
+    );
+    marks
+}
+
+/// The names of the marks, `first_progress` checked against the progress lines and then left out (a
+/// step may or may not send one): present exactly when a `*.progress` line of the request was sent,
+/// and then right after the start mark and before the end mark.
+fn timing_names(reply: &Value, notes: &[Value], start: &str) -> Vec<String> {
+    let names: Vec<String> = timing_marks(reply).into_iter().map(|m| m.0).collect();
+    let progressed = notes.iter().any(|n| {
+        n["method"]
+            .as_str()
+            .is_some_and(|m| m.ends_with(".progress"))
+            && n["params"]["request"] == reply["id"]
+    });
+    let first = names.iter().position(|n| n == "first_progress");
+    assert_eq!(first.is_some(), progressed, "{names:?} {notes:?}");
+    if let Some(at) = first {
+        let started = names.iter().position(|n| n == start).unwrap();
+        assert!(started < at && at + 1 < names.len(), "{names:?}");
+    }
+    names
+        .into_iter()
+        .filter(|n| n != "first_progress")
+        .collect()
+}
+
+/// The flow's four timed results carry their marks (design 9.1, gate G12): the process mark, then the
+/// request's own, in order and never going back.
+#[test]
+fn the_flow_results_carry_their_timing_marks_in_order() {
+    let mut rig = Rig::start();
+    let c = rig.client();
+    let (prepare, notes) = {
+        c.send_line(&request(
+            2,
+            "uninstall.prepare",
+            &json!({ "program_ids": [broker_id()] }),
+        ));
+        answer_with_notes(&c)
+    };
+    assert_eq!(
+        timing_names(&prepare, &notes, "harvest_start"),
+        ["pipe_connected", "harvest_start", "harvest_complete"]
+    );
+    let session = prepare["result"]["programs"][0]["session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    c.send_line(&request(
+        3,
+        "leftovers.scan",
+        &json!({ "session_id": session, "forced": true }),
+    ));
+    let (scan, notes) = answer_with_notes(&c);
+    assert_eq!(
+        timing_names(&scan, &notes, "scan_start"),
+        ["pipe_connected", "scan_start", "scan_complete"]
+    );
+    let scan_id = scan["result"]["scan_id"].as_str().unwrap().to_owned();
+    let item = first_selectable(&rig.scan().scan).id.0.clone();
+    let plan = create_selected(&c, 4, &scan_id, &[&item]);
+    assert_eq!(
+        timing_names(&plan, &[], "plan_ready"),
+        ["pipe_connected", "plan_ready"]
+    );
+    // The process mark is the same in every result.
+    assert_eq!(timing_marks(&prepare)[0], timing_marks(&plan)[0]);
+
+    let (done, notes) = execute_answering(&rig, &c, 5, &created_id(&plan), "off", Answer::Approved);
+    assert_eq!(done["result"]["outcome"], "complete", "{done}");
+    assert_eq!(
+        timing_names(&done, &notes, "execute_start"),
+        [
+            "pipe_connected",
+            "consent_shown",
+            "consent_answered",
+            "execute_start",
+            "execute_complete"
+        ]
+    );
+    // Later requests count on from earlier ones: one clock for the whole process.
+    let last = |reply: &Value| *timing_marks(reply).last().map(|(_, ms)| ms).unwrap();
+    assert!(last(&prepare) <= last(&scan) && last(&scan) <= last(&plan));
+    assert!(last(&plan) <= last(&done));
+    c.close();
+    assert_eq!(rig.exit(SECS).reason, ExitReason::CompletedChange);
+}
+
+/// A timer that cannot be read, or panics, leaves the `timings` member out and changes nothing else:
+/// the same flow runs to the same end.
+#[test]
+fn a_failing_timer_changes_no_step_of_the_flow() {
+    use std::sync::atomic::Ordering::SeqCst;
+    for panics in [false, true] {
+        let steps = Arc::new(crate::timing::tests::Steps::default());
+        if panics {
+            steps.panic.store(true, SeqCst);
+        } else {
+            steps.fail.store(true, SeqCst);
+        }
+        let mut rig = Rig::start_timed(crate::timing::Timings::new(steps, 7));
+        let c = rig.client();
+        let p = planned(&rig, &c, &[broker_id()]);
+        let (done, _) = execute_answering(&rig, &c, 5, &p.plan, "off", Answer::Approved);
+        assert_eq!(done["result"]["outcome"], "complete", "{done}");
+        assert!(done["result"].get("timings").is_none(), "{done}");
+        assert_eq!(rig.exec.calls(), 1);
+        c.close();
+        assert_eq!(rig.exit(SECS).reason, ExitReason::CompletedChange);
+    }
 }
 
 /// The restore point follows the request's enum. The dialog says one is asked for only when it will be:

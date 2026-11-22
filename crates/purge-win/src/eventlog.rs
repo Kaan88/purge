@@ -1,21 +1,36 @@
 //! One line to the Application event log (`RegisterEventSourceW`, `ReportEventW`).
 //!
 //! The broker writes here when a start check fails, because no pipe exists yet to carry the reason
-//! (M3 design 3.4). The source name need not be registered: Windows then files the event under the
-//! Application log with a note that the source has no message file, and the line is still shown as
-//! the event's text.
+//! (M3 design 3.4), and its timing lines as information events (M3 design 9.1). The source name need
+//! not be registered: Windows then files the event under the Application log with a note that the
+//! source has no message file, and the line is still the event's one insertion string.
 #![cfg(feature = "read")]
 
 use std::ptr;
 
 use windows_sys::Win32::System::EventLog::{
-    DeregisterEventSource, EVENTLOG_ERROR_TYPE, RegisterEventSourceW, ReportEventW,
+    DeregisterEventSource, EVENTLOG_ERROR_TYPE, EVENTLOG_INFORMATION_TYPE, REPORT_EVENT_TYPE,
+    RegisterEventSourceW, ReportEventW,
 };
 
 use crate::os::{Win32Error, wide};
 
 /// Writes `line` to the Application log as an error event of `source` with `event_id`.
 pub fn report_error(source: &str, event_id: u32, line: &str) -> Result<(), Win32Error> {
+    report(source, EVENTLOG_ERROR_TYPE, event_id, line)
+}
+
+/// Writes `line` to the Application log as an information event of `source` with `event_id`.
+pub fn report_info(source: &str, event_id: u32, line: &str) -> Result<(), Win32Error> {
+    report(source, EVENTLOG_INFORMATION_TYPE, event_id, line)
+}
+
+fn report(
+    source: &str,
+    kind: REPORT_EVENT_TYPE,
+    event_id: u32,
+    line: &str,
+) -> Result<(), Win32Error> {
     let source = wide(source);
     let line = wide(line);
     // SAFETY: NUL-terminated source name; a null server name means the local machine.
@@ -28,7 +43,7 @@ pub fn report_error(source: &str, event_id: u32, line: &str) -> Result<(), Win32
     let ok = unsafe {
         ReportEventW(
             log,
-            EVENTLOG_ERROR_TYPE,
+            kind,
             0,
             event_id,
             ptr::null_mut(),

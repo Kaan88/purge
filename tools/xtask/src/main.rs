@@ -20,6 +20,8 @@
 //!   bench_launch.rs).
 //! - `gen-dto`: JSON Schemas of the engine API's types and the C# source-generation glue, under
 //!   `ui/Purge.Client/` (see gen_dto.rs). `--check` fails on a difference.
+//! - `broker-timings`: the broker's timing lines of a run (collected by `vm/guest/broker-timings.ps1`) as
+//!   the numbers of gate G12 (see broker_timings.rs; not part of `ci`).
 //! - `ci`: fmt check, clippy, tests, a standalone clippy of `purge-mcp`, clippy and the feature-gated
 //!   tests of the rig-exec build (engine CLI), every purge-exec test target with its `fault-inject` and
 //!   `test-support` features (crash matrix, object ops), check-deps, no-new-walks, ui-strings,
@@ -28,6 +30,7 @@
 
 mod baseline_sites;
 mod bench_launch;
+mod broker_timings;
 mod check_deps;
 mod gen_dto;
 mod lex;
@@ -44,7 +47,7 @@ use anyhow::{Context, Result, bail};
 
 const USAGE: &str = "usage: cargo xtask <ui-strings | check-deps | no-new-walks | baseline-sites | \
                      scanner-coverage | replay | replay-all | replay-diff | bench-launch | gen-dto | \
-                     ci>";
+                     broker-timings | ci>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -59,6 +62,7 @@ fn main() -> ExitCode {
         Some("replay-diff") => replay_diff::run(&workspace_root(), &args[1..]),
         Some("bench-launch") => bench_launch::run(&workspace_root(), &args[1..]),
         Some("gen-dto") => gen_dto::run(&workspace_root(), &args[1..]),
+        Some("broker-timings") => broker_timings::run(&args[1..]),
         Some("ci") => ci(&workspace_root(), &args[1..]),
         Some("-h" | "--help") => {
             println!("{USAGE}");
