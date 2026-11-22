@@ -153,8 +153,10 @@ selftest() {
   run_case trap-fail 1 "S1 R4 merged K9 blm-m1b-traps-7zip" trap
   run_case r4-missing 1 "S1 R4 local (bll-): m1b.sh exit collect-skipped; score unreadable" rm r4-local/m1b-score.json
   run_case danger-listed 1 "S1 R4 local clean/7zip danger_listed: 2 (exact gate 0)" danger
+  run_case empty-plan-ufh 0 "W3 R4 merged K1 clean/7zip: empty plan" emptyufh
+  run_case empty-plan-other 1 "S1 R4 merged K1 clean/7zip: empty plan" emptyother
   rm -rf "$tmp"
-  [ "$fails" -eq 0 ] && { echo "self-test: PASS (12 cases)"; return 0; }
+  [ "$fails" -eq 0 ] && { echo "self-test: PASS (14 cases)"; return 0; }
   echo "self-test: FAIL ($fails case(s))" >&2; return 1
 }
 

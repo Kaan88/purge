@@ -1,6 +1,6 @@
 """Helpers of truth/bl.sh (BL-GATE scorer): runinfo, runrec, summary, evaluate, mutate (the self-test's
 mutations). Read bl.sh's header for the criteria. Everything that cannot be read is a FAIL, never a skip."""
-import datetime, gzip, hashlib, json, os, sys
+import datetime, gzip, hashlib, json, os, re, sys
 
 MODE, A = sys.argv[1], sys.argv[2:]
 E = os.environ
@@ -151,6 +151,46 @@ if MODE == 'evaluate':
     def row(cid, kind, subject, value, limit, ok):
         rows.append({'id': cid, 'kind': kind, 'subject': subject, 'value': value, 'limit': limit, 'pass': bool(ok)})
 
+    UFH_SHC = re.compile(r'^V:HKU\\[^\\|]+\\Software\\Microsoft\\Windows\\CurrentVersion\\UFH\\SHC\|', re.I)
+    SET_TAG = {'clean': 'm1b', 'dirty': 'm1bd', 'cp': 'm1bcp'}
+
+    def purge_tool(doc, app):
+        for a in (doc or {}).get('apps', []) if isinstance(doc, dict) else []:
+            if a.get('id') == app:
+                for t in a.get('tools', []):
+                    if t.get('tool') == 'purge':
+                        return t
+        return None
+
+    def empty_plan_explained(m, p, c, mine):
+        """R4 ruling (coordinator 2026-11-22, DECISIONS): m1b.sh fails K1/K2/K3 of an app whose plan is empty while
+        its truth has leftovers. Below Exact that is a recall cost, not a safety failure, in one case only: the exact
+        M1b gate run of the same set and app offered items and every one was a UFH\\SHC slot value, which BL-FIX-UFH
+        makes Windows-owned below Exact. Also required: the app's RUN row passed (the engine ran and every phase was
+        ok) and its danger_listed is not above the exact gate's. Anything else stays an S1 failure."""
+        if c.get('pass') is True or c.get('id') not in ('K1', 'K2', 'K3'):
+            return False
+        if not str(c.get('value', '')).startswith('empty plan:'):
+            return False
+        s, _, app = str(c.get('subject', '')).partition('/')
+        if s not in SET_TAG or not app:
+            return False
+        run = f'{p}-{SET_TAG[s]}-{app}'
+        if not any(r.get('id') == 'RUN' and r.get('subject') == run and r.get('pass') is True for r in mine):
+            return False
+        ref = purge_tool(load(os.path.join(E['BL_EXACT_EVID'], f'score-{s}.json')), app)
+        got = purge_tool(load(os.path.join(OUT, f'r4-{m}', 'm1b-evidence', f'score-{s}.json')), app)
+        if not ref or not got:
+            return False
+        items = ref.get('items')
+        # The score's items are every offered item (offered_n of them), so "all UFH\SHC" covers the whole exact plan.
+        if not isinstance(items, list) or not items or ref.get('offered_n') != len(items):
+            return False
+        if not all(isinstance(i, dict) and UFH_SHC.match(str(i.get('target', ''))) for i in items):
+            return False
+        n, x = got.get('danger_listed'), ref.get('danger_listed')
+        return isinstance(n, int) and isinstance(x, int) and n <= x
+
     # R3
     r3 = os.path.join(OUT, 'r3')
     summ = load(os.path.join(r3, 'summary.json'))
@@ -273,15 +313,22 @@ if MODE == 'evaluate':
             row('S1', 'S', f'R4 {m} binding', f"sets {sc.get('sets')} trap runs {sc.get('trap_runs')}",
                 f'sets {sets} trap runs {want_traps}', False)
         mine = [c for c in crit if isinstance(c, dict) and c.get('id') in ('RUN', 'K1', 'K2', 'K3', 'K9')]
+        explained = {id(c) for c in mine if empty_plan_explained(m, p, c, mine)}
         for c in mine:
-            if c.get('pass') is not True:
+            if id(c) in explained:
+                row('W3', 'report', f"R4 {m} {c.get('id')} {c.get('subject')}", f"{c.get('value')}; the exact gate "
+                    'offered only UFH\\SHC slot values, which no view below Exact offers (BL-FIX-UFH)',
+                    'recall cost, reported (RUN ok, danger_listed within the exact gate)', True)
+            elif c.get('pass') is not True:
                 row('S1', 'S', f"R4 {m} {c.get('id')} {c.get('subject')}", str(c.get('value')), str(c.get('limit')), False)
         k9 = [c for c in mine if c.get('id') == 'K9']
         danger = [c for c in mine if c.get('id') in ('K1', 'K2')]
         per_set = all(any(str(c.get('subject', '')).startswith(s + '/') for c in danger) for s in sets)
+        good = [c.get('pass') is True or id(c) in explained for c in mine]
         row('S1', 'S', f'R4 {m} rows', f'{len(mine)} RUN/K1/K2/K3/K9 row(s), {sum(c.get("pass") is True for c in mine)} '
-            f'pass; {len(k9)} trap row(s)', 'all pass, danger rows for every set, a trap row per set',
-            bool(mine) and all(c.get('pass') is True for c in mine) and len(k9) >= len(sets) and per_set)
+            f'pass, {len(explained)} empty plan(s) explained (W3); {len(k9)} trap row(s)',
+            'all pass, danger rows for every set, a trap row per set', bool(mine) and all(good) and len(k9) >= len(sets)
+            and per_set)
         # danger_listed: not above the exact M1b gate run of the same set and app
         for s in sets:
             got = load(os.path.join(OUT, f'r4-{m}', 'm1b-evidence', f'score-{s}.json'))
@@ -353,6 +400,18 @@ if MODE == 'mutate':  # mutate <fixture dir> <what> [path]
     elif what == 'danger':
         edit(J('r4-local', 'm1b-evidence', 'score-clean.json'),
              lambda s: s['apps'][0]['tools'][0].update(danger_listed=2))
+    elif what in ('emptyufh', 'emptyother'):  # merged clean/7zip plan empty; the exact plan offered only UFH\SHC (or not)
+        target = ('V:HKU\\S-1-5-21-1\\Software\\Microsoft\\Windows\\CurrentVersion\\UFH\\SHC|1' if what == 'emptyufh'
+                  else 'V:HKU\\S-1-5-21-1\\Software\\7-Zip|Path')
+        edit(J('exact-evid', 'score-clean.json'), lambda s: s['apps'][0]['tools'][0].update(
+            offered_n=1, items=[{'target': target, 'band': 'Likely', 'outcome': 'hit'}]))
+
+        def empty(s):
+            for c in s['criteria']:
+                if c['id'] in ('K1', 'K3') and c['subject'] == 'clean/7zip':
+                    c.update(value='empty plan: 0 items offered, 3 leftover/user-data truth item(s)',
+                             limit='a plan with items', **{'pass': False})
+        edit(J('r4-merged', 'm1b-score.json'), empty)
     else:
         sys.exit(1)
     sys.exit(0)
