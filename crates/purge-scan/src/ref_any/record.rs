@@ -226,8 +226,10 @@ fn snapshot_evidence(
 ///
 /// A value that clean Windows has under this name is not offered: the app's record took the place of an
 /// older one, so the value existed before the install and is not a leftover, and unlike a list there is
-/// no part of it to take out. The common blockers apply as to any value (an Inno record of it having
-/// existed before the install keeps it).
+/// no part of it to take out. A slot of a user's numbered-slot store (`UFH\SHC`) counts as one without
+/// an exact baseline of this Windows ([`ScanCtx::in_baseline`]), so below Exact no slot is offered. The
+/// common blockers apply as to any value (an Inno record of it having existed before the install keeps
+/// it).
 ///
 /// The entries that do not refer to the app go with the value, so it is the app's alone only when they
 /// are nothing of their own: `UnmatchedChildren` (offered, never preselected) unless
@@ -474,23 +476,93 @@ mod tests {
     /// with the unattributed fields counted, so never preselected.
     #[test]
     fn a_record_is_not_preselected_without_a_matching_baseline() {
+        // The rig's slot records, in a key of another vendor rather than in Windows' slot store.
+        let launcher = format!(r"HKU\{SID}\Software\Vendor\Launcher");
+        let records = || {
+            machine()
+                .multi_sz(
+                    &launcher,
+                    "0",
+                    &[&lnk("Git Bash"), &exe("git-bash.exe"), "--cd-to-home"],
+                )
+                .multi_sz(
+                    &launcher,
+                    "1",
+                    &[&lnk("Git CMD"), &exe("git-cmd.exe"), "--cd-to-home"],
+                )
+                .multi_sz(&launcher, "2", &[&lnk("Git GUI"), &exe(r"cmd\git-gui.exe")])
+        };
         // Every view below Exact takes the no-baseline path (presence-only, design L5).
         for below in 0..purge_index::baseline_view::fixture::BELOW_EXACT {
-            let mut none = World::new(git_slots().build());
+            let mut none = World::new(records().build());
             none.baseline = purge_index::baseline_view::fixture::below_exact(below, &none.fp.os);
             // A baseline of another edition is not this Windows' baseline.
-            let mut other = World::new(git_slots().build());
+            let mut other = World::new(records().build());
             other.baseline = Some(baseline("Enterprise", &[]));
             for world in [&none, &other] {
                 let found = scan(world);
                 assert_eq!(segments(&found), 0, "{found:#?}");
+                assert_eq!(found.len(), 3, "{found:#?}");
                 for (name, n) in [("0", 2), ("1", 2), ("2", 1)] {
-                    let c = expect(&found, &value(&shc(), name));
+                    let c = expect(&found, &value(&launcher, name));
                     assert_eq!(c.blockers, vec![Blocker::UnmatchedChildren { n }], "{name}");
                     assert!(!c.blockers.iter().any(Blocker::is_hard));
                 }
             }
         }
+    }
+
+    /// BL-GATE S1 (frozen runs `7zip`, `git`, `m1bcp-7zip` replayed with the local view): a slot of
+    /// Windows' slot store is the app's leftover only when an exact baseline of this Windows shows the
+    /// slot is newer than the profile's own. Below Exact, and with a baseline of another Windows, no
+    /// slot is offered, whatever the view holds: the local baseline has no slot of any profile (the
+    /// exact baselines hold slot `0` of the rig user, which the exact view withholds), a neighbour's
+    /// slots are another machine's, and an empty view knows nothing. With the exact baseline the new
+    /// slots are offered as before.
+    #[test]
+    fn a_slot_record_is_not_offered_without_a_matching_baseline() {
+        use purge_index::baseline_view::fixture::{self, value_entry};
+        let slots: Vec<String> = ["0", "1", "2"]
+            .iter()
+            .map(|name| value_entry(&shc(), name))
+            .collect();
+        let slots: Vec<&str> = slots.iter().map(String::as_str).collect();
+        let mut views: Vec<(String, Option<BaselineView>)> = (0..fixture::BELOW_EXACT)
+            .map(|below| {
+                let world = World::new(git_slots().build());
+                (
+                    format!("below Exact {below}"),
+                    fixture::below_exact(below, &world.fp.os),
+                )
+            })
+            .collect();
+        // Views that hold every slot, the slot store's key, or nothing of it: alike.
+        views.push(("local, all slots".into(), Some(local_view(&slots))));
+        views.push((
+            "merged, the slots in the neighbour".into(),
+            Some(merged_view(&[], &slots)),
+        ));
+        views.push((
+            "merged, the key only".into(),
+            Some(merged_view(&[], &[&shc()])),
+        ));
+        views.push(("none, all slots".into(), Some(none_view(&slots))));
+        views.push((
+            "another Windows' exact baseline".into(),
+            Some(baseline("Enterprise", &[])),
+        ));
+        for (name, view) in views {
+            let mut world = World::new(git_slots().build());
+            world.baseline = view;
+            let found = scan(&world);
+            assert!(found.is_empty(), "{name}: {found:#?}");
+        }
+        // The exact baseline of this Windows: the slots it lacks are offered (L3).
+        let mut exact = World::new(git_slots().build());
+        exact.baseline = Some(baseline_with_values(&[(&shc(), "0")]));
+        let found = scan(&exact);
+        assert_eq!(found.len(), 2, "{found:#?}");
+        assert!(find(&found, &value(&shc(), "0")).is_none());
     }
 
     /// A record that names another installed app next to this one is not this app's alone.

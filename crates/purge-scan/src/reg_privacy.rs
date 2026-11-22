@@ -61,7 +61,10 @@
 //! of anybody else, is left alone: no segment edit here. Evidence `PointsIntoInstallRoot`, plus
 //! `DanglingRef` when every named file is proven absent and the whole root is gone. The slot store is a
 //! shared place of the framework (`ScanCtx::owns_registration`: Windows reuses a slot for the next
-//! program), so this evidence is Tier B and the value at most Likely.
+//! program), so this evidence is Tier B and the value at most Likely. A slot that clean Windows of this
+//! build has is `WindowsBaseline`; without an exact baseline of this Windows every slot is
+//! (`ScanCtx::in_baseline`: which slots the profile had before the install is unknown), so below
+//! Exact a slot is listed Blocked, never offered (BL-GATE S1).
 //!
 //! # Reads
 //!
@@ -618,6 +621,14 @@ fn file_blockers(ctx: &ScanCtx<'_>, path: &str) -> Vec<Blocker> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The slot store read here is the one the framework takes as Windows' own below Exact.
+    #[test]
+    fn the_slot_store_is_a_framework_slot_store() {
+        assert!(crate::framework::is_user_slot_store(&format!(
+            r"HKU\S-1-5-21-1-2-3-1001\{USER_SHC}"
+        )));
+    }
 
     #[test]
     fn roots_are_well_formed_and_the_stores_are_guard_containers() {
