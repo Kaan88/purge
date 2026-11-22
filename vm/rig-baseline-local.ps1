@@ -622,7 +622,7 @@ Add-Type -AssemblyName Microsoft.VisualBasic
 $avail = [int]((New-Object Microsoft.VisualBasic.Devices.ComputerInfo).AvailablePhysicalMemory / 1MB)
 if ($avail -lt 6144) { Stop-Bl 2 "REFUSED: only $avail MiB RAM available (need 6144 for a 4 GiB VM)" }
 
-$passes = $(if ($B.first_read) { @('first-read') } else { @('cold', 'warm', 'settled') })
+$passes = @($(if ($B.first_read) { @('first-read') } else { @('cold', 'warm', 'settled') }))   # @(): one pass stays an array ($passes[0] is its name, not 'f')
 $job = Get-BlBuildJob "C:\cr\out\$($Spec.run)" 'C:\cr\bin\purge-engine.exe' 'C:\cr\guest\riglib.ps1' $passes
 Write-RigLog "== $($Spec.run) start $($started.ToString('o')) on $($Spec.vm); engine $((Get-FileHash -Algorithm SHA256 -LiteralPath $tools.engine).Hash.ToLower().Substring(0, 12)) ($($tools.engine)); truth $($Spec.truth); neighbour $($Spec.neighbour)"
 $rc = 1

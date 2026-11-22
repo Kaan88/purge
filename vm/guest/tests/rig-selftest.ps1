@@ -147,6 +147,11 @@ foreach ($f in @(Get-ChildItem -LiteralPath $Guest -Filter '*.ps1') + @(Get-Item
     Check 'baseline-local: the first-read job parses, builds once, settles before it' (@($perr).Count -eq 0 -and $fj.Contains("foreach (`$pass in 'first-read')") -and $fj.Contains("`$pass -eq 'first-read'") -and $fj -notmatch '__PASSES__')
     $msg = $null; try { $null = Get-BlBuildJob 'C:\d' 'C:\e.exe' 'C:\r.ps1' @('hot') } catch { $msg = $_.Exception.Message }
     Check 'baseline-local: an unknown pass is refused' ($msg -match "bad pass 'hot'")
+    # the host's pass list (its own line in rig-baseline-local.ps1, evaluated here): one pass must stay an array, or
+    # $passes[0] is 'f' and the pull check looks for build-f.log (BL-GATE A0 first run, 2026-11-22)
+    $pl = @([IO.File]::ReadAllLines((Join-Path $Vm 'rig-baseline-local.ps1')) | Where-Object { $_ -match '^\$passes = ' })
+    $pv = & { foreach ($fr in @($true, $false)) { $B = @{ first_read = $fr }; Invoke-Expression $pl[0]; ,$passes } }
+    Check 'baseline-local: the pass list is an array, also with the one first-read pass' ($pl.Count -eq 1 -and $pv[0] -is [array] -and $pv[0][0] -ceq 'first-read' -and $pv[0].Count -eq 1 -and ($pv[1] -join ',') -ceq 'cold,warm,settled') ("lines=$($pl.Count) first=$($pv[0] | ConvertTo-Json -Compress)")
     $fb = [pscustomobject]@{ os = 'Professional-26340.9882'; cpus = 2; passes = @([pscustomobject]@{ pass = 'first-read'; exit = 0; seconds = 41.5; uptime_sec = 900; peak_working_set_mb = 120; file_bytes = 9000000; total_line = 't' })
         settle = [pscustomobject]@{ cpu_settled = $true; cache_purged = $true; error = $null }; network_up = [pscustomobject]@{ start = @(); settled = @() }; info = [pscustomobject]@{ seconds = 1 } }
     $ev = Get-BlFirstReadEvidence $fb $r1 60 @('id1', "#src`tS1`tcomplete")
