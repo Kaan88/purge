@@ -15,7 +15,7 @@
 
 ## 1. Verdict
 
-**BL-GATE: PASS on safety (S1 to S5); the worth criteria (W1 to W5) are met or recorded as measured outcomes.**
+**BL-GATE: PASS on safety (S1 to S5); worth (W1 to W5, which do not gate): W1 met, W2 and W3 measured, W4 met on Inbound and a W fail on Clean-Pro, W5 not measured on the host.**
 
 - `bl.sh evaluate`: **S criteria PASS, 0 failing S rows** (2026-11-23).
 - The feature ships **presence-only**, as built (design §4.3 "As built"): below Exact no site consumes inferred absence.
@@ -105,7 +105,7 @@ Attribution (Fable review finding 1; investigation 2026-11-23): **not the view, 
   The scan then reports, correctly, an empty folder that exists.
 - **The suggestion.** Since `59ae960`/`957c1be`, the live registry reader opens `HKU\S-1-5-18\Software\Classes` as an
   ordinary key. It is a registry link, and the read is refused as a reparse point. The MSI ownership index is then
-  incomplete for Burn, so SYS-BURNDEPS withholds the suggestion (engine log in `blx-m1b-python/job.log`). Replays
+  incomplete for Burn, so SYS-BURNDEPS withholds the suggestion (engine log in `blx-m1b-python/run.log`). Replays
   cannot show this, because the snapshot does not capture the link.
 
 Neither cause depends on the baseline view, so they do not count against S1. They are M3 regressions: the fixes, and
