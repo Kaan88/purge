@@ -2,94 +2,171 @@ using System.Globalization;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
-using Purge.App.Shell;
+using Purge.Client.Broker;
 
 namespace Purge.App.Views;
 
-/// <summary>One quarantined item of a session.</summary>
-public sealed partial class HistoryItem(string path, string size, bool isChecked)
+/// <summary>One item of a session (<c>history.get</c>) as the detail pane binds it.</summary>
+public sealed partial class HistoryItemRow(HistoryEntryModel model)
 {
-    public string Path { get; } = path;
-    public string Size { get; } = size;
-    public bool Checked { get; set; } = isChecked;
+    public HistoryEntryModel Model { get; } = model;
+    public string Name => Model.DisplayName;
+    public string Kind => Model.KindText;
+    public string Outcome => Model.OutcomeText;
+    public bool Selectable => Model.Selectable;
+    public string Alert => Model.AlertText ?? "";
+    public Visibility AlertVisibility => Model.HasAlert ? Visibility.Visible : Visibility.Collapsed;
+
+    public bool Checked
+    {
+        get => Model.Checked;
+        set => Model.Checked = value && Model.Selectable;
+    }
 }
 
-/// <summary>A day header or one cleanup session of the S4 list.</summary>
+/// <summary>A day header or one cleanup session of the S4 list and timeline.</summary>
 public sealed partial class HistoryRow
 {
-    private HistoryRow(string title) { IsDay = true; Title = title; }
+    private HistoryRow(string day) { IsDay = true; Title = day; }
 
-    public HistoryRow(string title, string time, string detail, string state, string publisher, string summary,
-        string note, string expiry, List<HistoryItem> items)
+    private HistoryRow(HistorySessionModel session)
     {
-        Title = title;
-        Time = time;
-        Detail = detail;
-        State = state;
-        Tile = ProgramRow.TileFor(publisher);
-        Initial = title[..1];
-        Summary = summary;
-        Note = note;
-        _expiry = expiry;
-        Items = items;
+        Session = session;
+        Title = session.Name;
+        Time = session.Time;
+        Tile = ProgramRow.TileFor(session.Name);
+        Initial = session.Name.Length > 0 && char.IsLetterOrDigit(session.Name[0]) ? char.ToUpperInvariant(session.Name[0]).ToString() : "?";
     }
 
     public static HistoryRow Day(string title) => new(title);
 
+    public static HistoryRow For(HistorySessionModel session) => new(session);
+
+    public HistorySessionModel? Session { get; }
     public bool IsDay { get; }
     public string Title { get; }
     public string Time { get; } = "";
-    public string Detail { get; } = "";
-    public string State { get; } = "";
     public string Initial { get; } = "";
     public Brush? Tile { get; }
-    public string Summary { get; } = "";
-    public string Note { get; } = "";
-    private readonly string _expiry = "";
-    public List<HistoryItem> Items { get; } = [];
-
-    /// <summary>When the cleanup ran; retention counts from here (ENGINE_PLAN.md §7.8).</summary>
-    public DateTimeOffset Created { get; init; }
-
-    /// <summary>Still something in quarantine to put back.</summary>
-    public bool Held => !IsDay && State is "Undoable" or "Partial";
-
-    private int FileDays => Retention.DaysLeft(Created, Retention.FileDays, DateTimeOffset.Now);
-    private int BackupDays => Retention.DaysLeft(Created, Retention.BackupDays, DateTimeOffset.Now);
-
-    public string Expiry => !Held ? _expiry
-        : $"Files restorable until {Created.AddDays(Retention.FileDays).ToString("d MMM yyyy", CultureInfo.CurrentCulture)} ({FileDays} days), " +
-          $"registry and task backups until {Created.AddDays(Retention.BackupDays).ToString("d MMM yyyy", CultureInfo.CurrentCulture)}";
+    public string Detail => Session?.Detail ?? "";
+    public string State => Session?.State ?? "";
+    public string AlertTip => "Purge found another object in quarantine in place of one of these items. Show items to see it.";
 
     // Board 13 timeline marker
     public double MarkWidth => IsDay ? 92 : 156;
-    public string MarkTitle => Title;
-    public string MarkRestorable => IsDay ? "" : !Held ? "Nothing to restore"
-        : FileDays > 0 ? $"Files {FileDays} d · registry {BackupDays} d" : $"Files expired · registry {BackupDays} d";
+    public string MarkRestorable => Session?.Restorable ?? "";
     public string MarkName => IsDay ? Title : $"{Title} {Time}, {MarkRestorable}";
 
     public Visibility DayVisibility => IsDay ? Visibility.Visible : Visibility.Collapsed;
     public Visibility OpVisibility => IsDay ? Visibility.Collapsed : Visibility.Visible;
-    public Visibility UndoableVisibility => !IsDay && State == "Undoable" ? Visibility.Visible : Visibility.Collapsed;
-    public Visibility PartialVisibility => !IsDay && State == "Partial" ? Visibility.Visible : Visibility.Collapsed;
-    public Visibility NeutralVisibility => !IsDay && State is "Restored" or "Kept all" ? Visibility.Visible : Visibility.Collapsed;
+    public Visibility AlertVisibility => Session?.HasAlert == true ? Visibility.Visible : Visibility.Collapsed;
+    public Visibility UndoableVisibility => Session?.Chip == HistoryChip.Undoable ? Visibility.Visible : Visibility.Collapsed;
+    public Visibility CautionVisibility => Session?.Chip == HistoryChip.Caution ? Visibility.Visible : Visibility.Collapsed;
+    public Visibility NeutralVisibility => Session?.Chip == HistoryChip.Neutral ? Visibility.Visible : Visibility.Collapsed;
 }
 
-/// <summary>S4 on sample data. Restore buttons only report what they would do.</summary>
+/// <summary>
+/// S4 on real data: the list is <c>history.index</c> from the medium engine (no broker, no prompt to open the page);
+/// "Show items" and Restore start the broker on the click. All state lives in <see cref="HistoryViewModel"/>.
+/// </summary>
 public sealed partial class HistoryView : UserControl
 {
-    private HistoryRow? _current;
-    private readonly List<HistoryRow> _rows = Sample();
+    private readonly HistoryViewModel _vm;
+    private List<HistoryRow> _rows = [];
+    private string _rowsKey = "";
     private bool _syncing;
+    private bool _cancelShown;
 
     public HistoryView()
     {
         InitializeComponent();
-        Ops.ItemsSource = _rows;
-        // The strip runs left to right, oldest first; the list stays newest first.
-        Strip.ItemsSource = TimelineOrder(_rows);
-        Ops.SelectedItem = _rows[1];
-        Loaded += (_, _) => { if (Strip.SelectedItem is { } s) Strip.ScrollIntoView(s); };
+        _vm = new HistoryViewModel(ct => Program.Engine.GetHistoryIndexAsync(ct), LaunchAsync);
+        _vm.Changed += () => DispatcherQueue.TryEnqueue(Render);
+        // The store changes under the page (a cleanup, an undo): read the index each time the page is shown.
+        Loaded += (_, _) => _ = _vm.LoadAsync();
+        Render();
+    }
+
+    private static async Task<HistoryBrokerLaunch> LaunchAsync(CancellationToken ct)
+    {
+        try
+        {
+            if (!await MainWindow.Instance.ConfirmFirstElevationAsync())
+                return new HistoryBrokerLaunch(null, true, "");
+            var result = await BrokerLauncher.LaunchAsync(BrokerLauncher.PathBesideApp(), MainWindow.Instance.Hwnd, ct);
+            return result.Status switch
+            {
+                BrokerLaunchStatus.Started when result.Session is { } session =>
+                    new HistoryBrokerLaunch(new HistoryBroker(session), false, ""),
+                BrokerLaunchStatus.Cancelled => new HistoryBrokerLaunch(null, true, result.Message),
+                _ => new HistoryBrokerLaunch(null, false, result.Message),
+            };
+        }
+        catch (Exception e) when (e is not OutOfMemoryException)
+        {
+            return new HistoryBrokerLaunch(null, false, e.Message);
+        }
+    }
+
+    private void Render()
+    {
+        var phase = _vm.Phase;
+        var ready = phase == HistoryPhase.Ready;
+        StatePanel.Visibility = ready ? Visibility.Collapsed : Visibility.Visible;
+        StripCard.Visibility = ready ? Visibility.Visible : Visibility.Collapsed;
+        ListAndDetail.Visibility = ready ? Visibility.Visible : Visibility.Collapsed;
+        LoadingRing.IsActive = phase == HistoryPhase.Loading;
+        LoadingRing.Visibility = phase == HistoryPhase.Loading ? Visibility.Visible : Visibility.Collapsed;
+        StateRetry.Visibility = phase == HistoryPhase.Error ? Visibility.Visible : Visibility.Collapsed;
+        (StateTitle.Text, StateDetail.Text) = phase switch
+        {
+            HistoryPhase.Loading => ("Reading the history…", ""),
+            HistoryPhase.Empty => ("No cleanups yet.", "Cleanups you run from Leftovers appear here, and you can put them back from here."),
+            HistoryPhase.Error => ("Couldn't read the history.", _vm.Error ?? ""),
+            _ => ("", ""),
+        };
+        if (!ready) return;
+        FillRows();
+        RenderDetail();
+    }
+
+    private void FillRows()
+    {
+        var key = string.Join("|", _vm.Sessions.Select(s => $"{s.Id}:{s.State}:{s.HasAlert}:{s.Detail}"));
+        if (key != _rowsKey)
+        {
+            _rowsKey = key;
+            _rows = BuildRows(_vm.Sessions);
+            _syncing = true;
+            Ops.ItemsSource = _rows;
+            // The strip runs left to right, oldest first; the list stays newest first.
+            Strip.ItemsSource = TimelineOrder(_rows);
+            _syncing = false;
+        }
+        if (_vm.Selected is { } selected && _rows.FirstOrDefault(r => r.Session == selected) is { } row && Ops.SelectedItem != row)
+        {
+            _syncing = true;
+            Ops.SelectedItem = row;
+            Strip.SelectedItem = row;
+            _syncing = false;
+            Ops.ScrollIntoView(row);
+            Strip.ScrollIntoView(row);
+        }
+    }
+
+    private static List<HistoryRow> BuildRows(List<HistorySessionModel> sessions)
+    {
+        var rows = new List<HistoryRow>();
+        var today = DateTime.Today;
+        foreach (var group in sessions.GroupBy(s => s.Day))
+        {
+            var title = group.Key == today ? "Today"
+                : group.Key == today.AddDays(-1) ? "Yesterday"
+                : group.Key.ToString(group.Key.Year == today.Year ? "d MMMM" : "d MMMM yyyy", CultureInfo.CurrentCulture);
+            rows.Add(HistoryRow.Day(title));
+            rows.AddRange(group.Select(HistoryRow.For));
+        }
+        return rows;
     }
 
     private static List<HistoryRow> TimelineOrder(List<HistoryRow> rows)
@@ -101,17 +178,61 @@ public sealed partial class HistoryView : UserControl
             else days[^1].Add(r);
         }
         days.Reverse();
-        return days.SelectMany(d => d.Take(1).Concat(d.Skip(1).OrderBy(r => r.Created))).ToList();
+        return days.SelectMany(d => d.Take(1).Concat(d.Skip(1).OrderBy(r => r.Session!.Started))).ToList();
     }
 
-    /// <summary>Selects the newest cleanup of a program (from the command box).</summary>
-    public void Select(string programName)
+    private void RenderDetail()
     {
-        if (_rows.FirstOrDefault(r => !r.IsDay && r.Title == programName) is { } row)
+        InfoBarHost.Children.Clear();
+        if (_vm.Selected is not { } s) return;
+        DTitle.Text = $"{s.Name} · {s.Started.ToLocalTime().ToString("d MMM yyyy HH:mm", CultureInfo.CurrentCulture)}";
+        DSummary.Text = s.Detail;
+        DExpiry.Text = s.Expiry;
+
+        var items = _vm.Items;
+        ShowItems.Visibility = items is null ? Visibility.Visible : Visibility.Collapsed;
+        ShowItems.IsEnabled = !_vm.Busy;
+        ItemsBorder.Visibility = items is null ? Visibility.Collapsed : Visibility.Visible;
+        if (items is not null && (DItems.ItemsSource as List<HistoryItemRow>)?.Select(r => r.Model).SequenceEqual(items) != true)
+            DItems.ItemsSource = items.Select(i => new HistoryItemRow(i)).ToList();
+        UpdateRestore();
+
+        if (s.Interrupted && !_vm.Busy)
         {
-            Ops.SelectedItem = row;
-            Ops.ScrollIntoView(row);
+            // Recovery banner (design 6.3): Resume and Roll back, each through the broker's own dialog.
+            var bar = ShowInfo(InfoBarSeverity.Warning, "The session was not recorded completely.",
+                "Resume finishes what it started; Roll back puts back what it changed. Both ask in the Purge security prompt first.",
+                closable: false);
+            var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+            var resume = new Button { Content = "Resume" };
+            resume.Click += (_, _) => _ = _vm.RecoverAsync(rollback: false);
+            var rollback = new Button { Content = "Roll back" };
+            rollback.Click += (_, _) => _ = _vm.RecoverAsync(rollback: true);
+            buttons.Children.Add(resume);
+            buttons.Children.Add(rollback);
+            bar.Content = buttons;
         }
+        if (_vm.Waiting is { } waiting)
+            ShowInfo(InfoBarSeverity.Informational, waiting, _vm.WaitingDetail, closable: false);
+        if (_vm.RestoreTitle is { } title)
+            ShowInfo(_vm.RestoreLines.Count == 0 ? InfoBarSeverity.Success : InfoBarSeverity.Warning, title,
+                string.Join(" ", _vm.RestoreLines.Prepend(_vm.ActionInfo ?? "")).Trim());
+        else if (_vm.ActionInfo is { } info)
+            ShowInfo(InfoBarSeverity.Informational, info, "");
+        if (_vm.ActionError is { } error)
+            ShowInfo(InfoBarSeverity.Error, "Couldn't finish that.", error);
+        // The shell's cancelled bar, once per cancelled prompt.
+        if (_vm.PromptCancelled && !_cancelShown)
+            MainWindow.Instance.ShowAdminPromptCancelled();
+        _cancelShown = _vm.PromptCancelled;
+    }
+
+    private void UpdateRestore()
+    {
+        var n = _vm.CheckedCount;
+        RestoreSelected.Content = $"Restore {n} selected";
+        RestoreSelected.IsEnabled = n > 0 && _vm.CanRestore;
+        RestoreAll.IsEnabled = _vm.CanRestore;
     }
 
     private void OnStripSelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -125,128 +246,34 @@ public sealed partial class HistoryView : UserControl
             row = _rows.Skip(i + 1).FirstOrDefault(r => !r.IsDay) ?? row;
             if (row.IsDay) return;
         }
-        _syncing = true;
-        Strip.SelectedItem = row;
-        Ops.SelectedItem = row;
-        Ops.ScrollIntoView(row);
-        _syncing = false;
+        _vm.Select(row.Session!.Id);
+    }
+
+    private void OnSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_syncing) return;
+        if (Ops.SelectedItem is HistoryRow { IsDay: false, Session: { } session }) _vm.Select(session.Id);
     }
 
     private void OnOpenVault(object sender, RoutedEventArgs e) => MainWindow.Instance.Navigate("vault");
 
-    private void OnSelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (Ops.SelectedItem is not HistoryRow { IsDay: false } row) return;
-        if (!_syncing)
-        {
-            _syncing = true;
-            Strip.SelectedItem = row;
-            Strip.ScrollIntoView(row);
-            _syncing = false;
-        }
-        _current = row;
-        DTitle.Text = $"{row.Title} · {row.Time}";
-        DSummary.Text = row.Summary;
-        DItems.ItemsSource = row.Items;
-        DNote.Text = row.Note;
-        DExpiry.Text = row.Expiry;
-        UpdateRestore();
-    }
+    private void OnRetryLoad(object sender, RoutedEventArgs e) => _ = _vm.LoadAsync();
+
+    private void OnShowItems(object sender, RoutedEventArgs e) => _ = _vm.ShowItemsAsync();
 
     private void OnItemCheck(object sender, RoutedEventArgs e) => UpdateRestore();
 
-    private void UpdateRestore()
-    {
-        var n = _current?.Items.Count(i => i.Checked) ?? 0;
-        RestoreSelected.Content = $"Restore {n} selected";
-        RestoreSelected.IsEnabled = n > 0 && _current?.Held == true;
-        RestoreAll.IsEnabled = _current?.Held == true;
-    }
+    private void OnRestore(object sender, RoutedEventArgs e) =>
+        _ = _vm.RestoreAsync(all: (sender as FrameworkElement)?.Tag as string == "all");
 
-    private async void OnRestore(object sender, RoutedEventArgs e)
+    private InfoBar ShowInfo(InfoBarSeverity severity, string title, string message, bool closable = true)
     {
-        if (_current is not { Held: true } row) return;
-        var items = ((sender as FrameworkElement)?.Tag as string == "all" ? row.Items : row.Items.Where(i => i.Checked))
-            .Select(i => new ConsentItem(i.Path, i.Path.StartsWith("HK", StringComparison.Ordinal) ? LeftoverKind.Registry : LeftoverKind.File,
-                Band.Safe, i.Size, 0, false))
-            .ToList();
-        if (items.Count == 0) return;
-        // Putting back writes to protected places, so it goes through the broker's security prompt like moving.
-        var waiting = ShowInfo(InfoBarSeverity.Informational, "Confirm in the Purge security prompt.", "Nothing has been put back yet.");
-        var ok = await ConsentPrompt.ShowAsync(MainWindow.Instance.Hwnd,
-            new ConsentSummary(row.Title, items, DateTime.Today, ConsentAction.Restore));
-        InfoBarHost.Children.Remove(waiting);
-        if (ok)
-            ShowInfo(InfoBarSeverity.Success, "Confirmed in the security prompt.",
-                "This preview isn't connected to the engine, so nothing was put back.");
-    }
-
-    private InfoBar ShowInfo(InfoBarSeverity severity, string title, string message)
-    {
-        InfoBarHost.Children.Clear();
-        var bar = new InfoBar { Severity = severity, Title = title, Message = message, IsOpen = true, IsClosable = true };
+        var bar = new InfoBar { Severity = severity, Title = title, Message = message, IsOpen = true, IsClosable = closable };
         // Pin to the window theme: code-made InfoBars otherwise take the warning/info fill from the app theme
         // (Windows setting), not from Settings → Appearance.
         bar.RequestedTheme = MainWindow.Instance.ActualTheme;
         bar.Closed += (s, _) => InfoBarHost.Children.Remove(s);
         InfoBarHost.Children.Add(bar);
         return bar;
-    }
-
-    private void OnSample(object sender, RoutedEventArgs e) { }
-
-    private static DateTimeOffset Today(int h, int m) => new DateTimeOffset(DateTime.Today).AddHours(h).AddMinutes(m);
-
-    private static List<HistoryRow> Sample()
-    {
-        const string undoNote = "Undo puts the leftovers back exactly as they were. It doesn't reinstall the program: run its installer for that.";
-        return
-        [
-            HistoryRow.Day("Today"),
-            new("Mozilla Firefox", "04:14", "Uninstalled · 8 leftovers removed · 2.7 MB", "Undoable", "Mozilla",
-                "Uninstaller ran (exit 0), then 8 leftovers moved to quarantine. Restore point \u201CPurge: before removing 3 programs\u201D.",
-                "Undo puts the leftovers back exactly as they were. It doesn't reinstall Firefox: run its installer for that.",
-                @"Expires 11 Dec 2026 · stored in C:\ProgramData\Purge\quarantine\2026-11-11T0414",
-                [
-                    new(@"C:\Users\tester\AppData\Local\Mozilla", "2.6 MB", true),
-                    new(@"C:\ProgramData\Mozilla-1de4eec8-…", "96 KB", true),
-                    new(@"HKCU\Software\Mozilla\Firefox", "12 values", true),
-                    new(@"HKLM\Software\Mozilla\Firefox", "4 values", false),
-                    new(@"Classes\…\OpenWithProgids (7 values)", "7 values", false),
-                    new("Task: Firefox Default Browser Agent", "", false),
-                ]) { Created = Today(4, 14) },
-            new("Python 3.12.7 (64-bit)", "04:16", "Uninstalled · 1 file in use, removed after restart · 6 leftovers", "Partial",
-                "Python Software Foundation",
-                "Uninstaller ran (exit 0). 5 leftovers moved to quarantine; 1 file was in use and was removed at the next restart.",
-                undoNote, @"Expires 11 Dec 2026 · stored in C:\ProgramData\Purge\quarantine\2026-11-11T0416",
-                [
-                    new(@"C:\Users\tester\AppData\Local\Programs\Python\Python312", "3.4 MB", true),
-                    new(@"HKCU\Software\Python\PythonCore\3.12", "9 values", true),
-                    new(@"C:\Users\tester\AppData\Roaming\Python\Python312", "1.1 MB", false),
-                    new(@"C:\Users\tester\AppData\Local\pip", "412 MB", false),
-                ]) { Created = Today(4, 16) },
-            new("Notepad++", "03:58", "Uninstalled · 2 leftovers removed, then restored at 04:02", "Restored", "Notepad++ Team",
-                "Uninstaller ran (exit 0), 2 leftovers moved to quarantine, then you restored both at 04:02.",
-                "Nothing of Notepad++ is in quarantine any more.", "Restored 04:02",
-                [
-                    new(@"C:\Users\tester\AppData\Roaming\Notepad++", "180 KB", false),
-                    new(@"HKCU\Software\Notepad++", "3 values", false),
-                ]) { Created = Today(3, 58) },
-            HistoryRow.Day("10 November"),
-            new("Microsoft Visual Studio Code", "22:41", "Uninstalled · 141 leftovers removed (135 file-type values) · 28.4 MB", "Undoable",
-                "Microsoft Corporation",
-                "Uninstaller ran (exit 0), then 141 leftovers moved to quarantine, 135 of them file-type values.",
-                undoNote, @"Expires 10 Dec 2026 · stored in C:\ProgramData\Purge\quarantine\2026-11-10T2241",
-                [
-                    new(@"C:\Users\tester\AppData\Roaming\Code", "27.9 MB", true),
-                    new(@"Classes\…\OpenWithProgids (135 values)", "135 values", true),
-                    new(@"HKCU\Software\Classes\vscode", "4 keys", true),
-                ]) { Created = new DateTimeOffset(2026, 11, 10, 22, 41, 0, DateTimeOffset.Now.Offset) },
-            new("7-Zip 24.08", "22:30", "Uninstalled · 1 shell extension entry found, kept by you", "Kept all", "Igor Pavlov",
-                "Uninstaller ran (exit 0). Purge found 1 shell extension entry and you chose to keep it.",
-                "Nothing was moved, so there is nothing to restore.", "Nothing in quarantine",
-                [new(@"HKCR\*\shellex\ContextMenuHandlers\7-Zip", "1 key", false)])
-            { Created = new DateTimeOffset(2026, 11, 10, 22, 30, 0, DateTimeOffset.Now.Offset) },
-        ];
     }
 }

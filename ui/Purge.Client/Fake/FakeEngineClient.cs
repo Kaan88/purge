@@ -143,6 +143,9 @@ public sealed class FakeEngineClient : IEngineClient
         return _forecasts.Where(f => wanted.Contains(f.ProgramId)).ToList();
     }
 
+    /// <summary>No sample cleanups: without the engine, History shows its empty state.</summary>
+    public Task<Rpc.HistoryIndex> GetHistoryIndexAsync(CancellationToken ct = default) => Task.FromResult(new Rpc.HistoryIndex());
+
     public Task<QuarantineStatus> GetQuarantineAsync(CancellationToken ct = default)
     {
         using var s = Open("Purge.Client.sample-quarantine.json");

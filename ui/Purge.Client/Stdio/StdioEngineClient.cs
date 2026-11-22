@@ -164,6 +164,12 @@ public sealed class StdioEngineClient : IEngineClient
     public Task<IReadOnlyList<LeftoverForecast>> GetForecastsAsync(IReadOnlyList<string> programIds, CancellationToken ct = default) =>
         Task.FromResult<IReadOnlyList<LeftoverForecast>>([]);
 
+    public async Task<Rpc.HistoryIndex> GetHistoryIndexAsync(CancellationToken ct = default)
+    {
+        var result = await CallAsync("history.index", null, null, ct).ConfigureAwait(false);
+        return result.Deserialize(Rpc.RpcJsonContext.Default.HistoryIndex) ?? throw new InvalidDataException("empty history.index result");
+    }
+
     public Task<QuarantineStatus> GetQuarantineAsync(CancellationToken ct = default) => NeedsBrokerCall<QuarantineStatus>();
 
     public Task<LeftoverPlan> ScanAsync(string programId, string programName, ScanKind kind, IProgress<EngineProgress>? progress = null,
