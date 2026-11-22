@@ -5,13 +5,13 @@
     "clean"
   ],
   "trap_runs": [
-    "bll-traps-7zip"
+    "bll-m1b-traps-7zip"
   ],
   "criteria": [
     {
       "id": "RUN",
       "step": "G2",
-      "subject": "bll-7zip",
+      "subject": "bll-m1b-7zip",
       "value": "finished=True",
       "limit": "finished",
       "pass": true,
@@ -38,7 +38,7 @@
     {
       "id": "K9",
       "step": "G4",
-      "subject": "bll-traps-7zip",
+      "subject": "bll-m1b-traps-7zip",
       "value": "cases=26 escapes=0",
       "limit": "every case",
       "pass": true,

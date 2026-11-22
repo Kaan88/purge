@@ -106,7 +106,7 @@ replay() {
 trap_runs_of() { # trap_runs_of <prefix>: the trap run of each R4 set
   local s out=""
   for s in $BL_R4_SETS; do
-    case "$s" in clean) out+=" $1-traps-7zip" ;; dirty) out+=" ${1}d-traps-7zip" ;; cp) out+=" ${1}cp-traps-7zip" ;; esac
+    case "$s" in clean) out+=" $1-m1b-traps-7zip" ;; dirty) out+=" $1-m1bd-traps-7zip" ;; cp) out+=" $1-m1bcp-traps-7zip" ;; esac
   done
   echo "${out# }"
 }
@@ -118,7 +118,7 @@ evaluate() {
     dir="$BL_OUT/r4-$mode"; mkdir -p "$dir"
     if [ "$BL_R4_COLLECT" = 1 ]; then
       rm -f "$dir/m1b-score.json"
-      M1B_CLEAN=$p M1B_DIRTY=${p}d M1B_CP=${p}cp M1B_SETS=$BL_R4_SETS M1B_TRAP_RUNS=$(trap_runs_of "$p") \
+      M1B_CLEAN=$p-m1b M1B_DIRTY=$p-m1bd M1B_CP=$p-m1bcp M1B_SETS=$BL_R4_SETS M1B_TRAP_RUNS=$(trap_runs_of "$p") \
         M1B_OUT=$dir M1B_RUNS=$BL_SRC bash truth/m1b.sh >"$dir/m1b.log" 2>&1; rc=$?
     else
       rc=collect-skipped
@@ -150,7 +150,7 @@ selftest() {
   run_case missing-summary 1 "S1 R3: missing: no runs" rm r3/summary.json
   run_case l3-break 1 "S4 L3 7zip: differs" l3
   run_case l5-break 1 "S4 L5 merged 7zip: exit 0" l5
-  run_case trap-fail 1 "S1 R4 merged K9 blm-traps-7zip" trap
+  run_case trap-fail 1 "S1 R4 merged K9 blm-m1b-traps-7zip" trap
   run_case r4-missing 1 "S1 R4 local (bll-): m1b.sh exit collect-skipped; score unreadable" rm r4-local/m1b-score.json
   run_case danger-listed 1 "S1 R4 local clean/7zip danger_listed: 2 (exact gate 0)" danger
   rm -rf "$tmp"
