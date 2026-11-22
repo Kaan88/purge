@@ -9,7 +9,9 @@ satisfied. Coordinator: Claude Code (Opus 5.5). Push as you go. Host: laptop DES
   `storage::tests::strict_policy_refuses_and_renames_aside_a_tree_owned_by_a_user`) become elevation-aware (expect
   Administrators as owner when elevated) instead of an exclusion list. Elevated ci runs in the Inbound VM, not on
   the host.
-- 11.3 manual SendInput test: automated from the elevated rig in the VM, with screenshots as evidence.
+- 11.3 manual SendInput test: automated from the elevated rig in the VM, with screenshots as evidence
+  (`rig-m3.ps1 -Mode m3-consent`, the `sendinput-key` and `sendinput-mouse` rows; m3-uac adds real-input clicks
+  inside the arming delay with UAC on).
 - M2 residual (r2-m2-inline, after Fable review): every powershell/pwsh command routes Medium (profile and
   user PSModulePath load user-writable code elevated); `cmd /c` running a host executable routes Medium; `cmd /c`
   without `/d` routes Medium (HKCU AutoRun).
@@ -36,10 +38,21 @@ Clean-Pro `rig-base-off`, `rig-base`, `m2-base`.
 - B2 G1 ci unelevated (host) + elevated (Inbound VM).
 - B3 G2 benches, quiet host, Defender on: warm (`--bare out\bare`), first-launch x5. WRITE `--real-engine`,
   `icons_visible` marker, S3 2,000-item timer.
-- B4 G3/G10 m3-broker (exit codes 20-27, planted dirs, off-system-volume copy, user-writable copy). WRITE.
-- B5 G4 m3-consent: real broker TaskDialog UIPI probe + SendInput test. WRITE.
+- B4 G3/G10 m3-broker (exit codes 20-27, planted dirs, off-system-volume copy, user-writable copy). Tooling: done,
+  branch m3-rig-sec (vm/RIG.md section 14; 21 cases, exit 27 excluded with its reason in `vm/truth/m3-sec-expect.json`).
+- B5 G4 m3-consent: real broker TaskDialog UIPI probe + SendInput test. Tooling: done, branch m3-rig-sec (medium
+  SendInput/PostMessage/SendMessage/UIA at both real dialogs, high control per method, screenshots per step).
 - B6 G5 m3-uac from `m3-uac-on`: No -> 1223, Yes -> full flow, standard-user refusal, secure-desktop dialog
-  (arming, paging, footer code, foreground). WRITE (extend rig-m3.ps1).
+  (arming, paging, footer code, foreground). Tooling: done, branch m3-rig-sec (extends rig-m3.ps1).
+- B4-B6 run commands (host, unelevated, no other VM running; release builds only, never the rig-exec engine):
+  ```
+  $env:VMPWFILE = '<pw file>'; $t = '<main checkout>\target'
+  .\vm\rig-m3.ps1 -Mode m3-broker  -Engine $t\release\purge-engine.exe -Broker $t\release\purge-broker.exe   # ~40 min
+  .\vm\rig-m3.ps1 -Mode m3-consent -Engine $t\release\purge-engine.exe -Broker $t\release\purge-broker.exe   # ~45 min
+  .\vm\rig-m3.ps1 -Mode m3-uac     -Engine $t\release\purge-engine.exe -Broker $t\release\purge-broker.exe -UiPublish $t\ui-publish
+  powershell -NoProfile -File vm\truth\m3-sec-score.ps1 -Mode broker|consent|uac -Evidence E:\purge-build\gate-evidence\m3-<mode>
+  ```
+  Evidence `E:\purge-build\gate-evidence\m3-broker|m3-consent|m3-uac\` (an older one is moved to `<dir>-old-<stamp>`).
 - B7 G6/G7/G12 m3-e2e on the M1 apps (VS Code system + user, Git, Firefox+Thunderbird, Notepad++, 7-Zip, one M1b
   service/task app) + failed uninstaller 1603/3010. WRITE UIA driver, scorer, broker timing records.
 - B8 G8/G9 m3-owner, m3-recover (crash at every step), allow_irreversible, Restart Manager, System Restore. WRITE.
