@@ -1062,9 +1062,28 @@ mod tests {
     }
 
     #[test]
+    fn the_live_machine_path_keeps_the_expanded_system32() {
+        // `%SystemRoot%\system32` in the registry's PATH arrives expanded and survives the filter.
+        use purge_source::live::{LiveFileSystem, LiveSystem};
+        let env = LiveSystem::new().machine_env().unwrap();
+        let path = env.get("PATH").expect("a machine PATH");
+        let system32 = format!(r"{}\system32", env.get("SYSTEMROOT").expect("SystemRoot"));
+        let has_system32 = |p: &str| {
+            p.split(';')
+                .any(|e| e.trim_end_matches('\\').eq_ignore_ascii_case(&system32))
+        };
+        assert!(has_system32(path), "{path}");
+        let kept = admin_only_path(path, &LiveFileSystem::new());
+        assert!(has_system32(&kept), "{kept}");
+        assert!(!kept.contains('%'), "{kept}");
+    }
+
+    #[test]
     fn an_elevated_run_gets_the_machine_environment_and_the_uninstaller_directory() {
         let mut c = Case::new(secs(1), 0, Some(0));
         c.fixture.add_dir(r"C:\Windows\system32");
+        c.fixture
+            .add_dir(r"C:\Windows\System32\WindowsPowerShell\v1.0");
         c.fixture.add_dir(r"C:\Tools\bin");
         c.fixture.add_dir(r"C:\Program Files\Vendor\bin");
         c.fixture
@@ -1076,7 +1095,7 @@ mod tests {
         facts.machine_env = [
             (
                 "PATH",
-                r#"C:\Windows\system32;C:\Tools\bin;;C:\Missing\bin;bin;"C:\Program Files\Vendor\bin";C:\Windows"#,
+                r#"C:\Windows\system32;C:\Tools\bin;;C:\Missing\bin;bin;"C:\Program Files\Vendor\bin";C:\Windows;C:\WINDOWS\System32\WindowsPowerShell\v1.0\"#,
             ),
             ("PROGRAMDATA", r"C:\ProgramData"),
             ("COMSPEC", r"C:\Windows\system32\cmd.exe"),
@@ -1120,7 +1139,9 @@ mod tests {
         let environment = environment.as_ref().expect("a clean environment");
         assert_eq!(
             environment.get("PATH").map(String::as_str),
-            Some(r#"C:\Windows\system32;"C:\Program Files\Vendor\bin";C:\Windows"#),
+            Some(
+                r#"C:\Windows\system32;"C:\Program Files\Vendor\bin";C:\Windows;C:\WINDOWS\System32\WindowsPowerShell\v1.0\"#
+            ),
             "the user's PATH was inherited, or a writable or missing machine PATH entry kept"
         );
         assert_eq!(

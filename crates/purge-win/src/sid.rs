@@ -31,7 +31,8 @@ use windows_sys::Win32::Security::{
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
-    FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING, READ_CONTROL,
+    FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, GetDriveTypeW, OPEN_EXISTING,
+    QueryDosDeviceW, READ_CONTROL,
 };
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
@@ -439,8 +440,9 @@ fn admin_only(facts: &SdFacts, mask: u32) -> bool {
 /// Whether `path` (absolute) can be changed only by administrative principals (SYSTEM,
 /// Administrators, TrustedInstaller): checked on the path and every ancestor up to the volume root.
 ///
-/// Conservative: a non-admin owner, an absent/NULL DACL, an undecodable allow ACE or a reparse point
-/// anywhere on the chain makes the answer `false`. Deny ACEs are ignored (they can only narrow
+/// Conservative: a path that is not on a local fixed drive (UNC, mapped, `subst`, removable;
+/// [`on_local_fixed_drive`]), or a non-admin owner, an absent/NULL DACL, an undecodable allow ACE or
+/// a reparse point anywhere on the chain makes the answer `false`. Deny ACEs are ignored (they can only narrow
 /// access, and ignoring them errs towards `UserWritable`). Errors opening a component are returned.
 pub fn is_admin_only_writable(path: &Path) -> Result<bool, Win32Error> {
     chain_admin_only(path, ANCESTOR_WRITE_MASK)
@@ -466,10 +468,14 @@ pub fn is_admin_only_executable(path: &Path) -> Result<bool, Win32Error> {
 }
 
 /// The chain walk behind both rules: the path with [`LEAF_WRITE_MASK`], its parent with
-/// `parent_mask`, every ancestor above it with [`ANCESTOR_WRITE_MASK`].
+/// `parent_mask`, every ancestor above it with [`ANCESTOR_WRITE_MASK`]. A path that is not on a
+/// local fixed drive ([`on_local_fixed_drive`]) is never admin-only.
 fn chain_admin_only(path: &Path, parent_mask: u32) -> Result<bool, Win32Error> {
     if !path.is_absolute() {
         return Err(Win32Error::INVALID_PARAMETER);
+    }
+    if !on_local_fixed_drive(path) {
+        return Ok(false);
     }
     for (depth, p) in path.ancestors().enumerate() {
         let Some(facts) = file_sd_facts(p)? else {
@@ -480,6 +486,50 @@ fn chain_admin_only(path: &Path, parent_mask: u32) -> Result<bool, Win32Error> {
         }
     }
     Ok(true)
+}
+
+/// The drive letter `path` starts at, after a `\\?\`, `\\.\` or `\??\` prefix: `X:\` or `X:/`.
+/// `None` for a UNC path (`\\server\share`, `\\?\UNC\...`), a volume GUID path or anything else.
+fn drive_letter(path: &str) -> Option<char> {
+    let rest = [r"\\?\", r"\\.\", r"\??\"]
+        .iter()
+        .find_map(|prefix| path.strip_prefix(prefix))
+        .unwrap_or(path);
+    let b = rest.as_bytes();
+    (b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && matches!(b[2], b'\\' | b'/'))
+        .then(|| char::from(b[0]))
+}
+
+/// Whether `path` is on a local fixed volume reached through a plain drive letter (review M3-R2 M6).
+///
+/// A remote path is judged by the server's ACL, whose SYSTEM and BUILTIN\Administrators are the
+/// server's, and the share permissions are not judged at all; so every UNC path (`\\server`,
+/// `\\?\UNC\...`, `\\localhost\c$` included, which goes through SMB) is refused. A drive letter must
+/// be `DRIVE_FIXED` (a mapped network drive is `DRIVE_REMOTE`; removable media and optical drives
+/// are refused too) and name a device itself, not a `subst` of a folder (`QueryDosDeviceW` gives
+/// `\??\C:\...` for that) or a redirector.
+fn on_local_fixed_drive(path: &Path) -> bool {
+    let Some(letter) = drive_letter(&path.to_string_lossy()) else {
+        return false;
+    };
+    let root = wide(format!(r"{letter}:\"));
+    // SAFETY: `root` is NUL-terminated.
+    if unsafe { GetDriveTypeW(root.as_ptr()) } != crate::fs::DRIVE_FIXED {
+        return false;
+    }
+    let device = wide(format!("{letter}:"));
+    let mut target = [0u16; 1024];
+    // SAFETY: `device` is NUL-terminated; `target` has `target.len()` writable units.
+    let n = unsafe { QueryDosDeviceW(device.as_ptr(), target.as_mut_ptr(), target.len() as u32) };
+    if n == 0 {
+        return false;
+    }
+    let end = target.iter().position(|&c| c == 0).unwrap_or(target.len());
+    let target = String::from_utf16_lossy(&target[..end]);
+    let lower = target.to_ascii_lowercase();
+    lower.starts_with(r"\device\")
+        && !lower.starts_with(r"\device\mup")
+        && !lower.starts_with(r"\device\lanmanredirector")
 }
 
 /// The mask for the component `depth` levels above the judged path (0 is the path itself).
@@ -741,6 +791,53 @@ mod tests {
         assert_eq!(
             is_admin_only_executable(Path::new(r"relative\path")),
             Err(Win32Error::INVALID_PARAMETER)
+        );
+    }
+
+    #[test]
+    fn drive_letter_spellings() {
+        assert_eq!(drive_letter(r"C:\Windows"), Some('C'));
+        assert_eq!(drive_letter("d:/x"), Some('d'));
+        assert_eq!(drive_letter(r"\\?\C:\Windows"), Some('C'));
+        assert_eq!(drive_letter(r"\\.\C:\Windows"), Some('C'));
+        assert_eq!(drive_letter(r"\??\C:\Windows"), Some('C'));
+        for remote in [
+            r"\\nas\deploy\App\uninstall.exe",
+            r"\\?\UNC\nas\deploy\App\uninstall.exe",
+            r"\\localhost\c$\Windows",
+            "//nas/deploy/App/uninstall.exe",
+            r"\\?\Volume{11111111-1111-1111-1111-111111111111}\x",
+            "C:relative",
+            "1:\\x",
+        ] {
+            assert_eq!(drive_letter(remote), None, "{remote}");
+        }
+    }
+
+    #[test]
+    fn remote_paths_are_never_admin_only() {
+        // Review M3-R2 M6: refused before any I/O, so no share has to exist.
+        for remote in [
+            r"\\nas\deploy\App\uninstall.exe",
+            r"\\?\UNC\nas\deploy\App\uninstall.exe",
+            r"\\localhost\c$\Windows\System32\cmd.exe",
+            r"\\?\UNC\localhost\c$\Windows\System32\cmd.exe",
+        ] {
+            let path = Path::new(remote);
+            assert_eq!(is_admin_only_writable(path), Ok(false), "{remote}");
+            assert_eq!(is_admin_only_executable(path), Ok(false), "{remote}");
+        }
+        // The local fixed system drive, plain and in the extended spelling.
+        let cmd = crate::known_folders::known_folder(crate::known_folders::KnownFolder::System)
+            .unwrap()
+            .join("cmd.exe");
+        assert!(on_local_fixed_drive(&cmd), "{cmd:?}");
+        let extended = PathBuf::from(format!(r"\\?\{}", cmd.display()));
+        assert!(on_local_fixed_drive(&extended), "{extended:?}");
+        assert_eq!(
+            is_admin_only_executable(&extended),
+            Ok(true),
+            "{extended:?}"
         );
     }
 

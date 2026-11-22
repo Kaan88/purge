@@ -743,13 +743,14 @@ pub fn uninstall_commands(
 /// `env` is the interactive user's environment and `machine_env` the machine's. The command is expanded
 /// with both; any difference between the two strings would let a value in `HKCU\Environment` change the
 /// command after it was shown, so it makes the route medium. A `%NAME%` neither map defines is medium
-/// for the same reason (review M3-R2 B1). A known host executable (`cmd`, `rundll32`, `wscript`,
-/// `cscript`, `powershell`, `mshta`, `regsvr32`, `msiexec`, `java`, `sdbinst`) is judged on the script,
-/// DLL or package it is told to load as well; a load path that is user-writable, cannot be found or
-/// cannot be worked out makes the route medium (review M3-R2 M2). Three hosts are narrower still:
-/// - `powershell`/`pwsh` is always medium, `-File` and `-NoProfile` or not: elevated PowerShell loads
-///   the user's profile and auto-loads modules from user-writable folders and from `PSModulePath` in
-///   `HKCU\Environment`, which no argument or environment cleaning shuts off.
+/// for the same reason (review M3-R2 B1). A known host executable (`cmd`, `rundll32`, `regsvr32`,
+/// `msiexec`) is judged on the script, DLL or package it is told to load as well; a load path that is
+/// user-writable, cannot be found or cannot be worked out makes the route medium (review M3-R2 M2).
+/// Narrower still:
+/// - an interpreter or script host ([`INTERPRETERS`]: `powershell`, `python`, `node`, `java`,
+///   `wscript`, `mshta`, `wsl`, ...) is always medium, whatever it is told to run: it also loads code
+///   from per-user places the command line does not name (the PowerShell profile and `PSModulePath`,
+///   Python's user site-packages, ...), which no argument or environment cleaning shuts off.
 /// - `cmd` is medium unless `/d` comes before `/c` (`/k`, `/r`), since without it cmd runs the
 ///   `AutoRun` value in `HKCU\Software\Microsoft\Command Processor`; it is also medium when the program
 ///   it runs is itself a host or has no extension, the command text can run a second program (`&`,
@@ -857,21 +858,69 @@ fn is_absolute_path(path: &str) -> bool {
     (bytes.len() >= 2 && bytes[1] == b':') || path.starts_with(r"\\") || path.starts_with("//")
 }
 
-/// The file names whose arguments name a file that decides what runs, under the Windows directory.
-const HOST_EXECUTABLES: &[&str] = &[
-    "cmd.exe",
-    "rundll32.exe",
-    "wscript.exe",
-    "cscript.exe",
-    "powershell.exe",
-    "pwsh.exe",
-    "mshta.exe",
-    "regsvr32.exe",
-    "msiexec.exe",
-    "java.exe",
-    "javaw.exe",
-    "sdbinst.exe",
+/// The hosts whose load file is worked out from the arguments and judged (`host_load_path`): the
+/// route may still be broker for them. Every other program that runs code it is told to load is in
+/// [`INTERPRETERS`] and always medium.
+const HOST_EXECUTABLES: &[&str] = &["cmd.exe", "rundll32.exe", "regsvr32.exe", "msiexec.exe"];
+
+/// Interpreters and script hosts (file name stems; `python` and `pythonw` with or without a version,
+/// `python3.12.exe`, are matched in [`is_interpreter`]). A command they run, or that `cmd /c` hands to them, is always medium: each loads
+/// code from places the command line does not name and a standard user can write, so judging the
+/// script is not enough (review M3-R2 M2; coordinator ruling after the fourth Fable review):
+/// - `powershell`/`pwsh`: the user's profile (`Documents\WindowsPowerShell\profile.ps1`, found through
+///   the known folder in HKCU) unless `-NoProfile`, and even then modules auto-loaded from
+///   `Documents\WindowsPowerShell\Modules` and from `PSModulePath` in `HKCU\Environment`, which
+///   PowerShell reads from the registry itself; adding `-NoProfile` in the broker would run a command
+///   other than the one shown (B1; H1, H2).
+/// - `python`/`py`: user site-packages (`%APPDATA%\Python`) and `.pth` files; `node`, `perl`, `ruby`,
+///   `php`: per-user module and config paths; `java`/`javaw`: a jar manifest's `Class-Path` and the
+///   per-user JVM configuration load further code; `wsl`, `bash`, `sh`: a per-user Linux environment.
+/// - `wscript`, `cscript`, `mshta`, `hh`, `msxsl`: script engines; `forfiles`: runs any command;
+///   `msbuild`, `installutil`, `regasm`, `regsvcs`, `cmstp`: run code from a project, assembly or
+///   profile; `sdbinst`: installs a compatibility database that changes how later programs start.
+///
+/// Not modelled interpreters are plain executables to the route; this list is the place to add one.
+const INTERPRETERS: &[&str] = &[
+    "powershell",
+    "pwsh",
+    "py",
+    "pyw",
+    "node",
+    "java",
+    "javaw",
+    "perl",
+    "ruby",
+    "php",
+    "wsl",
+    "bash",
+    "sh",
+    "forfiles",
+    "hh",
+    "mshta",
+    "wscript",
+    "cscript",
+    "msbuild",
+    "installutil",
+    "regasm",
+    "regsvcs",
+    "cmstp",
+    "msxsl",
+    "sdbinst",
 ];
+
+/// Whether `program` (with or without a directory, with or without `.exe`) is in [`INTERPRETERS`] or
+/// a versioned `python` name.
+fn is_interpreter(program: &str) -> bool {
+    let name = file_name_lower(program);
+    let stem = name.strip_suffix(".exe").unwrap_or(&name);
+    // `python`, `pythonw`, `python3`, `python3.12`, ...; not Python's own installer
+    // (`python-3.12.0-amd64.exe`), which Package Cache keeps admin-only.
+    let python = ["pythonw", "python"].iter().any(|prefix| {
+        stem.strip_prefix(prefix)
+            .is_some_and(|version| version.chars().all(|c| c.is_ascii_digit() || c == '.'))
+    });
+    python || INTERPRETERS.contains(&stem)
+}
 
 /// The lowercase file name of `exe`.
 fn file_name_lower(exe: &str) -> String {
@@ -886,13 +935,14 @@ fn is_host_executable(exe: &str) -> bool {
     HOST_EXECUTABLES.contains(&file_name_lower(exe).as_str())
 }
 
-/// Whether `program`, as `cmd.exe` would be told to run it, names a known host: with or without the
-/// `.exe`, with or without a directory.
+/// Whether `program`, as `cmd.exe` would be told to run it, names a known host or an interpreter: with
+/// or without the `.exe`, with or without a directory.
 fn names_a_host(program: &str) -> bool {
     let name = file_name_lower(program);
-    HOST_EXECUTABLES
-        .iter()
-        .any(|host| name == *host || host.strip_suffix(".exe") == Some(name.as_str()))
+    is_interpreter(program)
+        || HOST_EXECUTABLES
+            .iter()
+            .any(|host| name == *host || host.strip_suffix(".exe") == Some(name.as_str()))
 }
 
 /// The path a known host is told to load. `None` means it cannot be worked out from the arguments, or
@@ -904,33 +954,15 @@ fn host_load_path(exe: &str, args: &str, tokens: &[&str]) -> Option<String> {
             .find(|t| !t.starts_with('/') && !t.starts_with('-'))
             .map(|t| (*t).to_owned())
     };
-    let after_switch = |switch: &str| {
-        tokens
-            .iter()
-            .position(|t| t.eq_ignore_ascii_case(switch))
-            .and_then(|at| tokens.get(at + 1))
-            .map(|t| (*t).to_owned())
-    };
     match file_name_lower(exe).as_str() {
         "cmd.exe" => cmd_program(args),
         "rundll32.exe" => rundll32_dll(args),
-        "wscript.exe" | "cscript.exe" | "mshta.exe" | "regsvr32.exe" | "sdbinst.exe" => {
-            first_operand()
-        }
-        // Elevated PowerShell loads files a standard user can write whatever the arguments say: the
-        // user's profile (`Documents\WindowsPowerShell\profile.ps1`, found through the known folder in
-        // HKCU, not the environment) unless `-NoProfile`, and even with `-NoProfile` modules it
-        // auto-loads from `Documents\WindowsPowerShell\Modules` and from `PSModulePath` in
-        // `HKCU\Environment`, which PowerShell reads from the registry itself. Cleaning the environment
-        // cannot remove that, and adding `-NoProfile` in the broker would run a command other than the
-        // one shown (B1). So no PowerShell command line is judged admin-only (review M3-R2 M2, H1 H2).
-        "powershell.exe" | "pwsh.exe" => None,
+        "regsvr32.exe" => first_operand(),
         "msiexec.exe" => tokens
             .iter()
             .find(|t| t.to_ascii_lowercase().ends_with(".msi"))
             .map(|t| (*t).to_owned())
             .or_else(|| first_operand_filtered(tokens)),
-        "java.exe" | "javaw.exe" => after_switch("-jar"),
         _ => None,
     }
 }
@@ -1052,13 +1084,16 @@ fn command_loads_admin_only(command: &QuietCommand, fs: &dyn FileSystemSource) -
             }
         }
     }
+    if is_interpreter(&command.exe) {
+        return false;
+    }
     if !is_host_executable(&command.exe) {
         return true;
     }
     let Some(load) = host_load_path(&command.exe, &command.args, &tokens) else {
         // A host that names no script, DLL or package: only `msiexec` with a ProductCode loads no
-        // client-chosen file (it runs the cached package). Everything else is undetermined: any
-        // `powershell`/`pwsh` line, `cmd` without `/d` or running another host or more than one
+        // client-chosen file (it runs the cached package). Everything else is undetermined: `cmd`
+        // without `/d` or running another host, an interpreter or more than one
         // program, and a load path that is missing from the arguments (review M3-R2 M2).
         return file_name_lower(&command.exe) == "msiexec.exe";
     };
@@ -1067,13 +1102,13 @@ fn command_loads_admin_only(command: &QuietCommand, fs: &dyn FileSystemSource) -
 
 /// Whether one argument part, if it is a path, is one a standard user cannot supply (review M3-R2 M5).
 ///
-/// - A fully qualified path (`X:\...`, `X:/...`, `\\server\...`) that exists must pass the run rule
-///   (`is_admin_only_executable`). One that does not exist is judged by its nearest existing ancestor,
+/// - A fully qualified path (`X:\...`, `X:/...`, `\\server\...`, `//server/...`; a remote one never
+///   passes, M6) that exists must pass the run rule (`is_admin_only_executable`). One that does not exist is judged by its nearest existing ancestor,
 ///   which must be an admin-only directory (`is_admin_only_writable`, whose leaf mask also refuses
 ///   "add file"): otherwise a user could create the file while the consent dialog is open (a
 ///   `/LOADINF=` the uninstaller then reads), or plant a link where an elevated log is written. Any
 ///   other error is not provably safe.
-/// - A drive-relative or `//` part (`C:foo`, `x:1`) keeps the earlier rule: only one that exists and
+/// - A drive-relative part (`C:foo`, `x:1`) keeps the earlier rule: only one that exists and
 ///   fails the run rule counts, so switches and values with a colon in second place are not judged.
 /// - Anything else (`/S`, `-key:value`, `http://...`, a GUID, a relative name) is not a path here.
 fn argument_path_admin_only(part: &str, fs: &dyn FileSystemSource) -> bool {
@@ -1082,7 +1117,8 @@ fn argument_path_admin_only(part: &str, fs: &dyn FileSystemSource) -> bool {
         && bytes[0].is_ascii_alphabetic()
         && bytes[1] == b':'
         && matches!(bytes[2], b'\\' | b'/'))
-        || part.starts_with(r"\\");
+        || part.starts_with(r"\\")
+        || part.starts_with("//");
     if !fully_qualified {
         return !(is_absolute_path(part) && fs.is_admin_only_executable(part) == Ok(false));
     }
@@ -2570,6 +2606,18 @@ mod tests {
         let mut builder = Fixture::builder()
             .admin_only_roots(&[r"C:\Windows", r"C:\Program Files", r"C:\ProgramData"])
             .file(r"C:\Program Files\App\uninstall.cmd", 1)
+            .file(r"C:\Program Files\App\uninstall.py", 1)
+            .file(r"C:\Program Files\App\uninstall.js", 1)
+            .file(r"C:\Program Files\App\uninstall.vbs", 1)
+            .file(r"C:\Program Files\App\uninstall.jar", 1)
+            .file(r"C:\Program Files\App\vendor.dll", 1)
+            .file(r"C:\Program Files\Python312\python.exe", 1)
+            .file(r"C:\Program Files\Python312\python3.12.exe", 1)
+            .file(r"C:\Program Files\nodejs\node.exe", 1)
+            .file(r"C:\Program Files\Java\bin\java.exe", 1)
+            .file(r"C:\Windows\System32\wsl.exe", 1)
+            .file(r"C:\Windows\System32\wscript.exe", 1)
+            .file(r"C:\Windows\System32\regsvr32.exe", 1)
             .file(r"C:\Program Files\Vendor Tools\tools.dll", 1)
             .file(r"C:\ProgramData\My Vendor\uninstall.cmd", 1)
             .file(r"C:\ProgramData\My Vendor (x64)\uninstall.cmd", 1)
@@ -3014,6 +3062,79 @@ mod tests {
     }
 
     #[test]
+    fn interpreters_and_script_hosts_are_medium() {
+        // Coordinator ruling after the fourth Fable review: an interpreter also loads code from
+        // per-user places (Python's user site-packages, ...), so an admin-only script is not enough.
+        for (exe, args) in [
+            (
+                r"C:\Program Files\Python312\python.exe",
+                r#""C:\Program Files\App\uninstall.py""#,
+            ),
+            (
+                r"C:\Program Files\Python312\python3.12.exe",
+                r#"-I "C:\Program Files\App\uninstall.py""#,
+            ),
+            (
+                r"C:\Program Files\nodejs\node.exe",
+                r#""C:\Program Files\App\uninstall.js""#,
+            ),
+            (
+                r"C:\Program Files\Java\bin\java.exe",
+                r#"-jar "C:\Program Files\App\uninstall.jar""#,
+            ),
+            (r"C:\Windows\System32\wsl.exe", "-e /opt/app/uninstall.sh"),
+            (
+                r"C:\Windows\System32\wscript.exe",
+                r#""C:\Program Files\App\uninstall.vbs""#,
+            ),
+            (CMD, r#"/d /c python "C:\Program Files\App\uninstall.py""#),
+            (
+                CMD,
+                r#"/d /c "C:\Program Files\nodejs\node.exe" "C:\Program Files\App\uninstall.js""#,
+            ),
+            (CMD, r"/d /c wsl.exe -e /opt/app/uninstall.sh"),
+        ] {
+            assert_eq!(
+                shell_route(exe, args),
+                purge_rpc::methods::Route::Medium,
+                "{exe} {args}"
+            );
+        }
+        for name in [
+            "python",
+            "PYTHONW.EXE",
+            "python3.11.exe",
+            "py",
+            r"C:\x\node.exe",
+            "forfiles",
+            "msbuild.exe",
+            "cmstp",
+            "sdbinst.exe",
+        ] {
+            assert!(is_interpreter(name), "{name}");
+        }
+        for name in [
+            "unins000.exe",
+            "cmd.exe",
+            "msiexec",
+            "rundll32.exe",
+            "pyinstaller-app.exe",
+            "python-3.12.0-amd64.exe",
+        ] {
+            assert!(!is_interpreter(name), "{name}");
+        }
+        // The judged hosts keep their rules.
+        assert_eq!(
+            shell_route(
+                r"C:\Windows\System32\regsvr32.exe",
+                r#"/u /s "C:\Program Files\App\vendor.dll""#
+            ),
+            purge_rpc::methods::Route::Broker,
+            "regsvr32 with an admin-only DLL"
+        );
+    }
+
+    #[test]
     fn a_missing_argument_file_is_judged_by_its_nearest_existing_folder() {
         // Review M3-R2 M5: a file that does not exist yet can be created while the dialog is open.
         const UNINS: &str = r"C:\Program Files\App\unins000.exe";
@@ -3026,6 +3147,9 @@ mod tests {
             r"/LOG=C:\ProgramData\NewVendor\uninstall.log",
             r"/LOADINF=\\server\share\new.inf",
             r"/LOADINF=Q:\nowhere\new.inf",
+            // L4: a leading `//` is a UNC path too.
+            "/LOADINF=//localhost/c$/Users/tester/new.inf",
+            "//example.com/c",
             // Unquoted with a space: the uninstaller reads `C:\Program`, whose folder is `C:\`.
             r"/LOADINF=C:\Program Files\App\new.inf",
         ] {
@@ -3042,7 +3166,7 @@ mod tests {
             // Not paths: switches, values with a colon, URLs, a GUID, a relative name.
             "/S /VERYSILENT",
             "-key:value --mode:quiet x:1 /D=x:1",
-            "--url=http://example.com/a;https://example.com/b //example.com/c",
+            "--url=http://example.com/a;https://example.com/b",
             "{11111111-1111-1111-1111-111111111111} logs\\uninstall.log",
         ] {
             assert_eq!(
