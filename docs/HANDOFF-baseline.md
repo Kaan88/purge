@@ -31,6 +31,20 @@ continued from any harness: read it, then `git log --oneline -15` and `git workt
 - Open: none blocking. `<data root>\baseline` (local baseline cache) is still written by path by the broker's
   build thread (`pipeline::baseline`), guarded by its admin-only checks only: same class, out of scope here.
 
+## BL-FIX-UFH (branch `bl-fix-ufh` off `baseline` 9f40cca, 2026-11-22; pushed, NOT merged, Fable review next)
+- Finding: the BL-GATE smoke (`truth/bl.sh replay`, frozen `7zip`, four views) had one S1 flip in the local view:
+  `UFH\SHC` slot `0` (REF-ANY record, Likely, unticked), withheld by exact because the truth baseline holds it.
+  Not inferred absence: the no-baseline path, which the local view cannot correct because the local baseline has
+  no per-user state of a logged-on profile (S2 template, S3 `.DEFAULT`). Class over 10 local replays: 5 flips, all
+  `UFH\SHC` slots. DECISIONS row 2026-11-22 "BL-GATE smoke finding".
+- Fix (purge-scan only): `ScanCtx::in_baseline` takes a slot of a user's numbered-slot store
+  (`framework::USER_SLOT_STORES`) as Windows' own without an exact baseline of this Windows, at every view below
+  Exact and with none. Tests: `framework::a_user_slot_is_windows_own_below_exact`,
+  `ref_any::record::a_slot_record_is_not_offered_without_a_matching_baseline` (the old below-Exact record test now
+  uses a vendor key), `tests/privacy/ufh.rs::ufh_shc_below_exact_is_windows_own`,
+  `reg_privacy::the_slot_store_is_a_framework_slot_store`; `baseline-sites` row updated.
+- Re-check after merge: the full R3 replay (`bash truth/bl.sh replay`, 2.5-3 h) and `evaluate` with R4.
+
 ## R3 SINGLE WRITER + UI FOLLOW-UPS 2026-11-22 (branch `r3-single-writer`; Fable re-review APPROVED, merged into baseline).
 - Verdict: two brokers (Leftovers' and History's/Vault's) could write one store at once with no guard. The index's
   read-modify-write lost entries and failed its read-back (measured: 6 unlocked writers x 4 updates, 18 sharing
