@@ -147,9 +147,7 @@ fn main() -> ExitCode {
         },
     };
     let mut host = LiveHost::new();
-    let stdout = std::io::stdout();
-    let stderr = std::io::stderr();
-    let (mut out, mut err) = (stdout.lock(), stderr.lock());
+    let (mut out, mut err) = std_streams();
     let exit = cli::run(
         &args,
         &mut Env {
@@ -168,8 +166,38 @@ fn main() -> ExitCode {
     ExitCode::from(exit.code())
 }
 
+/// The streams of one CLI run. stdout is locked for the run (only this thread writes it); stderr is
+/// not: a thread the run starts (the local baseline build, `PURGE_TIMING` lines) writes stderr too, and
+/// a stderr lock held by this thread for the whole run made that thread wait for ever while this one
+/// waited for the build (BL-GATE R4, 2026-11-22). Each `writeln!` locks stderr once, so a line stays
+/// whole.
+fn std_streams() -> (std::io::StdoutLock<'static>, std::io::Stderr) {
+    (std::io::stdout().lock(), std::io::stderr())
+}
+
 #[cfg(test)]
 mod tests {
+    /// Regression (BL-GATE R4 hang): while the run's streams are open, another thread can still
+    /// write stderr. With the old `stderr.lock()` for the whole run this thread never returned.
+    #[test]
+    fn another_thread_can_write_stderr_while_the_run_streams_are_open() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+        let (_out, mut err) = std_streams();
+        let _ = writeln!(err, "main thread line");
+        let (tx, rx) = mpsc::channel();
+        // `io::stderr()` directly, not `eprintln!`: the test harness captures the macro output,
+        // which would bypass the real stderr lock this test is about.
+        std::thread::spawn(move || {
+            let _ = writeln!(std::io::stderr(), "build thread line");
+            let _ = tx.send(());
+        });
+        assert!(
+            rx.recv_timeout(Duration::from_secs(10)).is_ok(),
+            "a second thread could not write stderr while the run streams were open"
+        );
+    }
+
     use super::*;
     use std::path::Path;
 
