@@ -1965,7 +1965,7 @@ side `vm\guest\m3-clean.ps1` (one agent job per phase, result lines `M3C ...`), 
 ```powershell
 $env:VMPWFILE = 'C:\path\to\pw.txt'
 powershell -NoProfile -ExecutionPolicy Bypass -File install\inno\build-installer.ps1      # on the gate commit
-.\vm\rig-m3-clean.ps1 -Setup target\installer\Purge-Setup-0.1.0.exe [-Run <name>] [-BenchRuns 6]   # ~30-40 min
+.\vm\rig-m3-clean.ps1 -Setup target\installer\Purge-Setup-0.1.0.exe [-Run <name>] [-BenchRuns 6] [-NoMotw]   # ~30-40 min
 powershell -NoProfile -File vm\truth\m3-clean-score.ps1 -Evidence E:\purge-build\gate-evidence\m3-clean-start\<run>
 powershell -NoProfile -File vm\truth\m3-clean-score.ps1 --self-test
 ```
@@ -1978,7 +1978,7 @@ powershell -NoProfile -File vm\truth\m3-clean-score.ps1 --self-test
   missing or misnamed setup and an existing non-empty run directory. At the end the VM is powered off and `rig-base`
   restored (left off).
 - **Evidence** `E:\purge-build\gate-evidence\m3-clean-start\<run>\` (run = `-Run`, default the start time):
-  `rig-m3-clean-<stamp>.log`, `jobs\*.log`, `pre.png`, `install-1.png`, `ui-names.png`, `uninstall-no.png`,
+  `rig-m3-clean-<stamp>.log`, `jobs\*.log`, `pre.png`, `motw-interactive.png`, `motw-end.png`, `install-1.png`, `ui-names.png`, `uninstall-no.png`,
   `install-2.png`, `uninstall-yes-dialog.png`, `uninstall-yes-done.png`, `rollback.png`, `guest\` (the guest's
   `C:\cr\out\m3-clean\`: one JSON per phase, the Inno logs `setup-install-<n>.log`, `uninstall-no.log`,
   `uninstall-yes.log`, `setup-rollback.log`, the `-Check` reports `check-<n>.json`, `bench\markers.txt`),
@@ -1989,11 +1989,25 @@ powershell -NoProfile -File vm\truth\m3-clean-score.ps1 --self-test
     C++ ... Redistributable"), nothing of Purge yet. Reported only: Smart App Control
     (`CI\Policy\VerifiedAndReputablePolicyState`: off / on / evaluation), SmartScreen (Explorer `SmartScreenEnabled`,
     policy `EnableSmartScreen`), the setup's Authenticode status and mark of the web, Defender, UAC (the Windows
-    default; 11.2 says "default"), the display adapter, the VCLibs appx packages. The setup arrives by guestcontrol, so
-    it has **no mark of the web**: SmartScreen's reputation check of a downloaded file is not exercised (code signing
-    is the user's open item, M3_FINISH_PLAN "Needs the user"). With Smart App Control on, an unsigned setup is
+    default; 11.2 says "default"), the display adapter, the VCLibs appx packages. The setup arrives by guestcontrol
+    without a mark of the web; the next phase adds one (code signing is the user's open item, M3_FINISH_PLAN "Needs
+    the user"). With Smart App Control on, an unsigned setup is
     blocked: the install rows then fail and `pre.json` says why (Code Integrity events 3033/3034/3076/3077 since the
     setup started are kept in `install-<n>.json`).
+  - `motw-start` / `motw-end` (skipped with `-NoMotw`): the copied setup gets a mark of the web, a `Zone.Identifier`
+    ADS with `[ZoneTransfer]`, `ZoneId=3`, `ReferrerUrl=https://github.com/Kaan88/purge/releases` and
+    `HostUrl=https://github.com/Kaan88/purge/releases/download/v<version>/Purge-Setup-<version>.exe` (nothing is
+    downloaded), so SmartScreen and Smart App Control treat it as downloaded. One interactive start at medium through
+    the shell (`explorer.exe "<setup>"`, as a double-click): the agent looks for the SmartScreen dialog ("Windows
+    protected your PC"), `smartscreen.exe`, the setup's processes, a UAC prompt (`consent.exe`), the wizard window and
+    the Code Integrity events (3077/3033 blocked, 3076/3034 audit); one word `outcome` (blocked / warned / allowed /
+    nothing seen); the host's screenshot `motw-interactive.png`. Then the host types Esc twice (closes the SmartScreen
+    dialog or the UAC prompt), `motw-end` records again, stops what is left (`Purge-Setup-*.exe|.tmp`) and checks that
+    nothing was installed; screenshot `motw-end.png`. The mark stays on the file, so the silent install that follows
+    (and the rollback run) also start a marked setup; `install-<n>.json` records `mark_of_the_web` and its Code
+    Integrity events. `/VERYSILENT` started by the elevated rig agent (CreateProcess, not the shell) may bypass the
+    SmartScreen prompt: the scorer reports that start separately. All four MOTW rows are **report-only** (`report
+    (info): ...`): always present, never a FAIL, whatever happened (and with `-NoMotw` one row says "skipped").
   - `install -Tag 1`: `Purge-Setup-*.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG=...` from the elevated agent
     (`PrivilegesRequired=admin`, no prompt). Then: the layout (`purge-engine.exe`, `purge-broker.exe`, `Purge.exe`,
     `kb\`, `setup\install.ps1`, `unins000.exe`, `unins000.dat`), the owners of the root and the binaries, the root's
@@ -2039,8 +2053,10 @@ powershell -NoProfile -File vm\truth\m3-clean-score.ps1 --self-test
 - **Scorer** (`m3-clean-score.ps1`, fail-closed: a missing file, record or field fails its row): the rows above, the
   screenshots `ui-names` and `uninstall-yes-dialog`, the VM name, and "every rig step ran" (`failed_step` false, not
   aborted). Rows named `report: ...` (SmartScreen / Smart App Control state, the WARP numbers) need only that the
-  values were recorded. `--self-test`: a passing synthetic evidence directory passes; an empty and a missing directory
-  fail; 35 single defects each fail (among them: event source missing after install, a leftover file after
+  values were recorded; rows named `report (info): ...` (mark of the web) are always ok. `--self-test`: a passing
+  synthetic evidence directory passes and has the four MOTW rows; six MOTW variants (SmartScreen allowed, Smart App
+  Control blocked, a setup process left, either MOTW file missing, `-NoMotw`) still pass with their rows present; an
+  empty and a missing directory fail; 35 single defects each fail (among them: event source missing after install, a leftover file after
   uninstall, `-Check` exit 1, the setup succeeding in the rollback, a runtime loaded from `WindowsApps`, the data root
   deleted by the silent uninstall). The rig self-test checks the pure helpers (VM refusal, setup name, run name, job
   text, step order, a guest branch per step, the AppId) and runs the scorer's self-test.

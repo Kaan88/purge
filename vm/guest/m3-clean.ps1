@@ -12,6 +12,11 @@
   Phases, in the host's order:
     pre                   preconditions (no .NET runtime, no Windows App Runtime, no VC++ redistributable), SmartScreen,
                           Smart App Control, Defender and UAC state, the setup's hash, signature and mark of the web
+    motw-start            (skipped with the host's -NoMotw) gives the setup a mark of the web (Zone.Identifier ADS,
+                          ZoneId=3, ReferrerUrl/HostUrl = a GitHub release URL of the project; nothing is downloaded),
+                          then starts it interactively at medium through the shell (explorer.exe "<setup>") and
+                          records what SmartScreen / Smart App Control do; the host takes a screenshot
+    motw-end              after the host's Esc keys: records again, stops whatever is left of that start; report only
     install -Tag 1|2      the setup, silent and elevated (/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG=); then the
                           layout, owners, install.ps1 -Check, the data root, the event source, the ARP entry, shortcuts
     ui-start              Purge.exe at medium integrity (no arguments); UI Automation: the window, the list
@@ -32,8 +37,8 @@
 #>
 param(
     [Parameter(Mandatory)]
-    [ValidateSet('pre', 'install', 'ui-start', 'ui-stop', 'bench', 'uninstall-no', 'uninstall-yes-start', 'uninstall-yes-answer',
-                 'rollback', 'pack')]
+    [ValidateSet('pre', 'motw-start', 'motw-end', 'install', 'ui-start', 'ui-stop', 'bench', 'uninstall-no', 'uninstall-yes-start',
+                 'uninstall-yes-answer', 'rollback', 'pack')]
     [string] $Phase,
     [string] $Tag = '',
     [int] $WaitSec = 120
@@ -302,6 +307,38 @@ function Get-RemovalState {
                 shortcuts = (Get-Shortcuts); processes = @(Get-PurgeProcs); data_root = (Get-DataRoot) }
 }
 
+function Get-Motw([string]$Path) {
+    try { (@(Get-Content -LiteralPath $Path -Stream Zone.Identifier -ErrorAction Stop) -join "`n") } catch { $null }
+}
+
+function Stop-SetupProcs {
+    Get-ProcList | Where-Object { $_.name -match '^Purge-Setup-.*\.(exe|tmp)$' } | ForEach-Object { Stop-Process -Id $_.pid -Force -ErrorAction SilentlyContinue }
+}
+
+# What a shell start of the marked setup led to: SmartScreen's process, the setup's processes, a UAC prompt, the Code
+# Integrity events (3077/3033: blocked, 3076/3034: audit = Smart App Control in evaluation), the setup's own window.
+function Get-MotwState([datetime]$Since) {
+    $procs = @(Get-ProcList)
+    $wiz = Find-TextWindow 'Setup - Purge' 2
+    [ordered]@{ smartscreen_proc = (@($procs | Where-Object { $_.name -eq 'smartscreen.exe' }).Count -gt 0)
+                setup_procs = @($procs | Where-Object { $_.name -match '^Purge-Setup-.*\.(exe|tmp)$' } | ForEach-Object { $_.name })
+                consent = (@($procs | Where-Object { $_.name -eq 'consent.exe' }).Count -gt 0)
+                wizard = [bool]$wiz
+                code_integrity = @(Get-CiEvents $Since)
+                smartscreen_events = @(Get-WinEvent -FilterHashtable @{ LogName = 'Microsoft-Windows-SmartScreen/Debug'; StartTime = $Since } -ErrorAction SilentlyContinue | Select-Object -First 20 |
+                                       ForEach-Object { [ordered]@{ id = $_.Id; message = ("$($_.Message)" -split "`r?`n")[0] } }) }
+}
+
+# Pure: one word for the report. Never a verdict: the scorer's MOTW rows are report-only.
+function Get-MotwOutcome([bool]$Dialog, $State) {
+    $ci = @($State.code_integrity)
+    if (@($ci | Where-Object { $_.id -in 3033, 3077 }).Count) { return 'blocked (Smart App Control / Code Integrity)' }
+    if ($Dialog) { return 'warned (SmartScreen dialog)' }
+    if ($State.consent) { return 'allowed (UAC prompt shown)' }
+    if ($State.wizard -or @($State.setup_procs).Count) { return 'allowed (setup started)' }
+    'nothing seen'
+}
+
 function Get-Percentile([double[]]$Values, [double]$P) {
     $v = @($Values | Sort-Object)
     if (-not $v.Count) { return $null }
@@ -355,11 +392,47 @@ switch ($Phase) {
         "M3C PRE clean=$($rec.clean) dotnet=$($rec.dotnet.present) war=$(@($rec.windows_app_runtime.appx).Count + @($rec.windows_app_runtime.arp).Count) vcredist=$(@($rec.vc_redist).Count) sac=$($rec.smart_app_control.state) sig=$($rec.setup.signature) build=$($rec.build)"
     }
 
+    'motw-start' {
+        $setup = Get-Setup
+        $leaf = Split-Path -Leaf $setup
+        $ver = [regex]::Match($leaf, '^Purge-Setup-(.+)\.exe$').Groups[1].Value
+        $zone = "[ZoneTransfer]`r`nZoneId=3`r`nReferrerUrl=https://github.com/Kaan88/purge/releases`r`nHostUrl=https://github.com/Kaan88/purge/releases/download/v$ver/$leaf`r`n"
+        Set-Content -LiteralPath $setup -Stream Zone.Identifier -Value $zone -Encoding Ascii
+        $since = Get-Date
+        $rec = [ordered]@{ t = (NowIso); enabled = $true; zone_identifier = (Get-Motw $setup); since = $since.ToString('o') }
+        Stop-SetupProcs
+        # Through the shell, as a double-click would: the path where SmartScreen and Smart App Control look at the file.
+        $l = LaunchMedium -Exe "$env:WINDIR\explorer.exe" -Arguments "`"$setup`"" -TaskName $UiTask -StartTimeoutSec 0
+        $w = Find-TextWindow 'Windows protected your PC' 20
+        $rec.smartscreen_dialog = [bool]$w
+        if ($w) { $rec.smartscreen_texts = @(Get-UiNames $w | Select-Object -First 40) }
+        Start-Sleep -Seconds 3
+        $rec.state = Get-MotwState $since
+        $rec.outcome = Get-MotwOutcome $rec.smartscreen_dialog $rec.state
+        Write-JsonFile $rec (Join-Path $Out 'motw-start.json') 8
+        "M3C MOTW-START outcome=$($rec.outcome) smartscreen_dialog=$($rec.smartscreen_dialog) ci_blocks=$(@($rec.state.code_integrity | Where-Object { $_.id -in 3033, 3077 }).Count) setup_running=$(@($rec.state.setup_procs).Count) consent=$($rec.state.consent)"
+    }
+
+    'motw-end' {
+        $st = Read-Json (Join-Path $Out 'motw-start.json')
+        $since = $(if ($st -and $st.since) { [datetime]$st.since } else { (Get-Date).AddMinutes(-5) })
+        $rec = [ordered]@{ t = (NowIso); state_after_keys = (Get-MotwState $since) }
+        Stop-SetupProcs
+        Unregister-ScheduledTask -TaskName $UiTask -Confirm:$false -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 2
+        $rec.left = @(Get-ProcList | Where-Object { $_.name -match '^Purge-Setup-.*\.(exe|tmp)$' } | ForEach-Object { $_.name })
+        # The interactive start must not have installed anything (the wizard was never clicked through).
+        $rec.installed = [ordered]@{ arp = (Get-Arp).present; pf = (Test-Path -LiteralPath $PF) }
+        $rec.zone_identifier = Get-Motw (Get-Setup)
+        Write-JsonFile $rec (Join-Path $Out 'motw-end.json') 8
+        "M3C MOTW-END left=$(@($rec.left).Count) arp=$($rec.installed.arp) pf=$($rec.installed.pf) motw=$([bool]$rec.zone_identifier)"
+    }
+
     'install' {
         if ($Tag -notin '1', '2') { throw 'install needs -Tag 1|2' }
         $setup = Get-Setup
         $since = Get-Date
-        $rec = [ordered]@{ t = (NowIso); tag = $Tag; data_root_before = (Get-DataRoot) }
+        $rec = [ordered]@{ t = (NowIso); tag = $Tag; data_root_before = (Get-DataRoot); mark_of_the_web = (Get-Motw $setup) }
         $log = Join-Path $Out "setup-install-$Tag.log"
         $rec.setup = Invoke-Wait $setup "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG=`"$log`"" 900
         $rec.setup_log_tail = Get-InnoLogTail $log

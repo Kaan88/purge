@@ -1952,7 +1952,12 @@ function Invoke-M2Script([string]$Script, [string]$Arguments = '', [int]$Timeout
     Check 'm3-clean: a tag with quotes is refused' $threw
     $steps = @(Get-M3CleanSteps 6)
     $order = @($steps | ForEach-Object { "$($_.phase)$(if ($_.tag) { ':' + $_.tag })" }) -join ' '
-    Check 'm3-clean: step order' ($order -eq 'pre install:1 ui-start ui-stop bench:6 uninstall-no install:2 uninstall-yes-start uninstall-yes-answer rollback') $order
+    Check 'm3-clean: step order' ($order -eq 'pre motw-start motw-end install:1 ui-start ui-stop bench:6 uninstall-no install:2 uninstall-yes-start uninstall-yes-answer rollback') $order
+    Check 'm3-clean: Esc twice before motw-end' ((@($steps | Where-Object { $_.phase -eq 'motw-end' })[0]['keys'] -join ',') -eq 'esc,esc' -and $M3CleanKeys['esc'].Count -eq 2)
+    $orderNo = @(Get-M3CleanSteps 6 -NoMotw | ForEach-Object { "$($_.phase)$(if ($_.tag) { ':' + $_.tag })" }) -join ' '
+    Check 'm3-clean: -NoMotw drops the two MOTW steps' ($orderNo -eq 'pre install:1 ui-start ui-stop bench:6 uninstall-no install:2 uninstall-yes-start uninstall-yes-answer rollback') $orderNo
+    $gm = [IO.File]::ReadAllText((Join-Path $Guest 'm3-clean.ps1'))
+    Check 'm3-clean: the guest writes ZoneId=3 with a GitHub release HostUrl' ($gm.Contains('ZoneId=3') -and $gm.Contains('HostUrl=https://github.com/') -and $gm.Contains('-Stream Zone.Identifier'))
     Check 'm3-clean: the names and the data-folder dialog have screenshots' ((@($steps | Where-Object { $_.shot -eq 'ui-names' }).Count -eq 1) -and (@($steps | Where-Object { $_.shot -eq 'uninstall-yes-dialog' }).Count -eq 1))
     $guestText = [IO.File]::ReadAllText((Join-Path $Guest 'm3-clean.ps1'))
     $missing = @(@(@($steps | ForEach-Object { $_.phase }) + 'pack') | Sort-Object -Unique | Where-Object { $guestText -notmatch ("(?m)^\s*'" + [regex]::Escape($_) + "' \{") })

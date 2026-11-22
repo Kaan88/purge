@@ -43,6 +43,10 @@ $script:Rows = New-Object System.Collections.ArrayList
 function Row([string]$Name, $Ok, [string]$Detail = '') {
     [void]$script:Rows.Add([ordered]@{ row = $Name; ok = ($Ok -eq $true); detail = $Detail })
 }
+# A report-only row: always present, always ok (it can never change the verdict).
+function Info([string]$Name, [string]$Detail = '') {
+    [void]$script:Rows.Add([ordered]@{ row = $Name; ok = $true; info = $true; detail = $Detail })
+}
 
 # Every file of the layout is there (install) or none is (uninstall, rollback).
 function Test-AllFiles($Files, [bool]$Want) {
@@ -98,7 +102,18 @@ function Invoke-Score([string]$Ev, [switch]$Quiet) {
     Row 'precondition: nothing of Purge before the install' ((Has $pre 'preexisting') -and (IsFalse $pre.preexisting.pf) -and (IsFalse $pre.preexisting.data_root) -and (IsFalse $pre.preexisting.arp) -and (IsFalse $pre.preexisting.event_source)) ''
     Row 'report: SmartScreen and Smart App Control state recorded' ((Has $pre 'smartscreen') -and (Has $pre 'smart_app_control') -and (Has $pre.smart_app_control 'state')) "SAC $($pre.smart_app_control.state); SmartScreen $($pre.smartscreen.explorer_SmartScreenEnabled); signature $($pre.setup.signature); mark of the web '$($pre.setup.mark_of_the_web)'"
 
-    Test-Install (Read-J (Join-Path $g 'install-1.json')) '1'
+    # Mark of the web: report-only rows, always present, never a FAIL (what SmartScreen / SAC did is recorded, not judged).
+    $ms = Read-J (Join-Path $g 'motw-start.json'); $me = Read-J (Join-Path $g 'motw-end.json'); $i1 = Read-J (Join-Path $g 'install-1.json')
+    if ((Has $sum 'motw') -and $sum.motw -eq $false) {
+        Info 'report (info): mark of the web' 'skipped (-NoMotw)'
+    } else {
+        Info 'report (info): mark of the web on the setup' $(if ($ms) { "$("$($ms.zone_identifier)" -replace '\s+', ' ')" } else { 'no motw-start.json' })
+        Info 'report (info): interactive start of the marked setup' $(if ($ms) { "outcome '$($ms.outcome)'; SmartScreen dialog $($ms.smartscreen_dialog); Code Integrity events $((Arr $ms.state.code_integrity | ForEach-Object { $_.id }) -join ',')" } else { 'not recorded' })
+        Info 'report (info): after Esc' $(if ($me) { "left [$((Arr $me.left) -join ', ')]; installed: arp $($me.installed.arp) pf $($me.installed.pf)" } else { 'not recorded' })
+        Info 'report (info): silent elevated start of the marked setup' $(if ($i1) { "exit $($i1.setup.exit); mark of the web $([bool]$i1.mark_of_the_web); Code Integrity events $((Arr $i1.code_integrity | ForEach-Object { $_.id }) -join ','); /VERYSILENT from the elevated rig may bypass the SmartScreen prompt" } else { 'not recorded' })
+    }
+
+    Test-Install $i1 '1'
 
     # The first start: medium, the window, real names.
     $ui = Read-J (Join-Path $g 'ui.json')
@@ -185,14 +200,17 @@ function New-InstallPass([string]$Tag) {
 
 function New-Pass {
     [ordered]@{
-        summary = [ordered]@{ mode = 'm3-clean-start'; vm = 'Purge-CleanPro'; failed_step = $false; setup = [ordered]@{ sha256 = 'AB' * 32 }
+        summary = [ordered]@{ mode = 'm3-clean-start'; vm = 'Purge-CleanPro'; failed_step = $false; motw = $true; setup = [ordered]@{ sha256 = 'AB' * 32 }
                               shots = @($Shots + @('pre', 'install-1') | ForEach-Object { [ordered]@{ name = $_; file = "$_.png"; bytes = 10 } }) }
         pre = [ordered]@{ setup = [ordered]@{ sha256 = 'AB' * 32; signature = 'NotSigned'; mark_of_the_web = $null }
                           dotnet = [ordered]@{ present = $false; runtimes = @() }; windows_app_runtime = [ordered]@{ appx = @(); arp = @() }; vc_redist = @()
                           preexisting = [ordered]@{ pf = $false; data_root = $false; arp = $false; event_source = $false }
                           smartscreen = [ordered]@{ explorer_SmartScreenEnabled = 'Warn' }; smart_app_control = [ordered]@{ state = 'off' } }
+        motwstart = [ordered]@{ enabled = $true; zone_identifier = "[ZoneTransfer]`nZoneId=3"; outcome = 'warned (SmartScreen dialog)'; smartscreen_dialog = $true
+                                state = [ordered]@{ code_integrity = @(); consent = $false; setup_procs = @() } }
+        motwend = [ordered]@{ left = @(); installed = [ordered]@{ arp = $false; pf = $false } }
         install1 = (New-InstallPass '1')
-        ui = [ordered]@{ ui_pid = 100; ui_il = 'Medium'; engine_pid = 101; engine_il = 'Medium'; window_found = $true; list_found = $true; purge_row = $true
+        ui =[ordered]@{ ui_pid = 100; ui_il = 'Medium'; engine_pid = 101; engine_il = 'Medium'; window_found = $true; list_found = $true; purge_row = $true
                          names_shown = @('Purge', 'Microsoft Edge'); ui_modules = [ordered]@{ count = 120; foreign = @() }; engine_modules = [ordered]@{ count = 30; foreign = @() } }
         bench = [ordered]@{ fallbacks = 0; timeouts = 0; cold_icons_ms = 900.0
                             stats = [ordered]@{ names_visible = [ordered]@{ n = 5; p50 = 700.0; p90 = 800.0 }; icons_visible = [ordered]@{ n = 5; p50 = 900.0; p90 = 950.0 } } }
@@ -206,7 +224,7 @@ function New-Pass {
     }
 }
 
-$FileOf = [ordered]@{ pre = 'pre.json'; install1 = 'install-1.json'; ui = 'ui.json'; bench = 'bench.json'; unno = 'uninstall-no.json'; install2 = 'install-2.json'
+$FileOf = [ordered]@{ pre = 'pre.json'; motwstart = 'motw-start.json'; motwend = 'motw-end.json'; install1 = 'install-1.json'; ui = 'ui.json'; bench = 'bench.json'; unno = 'uninstall-no.json'; install2 = 'install-2.json'
                       ystart = 'uninstall-yes-start.json'; yanswer = 'uninstall-yes-answer.json'; rollback = 'rollback.json' }
 
 function Get-Defects {
@@ -279,6 +297,22 @@ function Invoke-SelfTest {
             $r = Invoke-Score (& $build $df) -Quiet
             Check "defect '$($df.name)' fails" (-not $r.pass)
         }
+        # Mark-of-the-web rows are report-only: present in every variant, never flipping the verdict.
+        $infoOnly = @(
+            @{ name = 'SmartScreen allowed'; act = { param($d) $d.motwstart.outcome = 'allowed (UAC prompt shown)'; $d.motwstart.smartscreen_dialog = $false } }
+            @{ name = 'Smart App Control blocked the interactive start'; act = { param($d) $d.motwstart.outcome = 'blocked (Smart App Control / Code Integrity)'; $d.motwstart.state.code_integrity = @([ordered]@{ id = 3077 }) } }
+            @{ name = 'setup process left after Esc'; act = { param($d) $d.motwend.left = @('Purge-Setup-0.1.0.tmp') } }
+            @{ name = 'motw-start.json missing'; drop = 'motwstart' }
+            @{ name = 'motw-end.json missing'; drop = 'motwend' }
+            @{ name = '-NoMotw'; act = { param($d) $d.summary.motw = $false } }
+        )
+        foreach ($v in $infoOnly) {
+            $r = Invoke-Score (& $build $v) -Quiet
+            $info = @($r.rows | Where-Object { $_.info })
+            Check "report-only '$($v.name)': still passes, MOTW rows present" ($r.pass -and $info.Count -ge 1 -and @($info | Where-Object { -not $_.ok }).Count -eq 0)
+        }
+        $r = Invoke-Score (& $build $null) -Quiet
+        Check 'the passing run has the four MOTW report rows' (@($r.rows | Where-Object { $_.info -and $_.row -match 'mark of the web|marked setup|after Esc' }).Count -eq 4)
     } finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
     Write-Host "m3-clean-score self-test: $($script:checks - $script:fails)/$($script:checks) ok"
     if ($script:fails) { 1 } else { 0 }

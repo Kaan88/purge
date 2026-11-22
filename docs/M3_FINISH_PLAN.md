@@ -60,7 +60,8 @@ Clean-Pro `rig-base-off`, `rig-base`, `m2-base`.
 - B9 G11 m3-clean-start + Inno setup install/uninstall on Clean-Pro. Tooling: done, branch m3-rig-clean (vm/RIG.md
   section 15; `vm\rig-m3-clean.ps1`, guest `vm\guest\m3-clean.ps1`, scorer `vm\truth\m3-clean-score.ps1`, not run
   yet). Clean-Pro `rig-base` only: preconditions (no .NET / Windows App Runtime / VC++ redist), SmartScreen and SAC
-  reported, silent elevated install, layout + `install.ps1 -Check` + data root + event source + ARP entry, Purge.exe at
+  reported, a mark of the web (ZoneId=3, GitHub release URL; `-NoMotw` skips it) with one interactive shell start
+  and its screenshot (report-only rows, never PASS/FAIL), silent elevated install, layout + `install.ps1 -Check` + data root + event source + ARP entry, Purge.exe at
   medium shows the ARP names (UIA `ProgramList`), WARP numbers (report only), silent uninstall (data root kept), second
   install, uninstall answering Yes by UIA (the setup has no silent switch for it), rollback with a planted junction.
   Run (host, unelevated, no other VM running), with a setup built from the gate commit:

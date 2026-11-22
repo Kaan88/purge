@@ -6,7 +6,7 @@
 
     $env:VMPWFILE = 'C:\path\to\pw.txt'
     powershell -NoProfile -ExecutionPolicy Bypass -File install\inno\build-installer.ps1      # on the gate commit
-    .\vm\rig-m3-clean.ps1 -Setup target\installer\Purge-Setup-0.1.0.exe [-Run <name>] [-BenchRuns 6]
+    .\vm\rig-m3-clean.ps1 -Setup target\installer\Purge-Setup-0.1.0.exe [-Run <name>] [-BenchRuns 6] [-NoMotw]
     powershell -NoProfile -File vm\truth\m3-clean-score.ps1 -Evidence E:\purge-build\gate-evidence\m3-clean-start\<run>
 
   The gate takes a setup built from the gate commit by install\inno\build-installer.ps1 (the script does not build it;
@@ -37,12 +37,16 @@ param(
     [string] $Evidence = 'E:\purge-build\gate-evidence\m3-clean-start',
     [string] $Run = '',
     [int] $BenchRuns = 6,
-    [string] $Base = 'rig-base'
+    [string] $Base = 'rig-base',
+    # Skip the mark of the web (Zone.Identifier ZoneId=3) and the interactive SmartScreen start.
+    [switch] $NoMotw
 )
 $ErrorActionPreference = 'Stop'
 
 # rig.ps1 has parameters of its own (Mode, Engine, Snapshot, ...): ours are kept here first. The VM is fixed.
-$MC = [ordered]@{ setup = $Setup; evidence_root = $Evidence; run = $Run; bench = $BenchRuns; base = $Base; vm = 'Purge-CleanPro' }
+$MC = [ordered]@{ setup = $Setup; evidence_root = $Evidence; run = $Run; bench = $BenchRuns; base = $Base; vm = 'Purge-CleanPro'; no_motw = [bool]$NoMotw }
+# Set 1 scancodes (make, break) for controlvm keyboardputscancode.
+$M3CleanKeys = @{ 'esc' = @('01', '81') }
 . (Join-Path $PSScriptRoot 'rig.ps1') -VmName $MC.vm
 
 $script:MCLock = $null
@@ -81,11 +85,17 @@ function New-M3CleanPhaseText([string]$Phase, [string]$Tag = '', [int]$WaitSec =
     $t + " -WaitSec $WaitSec"
 }
 
-# The host's order of guest phases (name, tag, wait, timeout, screenshot after it). One list: the driver runs it and the
-# self-test checks it against the guest script's phases.
-function Get-M3CleanSteps([int]$Bench = 6) {
+# The host's order of guest phases (name, tag, wait, timeout, keys the host types before it, screenshot after it). One
+# list: the driver runs it and the self-test checks it against the guest script's phases. Without -NoMotw the setup gets
+# a mark of the web and one interactive start (motw-start: screenshot of what SmartScreen shows; Esc twice closes the
+# SmartScreen dialog or the UAC prompt; motw-end stops what is left) before the silent install.
+function Get-M3CleanSteps([int]$Bench = 6, [switch]$NoMotw) {
     @(
         [ordered]@{ phase = 'pre'; tag = ''; wait = 60; timeout = 600; shot = 'pre' }
+        if (-not $NoMotw) {
+            [ordered]@{ phase = 'motw-start'; tag = ''; wait = 60; timeout = 600; shot = 'motw-interactive' }
+            [ordered]@{ phase = 'motw-end'; tag = ''; wait = 60; timeout = 600; keys = @('esc', 'esc'); shot = 'motw-end' }
+        }
         [ordered]@{ phase = 'install'; tag = '1'; wait = 900; timeout = 1800; shot = 'install-1' }
         [ordered]@{ phase = 'ui-start'; tag = ''; wait = 90; timeout = 600; shot = 'ui-names' }
         [ordered]@{ phase = 'ui-stop'; tag = ''; wait = 30; timeout = 300; shot = '' }
@@ -167,7 +177,7 @@ function Complete-M3Clean([hashtable]$Extra = @{}) {
     $sum = [ordered]@{ schema = 'purge.rig.m3clean.summary/1'; mode = 'm3-clean-start'; vm = $MC.vm; snapshot = $MC.base; run = $MC.run
                        setup = [ordered]@{ path = $MC.setup; name = $setupFile.Name; bytes = $setupFile.Length; sha256 = (Get-FileHash -LiteralPath $MC.setup -Algorithm SHA256).Hash
                                            built = $setupFile.LastWriteTime.ToString('o') }
-                       repo_head = "$head"; bench_runs = $MC.bench; started = $script:MCStarted; ended = (Get-Date).ToString('o')
+                       repo_head = "$head"; bench_runs = $MC.bench; motw = (-not $MC.no_motw); started = $script:MCStarted; ended = (Get-Date).ToString('o')
                        failed_step = $script:MCFail; shots = $script:MCShots; lines = $script:MCLines }
     foreach ($k in $Extra.Keys) { $sum[$k] = $Extra[$k] }
     [IO.File]::WriteAllText((Join-Path $MC.evidence 'summary.json'), (ConvertTo-Json $sum -Depth 8), (New-Object System.Text.UTF8Encoding($false)))
@@ -178,7 +188,13 @@ function Invoke-M3CleanStart {
     Write-RigLog "m3-clean-start from $($MC.vm) $($MC.base); setup $($MC.setup)"
     Restore-Base -Snapshot $MC.base
     Push-M3CleanFiles
-    foreach ($s in Get-M3CleanSteps $MC.bench) {
+    foreach ($s in Get-M3CleanSteps $MC.bench -NoMotw:$MC.no_motw) {
+        foreach ($k in @($s['keys'] | Where-Object { $_ })) {
+            $codes = $M3CleanKeys[$k]
+            $r = Invoke-VBox (@('controlvm', $MC.vm, 'keyboardputscancode') + $codes)
+            Write-RigLog "  keyboardputscancode $k ($($codes -join ' ')): exit $($r.code)"
+            Start-Sleep -Seconds 3
+        }
         $null = Invoke-M3CleanPhase $s
         if ($s.shot) { Start-Sleep -Seconds 2; Save-M3CleanShot $s.shot }
     }
