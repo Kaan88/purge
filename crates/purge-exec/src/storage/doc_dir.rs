@@ -25,12 +25,17 @@
 //! that pass the `StoreFile` verdict on a handle opened relative to the old directory (a plain file,
 //! one link, owner Administrators or SYSTEM, nobody else may write) and hold at most
 //! [`MAX_MIGRATED_BYTES`]. Each is renamed into the new `fp` by that handle. Nothing else is moved.
+//! An upgrade that stopped after the rename (the new `fp` could not be made, the broker ended) is
+//! finished by the next use: an `fp` holding no fingerprint takes them, by the same rules, from the
+//! newest `fp.rejected-*` when that directory passes the `Store` verdict as it is now. A name the new
+//! `fp` already has is never replaced (the old file stays aside), so the move is never done twice.
 //!
 //! # Pruning
 //!
 //! [`StorageRoots::prune_rejected`] removes what these directories renamed aside more than a given age
 //! ago (the broker: 30 days at its start), by the time in the name, deleting a rejected directory's
-//! contents relative to handles without following anything.
+//! contents relative to handles without following anything. It creates no directory: `fp\msitables`
+//! and `baseline` are pruned only when they exist.
 
 use std::fs::File;
 use std::io::{Read, Write};
@@ -139,20 +144,27 @@ impl StorageRoots {
             self.child_dir(root, FP_DIR, ObjectKind::Store, super::Create::IfAbsent)?
                 .ok_or_else(|| io("open", &self.fp_path(), FsError::NotFound))
         };
-        match open() {
+        let dir = match open() {
             Err(StorageError::Integrity {
                 failure: IntegrityFailure::UnprotectedDacl,
                 renamed_to: Some(aside),
                 ..
             }) if upgrade.is_some() => {
                 let fresh = open()?;
-                if let Some(old) = upgrade {
-                    self.migrate_fingerprints(root, &aside, old, &fresh);
-                }
-                Ok(fresh)
+                self.migrate_fingerprints(root, &aside, upgrade, &fresh);
+                return Ok(fresh);
             }
-            other => other,
+            other => other?,
+        };
+        // An upgrade that stopped between the rename and the move (the new `fp` could not be made,
+        // or the broker ended) left the fingerprints in the newest `fp.rejected-*`: an `fp` without a
+        // fingerprint takes them from there, under the same per-file rules.
+        if !has_fingerprints(&dir)
+            && let Some(aside) = newest_rejected_fp(root)
+        {
+            self.migrate_fingerprints(root, &self.data_root.join(aside), None, &dir);
         }
+        Ok(dir)
     }
 
     /// The identity of `fp` when it is a directory an older broker made by path: it would pass the
@@ -184,13 +196,17 @@ impl StorageRoots {
             .then_some(facts.file_id)
     }
 
-    /// Moves the fingerprints of the old `fp`, renamed aside to `aside`, into `fresh`: see the module
-    /// documentation. Returns how many were moved; whatever is not moved stays where it is.
+    /// Moves the fingerprints of an old `fp`, renamed aside to `aside`, into `fresh`: see the module
+    /// documentation. `old`: the identity judged before the rename (the upgrade itself); `None` for an
+    /// upgrade that stopped before the move, where the renamed directory must pass the `Store` verdict
+    /// as it is now (its descriptor was replaced when it was renamed aside). A name `fresh` already has
+    /// is never replaced: whatever is there stays, and the old file stays aside, so a second run moves
+    /// nothing twice. Returns how many were moved; whatever is not moved stays where it is.
     fn migrate_fingerprints(
         &self,
         root: &CheckedDir,
         aside: &Path,
-        old: super::FileId,
+        old: Option<super::FileId>,
         fresh: &CheckedDir,
     ) -> usize {
         let Ok(handle) = ext(aside)
@@ -206,11 +222,22 @@ impl StorageRoots {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
         let expected = format!(r"{}\{leaf}", root.final_path.trim_end_matches('\\'));
-        if facts.file_id != old
-            || facts.reparse_tag != 0
+        if facts.reparse_tag != 0
+            || !facts.is_dir
             || !same_path(Path::new(&expected), Path::new(&final_path))
         {
             return 0;
+        }
+        match old {
+            Some(old) if facts.file_id != old => return 0,
+            Some(_) => {}
+            None => {
+                let judged =
+                    self.check_handle(aside, ObjectKind::Store, Some(root.as_parent()), &handle);
+                if !matches!(judged, Ok(Ok(_))) {
+                    return 0;
+                }
+            }
         }
         let parent = Parent {
             handle: &handle,
@@ -275,21 +302,78 @@ impl StorageRoots {
         let cutoff = SessionId::new(FileTime(sys::now().0.saturating_sub(ticks)), 0);
         let cutoff = &cutoff.as_str()[..16];
         let old = |name: &str| rejected_stamp(name).is_some_and(|stamp| stamp < cutoff);
-        let mut removed = 0;
-        if let Ok(root) = self.checked_data_root() {
-            removed += prune_in(&root.handle, |name| {
-                (name.starts_with("fp.rejected-") || name.starts_with("baseline.rejected-"))
-                    && old(name)
-            });
+        let Ok(root) = self.checked_data_root() else {
+            return 0;
+        };
+        let mut removed = prune_in(&root.handle, |name| {
+            (name.starts_with("fp.rejected-") || name.starts_with("baseline.rejected-"))
+                && old(name)
+        });
+        // Checked, never created: a cache directory that does not exist has nothing to prune, and an
+        // engine on a host with an exact baseline makes none (L3).
+        let existing = |parent: &CheckedDir, leaf: &str| {
+            self.child_dir(parent, leaf, ObjectKind::Store, super::Create::Never)
+                .ok()
+                .flatten()
+        };
+        if let Some(fp) = existing(&root, FP_DIR) {
+            removed += prune_in(&fp.handle, old);
+            if let Some(tables) = existing(&fp, MSI_TABLES_DIR) {
+                removed += prune_in(&tables.handle, old);
+            }
         }
-        for dir in [self.fp_dir(), self.msi_tables_dir(), self.baseline_dir()]
-            .into_iter()
-            .flatten()
-        {
-            removed += prune_in(&dir.dir.handle, old);
+        if let Some(baseline) = existing(&root, BASELINE_DIR) {
+            removed += prune_in(&baseline.handle, old);
         }
         removed
     }
+}
+
+/// Whether the directory behind `dir` holds a stored fingerprint ([`is_fingerprint_name`]); a
+/// directory that cannot be listed counts as holding one (nothing is moved into it).
+fn has_fingerprints(dir: &CheckedDir) -> bool {
+    at::open_at(
+        &dir.handle,
+        "",
+        at::Open {
+            access: at::FILE_LIST_DIRECTORY | at::FILE_READ_ATTRIBUTES,
+            share: at::SHARE_ALL,
+            create: None,
+            kind: at::Kind::Dir,
+        },
+    )
+    .and_then(|listing| at::list_names(&listing))
+    .map_or(true, |names| names.iter().any(|n| is_fingerprint_name(n)))
+}
+
+/// The newest `fp.rejected-<utc>[-n]` in the data root behind `root`, by the time and number in its
+/// name.
+fn newest_rejected_fp(root: &CheckedDir) -> Option<String> {
+    let names = at::open_at(
+        &root.handle,
+        "",
+        at::Open {
+            access: at::FILE_LIST_DIRECTORY | at::FILE_READ_ATTRIBUTES,
+            share: at::SHARE_ALL,
+            create: None,
+            kind: at::Kind::Dir,
+        },
+    )
+    .and_then(|listing| at::list_names(&listing))
+    .ok()?;
+    names
+        .into_iter()
+        .filter(|name| name.starts_with("fp.rejected-"))
+        .filter_map(|name| {
+            let stamp = rejected_stamp(&name)?.to_owned();
+            let n: u32 = name
+                .rsplit_once(&stamp)
+                .and_then(|(_, rest)| rest.strip_prefix('-'))
+                .map_or(Some(1), |n| n.parse().ok())?;
+            Some(((stamp, n), name))
+        })
+        .max()
+        .map(|(_, name)| name)
 }
 
 /// A store refusal as a cache sees it ([`DocDir::read_file`] and the others): a file over the limit

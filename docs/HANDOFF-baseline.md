@@ -12,6 +12,9 @@ continued from any harness: read it, then `git log --oneline -15` and `git workt
   the rejected object its kind's descriptor; the broker prunes its directories' rejects after 30 days at start;
   tests for the caches' real names through `DocDir`, concurrent replaces, and an elevated-only owner test
   (`#[ignore]`). purge-exec gained dev-dependencies purge-index and purge-source (tests only).
+- Fourth round (Fable re-check of a62111f, DECISIONS row "fp checked, re-check follow-ups"; origin/baseline
+  f7200f1 merged first): no descriptor reset on a hard-linked file; an interrupted upgrade finishes from the newest
+  `fp.rejected-*` when `fp` has no fingerprint (never replacing a name); the prune creates no cache directory.
 - Why: the R3 Fable re-review's follow-up. The elevated broker wrote, renamed and swept fingerprint files in
   `<data root>\fp` by path (and its MSI table cache wrote `fp\msitables` by path); `fp` was admin-only only by
   the installer's descriptor, never checked at run time. A user-writable `fp` would let a junction to

@@ -1846,7 +1846,9 @@ fn reject(
 /// check), relative to a handle on the parent directory opened for the purpose.
 ///
 /// After the rename, the object itself (not what is below it, and a link as a link) gets `sddl`
-/// through the same handle when the handle could be opened with `WRITE_DAC` and `WRITE_OWNER`:
+/// through the same handle when the handle could be opened with `WRITE_DAC` and `WRITE_OWNER` and
+/// the object is a directory, a reparse point or a file with one name (never a hard-linked file,
+/// whose security is that of a file outside the store as well):
 /// with its owner part, or, when the owner cannot be assigned, its DACL alone (protected). A
 /// rejected object that a user could write so stops being theirs to change; where the security
 /// cannot be set the object keeps its own (best effort: the rename is what protects the store).
@@ -1886,9 +1888,14 @@ fn rename_aside(
         Err(FsError::AccessDenied) => (open(move_access)?, false),
         Err(e) => return Err(e),
     };
-    if at::facts(&mover)?.file_id != id {
+    let facts = at::facts(&mover)?;
+    if facts.file_id != id {
         return Err(FsError::Other(ERROR_FILE_INVALID));
     }
+    // A file with more than one name is one object with names elsewhere too (a hard link planted at
+    // a store name to a file outside the store): its security is that file's, and is never touched.
+    // A directory, and a reparse point (opened as the link itself), have one object of their own.
+    let securable = securable && (facts.is_dir || facts.reparse_tag != 0 || facts.n_links == 1);
     let stamp = SessionId::new(sys::now(), 0);
     let stamp = &stamp.as_str()[..16];
     for n in 1..=64 {

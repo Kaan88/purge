@@ -2766,3 +2766,119 @@ fn strict_migration_moves_only_admin_owned_fingerprints() {
     strict.check().unwrap();
     assert_eq!(names(&fp), [fp_name('a')]);
 }
+
+// ---- second review follow-ups ----
+
+#[test]
+fn a_hard_link_renamed_aside_keeps_the_outside_files_security() {
+    let (s, roots) = fixture("hardlinksd");
+    let fp = roots.fp_dir().unwrap();
+    let outside = s.path("victim.txt");
+    std::fs::write(&outside, b"victim").unwrap();
+    let before = sddl_of(&outside);
+    let temp = roots.fp_path().join(FP_TEMP);
+    std::fs::hard_link(&outside, &temp).unwrap();
+    let err = fp.replace(FP_DOC, FP_TEMP, b"new").unwrap_err();
+    assert_renamed(&err, &temp, |f| {
+        matches!(f, IntegrityFailure::HardLinked { .. })
+    });
+    // Owner, group and DACL of the shared file object are as they were.
+    assert_eq!(sddl_of(&outside), before);
+    assert_eq!(std::fs::read(&outside).unwrap(), b"victim");
+    // A file with one name is still given the store's descriptor.
+    std::fs::remove_file(&outside).unwrap();
+    std::fs::write(roots.fp_path().join(FP_DOC), b"plain").unwrap();
+    let users = format!(
+        "{}(A;;FA;;;BU)",
+        roots.policy().sddl_for(ObjectKind::StoreFile)
+    );
+    MoveHandle::open_with_security_write(&ext(&roots.fp_path().join(FP_DOC)).unwrap())
+        .unwrap()
+        .set_security(&users)
+        .unwrap();
+    let err = fp.read(FP_DOC, 64).unwrap_err();
+    let StorageError::Integrity {
+        renamed_to: Some(aside),
+        ..
+    } = err
+    else {
+        panic!("{err}");
+    };
+    assert!(!sddl_of(&aside).contains(";BU)"), "{}", sddl_of(&aside));
+}
+
+#[test]
+fn an_upgrade_that_stopped_after_the_rename_is_finished_by_the_next_use() {
+    let (_s, roots) = fixture("fpinterrupted");
+    // What a broker that ended between the rename and the move leaves: no `fp`, and the old one
+    // aside with the store's descriptor (given when it was renamed aside) and its fingerprints.
+    std::fs::remove_dir(roots.fp_path()).unwrap();
+    let older = roots.data_root().join("fp.rejected-20261101T000000Z");
+    let newest = roots.data_root().join("fp.rejected-20261122T000000Z-2");
+    let middle = roots.data_root().join("fp.rejected-20261122T000000Z");
+    for dir in [&older, &newest, &middle] {
+        fs_write::create_dir_secure(
+            &ext(dir).unwrap(),
+            &roots.policy().sddl_for(ObjectKind::Store),
+        )
+        .unwrap();
+    }
+    std::fs::write(older.join(fp_name('o')), b"older").unwrap();
+    std::fs::write(newest.join(fp_name('a')), b"a").unwrap();
+    std::fs::write(newest.join(fp_name('b')), b"b").unwrap();
+
+    let fp = roots.fp_dir().unwrap();
+    assert_eq!(names(&roots.fp_path()), [fp_name('a'), fp_name('b')]);
+    assert_eq!(fp.read(&fp_name('a'), 64).unwrap().unwrap(), b"a");
+    assert!(names(&newest).is_empty());
+    assert_eq!(names(&older), [fp_name('o')]);
+
+    // Never twice, never over a newer document: an `fp` with fingerprints takes nothing more, and a
+    // name it has is not replaced.
+    std::fs::write(newest.join(fp_name('a')), b"stale").unwrap();
+    roots.fp_dir().unwrap();
+    assert_eq!(fp.read(&fp_name('a'), 64).unwrap().unwrap(), b"a");
+    assert_eq!(names(&newest), [fp_name('a')]);
+    // An `fp` without a fingerprint (here emptied by hand; other files do not count) takes from the
+    // newest again.
+    std::fs::remove_file(roots.fp_path().join(fp_name('b'))).unwrap();
+    std::fs::write(newest.join(fp_name('b')), b"b again").unwrap();
+    std::fs::remove_file(roots.fp_path().join(fp_name('a'))).unwrap();
+    std::fs::write(roots.fp_path().join("notes.txt"), b"not a fingerprint").unwrap();
+    roots.fp_dir().unwrap();
+    assert_eq!(
+        names(&roots.fp_path()),
+        [fp_name('a'), fp_name('b'), "notes.txt".to_owned()]
+    );
+    assert_eq!(fp.read(&fp_name('a'), 64).unwrap().unwrap(), b"stale");
+}
+
+#[test]
+fn a_rejected_fp_that_fails_the_store_verdict_now_gives_nothing() {
+    let (_s, roots) = fixture("fpinterrupted-open");
+    std::fs::remove_dir(roots.fp_path()).unwrap();
+    // A renamed-aside `fp` whose descriptor could not be replaced: Users may still write it.
+    let aside = roots.data_root().join("fp.rejected-20261122T000000Z");
+    let open = format!(
+        "{}(A;OICI;0x1301bf;;;BU)",
+        roots.policy().sddl_for(ObjectKind::Store)
+    );
+    fs_write::create_dir_secure(&ext(&aside).unwrap(), &open).unwrap();
+    let admin_only = roots.policy().sddl_for(ObjectKind::StoreFile);
+    drop(
+        fs_write::create_file_secure(&ext(&aside.join(fp_name('a'))).unwrap(), &admin_only)
+            .unwrap(),
+    );
+    roots.fp_dir().unwrap();
+    assert!(names(&roots.fp_path()).is_empty());
+    assert_eq!(names(&aside), [fp_name('a')]);
+}
+
+#[test]
+fn pruning_creates_no_cache_directory() {
+    let (_s, roots) = fixture("prune-l3");
+    assert_eq!(roots.prune_rejected(Duration::from_secs(1)), 0);
+    assert!(!roots.msi_tables_path().exists());
+    assert!(!roots.baseline_path().exists());
+    assert_eq!(names(roots.data_root()), ["Quarantine", "fp", "sessions"]);
+}
