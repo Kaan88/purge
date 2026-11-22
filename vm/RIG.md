@@ -1880,7 +1880,14 @@ powershell -NoProfile -File vm\truth\m3-sec-score.ps1 --self-test
   `HKCU\Software\PurgeRigApp` and `C:\ProgramData\PurgeRigApp` stay as leftovers. Variants: `plain3`, `lookalike3`
   (three data files with a Cyrillic letter inside an ASCII name: attention entries, so the plan dialog has the
   verification box), `lookalike45` (45 of them: the attention list pages at 40).
-- **`m3-broker`** (G3, G10; from `rig-base`, UAC silent, checked: `ConsentPromptBehaviorAdmin=0`). One phase
+- **Silent UAC** (m3-broker, m3-consent; coordinator ruling 2026-11-22). `rig-base` is at the Windows UAC defaults (5/1/1,
+  section 13), so these two modes do not assume design 11.2's silent UAC: right after the install push, guest phase
+  `uac-silent` sets `ConsentPromptBehaviorAdmin=0` (EnableLUA stays 1, so medium and high integrity still differ;
+  PromptOnSecureDesktop is left: a silent elevation shows no prompt), records the values before and after in
+  `uac-silent.json` (both summaries carry it as `uac_silent`), and the host re-checks 0 with `uac-check silent`. The
+  scorer checks the recorded state (set ok, after 0 with LUA on, still 0 at the summary), never the snapshot's value.
+  m3-uac keeps `m3-uac-on` and its 5/1/1 check.
+- **`m3-broker`** (G3, G10; from `rig-base`, UAC made silent as above). One phase
   `broker-case -Tag <id>` per case of `m3-sec-expect.json`, in its order (`-Cases` runs a subset). Each case records
   the client's `client.json`, the exit code, the Application events of source `Purge` since the case started, a listing
   of `C:\ProgramData\Purge` before and after (path, size, last write, attributes: any difference is a write), and for
@@ -2274,7 +2281,8 @@ uninstallers: `fail-check` (ARP entry, fixture key, new sessions, quarantine lis
 every step record; the rigtool run directory copied in as `run\`; zipped and pulled to `<evidence>\<app>\guest\`). A
 phase that throws still gets `finish` and the pull; the scorer fails the missing rows.
 
-**UAC and the consent dialog.** Design 11.2 runs `m3-e2e` UAC-silent; section 13 found `rig-base` at the Windows
+**UAC and the consent dialog.** (Ruling 2026-11-22: approving the broker's consent dialogs with the elevated
+`m3sec press` is accepted: a high-integrity click is what the user's click is.) Design 11.2 runs `m3-e2e` UAC-silent; section 13 found `rig-base` at the Windows
 defaults (5/1/1). The flow works either way: whenever `consent.exe` is up after a step that can start the broker, the
 host answers it by scancode, and the scorer checks one UAC value per run and, with 5, the scancode answer and the
 prompt screenshot per app. The broker's TaskDialog is approved by the elevated agent (`m3sec press`), the route the

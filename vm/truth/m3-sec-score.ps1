@@ -49,13 +49,23 @@ function Get-Shots([string]$Ev, $Summary) {
     @(Arr $Summary.shots | Where-Object { $_.file -and $_.bytes -gt 0 -and (Test-Path -LiteralPath (Join-Path $Ev $_.file) -PathType Leaf) -and (Get-Item -LiteralPath (Join-Path $Ev $_.file)).Length -gt 0 } | ForEach-Object { "$($_.name)" })
 }
 
+# The silent UAC the mode set itself (guest phase uac-silent, ruling 2026-11-22: rig-base is at the Windows defaults):
+# the recorded state after the set is silent with LUA on, and it still was when the summary was written. The value the
+# snapshot had before is recorded, never asserted.
+function Test-UacSilent($Doc, $Want) {
+    $s = $Doc.uac_silent
+    $okSet = ($s -and $s.ok -eq $true -and "$($s.after.ConsentPromptBehaviorAdmin)" -eq "$Want" -and "$($s.after.EnableLUA)" -eq '1')
+    Row 'uac made silent by the mode (recorded before/after)' $okSet $(if ($s) { "before $($s.before.ConsentPromptBehaviorAdmin)/$($s.before.PromptOnSecureDesktop)/$($s.before.EnableLUA), after $($s.after.ConsentPromptBehaviorAdmin)/$($s.after.PromptOnSecureDesktop)/$($s.after.EnableLUA)" } else { 'no uac_silent record' })
+    Row 'uac still silent at the end (ConsentPromptBehaviorAdmin)' ((Has $Doc 'uac') -and "$($Doc.uac.ConsentPromptBehaviorAdmin)" -eq "$Want") "$($Doc.uac.ConsentPromptBehaviorAdmin)"
+}
+
 # ------------------------------------------------------------------------------------------------- broker
 
 function Test-Broker([string]$Ev, $X) {
     $doc = Read-J (Join-Path $Ev 'guest\m3-broker.json')
     Row 'evidence guest\m3-broker.json' ($null -ne $doc) $(if (-not $doc) { 'missing or unreadable' })
     if (-not $doc) { return }
-    Row 'uac silent (ConsentPromptBehaviorAdmin)' ((Has $doc 'uac') -and "$($doc.uac.ConsentPromptBehaviorAdmin)" -eq "$($X.broker.uac_admin)") "$($doc.uac.ConsentPromptBehaviorAdmin)"
+    Test-UacSilent $doc $X.broker.uac_admin
     foreach ($c in Arr $X.broker.cases) {
         $r = @(Arr $doc.cases | Where-Object { $_.id -eq $c.id }) | Select-Object -First 1
         $n = "case $($c.id)"
@@ -106,7 +116,7 @@ function Test-Consent([string]$Ev, $X) {
     Row 'evidence guest\m3-consent.json' ($null -ne $doc) $(if (-not $doc) { 'missing or unreadable' })
     Row 'evidence summary.json' ($null -ne $sum) $(if (-not $sum) { 'missing or unreadable' })
     if (-not $doc) { return }
-    Row 'uac silent (ConsentPromptBehaviorAdmin)' ((Has $doc 'uac') -and "$($doc.uac.ConsentPromptBehaviorAdmin)" -eq "$($X.consent.uac_admin)") "$($doc.uac.ConsentPromptBehaviorAdmin)"
+    Test-UacSilent $doc $X.consent.uac_admin
     $ready = @(Arr $doc.ready | ForEach-Object { $_.data })
     $kinds = @{}
     foreach ($r in $ready) { $kinds[[int]$r.k] = "$($r.method)" }
@@ -322,7 +332,7 @@ function New-BrokerPass($X) {
                     data_root_changed = $false; data_root_diff = @(); client = [ordered]@{ connects = @($conn) }
                     planted = $(if ($c.planted_unchanged) { 'C:\PurgePlant' }); planted_changed = $(if ($c.planted_unchanged) { $false }) }
     }
-    [ordered]@{ schema = 'purge.rig.m3sec.broker/1'; uac = [ordered]@{ ConsentPromptBehaviorAdmin = 0 }; cases = @($cases) }
+    [ordered]@{ schema = 'purge.rig.m3sec.broker/1'; uac = [ordered]@{ ConsentPromptBehaviorAdmin = 0 }; uac_silent = [ordered]@{ ok = $true; before = [ordered]@{ ConsentPromptBehaviorAdmin = 5; PromptOnSecureDesktop = 1; EnableLUA = 1 }; after = [ordered]@{ ConsentPromptBehaviorAdmin = 0; PromptOnSecureDesktop = 1; EnableLUA = 1 } }; cases = @($cases) }
 }
 
 function New-ConsentPass($X, [string]$Dir) {
@@ -348,7 +358,7 @@ function New-ConsentPass($X, [string]$Dir) {
         $k++
     }
     $shots = New-Shots $Dir $names
-    $doc = [ordered]@{ uac = [ordered]@{ ConsentPromptBehaviorAdmin = 0 }; ready = $ready; attacks = $attacks; controls = $controls; approves = $approves }
+    $doc = [ordered]@{ uac = [ordered]@{ ConsentPromptBehaviorAdmin = 0 }; uac_silent = [ordered]@{ ok = $true; before = [ordered]@{ ConsentPromptBehaviorAdmin = 5; PromptOnSecureDesktop = 1; EnableLUA = 1 }; after = [ordered]@{ ConsentPromptBehaviorAdmin = 0; PromptOnSecureDesktop = 1; EnableLUA = 1 } }; ready = $ready; attacks = $attacks; controls = $controls; approves = $approves }
     @($doc, $shots)
 }
 
@@ -393,6 +403,9 @@ function Get-Defects {
         @{ mode = 'broker'; name = 'two refusals of three'; act = { param($d) $c = $d.cases | Where-Object { $_.id -eq 'client-image' }; $c.events[0].message = 'purge-broker ended: (exit code 25); refused clients: [client image is not Purge.exe in the install directory; client image is not Purge.exe in the install directory]' } },
         @{ mode = 'broker'; name = 'squatter not detected'; act = { param($d) ($d.cases | Where-Object { $_.id -eq 'pipe-squat' }).client.connects[0].server_check = 'ok' } },
         @{ mode = 'broker'; name = 'uac not silent'; act = { param($d) $d.uac.ConsentPromptBehaviorAdmin = 5 } },
+        @{ mode = 'broker'; name = 'no uac-silent record'; act = { param($d) $d.uac_silent = $null } },
+        @{ mode = 'broker'; name = 'uac-silent left LUA off'; act = { param($d) $d.uac_silent.after.EnableLUA = 0 } },
+        @{ mode = 'consent'; name = 'uac-silent did not take'; act = { param($d) $d.uac_silent.ok = $false; $d.uac_silent.after.ConsentPromptBehaviorAdmin = 5 } },
         @{ mode = 'consent'; name = 'a medium attempt reached'; act = { param($d) $d.attacks[0].data.drive.attempts[1].reached = $true } },
         @{ mode = 'consent'; name = 'a medium effect (journal)'; act = { param($d) $d.attacks[5].data.effect_count = 1; $d.attacks[5].data.effects.journal_changed = $true } },
         @{ mode = 'consent'; name = 'medium driver ran high'; act = { param($d) $d.attacks[2].data.drive.driver_il = 'high' } },

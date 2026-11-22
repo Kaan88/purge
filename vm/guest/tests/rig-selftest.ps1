@@ -1921,6 +1921,13 @@ function Invoke-M2Script([string]$Script, [string]$Arguments = '', [int]$Timeout
     $guestText = [IO.File]::ReadAllText((Join-Path $Guest 'm3-sec.ps1'))
     $unknown = @($ids | Where-Object { $guestText -notmatch ("'" + [regex]::Escape($_) + "'") })
     Check 'm3-sec: m3-sec.ps1 has a branch for every case' ($unknown.Count -eq 0) ($unknown -join ', ')
+    # Ruling 2026-11-22: m3-broker / m3-consent make UAC silent themselves (rig-base is at the defaults) and record it.
+    $startText = (Get-Command Start-M3Sec).Definition
+    Check 'm3-sec: uac-silent is a guest phase that records before/after and sets only ConsentPromptBehaviorAdmin=0' (
+        $guestText -match "(?m)^\s+'uac-silent' \{" -and $guestText -match "Name 'ConsentPromptBehaviorAdmin' -Value 0" -and $guestText -match "uac_silent = \(Read-Json \(Join-Path \`$Out 'uac-silent.json'\)\)" -and
+        $guestText -notmatch "Name 'EnableLUA' -Value")
+    Check 'm3-sec: Start-M3Sec runs uac-silent for m3-broker / m3-consent and keeps the 5 check for m3-uac' (
+        $startText -match "Invoke-M3SecPhase 'uac-silent'" -and $startText -match "Assert-M3SecUac \`$u 5" -and $startText -match "Invoke-M3SecPhase 'uac-check' 'silent'")
     Check 'm3-sec: m3sec.cs is ASCII (csc reads it in the guest code page)' (-not ([IO.File]::ReadAllText((Join-Path $Guest 'm3sec.cs')) -match '[^\x00-\x7F]'))
 }
 

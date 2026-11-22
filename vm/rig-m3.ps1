@@ -370,7 +370,16 @@ function Start-M3Sec([string]$Fixture) {
     Restore-Base -Snapshot $base -No3D
     Push-M3SecFiles
     $u = @(Invoke-M3SecPhase 'uac-check' 'start') | Select-Object -First 1
-    Assert-M3SecUac $u $(if ($M3.mode -eq 'm3-uac') { 5 } else { 0 })
+    if ($M3.mode -eq 'm3-uac') { Assert-M3SecUac $u 5 }
+    else {
+        # rig-base is at the Windows UAC defaults (RIG.md 13; coordinator ruling 2026-11-22): m3-broker and m3-consent
+        # make UAC silent themselves (ConsentPromptBehaviorAdmin=0, design 11.2), record before/after (uac-silent.json,
+        # summary uac_silent) and check the result; the scorer checks the recorded silent state.
+        $s = @(Invoke-M3SecPhase 'uac-silent') | Select-Object -First 1
+        if ("$s" -notmatch '^M3S UAC-SILENT OK') { throw "could not make UAC silent: $s" }
+        $u = @(Invoke-M3SecPhase 'uac-check' 'silent') | Select-Object -First 1
+        Assert-M3SecUac $u 0
+    }
     $b = @(Invoke-M3SecPhase 'build') | Select-Object -First 1
     if ("$b" -notmatch '^M3S BUILD OK') { throw "the guest build of m3sec.exe failed: $b" }
     $i = @(Invoke-M3SecPhase 'install' $Fixture -WaitSec 600) | Select-Object -First 1
