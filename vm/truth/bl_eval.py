@@ -167,7 +167,9 @@ if MODE == 'evaluate':
         its truth has leftovers. Below Exact that is a recall cost, not a safety failure, in one case only: the exact
         M1b gate run of the same set and app offered items and every one was a UFH\\SHC slot value, which BL-FIX-UFH
         makes Windows-owned below Exact. Also required: the app's RUN row passed (the engine ran and every phase was
-        ok) and its danger_listed is not above the exact gate's. Anything else stays an S1 failure."""
+        ok); this run's plan offered nothing (offered_n 0) and listed no danger (danger_listed 0); and the R3 replay of
+        that same exact gate run with this view, made by the engine under test, offers nothing either (ties the claim
+        "no view below Exact offers these" to this build; a missing R3 plan fails closed). Anything else stays S1."""
         if c.get('pass') is True or c.get('id') not in ('K1', 'K2', 'K3'):
             return False
         if not str(c.get('value', '')).startswith('empty plan:'):
@@ -188,8 +190,10 @@ if MODE == 'evaluate':
             return False
         if not all(isinstance(i, dict) and UFH_SHC.match(str(i.get('target', ''))) for i in items):
             return False
-        n, x = got.get('danger_listed'), ref.get('danger_listed')
-        return isinstance(n, int) and isinstance(x, int) and n <= x
+        if got.get('offered_n') != 0 or got.get('danger_listed') != 0:
+            return False
+        replayed, _ = plan(os.path.join(OUT, 'r3', f'{SET_TAG[s]}-{app}', f'{m}.json'))
+        return replayed is not None and not offered(replayed)
 
     # R3
     r3 = os.path.join(OUT, 'r3')
@@ -316,9 +320,9 @@ if MODE == 'evaluate':
         explained = {id(c) for c in mine if empty_plan_explained(m, p, c, mine)}
         for c in mine:
             if id(c) in explained:
-                row('W3', 'report', f"R4 {m} {c.get('id')} {c.get('subject')}", f"{c.get('value')}; the exact gate "
+                row('W3-R4', 'report', f"R4 {m} {c.get('id')} {c.get('subject')}", f"{c.get('value')}; the exact gate "
                     'offered only UFH\\SHC slot values, which no view below Exact offers (BL-FIX-UFH)',
-                    'recall cost, reported (RUN ok, danger_listed within the exact gate)', True)
+                    'recall cost, reported (RUN ok, offered 0 and danger_listed 0, R3 replay offers nothing)', True)
             elif c.get('pass') is not True:
                 row('S1', 'S', f"R4 {m} {c.get('id')} {c.get('subject')}", str(c.get('value')), str(c.get('limit')), False)
         k9 = [c for c in mine if c.get('id') == 'K9']
@@ -326,7 +330,7 @@ if MODE == 'evaluate':
         per_set = all(any(str(c.get('subject', '')).startswith(s + '/') for c in danger) for s in sets)
         good = [c.get('pass') is True or id(c) in explained for c in mine]
         row('S1', 'S', f'R4 {m} rows', f'{len(mine)} RUN/K1/K2/K3/K9 row(s), {sum(c.get("pass") is True for c in mine)} '
-            f'pass, {len(explained)} empty plan(s) explained (W3); {len(k9)} trap row(s)',
+            f'pass, {len(explained)} empty plan(s) explained (W3-R4); {len(k9)} trap row(s)',
             'all pass, danger rows for every set, a trap row per set', bool(mine) and all(good) and len(k9) >= len(sets)
             and per_set)
         # danger_listed: not above the exact M1b gate run of the same set and app
@@ -400,18 +404,33 @@ if MODE == 'mutate':  # mutate <fixture dir> <what> [path]
     elif what == 'danger':
         edit(J('r4-local', 'm1b-evidence', 'score-clean.json'),
              lambda s: s['apps'][0]['tools'][0].update(danger_listed=2))
-    elif what in ('emptyufh', 'emptyother'):  # merged clean/7zip plan empty; the exact plan offered only UFH\SHC (or not)
-        target = ('V:HKU\\S-1-5-21-1\\Software\\Microsoft\\Windows\\CurrentVersion\\UFH\\SHC|1' if what == 'emptyufh'
-                  else 'V:HKU\\S-1-5-21-1\\Software\\7-Zip|Path')
+    elif what.startswith('empty'):
+        # Merged clean/7zip plan empty with truth leftovers. 'emptyufh' sets up every condition of the R4 empty-plan
+        # exception (bl_eval evaluate, empty_plan_explained); each other variant breaks exactly one of them.
+        ufh = 'V:HKU\\S-1-5-21-1\\Software\\Microsoft\\Windows\\CurrentVersion\\UFH\\SHC|'
+        items = [{'target': ufh + '1', 'band': 'Likely', 'outcome': 'hit'}]
+        if what == 'emptyother':
+            items = [{'target': 'V:HKU\\S-1-5-21-1\\Software\\7-Zip|Path', 'band': 'Likely', 'outcome': 'hit'}]
+        elif what == 'emptymixed':
+            items.append({'target': 'V:HKU\\S-1-5-21-1\\Software\\7-Zip|Path', 'band': 'Likely', 'outcome': 'hit'})
         edit(J('exact-evid', 'score-clean.json'), lambda s: s['apps'][0]['tools'][0].update(
-            offered_n=1, items=[{'target': target, 'band': 'Likely', 'outcome': 'hit'}]))
+            offered_n=len(items), items=items))
+        edit(J('r4-merged', 'm1b-evidence', 'score-clean.json'), lambda s: s['apps'][0]['tools'][0].update(
+            offered_n=0, danger_listed=1 if what == 'emptydanger' else 0))
 
         def empty(s):
             for c in s['criteria']:
                 if c['id'] in ('K1', 'K3') and c['subject'] == 'clean/7zip':
                     c.update(value='empty plan: 0 items offered, 3 leftover/user-data truth item(s)',
                              limit='a plan with items', **{'pass': False})
+                if c['id'] == 'RUN' and c['subject'] == 'blm-m1b-7zip' and what == 'emptyrunfail':
+                    c.update(value='finished=False', **{'pass': False})
         edit(J('r4-merged', 'm1b-score.json'), empty)
+        if what != 'emptynor3':
+            os.makedirs(J('r3', 'm1b-7zip'), exist_ok=True)
+            write(J('r3', 'm1b-7zip', 'merged.json'), {'schema': 'purge.plan/0', 'items': [
+                {'target': {'type': 'RegValue', 'path': 'HKU\\S-1-5-21-1\\Software\\Microsoft\\Windows\\CurrentVersion'
+                            '\\UFH\\SHC', 'name': '1'}, 'band': 'Blocked', 'preselected': False}]})
     else:
         sys.exit(1)
     sys.exit(0)

@@ -25,6 +25,10 @@
 #          RUN, K1, K2, K3, K9 of each set must be present and pass, and per app danger_listed must not exceed the
 #          exact M1b gate run's (m1b-evidence score-<set>.json; literal 0 would fail the exact runs, which list one
 #          deny-listed item Blocked).
+#          One exception (coordinator 2026-11-22, DECISIONS): a K1/K2/K3 row that m1b.sh fails only as an "empty plan"
+#          is a W3-R4 report row (recall cost) when the app's RUN row passed, its plan offered 0 items with
+#          danger_listed 0, the exact gate plan of that set and app offered items that are all UFH\SHC slot values
+#          (Windows-owned below Exact, BL-FIX-UFH), and the R3 replay of that gate run with this view offers nothing.
 #   S4     "exact plans byte-identical; every plan made with an injected view below Exact holds L5 ... against the
 #          no-baseline plan of the same run (l5_violations is empty)": exact plans byte-equal to the M1b gate replay
 #          plans in baseline-local/l3-ref (sha256 pinned in its manifest); xtask's --l5-against reports 0 violations
@@ -153,10 +157,14 @@ selftest() {
   run_case trap-fail 1 "S1 R4 merged K9 blm-m1b-traps-7zip" trap
   run_case r4-missing 1 "S1 R4 local (bll-): m1b.sh exit collect-skipped; score unreadable" rm r4-local/m1b-score.json
   run_case danger-listed 1 "S1 R4 local clean/7zip danger_listed: 2 (exact gate 0)" danger
-  run_case empty-plan-ufh 0 "W3 R4 merged K1 clean/7zip: empty plan" emptyufh
+  run_case empty-plan-ufh 0 "W3-R4 R4 merged K1 clean/7zip: empty plan" emptyufh
   run_case empty-plan-other 1 "S1 R4 merged K1 clean/7zip: empty plan" emptyother
+  run_case empty-plan-mixed 1 "S1 R4 merged K1 clean/7zip: empty plan" emptymixed
+  run_case empty-plan-run-fail 1 "S1 R4 merged K1 clean/7zip: empty plan" emptyrunfail
+  run_case empty-plan-danger 1 "S1 R4 merged K1 clean/7zip: empty plan" emptydanger
+  run_case empty-plan-no-r3 1 "S1 R4 merged K1 clean/7zip: empty plan" emptynor3
   rm -rf "$tmp"
-  [ "$fails" -eq 0 ] && { echo "self-test: PASS (14 cases)"; return 0; }
+  [ "$fails" -eq 0 ] && { echo "self-test: PASS (18 cases)"; return 0; }
   echo "self-test: FAIL ($fails case(s))" >&2; return 1
 }
 
