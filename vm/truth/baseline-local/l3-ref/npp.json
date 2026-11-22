@@ -1,0 +1,39 @@
+{
+  "schema": "purge.plan/0",
+  "app": "npp",
+  "tool": "purge",
+  "mode": "post",
+  "items": [
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist\\{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}\\Count",
+        "name": "{6Q809377-6NS0-444O-8957-N3773S02200R}\\Abgrcnq++\\abgrcnq++.rkr"
+      },
+      "band": "Likely",
+      "preselected": false,
+      "scanner": "REG-PRIVACY",
+      "category": "Privacy"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\WOW6432Node\\Notepad++"
+      },
+      "band": "Likely",
+      "preselected": false,
+      "scanner": "REG-SOFTWARE",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "AppxPackage",
+        "full_name": "NotepadPlusPlus_1.0.0.0_neutral__2247w0b46hfww"
+      },
+      "band": "Likely",
+      "preselected": false,
+      "scanner": "SYS-APPX",
+      "category": "Package"
+    }
+  ]
+}

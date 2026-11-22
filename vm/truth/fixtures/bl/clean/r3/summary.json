@@ -1,0 +1,16 @@
+{
+  "schema": "purge.rig.bl-r3/1",
+  "started": "2026-11-22T00:00:00+03:00",
+  "finished": "2026-11-22T00:01:00+03:00",
+  "commit": null,
+  "source_dirty": false,
+  "corpus": [
+    "7zip",
+    "m1bcp-7zip"
+  ],
+  "runs": [
+    "7zip",
+    "m1bcp-7zip"
+  ],
+  "locals": {}
+}

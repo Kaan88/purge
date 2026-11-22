@@ -366,7 +366,8 @@ pub const SITES: &[Site] = &[
         Class::P,
         1,
         0,
-        "baseline_blocker: union of the view",
+        "baseline_blocker: union of the view; a user's slot-store slot is present without an exact \
+         baseline of this Windows",
     ),
     site(
         SCAN,
@@ -409,9 +410,11 @@ pub const SITES: &[Site] = &[
         "framework.rs",
         "has_exact_baseline",
         Class::A,
+        4,
         3,
-        2,
-        "key_record_covers; the Inno key record is Tier B with baseline=none; no HarvestedToken on a key",
+        "key_record_covers; the Inno key record is Tier B with baseline=none; no HarvestedToken on a key; \
+         in_baseline (the third listed negation): without an exact baseline of this Windows a slot of a \
+         user's numbered-slot store is Windows' own, the P direction (unknown is present; BL-GATE S1)",
     ),
     site(
         SCAN,

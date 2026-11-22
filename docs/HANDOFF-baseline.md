@@ -30,6 +30,68 @@ continued from any harness: read it, then `git log --oneline -15` and `git workt
   the data rule `is_admin_only_writable` is unchanged for every other caller (`C:\ProgramData\Purge` would fail the
   run rule). Cost: vendor uninstallers in ProgramData folders that inherit the Users add right run at `Medium`.
 
+## BL-FIX-UFH (branch `bl-fix-ufh` off `baseline` 9f40cca, 2026-11-22; pushed, NOT merged, Fable review next)
+- Finding: the BL-GATE smoke (`truth/bl.sh replay`, frozen `7zip`, four views) had one S1 flip in the local view:
+  `UFH\SHC` slot `0` (REF-ANY record, Likely, unticked), withheld by exact because the truth baseline holds it.
+  Not inferred absence: the no-baseline path, which the local view cannot correct because the local baseline has
+  no per-user state of a logged-on profile (S2 template, S3 `.DEFAULT`). Class over 10 local replays: 5 flips, all
+  `UFH\SHC` slots. DECISIONS row 2026-11-22 "BL-GATE smoke finding".
+- Fix (purge-scan only): `ScanCtx::in_baseline` takes a slot of a user's numbered-slot store
+  (`framework::USER_SLOT_STORES`) as Windows' own without an exact baseline of this Windows, at every view below
+  Exact and with none. Tests: `framework::a_user_slot_is_windows_own_below_exact`,
+  `ref_any::record::a_slot_record_is_not_offered_without_a_matching_baseline` (the old below-Exact record test now
+  uses a vendor key), `tests/privacy/ufh.rs::ufh_shc_below_exact_is_windows_own`,
+  `reg_privacy::the_slot_store_is_a_framework_slot_store`; `baseline-sites` row updated.
+- Re-check after merge: the full R3 replay (`bash truth/bl.sh replay`, 2.5-3 h) and `evaluate` with R4.
+## R3 SINGLE WRITER + UI FOLLOW-UPS 2026-11-22 (branch `r3-single-writer`; Fable re-review APPROVED, merged into baseline).
+- Verdict: two brokers (Leftovers' and History's/Vault's) could write one store at once with no guard. The index's
+  read-modify-write lost entries and failed its read-back (measured: 6 unlocked writers x 4 updates, 18 sharing
+  violations on `index.json.tmp`, 3 of 6 sessions gone from the index), so a finished cleanup could vanish from
+  History or read as `Unindexed` and block every execute; one broker's recovery could `remove_unstarted` another's
+  just-created session or write its report/index entry concurrently; two cap checks could both pass. A session's
+  journal was already single-writer (append handle shares read only): no interleaved journal, no double restore.
+- Fix (purge-exec, 3f9252d): `StorageRoots::lock_writer` = `sessions\writer.lock`, share mode 0, admin-only store
+  file, OS-released on process death; taken by execute, undo, recovery, retry_held and purge for their whole run;
+  2 s wait, then `StorageError::WriterBusy`. Broker (9468b56): `busy` for it, `writer_busy` probe before the execute,
+  undo and recovery dialogs; fingerprint temp names per process. DECISIONS: two "(coordinator)" rows (R3).
+- UI (eeb6806): models stay on the UI thread; Quarantine vault on `history.index` + `undo.run` +
+  `quarantine.expiring/purge` (no sample data, no Empty quarantine); History "Check for interrupted cleanups"
+  (`journal.pending` on the click, or after a `needs_recovery` refusal). Notes: `m3-notes/ui-history.md` (R3
+  section), `broker-core.md` point 5, M3_DESIGN 3.6, install/README layout.
+- Checks (unelevated, TEMP=C:\purge-build\tmp): fmt --check, clippy --workspace --all-targets -D warnings, rig clippy (rig-exec + test-support), check-deps, gen-dto --check (no RPC change), no-new-walks: ok. purge-exec (fault-inject + test-support) lib 481 (8 ignored) + every integration target incl. crash 16 and single_writer 2; purge-broker 223 + 10 + 1; purge-engine rig lib 73, exec_cli 43, engine 14. `dotnet build ui\Purge.App -c Release` 0 warnings; Purge.Client.Tests 130/130 (History 17, Vault 10, UiThread 3).
+- Fable review (lock sound; advisory layer) fixed: pending read with the lock held (`pending_at_rest`, `busy` for
+  `journal.pending` and the pre-execute check; UI lists nothing and drops stale marks on the next refresh); purge
+  probes before its first dialog; execute re-checks interrupted sessions under the lock (`ExecError::NeedsRecovery`/
+  `Damaged`); the probe retries 250 ms; stale fingerprint temporaries swept; two-process serialisation test, races of
+  resume vs rollback, pending at rest. CLI verified: it writes only through the locked entry points. Checks: fmt,
+  clippy (workspace, rig, mcp), check-deps, gen-dto ok; exec lib 484 + integration (single_writer 5); broker 227 +
+  10 + 1; engine rig 73/43/14; App Release 0 warnings; UI tests 133/133.
+- Open: one broker per app (ui-history.md); a fair queue instead of `busy` if users hit it; the VM rows in
+  ui-history.md. Fable re-review: approve; follow-up: make `fp` a checked Store directory with handle-relative ops (defence in depth).
+
+## BL-GATE runbook (rig tooling on branch `bl-gate-rig`, 2026-11-22; not run on a VM yet)
+Rig rules apply (one VM at a time, VMPWFILE from the environment, never the clone/UT or DietPi). From the repo root,
+with `target\release\purge-engine.exe` and `vm\rigtool\target\release\rigtool.exe` built from this tree and the tree
+committed (m1b.sh BIND needs clean sources and rig inputs). Details: `vm\RIG.md` §8a (FirstRead) and §12.9 (R4).
+```
+$env:VMPWFILE = '<pw file>'
+# A0  W4 settled first read (BL-RM S7; budget 60 s on the rig VM) -> vm\truth\baseline-local\bl-r?-*-firstread.json
+.\vm\rig-baseline-local.ps1 -Mode R1 -FirstRead
+.\vm\rig-baseline-local.ps1 -Mode R2 -FirstRead
+# A3  exact smoke: first rig run with the BL-R1 M1 tree; run.json engine.hello must say asked/expected exact, ok true
+.\vm\rig.ps1 -Mode m1b-app -App 7zip -RunPrefix blx-
+# R4  Inbound (default VM): merged (exact hidden) and local (no shipped baseline), apps then traps
+.\vm\rig.ps1 -Mode m1b-apps  -Base rig-base -RunPrefix blm- -HideExact -ExpectTrust merged
+.\vm\rig.ps1 -Mode m1b-traps -Base rig-base -RunPrefix blm- -HideExact -ExpectTrust merged
+.\vm\rig.ps1 -Mode m1b-apps  -Base rig-base -RunPrefix bll- -NoBaselines -ExpectTrust local
+.\vm\rig.ps1 -Mode m1b-traps -Base rig-base -RunPrefix bll- -NoBaselines -ExpectTrust local
+# R4  Clean-Pro: the same four with -VmName Purge-CleanPro (runs blm-m1bcp-*, bll-m1bcp-*)
+```
+Then score with `vm/truth/m1b.sh` (prefixes via `M1B_CLEAN=blm-m1b M1B_CP=blm-m1bcp`, then `bll-...`; S1: `danger_listed = 0`, every trap expectation met, merged and local, both VMs),
+R3 replay (`--baseline-view` + `--l5-against`), W2/W3 from the plans; write `docs/BASELINE_LOCAL_GATE.md`.
+Open risks (RIG.md §12.9): MSI table cache files under `%ProgramData%\Purge` land in the app truths (recall only);
+an inbox Store update between warm-up and hello makes trust None (the run then fails its hello check).
+
 ## M3-R2 CLEANUP DONE 2026-11-22 (40e82ba code, 1f969c4 docs; pushed).
 - `docs/reviews/m3/r2-review.md` has its "Fixes" section: every B/M/S finding, flagged point and note mapped to its
   fix commit and tests (test names checked against the tree).
@@ -50,6 +112,13 @@ continued from any harness: read it, then `git log --oneline -15` and `git workt
   untested on its own: the S2 vanished-session refusal of `plan.create`; the History page still shows sample data
   (S5 alerts only on the Leftovers result). The section "Still open from M3-R2" below is superseded by this one.
 - Next: Fable re-review of `r2-m2-inline`, merge, then M3 per the design (warm/first-launch bench rows, VM backlog).
+- **Still open from R2:** M2 residual: `route` accepts `powershell`/`pwsh` without `-File` (inline `-Command` or
+  `-EncodedCommand`) as loading no file, so it can be broker-route. The DECISIONS M2 row rules it `Medium` (safe
+  direction); change `command_loads_admin_only` in `bins/purge-engine/src/pipeline.rs` and get a Fable review
+  (route rule = critical). The S2 vanished-session test is merged (bc0d558); the History page is on real data
+  (merged from `r3-history`, `docs/m3-notes/ui-history.md`). The section "Still open from M3-R2" below is
+  superseded by this one.
+- Next: the M2 residual above, then M3 per the design (warm/first-launch bench rows, VM backlog below).
 
 ## COLD BENCH DONE 2026-11-22 04:00: PASS, p50 559.7 ms (limit 1000), 5 runs 544-584 ms, CPU 96-98 % idle.
 Committed `bench/launch/cold-DESKTOP-K1F333G.json`, row filled in docs/M3_BENCH.md. Attempt 1 measured nothing
@@ -123,11 +192,12 @@ running; no VM was started this session.
      Not reproduced end to end over a real pipe (only the flag path).
    - S2: a successful run spends **every scan of the program** (`Scan.program` + `spent`); `plan.create` refuses a
      spent scan or a vanished session; `plan.execute` also refuses a plan pre-created from a sibling scan.
-     Test: `a_run_spends_every_scan_of_the_program`. Refusal kind for a vanished session is `plan_refused`
+     Tests: `a_run_spends_every_scan_of_the_program`,
+     `a_scan_whose_session_vanished_cannot_be_planned_until_scanned_again`. Refusal kind for a vanished session is `plan_refused`
      ("scan again"), not `gone` - a judgement call.
    - S5: reconcile alerts reach the client - `UndoResult.alerts[]` / `OutcomeResult.alerts[]`
      (`Alert { op, original_path, moved_back }`), `HistoryItem.alert` mark, shown on the Leftovers "Put back"
-     result panel. HistoryView is still sample data, so the live History page does not render it yet.
+     result panel; the live History page renders it too since `r3-history` (`docs/m3-notes/ui-history.md`).
      RPC + fixtures + schemas + `RpcModels.cs` changed.
 2. `r2-m1` 743ca9a (parent 8c7142f) - M3-R2 M1 (broker consent dialog before `uninstall.run`), by Sonnet 5.5.
    Checks reported green (215 broker, 100 UI, gen-dto, 0 warnings). RPC: `RunParams.restore_point` (optional,

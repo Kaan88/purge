@@ -90,6 +90,76 @@ fn ufh_shc_all_strings_owned_offered_likely() {
     }
 }
 
+/// BL-GATE S1: below Exact (any view, or none at all) and with another Windows' baseline, which slots
+/// a profile had before the install is unknown, and a slot is taken as Windows' own: Blocked
+/// (`WindowsBaseline`), never offered. The exact baseline of this Windows keeps telling a new slot
+/// from one its capture holds.
+#[test]
+fn ufh_shc_below_exact_is_windows_own() {
+    use purge_index::baseline_view::fixture::{self, value_entry};
+    let key = shc(SID);
+    let make = || {
+        let mut fx = machine();
+        fx.set_value(
+            &key,
+            "0",
+            purge_source::types::RegData::from_multi_sz(&[app_exe().as_str()]),
+        );
+        fx.set_value(
+            &key,
+            "1",
+            purge_source::types::RegData::from_multi_sz(&[lnk("App").as_str(), app_exe().as_str()]),
+        );
+        recorded(fx)
+    };
+    let os = fingerprint().os;
+    let slot0 = value_entry(&key, "0");
+    let mut views: Vec<Option<purge_index::baseline_view::BaselineView>> = (0
+        ..fixture::BELOW_EXACT)
+        .map(|below| fixture::below_exact(below, &os))
+        .collect();
+    views.push(Some(fixture::local_view(
+        &os.edition,
+        os.build,
+        os.ubr,
+        &[&slot0],
+    )));
+    views.push(Some(fixture::merged_view(
+        &os.edition,
+        os.build,
+        os.ubr,
+        &[],
+        &[&key],
+    )));
+    views.push(Some(purge_index::baseline_view::BaselineView::exact(
+        fixture::shipped("Enterprise", os.build, os.ubr, &[]),
+    )));
+    for view in views {
+        let what = view.as_ref().map(|v| v.name());
+        let mut world = make();
+        world.baseline = view;
+        let found = world.privacy();
+        assert_eq!(found.len(), 2, "{what:?}: {found:#?}");
+        for c in &found {
+            assert!(
+                c.blockers.contains(&purge_model::Blocker::WindowsBaseline),
+                "{what:?}: {c:#?}"
+            );
+            assert_eq!(band(c), Band::Blocked, "{what:?}");
+        }
+    }
+    // The exact baseline of this Windows holds slot 0: slot 1 is new and offered.
+    let mut world = make();
+    world.baseline = Some(purge_index::baseline_view::BaselineView::exact(
+        fixture::shipped(&os.edition, os.build, os.ubr, &[&slot0]),
+    ));
+    let found = world.privacy();
+    assert_eq!(band(get(&found, &value_spot(&key, "0"))), Band::Blocked);
+    let new = get(&found, &value_spot(&key, "1"));
+    assert!(new.blockers.is_empty(), "{new:#?}");
+    assert_eq!(band(new), Band::Likely);
+}
+
 #[test]
 fn ufh_shc_shortcut_present_no_dangling() {
     let mut fx = machine();

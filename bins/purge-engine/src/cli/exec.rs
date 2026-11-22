@@ -308,6 +308,8 @@ fn exec_error_exit(e: &ExecError) -> Exit {
     match e {
         ExecError::Plan(_) | ExecError::ObjectsUnbound(_) => Exit::PlanRefused,
         ExecError::NeedsElevation(_) => Exit::NeedsElevation,
+        ExecError::NeedsRecovery(_) => Exit::NeedsRecovery,
+        ExecError::Damaged(_) => Exit::StoreIntegrity,
         ExecError::Store(s) => storage_exit(s),
         ExecError::Journal(j) => journal_exit(j),
         _ => Exit::Runtime,

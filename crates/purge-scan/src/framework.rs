@@ -1316,14 +1316,27 @@ impl<'a> ScanCtx<'a> {
     }
 
     /// **P.** Whether Windows itself has the target (key, value, file or directory): some set of the
-    /// baseline view has it, at any trust. `false` when the view holds nothing, and for a segment of a
-    /// list value (the value itself is expected to exist).
+    /// baseline view has it, at any trust. `false` for a segment of a list value (the value itself is
+    /// expected to exist), and, but for the one case below, when the view holds nothing.
+    ///
+    /// **A slot of a user's numbered-slot store** ([`USER_SLOT_STORES`]) is Windows' own whenever the
+    /// scan has no exact baseline of this Windows ([`ScanCtx::has_exact_baseline`]), whatever the view
+    /// holds. Its name is a number Windows chose, and which slots a profile had before the install
+    /// only a capture of that Windows after its first logon shows; the local baseline has the default
+    /// user's template and nothing a profile gets at its first logon or later, and a neighbour's
+    /// slots are another machine's history. Unknown is taken as present, the safe side of a presence
+    /// answer (L1): the slot is withheld or Blocked below Exact, as the exact view withholds or blocks
+    /// the slots its capture holds (BL-GATE S1; DECISIONS 2026-11-22). The rule depends on no data of
+    /// the view, so every view below Exact, and no view at all, answers alike (L5).
     pub fn in_baseline(&self, target: &Target) -> bool {
         let baseline = self.baseline;
         match target {
             Target::Path { path } => baseline.has_path(path),
             Target::RegKey { path } => baseline.has_key(path),
-            Target::RegValue { path, name } => baseline.has_value(path, name),
+            Target::RegValue { path, name } => {
+                baseline.has_value(path, name)
+                    || (is_user_slot_store(path) && !self.has_exact_baseline())
+            }
             _ => false,
         }
     }
@@ -1444,6 +1457,35 @@ impl<'a> ScanCtx<'a> {
             },
         }
     }
+}
+
+/// The numbered-slot stores Windows keeps in every user's hive, as keys below the hive's root
+/// (`HKU\<sid>\…`). Windows names their values (slot numbers) and fills them from the profile's first
+/// logon on: the exact baselines of both rig VMs hold `UFH\SHC` slot `0`, Clean-Pro's also `1` and
+/// `2`. Whether a slot predates the install, only an exact baseline of this Windows tells
+/// ([`ScanCtx::in_baseline`]).
+pub const USER_SLOT_STORES: &[&str] = &[r"Software\Microsoft\Windows\CurrentVersion\UFH\SHC"];
+
+/// Whether `key` is one of the [`USER_SLOT_STORES`] of a user hive (`HKU\<sid>\…`, not the user's
+/// Classes hive, or `HKCU\…`).
+pub fn is_user_slot_store(key: &str) -> bool {
+    let mut segments = prefix::segments(key);
+    let Some(hive) = segments.next() else {
+        return false;
+    };
+    if prefix::eq_ci(hive, "HKU") {
+        match segments.next() {
+            Some(sid) if !sid.to_ascii_lowercase().ends_with("_classes") => {}
+            _ => return false,
+        }
+    } else if !prefix::eq_ci(hive, "HKCU") {
+        return false;
+    }
+    let rest: Vec<&str> = segments.collect();
+    USER_SLOT_STORES.iter().any(|store| {
+        let want: Vec<&str> = prefix::segments(store).collect();
+        want.len() == rest.len() && want.iter().zip(&rest).all(|(a, b)| prefix::eq_ci(a, b))
+    })
 }
 
 /// The segments of `key` below the `Software` key of the machine or of a user hive, in either view
@@ -4628,6 +4670,73 @@ mod tests {
         assert_eq!(ctx.key_absence(SH_AUTO), Absence::Unknown);
         assert!(!ctx.in_baseline(&key(WINDOWS_KEY)));
         assert_eq!(ctx.absence_trust(), BaselineTrust::None);
+    }
+
+    /// BL-GATE S1 (frozen runs `7zip`, `git`, `m1bcp-7zip`, local view): a slot of a user's
+    /// numbered-slot store is Windows' own below Exact, whatever the view holds and with no view at
+    /// all; the exact baseline of this Windows still tells a new slot from one its capture holds.
+    #[test]
+    fn a_user_slot_is_windows_own_below_exact() {
+        let user = format!(r"HKU\{}", GuardEnv::SAMPLE_SID);
+        let shc = format!(r"{user}\Software\Microsoft\Windows\CurrentVersion\UFH\SHC");
+        assert!(is_user_slot_store(&shc));
+        assert!(is_user_slot_store(
+            r"hkcu\software\microsoft\windows\currentversion\ufh\shc"
+        ));
+        assert!(is_user_slot_store(
+            r"HKU\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\UFH\SHC"
+        ));
+        for other in [
+            format!(r"{user}\Software\Microsoft\Windows\CurrentVersion\UFH"),
+            format!(r"{user}\Software\Microsoft\Windows\CurrentVersion\UFH\SHC\0"),
+            format!(r"{user}_Classes\Software\Microsoft\Windows\CurrentVersion\UFH\SHC"),
+            r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\UFH\SHC".to_owned(),
+            r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\UFH\ARP".to_owned(),
+        ] {
+            assert!(!is_user_slot_store(&other), "{other}");
+        }
+        let slot = |name: &str| Target::RegValue {
+            path: shc.clone(),
+            name: name.into(),
+        };
+        let held = purge_index::baseline_view::fixture::value_entry(&shc, "0");
+        let mut world = World::new(uninstalled());
+        // Exact: the capture's slot is Windows' own, a slot it lacks is not.
+        world.baseline = Some(baseline(EDITION, &[&held]));
+        let ctx = world.ctx();
+        assert!(ctx.in_baseline(&slot("0")));
+        assert!(!ctx.in_baseline(&slot("1")));
+        // Below Exact, another Windows' baseline and no baseline: every slot, nothing else.
+        let mut below: Vec<Option<BaselineView>> = views_below_exact()
+            .into_iter()
+            .map(|(v, _)| Some(v))
+            .collect();
+        below.extend([
+            Some(local_view(&[])),
+            Some(merged_view(&[], &[&held])),
+            Some(baseline("EnterpriseS", &[&held])),
+            None,
+        ]);
+        for view in below {
+            world.baseline = view;
+            let ctx = world.ctx();
+            for name in ["0", "1", "15"] {
+                assert!(ctx.in_baseline(&slot(name)), "{}", ctx.baseline.name());
+            }
+            assert!(!ctx.in_baseline(&Target::RegValue {
+                path: format!(r"{user}\Software\Microsoft\Windows\CurrentVersion\Run"),
+                name: "0".into(),
+            }));
+            assert!(!ctx.in_baseline(&Target::RegMultiSzSegment {
+                path: shc.clone(),
+                name: "0".into(),
+                segment: r"C:\Program Files\Git\git-bash.exe".into(),
+                index: None,
+            }));
+            let mut b = ctx.candidate("T", slot("1"), Action::DeleteValue, Category::Privacy);
+            b.baseline_blocker();
+            assert_eq!(b.build().blockers, [Blocker::WindowsBaseline]);
+        }
     }
 
     /// The A sites of the framework below Exact, with the view saying the key is Windows' own or

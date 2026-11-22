@@ -141,6 +141,19 @@ foreach ($f in @(Get-ChildItem -LiteralPath $Guest -Filter '*.ps1') + @(Get-Item
     Check 'baseline-local: the settle helper compiles' ($cs.Length -gt 0 -and -not $cerr -and ('PurgeRig.BlSettle' -as [type])) "$cerr"
     $msg = $null; try { $null = Get-BlBuildJob 'C:\d' 'C:\e.exe' '' } catch { $msg = $_.Exception.Message }
     Check 'baseline-local: an empty riglib path is refused' ($msg -match 'bad path')
+    # -FirstRead (BL-GATE A0, review BL-RM S7): one pass, after the settle, loaded with baseline info.
+    $fj = Get-BlBuildJob 'C:\cr\out\bl-r1-cleanpro-firstread' 'C:\cr\bin\purge-engine.exe' 'C:\cr\guest\riglib.ps1' @('first-read')
+    $perr = $null; $null = [Management.Automation.Language.Parser]::ParseInput($fj, [ref]$null, [ref]$perr)
+    Check 'baseline-local: the first-read job parses, builds once, settles before it' (@($perr).Count -eq 0 -and $fj.Contains("foreach (`$pass in 'first-read')") -and $fj.Contains("`$pass -eq 'first-read'") -and $fj -notmatch '__PASSES__')
+    $msg = $null; try { $null = Get-BlBuildJob 'C:\d' 'C:\e.exe' 'C:\r.ps1' @('hot') } catch { $msg = $_.Exception.Message }
+    Check 'baseline-local: an unknown pass is refused' ($msg -match "bad pass 'hot'")
+    $fb = [pscustomobject]@{ os = 'Professional-26340.9882'; cpus = 2; passes = @([pscustomobject]@{ pass = 'first-read'; exit = 0; seconds = 41.5; uptime_sec = 900; peak_working_set_mb = 120; file_bytes = 9000000; total_line = 't' })
+        settle = [pscustomobject]@{ cpu_settled = $true; cache_purged = $true; error = $null }; network_up = [pscustomobject]@{ start = @(); settled = @() }; info = [pscustomobject]@{ seconds = 1 } }
+    $ev = Get-BlFirstReadEvidence $fb $r1 60 @('id1', "#src`tS1`tcomplete")
+    Check 'baseline-local: first-read evidence within budget is ok' ($ev.ok -and $ev.doc.seconds -eq 41.5 -and $ev.doc.within_budget -and $ev.doc.budget_sec -eq 60 -and $ev.doc.source_id -ceq 'id1' -and $ev.doc.schema -ceq 'purge.rig.baseline-local-firstread/1') ($ev.problems -join '; ')
+    $fb.passes[0].seconds = 75; $fb.settle.cache_purged = $false; $fb.network_up.start = @('Ethernet')
+    $ev = Get-BlFirstReadEvidence $fb $r1 60
+    Check 'baseline-local: first-read evidence: over budget, no standby purge, online -> three problems' (-not $ev.ok -and $ev.problems.Count -eq 3 -and -not $ev.doc.within_budget) ($ev.problems -join '; ')
     $mr = @{ nic1 = 'nat'; nic2 = 'none'; nic3 = 'bridged'; nic10 = 'nat'; natnet1 = 'nat'; cableconnected1 = 'on' }
     Check 'baseline-local: NAT adapters from showvminfo, numbered, others apart' (((@(Get-BlNatNics $mr)) -join ',') -ceq '1,10' -and ((@(Get-BlOtherNics $mr)) -join ',') -ceq '3=bridged' -and @(Get-BlNatNics @{ nic1 = 'none' }).Count -eq 0)
     # Set-BlNatLink against a fake VBoxManage: only the NAT adapter is switched, and 'off' is verified.
@@ -1416,6 +1429,26 @@ $EnginePhases = 'edge-pause setup defender-idle arp0 lists0 snap0 install detect
     $gc = $script:GuestCalls -join "`n"
     Check 'Push-Tools -NoBaselines: engine pushed, old baselines deleted, none copied' ($gc.Contains("copyto --target-directory C:\cr\bin\ $eng") -and $gc.Contains('C:\cr\bin\kb\baselines\*.tsv.gz') -and -not ($gc -match 'copyto[^\n]*baselines')) $gc
     Check 'Push-Tools -NoBaselines: the (empty) baseline tree is protected all the same' ($gc -match 'job engine-tree-protect') $gc
+    # BL-GATE R4: -HideExact pushes the neighbour and view.json, never the VM's own baseline.
+    $savedVm = $script:VmName; $script:VmName = 'Purge-CleanPro'
+    [IO.File]::WriteAllText((Join-Path $repo 'kb\baselines\view.json'), '{}')
+    $script:GuestCalls.Clear()
+    Push-Tools -RigTool $rt -HideExact
+    $gc = $script:GuestCalls -join "`n"
+    Check 'Push-Tools -HideExact: neighbour + view.json pushed, the exact baseline not, then protected' (
+        $gc.Contains("copyto --target-directory C:\cr\bin\kb\baselines\ $(Join-Path $repo 'kb\baselines\EnterpriseS-26100.1742.tsv.gz') $(Join-Path $repo 'kb\baselines\view.json')") -and
+        -not ($gc -match 'copyto[^\n]*Professional-26340') -and $gc.Contains('stat C:\cr\bin\kb\baselines\view.json') -and ($gc -match 'job engine-tree-protect')) $gc
+    $msg = $null; try { Push-Tools -RigTool $rt -HideExact -NoBaselines } catch { $msg = $_.Exception.Message }
+    Check 'Push-Tools -HideExact -NoBaselines refused' ($msg -match 'exclude each other') "got '$msg'"
+    $script:VmName = 'Inbound-Win11-Test'
+    $msg = $null; try { Push-Tools -RigTool $rt -HideExact } catch { $msg = $_.Exception.Message }
+    Check 'Push-Tools -HideExact: refused when the VM''s exact baseline is not there to hide' ($msg -match 'no EnterpriseSEval-26100.1742.tsv.gz to hide') "got '$msg'"
+    $script:VmName = $savedVm
+    Remove-Item -LiteralPath (Join-Path $repo 'kb\baselines\view.json')
+    Check 'Get-RigExactBaseline: both rig VMs, others refused' ((Get-RigExactBaseline 'Inbound-Win11-Test') -ceq 'EnterpriseSEval-26100.1742' -and (Get-RigExactBaseline 'Purge-CleanPro') -ceq 'Professional-26340.9882' -and $(try { $null = Get-RigExactBaseline 'X'; $false } catch { $true }))
+    Check 'Test-RigTrustAnswer: below-exact takes merged/local/none, exact only exact' ($null -eq (Test-RigTrustAnswer 'below-exact' 'Merged') -and $null -eq (Test-RigTrustAnswer 'local' 'Local') -and $null -eq (Test-RigTrustAnswer '' 'None') -and (Test-RigTrustAnswer 'below-exact' 'Exact') -and (Test-RigTrustAnswer 'merged' 'None'))
+    $djt = New-DataRootJobText; $perr = $null; $null = [Management.Automation.Language.Parser]::ParseInput($djt, [ref]$null, [ref]$perr)
+    Check 'New-DataRootJobText: parses, install.ps1 -DataRootOnly, warm-up harvest, hello, DATA-ROOT line' (@($perr).Count -eq 0 -and $djt.Contains("install.ps1' -DataRootOnly") -and $djt.Contains(' harvest ') -and $djt.Contains(' hello ') -and $djt.Contains('DATA-ROOT OK baseline_trust='))
     # Host installer cache: Get-CachedRunFiles picks the run's files the cache holds; Push-Tools sends them + manifest.
     $cache = Join-Path $H 'cache'; New-Item -ItemType Directory -Force $cache | Out-Null
     foreach ($n in 'cache-sources.json', 'npp-portable.zip', 'thunderbird.exe') { [IO.File]::WriteAllText((Join-Path $cache $n), 'x') }

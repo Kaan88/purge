@@ -1,0 +1,60 @@
+{
+  "schema": "purge.rig.m1b-score/2",
+  "mode": "custom",
+  "sets": [
+    "clean"
+  ],
+  "trap_runs": [
+    "bll-traps-7zip"
+  ],
+  "criteria": [
+    {
+      "id": "RUN",
+      "step": "G2",
+      "subject": "bll-7zip",
+      "value": "finished=True",
+      "limit": "finished",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K1",
+      "step": "G2",
+      "subject": "clean/7zip",
+      "value": "danger_offered=0 (danger_kept=0)",
+      "limit": 0,
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K3",
+      "step": "G2",
+      "subject": "clean/7zip",
+      "value": "danger_preselected=0 userdata_preselected=0",
+      "limit": "0 and 0",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K9",
+      "step": "G4",
+      "subject": "bll-traps-7zip",
+      "value": "cases=26 escapes=0",
+      "limit": "every case",
+      "pass": true,
+      "note": null
+    },
+    {
+      "id": "K14",
+      "step": "G7",
+      "subject": "budgets",
+      "value": "missing budgets",
+      "limit": "-",
+      "pass": false,
+      "note": null
+    }
+  ],
+  "failed": 1,
+  "pass": false,
+  "gate": false
+}

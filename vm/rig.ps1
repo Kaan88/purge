@@ -36,6 +36,13 @@
     .\vm\rig.ps1 -Mode m2-crash -HardPowerOff
     . .\vm\rig.ps1; Invoke-SnapshotJob -Run m2-try -Mode m2-install    # the generic entry
 
+  BL-GATE R4 (RIG.md section 12.9): the M1b campaign with the VM's exact baseline hidden. -HideExact pushes only the
+  neighbour baseline (+ view.json), -NoBaselines none; both create the admin-only data root (install.ps1 -DataRootOnly)
+  and build the local baseline cache before snap 0; every engine run asserts the trust engine.hello reports:
+    .\vm\rig.ps1 -Mode m1b-apps -Base rig-base -RunPrefix blm- -HideExact -ExpectTrust merged
+    .\vm\rig.ps1 -Mode m1b-apps -Base rig-base -RunPrefix bll- -NoBaselines -ExpectTrust local
+    .\vm\rig.ps1 -Mode m1b-app -App 7zip -RunPrefix blx-          # exact control: asserts baseline_trust exact
+
   Before a run starts, an existing vm\runs\<run>\ is moved to vm\runs\_old\<run>-<stamp>\, so a run
   directory never mixes files from two runs.
 
@@ -98,7 +105,15 @@ param(
     [Alias('Base')] [string] $M1bBase = 'rig-base',
     [Alias('Traps')] [switch] $M1bTraps,
     [Alias('BaseEngine')] [string] $M1bBaseEngine = '',
-    [Alias('Program')] [string] $M1bProgram = ''
+    [Alias('Program')] [string] $M1bProgram = '',
+    # BL-GATE R4 (RIG.md section 12.9): push the shipped baselines without the guest's own (exact) one, and create the
+    # admin-only data root so the elevated engine builds its local baseline cache (m1b-app, m1b-apps, m1b-traps,
+    # campaign). With -NoBaselines (no shipped baseline at all) the data root is created as well.
+    # Prefixed like the M2 and M1b parameters: a script that dot-sources rig.ps1 keeps its own $HideExact, $ExpectTrust.
+    [Alias('HideExact')] [switch] $BlHideExact,
+    # The baseline trust engine.hello must report in every engine run (exact, merged, local, none, below-exact).
+    # M1b modes: default 'exact' without -HideExact / -NoBaselines, 'below-exact' with -HideExact.
+    [ValidateSet('', 'exact', 'merged', 'local', 'none', 'below-exact')] [Alias('ExpectTrust')] [string] $BlExpectTrust = ''
 )
 
 # Host platform: Windows (PowerShell 5.1 or 7) or Linux (pwsh 7, RIG.md §9). 5.1 has no $IsWindows.
@@ -400,19 +415,36 @@ function Test-EngineTreeOpen {
 # With an engine, the baseline tree is then protected by an elevated guest job (Invoke-EngineTreeJob protect), so
 # the elevated engine uses the baselines; a tree an earlier push protected is opened first (the copies run as the
 # unelevated guest user). Both jobs need the agent.
+# -HideExact (BL-GATE R4): every shipped baseline except the one of the VM's own Windows (Get-RigExactBaseline), which
+# must be among them; at least one neighbour must remain. -HideExact and -ViewFile also push kb\baselines\view.json
+# (the view's rules and areas as shipped); the plain push does not, as in the M1a and M1b gates.
 function Push-Tools {
-    param([string]$RigTool = '', [string]$Engine = '', [switch]$NoBaselines, [string[]]$Installers = @())
+    param([string]$RigTool = '', [string]$Engine = '', [switch]$NoBaselines, [string[]]$Installers = @(), [switch]$HideExact, [switch]$ViewFile)
     # The guest's rigtool is always the Windows build (rigtool.exe), on a Linux host too.
     # $env:RIG_RIGTOOL overrides the default build (e.g. a CARGO_TARGET_DIR outside the repo).
     if (-not $RigTool -and $env:RIG_RIGTOOL) { $RigTool = $env:RIG_RIGTOOL }
     if (-not $RigTool) { $RigTool = Join-Path $script:RigDir (HostPath 'rigtool\target\release\rigtool.exe') }
     if (-not (Test-Path -LiteralPath $RigTool)) { throw "rigtool not built: $RigTool (cargo build --release in vm\rigtool)" }
+    if ($HideExact -and $NoBaselines) { throw '-HideExact and -NoBaselines exclude each other' }
     $ep = Get-EnginePush -Engine $Engine
+    if ($HideExact) {
+        if (-not $ep.engine) { throw '-HideExact needs an engine to push' }
+        $exact = Get-RigExactBaseline
+        $kept = @($ep.baselines | Where-Object { (Split-Path -Leaf $_) -ne "$exact.tsv.gz" })
+        if ($kept.Count -eq @($ep.baselines).Count) { throw "-HideExact: kb\baselines has no $exact.tsv.gz to hide" }
+        if (-not $kept.Count) { throw '-HideExact: no neighbour baseline would be left' }
+        $ep.baselines = $kept
+    }
     if ($NoBaselines) { $ep.baselines = @() }
+    if ($ep.engine -and ($HideExact -or $ViewFile)) {
+        $view = Join-Path $script:RepoRoot (HostPath 'kb\baselines\view.json')
+        if (-not (Test-Path -LiteralPath $view -PathType Leaf)) { throw "no $view to push" }
+        $ep.baselines = @($ep.baselines) + @($view)
+    }
     $scripts = @(Get-ChildItem -LiteralPath (Join-Path $script:RigDir 'guest') -Filter '*.ps1' | ForEach-Object { $_.FullName })
     if (-not (Test-EngineTreeOpen)) { Invoke-EngineTreeJob -Action open }
     foreach ($d in 'C:\cr\bin', 'C:\cr\bin\kb\baselines', 'C:\cr\guest', 'C:\cr\out', 'C:\cr\stage') { $null = Invoke-Guest @('mkdir', '--parents', $d) }
-    $null = Invoke-GuestCmd 'del /f /q C:\cr\guest\*.ps1 C:\cr\bin\rigtool.exe C:\cr\bin\purge-engine.exe C:\cr\bin\kb\baselines\*.tsv.gz'
+    $null = Invoke-GuestCmd 'del /f /q C:\cr\guest\*.ps1 C:\cr\bin\rigtool.exe C:\cr\bin\purge-engine.exe C:\cr\bin\kb\baselines\*.tsv.gz C:\cr\bin\kb\baselines\view.json'
     $r = Invoke-Guest @('copyto', '--target-directory', 'C:\cr\bin\', $RigTool)
     if ($r.code -ne 0) { throw "copy rigtool failed: $($r.out -join ' ')" }
     $expect = @('C:\cr\bin\rigtool.exe')
@@ -448,9 +480,76 @@ function Push-Tools {
     # directory the engine then accepts as empty.
     if ($ep.engine) { Invoke-EngineTreeJob -Action protect }
     $what = 'rigtool.exe'
-    if ($ep.engine) { $what += " + purge-engine.exe ($($ep.engine)) + $($ep.baselines.Count) baseline(s)$(if ($NoBaselines) { ' (-NoBaselines)' })" }
+    if ($ep.engine) { $what += " + purge-engine.exe ($($ep.engine)) + $(($ep.baselines | ForEach-Object { Split-Path -Leaf $_ }) -join ', ')$(if ($NoBaselines) { ' (-NoBaselines)' })$(if ($HideExact) { " (-HideExact: $(Get-RigExactBaseline) hidden)" })" }
     if ($inst.Count) { $what += " + cached $(($inst | ForEach-Object { Split-Path -Leaf $_ }) -join ', ')" }
     Write-RigLog "  pushed $what + $($scripts.Count) guest scripts"
+}
+
+# Pure: the shipped baseline of a rig VM's own Windows (rig-baseline-local.ps1 Get-BlRunSpec truths): what
+# -HideExact hides.
+function Get-RigExactBaseline([string]$Vm = $script:VmName) {
+    switch -CaseSensitive ($Vm) {
+        'Inbound-Win11-Test' { return 'EnterpriseSEval-26100.1742' }
+        'Purge-CleanPro' { return 'Professional-26340.9882' }
+    }
+    throw "no exact baseline known for VM '$Vm'"
+}
+
+# Pure: the elevated guest job of Initialize-RigDataRoot. install.ps1 -DataRootOnly creates %ProgramData%\Purge as
+# documented (admin-only; also the Purge event-log source); then a harvest of a program id that does not exist starts
+# the engine's background build of the local baseline cache (%ProgramData%\Purge\baseline; nothing on a Windows whose
+# exact baseline is pushed) and waits for it; then `purge-engine hello`. Last line: 'DATA-ROOT OK baseline_trust=<t>'
+# or 'DATA-ROOT FAILED: <why>'.
+function New-DataRootJobText {
+    @'
+$ErrorActionPreference = 'Continue'
+$o = @(& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File 'C:\cr\install\install.ps1' -DataRootOnly 2>&1 | ForEach-Object { "$_" })
+$ic = $LASTEXITCODE
+foreach ($l in $o) { "install: $l" }
+if ($ic -ne 0) { "DATA-ROOT FAILED: install.ps1 -DataRootOnly exited $ic"; return }
+$env:PURGE_TIMING = '1'
+$sw = [Diagnostics.Stopwatch]::StartNew()
+$w = @(& 'C:\cr\bin\purge-engine.exe' harvest 'rig-local-baseline-warmup' -o 'C:\cr\stage\warmup-fp.json' 2>&1 | ForEach-Object { "$_" })
+$wc = $LASTEXITCODE
+$sw.Stop()
+foreach ($l in $w) { "warm-up: $l" }
+"warm-up: harvest exit $wc (expected non-zero: no such program) after $([int]$sw.Elapsed.TotalSeconds) s"
+$env:PURGE_TIMING = ''
+try {
+    $h = (@(& 'C:\cr\bin\purge-engine.exe' hello 2>$null) -join "`n") | ConvertFrom-Json
+    "hello: baseline_trust $($h.baseline_trust), view $($h.baseline_view.name), elevated $($h.elevated)"
+    "DATA-ROOT OK baseline_trust=$($h.baseline_trust)"
+} catch { "DATA-ROOT FAILED: hello: $($_.Exception.Message)" }
+'@
+}
+
+# Creates the admin-only data root in the guest and builds the engine's local baseline cache there (BL-GATE R4, after
+# Push-Tools with an engine): install\install.ps1 is pushed (Push-M2Install), New-DataRootJobText runs elevated. The
+# whole job runs before snap 0 of the run. Throws when it fails; -ExpectTrust (exact, merged, local, none,
+# below-exact) is checked against hello's answer here already, so a run whose cache did not build stops before its
+# install. Returns the trust hello reported.
+function Initialize-RigDataRoot {
+    param([string]$ExpectTrust = '', [int]$TimeoutSec = 2400)
+    Push-M2Install
+    $j = Invoke-GuestJob -Text (New-DataRootJobText) -Name 'data-root' -TimeoutSec $TimeoutSec
+    foreach ($l in @("$($j.log)" -split "`r?`n" | Where-Object { $_.Trim() })) { Write-RigLog "  $l" }
+    if (-not $j.done) { throw "data root: the guest job did not finish within $TimeoutSec s" }
+    $m = [regex]::Match("$($j.log)", '(?m)^DATA-ROOT OK baseline_trust=(\S*)\s*$')
+    if (-not $m.Success) { throw "data root failed: $(@("$($j.log)" -split "`r?`n" | Where-Object { $_ -like 'DATA-ROOT*' }) -join ' | ')" }
+    $t = $m.Groups[1].Value
+    $why = Test-RigTrustAnswer -Expected $ExpectTrust -Actual $t
+    if ($why) { throw "data root: $why (the local baseline cache did not give the trust this run is for)" }
+    Write-RigLog "  data root ready ($($j.seconds) s): engine.hello baseline_trust $t"
+    $t
+}
+
+# Pure: riglib Test-RigBaselineTrust on the host side ($null = ok).
+function Test-RigTrustAnswer([string]$Expected, [string]$Actual) {
+    if (-not $Expected) { return $null }
+    $a = "$Actual".ToLowerInvariant()
+    if ($Expected -eq 'below-exact') { if (@('merged', 'local', 'none') -contains $a) { return $null } }
+    elseif ($a -eq $Expected) { return $null }
+    "engine.hello reports baseline_trust '$Actual'; expected '$Expected'"
 }
 
 # ---------------------------------------------------------------------------------------------- runs
@@ -679,9 +778,15 @@ function Invoke-Campaign {
           [string]$ExecutionEngine = $env:RIG_VM_EXECUTION_ENGINE, [switch]$No3D = ($env:RIG_VM_NO_3D -eq '1'),
           # M1b options of the app runs (ConvertTo-M1bOpts; RIG.md section 12), $null for none.
           $M1b = $null,
-          [ValidateSet('', 'exact', 'merged', 'local', 'none', 'below-exact')][string]$ExpectTrust = '')
+          [ValidateSet('', 'exact', 'merged', 'local', 'none', 'below-exact')][string]$ExpectTrust = '',
+          # BL-GATE R4: hide the VM's exact baseline (Push-Tools -HideExact; default trust below-exact), and/or create
+          # the data root with the local baseline cache before each run (Initialize-RigDataRoot, null runs too).
+          [switch]$HideExact, [switch]$DataRoot)
     $useEngine = [bool]$Engine
     if ($ExpectTrust -and -not $useEngine) { throw '-ExpectTrust needs -Engine' }
+    if (($HideExact -or $DataRoot) -and -not $useEngine) { throw '-HideExact and -DataRoot need -Engine' }
+    if ($HideExact -and $NoBaselines) { throw '-HideExact and -NoBaselines exclude each other' }
+    if ($HideExact) { $null = Get-RigExactBaseline; if (-not $ExpectTrust) { $ExpectTrust = 'below-exact' } }
     if ($M1b) { $null = ConvertTo-M1bOpts $M1b }   # checked before anything is moved or restored
     if ($ExtraChecks -and -not $useEngine) { throw '-ExtraChecks needs -Engine' }
     if ($NoBaselines -and -not $useEngine) { throw '-NoBaselines needs -Engine' }
@@ -697,7 +802,7 @@ function Invoke-Campaign {
     $script:RigLogFile = Join-Path $script:RunsDir "campaign-$stamp.log"
     $summaryFile = Join-Path $script:RunsDir "campaign-$stamp.json"
     $results = New-Object System.Collections.ArrayList
-    Write-RigLog "campaign ${stamp}: $(($plan | ForEach-Object { $_.run }) -join ', ') from snapshot $Snapshot on $script:VmName$(if ($useEngine) { "; engine $Engine" })$(if ($ExtraChecks) { '; extra checks' })$(if ($NoBaselines) { '; NO baselines' })$(if ($ExecutionEngine) { "; execution engine $ExecutionEngine" })$(if ($No3D) { '; 3D off' })"
+    Write-RigLog "campaign ${stamp}: $(($plan | ForEach-Object { $_.run }) -join ', ') from snapshot $Snapshot on $script:VmName$(if ($useEngine) { "; engine $Engine" })$(if ($ExtraChecks) { '; extra checks' })$(if ($NoBaselines) { '; NO baselines' })$(if ($HideExact) { "; exact baseline $(Get-RigExactBaseline) hidden" })$(if ($DataRoot) { '; data root + local baseline cache' })$(if ($ExpectTrust) { "; expect trust $ExpectTrust" })$(if ($ExecutionEngine) { "; execution engine $ExecutionEngine" })$(if ($No3D) { '; 3D off' })"
     try {
         $null = Get-PwFile
         foreach ($p in $plan) {
@@ -708,7 +813,8 @@ function Invoke-Campaign {
                 $null = Move-RunToOld -Run $p.run
                 if (-not $NoRestore) { Restore-Base -Snapshot $Snapshot -ExecutionEngine $ExecutionEngine -No3D:$No3D } else { Wait-Agent -TimeoutSec 120 }
                 $inst = @(); if ($p.id) { $inst = @(Get-CachedRunFiles -Id $p.id) }
-                Push-Tools -Engine $Engine -NoBaselines:$NoBaselines -Installers $inst
+                Push-Tools -Engine $Engine -NoBaselines:$NoBaselines -Installers $inst -HideExact:$HideExact -ViewFile:$DataRoot
+                if ($DataRoot) { $null = Initialize-RigDataRoot -ExpectTrust $(if ($p.id) { $ExpectTrust } else { '' }) }
                 if ($p.id) { $res = Invoke-Run -Id $p.id -RunPrefix $RunPrefix -Engine:$useEngine -ExtraChecks:$ExtraChecks -M1b $M1b -ExpectTrust $ExpectTrust }
                 else { $res = Invoke-Run -NullRun $p.null -RunPrefix $RunPrefix -NullWaitSec $NullWaitSec }
                 $rec.pulled = @($res.pulled).Count
@@ -1368,10 +1474,24 @@ function Invoke-M1bMode {
     param([Parameter(Mandatory)][ValidateSet('m1b-app', 'm1b-apps', 'm1b-traps', 'm1b-freeze')][string]$Mode,
           [string]$App = '', [string]$Base = 'rig-base', [switch]$Traps, [string[]]$Ids = @(), [int]$Nulls = -1,
           [string]$Engine = '', [string]$RunPrefix = '', [int]$NullWaitSec = 60,
-          [string]$ExecutionEngine = $env:RIG_VM_EXECUTION_ENGINE, [switch]$No3D = ($env:RIG_VM_NO_3D -eq '1'))
+          [string]$ExecutionEngine = $env:RIG_VM_EXECUTION_ENGINE, [switch]$No3D = ($env:RIG_VM_NO_3D -eq '1'),
+          # BL-GATE R4 (RIG.md section 12.9): -HideExact (merged view) or -NoBaselines (local view) also create the data
+          # root with the local baseline cache before every run. -ExpectTrust default: 'exact' (the exact control
+          # asserts it in run.json engine.hello), 'below-exact' with -HideExact, none with -NoBaselines.
+          [switch]$HideExact, [switch]$NoBaselines,
+          [ValidateSet('', 'exact', 'merged', 'local', 'none', 'below-exact')][string]$ExpectTrust = '')
     Assert-RigVm
     $ids = @($Ids | ForEach-Object { "$_" -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
     $common = @{ ExecutionEngine = $ExecutionEngine; No3D = $No3D; NullWaitSec = $NullWaitSec }
+    if ($Mode -eq 'm1b-freeze') {
+        if ($HideExact -or $NoBaselines -or $ExpectTrust) { throw 'm1b-freeze runs no engine: -HideExact, -NoBaselines and -ExpectTrust do not apply' }
+    } else {
+        if ($HideExact -and $NoBaselines) { throw '-HideExact and -NoBaselines exclude each other' }
+        if (-not $ExpectTrust) { $ExpectTrust = $(if ($HideExact) { 'below-exact' } elseif ($NoBaselines) { '' } else { 'exact' }) }
+        if (-not $HideExact -and -not $NoBaselines -and $ExpectTrust -ne 'exact') { throw "-ExpectTrust $ExpectTrust needs -HideExact or -NoBaselines (the exact baseline is pushed)" }
+        if ($HideExact -and $ExpectTrust -eq 'exact') { throw '-HideExact with -ExpectTrust exact cannot pass' }
+        $common += @{ ExpectTrust = $ExpectTrust; HideExact = $HideExact; NoBaselines = $NoBaselines; DataRoot = ($HideExact -or $NoBaselines) }
+    }
     switch ($Mode) {
         'm1b-app' {
             if (-not $App) { throw '-Mode m1b-app needs -App <id>' }
@@ -1657,6 +1777,9 @@ if ($MyInvocation.InvocationName -ne '.' -and $m1bModes -ccontains $Mode) {
     $m1bArgs = @{ Mode = $Mode; App = $M1bApp; Base = $M1bBase; Traps = $M1bTraps; Ids = $Ids; Engine = $Engine; RunPrefix = $RunPrefix
                   NullWaitSec = $NullWaitSec; ExecutionEngine = $ExecutionEngine; No3D = $No3D }
     if ($PSBoundParameters.ContainsKey('Nulls')) { $m1bArgs.Nulls = $Nulls }
+    if ($BlHideExact) { $m1bArgs.HideExact = $true }
+    if ($NoBaselines) { $m1bArgs.NoBaselines = $true }
+    if ($BlExpectTrust) { $m1bArgs.ExpectTrust = $BlExpectTrust }
     $null = Invoke-M1bMode @m1bArgs
     return
 }
@@ -1669,5 +1792,6 @@ if ($MyInvocation.InvocationName -ne '.' -and $Mode -ne 'campaign') {
                           -Apps $M2Apps -BatchSize $M2BatchSize -Null:$M2Null -AppBands $M2AppBands -ExecutionEngine $ExecutionEngine -No3D:$No3D
 } elseif ($MyInvocation.InvocationName -ne '.' -and ($Ids.Count -gt 0 -or $Nulls -gt 0)) {
     Invoke-Campaign -Ids $Ids -Nulls $Nulls -Snapshot $Snapshot -RunPrefix $RunPrefix -Engine $Engine -NullWaitSec $NullWaitSec -NullOrder $NullOrder `
-                    -ExtraChecks:$ExtraChecks -NoBaselines:$NoBaselines -ExecutionEngine $ExecutionEngine -No3D:$No3D
+                    -ExtraChecks:$ExtraChecks -NoBaselines:$NoBaselines -ExecutionEngine $ExecutionEngine -No3D:$No3D `
+                    -HideExact:$BlHideExact -DataRoot:$BlHideExact -ExpectTrust $BlExpectTrust
 }

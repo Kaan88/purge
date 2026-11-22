@@ -618,6 +618,15 @@ rigtool baseline-diff --truth SHIPPED.tsv.gz --local LOCAL.tsv.gz [--neighbour S
   `-RigTool` (default `$env:RIG_RIGTOOL`, else the path above) override the binaries. Console log:
   `vm\runs\bl-<run>-<stamp>.log`. Exit 1: the VM part or the diff failed (R5: 2). The pure parts are covered by
   `vm\guest\tests\rig-selftest.ps1`.
+- **W4 settled first read** (BL-GATE A0, review BL-RM S7): `.\vm\rig-baseline-local.ps1 -Mode R1 -FirstRead` (and
+  `-Mode R2 -FirstRead`; refused for R5). Same refusals, restore, offline cable and push as R1/R2, but the guest job
+  (`Get-BlBuildJob ... @('first-read')`) builds exactly once: after the settle of the settled pass (`Wait-BlSettle`:
+  `Wait-M2BootSettle`, CPU under 10 % over 30 s, standby list emptied) and as the first build of that boot. Run
+  `bl-r1-cleanpro-firstread` / `bl-r2-inbound-firstread`; no baseline-diff. Evidence
+  `vm\truth\baseline-local\<run>.json` (`purge.rig.baseline-local-firstread/1`: seconds, uptime, settle, network,
+  peak, file size, source id and `#src` lines, `budget_sec` 60, `within_budget`) and `<run>-build.json`. Budget: BL-RM
+  S7's "settled first build at most 60 s on the rig VM" (design §5's 120 s is the cold-build figure). Exit 3 when the
+  build failed, the CPU did not settle, the standby list was not emptied, an adapter was up, or it took over 60 s.
 
 ## 9. Running the rig from Linux (CachyOS host, 2026-11-14)
 
@@ -1747,6 +1756,39 @@ R8 B1, below). It comes from null runs of the executor flows, not from hand rule
   `ambient-guest-differs`, `ambient-declared-missing`, `ambient-few-null-runs`, `ambient-gate-run-id`,
   `ambient-fixture-name`, `ambient-schema` (each must fail BIND); rigtool
   `m2_run_records_keep_added_records_only_when_asked`.
+
+### 12.9 BL-GATE R4: the M1b campaign with the exact baseline hidden (docs/BASELINE_LOCAL_DESIGN.md §8.2, §8.3)
+
+The scan modes `m1b-app`, `m1b-apps` and `m1b-traps` (and the plain campaign) take three more switches:
+
+| Switch | What |
+|---|---|
+| `-HideExact` | `Push-Tools -HideExact`: every shipped baseline except the VM's own (`Get-RigExactBaseline`: Inbound `EnterpriseSEval-26100.1742`, Clean-Pro `Professional-26340.9882`; refused when that file is not there to hide or no neighbour is left), plus `kb\baselines\view.json`. Also the data root (below). |
+| `-NoBaselines` | no shipped baseline (view.json is pushed). In the M1b modes it also creates the data root: the local view. |
+| `-ExpectTrust exact\|merged\|local\|none\|below-exact` | the trust `engine.hello` must report in every app run (run-app phase `engine-hello`, run.json `engine.hello.asked`/`expected`/`ok`). M1b default: `exact` without `-HideExact`/`-NoBaselines` (so the exact control asserts it), `below-exact` with `-HideExact`, none with `-NoBaselines`. `merged`/`local` without `-HideExact`/`-NoBaselines` are refused. |
+
+**Data root** (`Initialize-RigDataRoot`, after `Push-Tools`, before the run job, so before snap 0; null runs too):
+`Push-M2Install`, then one elevated guest job (`New-DataRootJobText`): `install.ps1 -DataRootOnly` (the admin-only
+`%ProgramData%\Purge` and the Purge event-log source), a `purge-engine harvest` of a program id that does not exist
+(it starts the background build of the local baseline cache `%ProgramData%\Purge\baseline` and waits for it; a
+non-zero exit is expected), then `purge-engine hello`. The host checks the reported trust against `-ExpectTrust`
+already here (app runs), so a run whose cache did not build stops before its install. The cold build after a restore
+took 160-544 s at gate M round 1: the job's timeout is 2400 s.
+
+```
+.\vm\rig.ps1 -Mode m1b-app  -App 7zip -RunPrefix blx-                                   # exact control (asserts exact)
+.\vm\rig.ps1 -Mode m1b-apps -Base rig-base -RunPrefix blm- -HideExact -ExpectTrust merged
+.\vm\rig.ps1 -Mode m1b-traps -Base rig-base -RunPrefix blm- -HideExact -ExpectTrust merged
+.\vm\rig.ps1 -Mode m1b-apps -Base rig-base -RunPrefix bll- -NoBaselines -ExpectTrust local
+.\vm\rig.ps1 -Mode m1b-traps -Base rig-base -RunPrefix bll- -NoBaselines -ExpectTrust local
+# Clean-Pro: the same with -VmName Purge-CleanPro (runs blm-m1bcp-..., bll-m1bcp-...)
+```
+
+Not settled without a VM run: (1) with the data root present the engine also keeps its MSI table cache
+(`%ProgramData%\Purge\fp\msitables`) during the run, so files created there between snap 0 and snap 2 land in the
+app's truth (default label leftover; rigtool's rig rules do not cover the data root). They cost recall, never
+`danger_listed`. (2) An inbox Store package updated between the warm-up and `engine-hello` makes the S4 part stale,
+trust None, and the run fails its hello check (the campaign does not disconnect the network).
 
 ## 13. M3 rig spike: UAC on, secure desktop answered from the host, UIPI probe (`rig-m3.ps1`, M3-RIG-UAC)
 

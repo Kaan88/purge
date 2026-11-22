@@ -292,6 +292,7 @@ struct Wrapped {
     plans: Arc<Mutex<Vec<Arc<Plan>>>>,
     scans: Arc<Mutex<Vec<Arc<ScanSlot<crate::scan::Scan>>>>>,
     seeds: Arc<Mutex<Vec<Seed>>>,
+    vanish: Arc<Mutex<Vec<String>>>,
 }
 
 impl Handler for Wrapped {
@@ -301,6 +302,16 @@ impl Handler for Wrapped {
 
     fn call(&self, ctx: &Ctx<'_, Self>, call: PipeCall) -> Result<Value, ErrorObject> {
         match call {
+            // Uninstall sessions a test takes out of the table without a run (no method does that: a
+            // run removes its session and spends the program's scans at once).
+            PipeCall::JournalPending(_) if !self.vanish.lock().unwrap().is_empty() => {
+                let ids: Vec<String> = self.vanish.lock().unwrap().drain(..).collect();
+                let removed = ids
+                    .iter()
+                    .filter(|id| ctx.tables().sessions.remove(id.parse().unwrap()))
+                    .count();
+                Ok(json!({ "vanished": removed }))
+            }
             PipeCall::JournalPending(_) if !self.seeds.lock().unwrap().is_empty() => {
                 let (doc, fingerprint) = self.seeds.lock().unwrap().remove(0);
                 let scan = crate::scan::Scan::for_test(doc, fingerprint, ME);
@@ -340,6 +351,7 @@ struct Rig {
     plans: Arc<Mutex<Vec<Arc<Plan>>>>,
     scans: Arc<Mutex<Vec<Arc<ScanSlot<crate::scan::Scan>>>>>,
     seeds: Arc<Mutex<Vec<Seed>>>,
+    vanish: Arc<Mutex<Vec<String>>>,
     join: Option<JoinHandle<Exit>>,
 }
 
@@ -355,6 +367,7 @@ impl Rig {
         let plans = Arc::new(Mutex::new(Vec::new()));
         let scans = Arc::new(Mutex::new(Vec::new()));
         let seeds = Arc::new(Mutex::new(Vec::new()));
+        let vanish = Arc::new(Mutex::new(Vec::new()));
         let machine = Arc::new(FixtureMachine::new(app_fixture()));
         let handler = Wrapped {
             inner: BrokerHandler::new(
@@ -366,6 +379,7 @@ impl Rig {
             plans: plans.clone(),
             scans: scans.clone(),
             seeds: seeds.clone(),
+            vanish: vanish.clone(),
         };
         let wiring = Wiring {
             link: net.link(),
@@ -391,6 +405,7 @@ impl Rig {
             plans,
             scans,
             seeds,
+            vanish,
             join: Some(join),
         }
     }
@@ -631,6 +646,14 @@ fn vouching_task() -> purge_model::SysTask {
         program: None,
         why: purge_model::ObjectWhy::ProgramInRoot,
     }
+}
+
+/// Takes uninstall session `session` out of the broker's table without a run (through `journal.pending`,
+/// which the wrapper answers instead of the broker).
+fn vanish_session(rig: &Rig, c: &Client, id: u64, session: &str) {
+    rig.vanish.lock().unwrap().push(session.to_owned());
+    let reply = ask(c, id, "journal.pending", json!({}));
+    assert_eq!(reply["result"]["vanished"], 1, "{reply}");
 }
 
 /// Seeds `doc` and returns the scan id the broker gave it.
@@ -967,6 +990,54 @@ fn a_run_spends_every_scan_of_the_program() {
         planned_from_fresh["result"]["plan_id"].is_string(),
         "{planned_from_fresh}"
     );
+    c.close();
+    rig.exit(SECS);
+}
+
+/// M3-R2 S2: a scan whose uninstall session is no longer in the table, and that no run has spent, is
+/// refused by `plan.create` as `plan_refused` "scan again" (not `gone`: the scan id is valid), before
+/// any dialog and with nothing run. A scan of another session that is still there is planned as usual.
+#[test]
+fn a_scan_whose_session_vanished_cannot_be_planned_until_scanned_again() {
+    let mut rig = Rig::start();
+    let c = rig.client();
+    let prepare = prepared(&c, 2, &[broker_id(), medium_id()]);
+    let sessions: Vec<String> = prepare["result"]["programs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["session_id"].as_str().unwrap().to_owned())
+        .collect();
+    let orphan = scan_session(&c, 3, &sessions[0], true);
+    let orphan_id = orphan["result"]["scan_id"].as_str().unwrap().to_owned();
+    let orphan_slot = rig.scan();
+    let orphan_item = first_selectable(&orphan_slot.scan).id.0.clone();
+    let kept = scan_session(&c, 4, &sessions[1], true);
+    let kept_id = kept["result"]["scan_id"].as_str().unwrap().to_owned();
+    let kept_item = first_selectable(&rig.scan().scan).id.0.clone();
+
+    vanish_session(&rig, &c, 5, &sessions[0]);
+    // Nothing ran: the scan is not spent, so the refusal below is the vanished session's own.
+    assert!(!orphan_slot.scan.spent());
+    let gone = scan_session(&c, 6, &sessions[0], true);
+    assert_eq!(kind(&gone), "gone", "{gone}");
+
+    let refused = create_selected(&c, 7, &orphan_id, &[&orphan_item]);
+    assert_eq!(kind(&refused), "plan_refused", "{refused}");
+    let reason = refused["error"]["data"]["refusals"][0]["reason"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        reason.contains("session") && reason.ends_with("scan again"),
+        "{refused}"
+    );
+    assert!(!rig.dialog_opens(), "a refused plan opens no dialog");
+    assert_eq!(rig.exec.calls(), 0);
+
+    // The control: a scan of a session still in the table, not spent, is planned.
+    let planned = create_selected(&c, 8, &kept_id, &[&kept_item]);
+    assert!(planned["result"]["plan_id"].is_string(), "{planned}");
+    assert_eq!(rig.exec.calls(), 0);
     c.close();
     rig.exit(SECS);
 }
@@ -1512,5 +1583,25 @@ fn exec_errors_map_to_the_designs_kinds() {
     assert_eq!(
         kind_of(ExecError::NotResumable("x".into())),
         Some("runtime")
+    );
+    // Another writer of the store (another broker's run, undo, recovery or purge) holds it.
+    assert_eq!(
+        kind_of(ExecError::Store(
+            purge_exec::storage::StorageError::WriterBusy {
+                path: r"C:\ProgramData\Purge\sessions\writer.lock".into()
+            }
+        )),
+        Some("busy")
+    );
+    // An interrupted or damaged session the run found once it held the lock (after the dialog).
+    let sessions = vec!["20251115T101502Z-9f3a6c1d2b7e4a50".parse().unwrap()];
+    let reply = exec_error(ExecError::NeedsRecovery(sessions.clone()));
+    assert_eq!(
+        reply.data,
+        Some(purge_rpc::error::ErrorData::NeedsRecovery { sessions })
+    );
+    assert_eq!(
+        kind_of(ExecError::Damaged(vec!["s (cut)".into()])),
+        Some("store_integrity")
     );
 }

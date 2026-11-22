@@ -1,0 +1,1400 @@
+{
+  "schema": "purge.plan/0",
+  "app": "vscode",
+  "tool": "purge",
+  "mode": "post",
+  "items": [
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\vscode\\shell\\open\\command",
+        "name": ""
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\vscode",
+        "name": ""
+      },
+      "band": "Likely",
+      "preselected": false,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.ascx\\OpenWithProgids"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.asp\\OpenWithProgids"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.aspx\\OpenWithProgids"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.c\\OpenWithProgids"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.cc\\OpenWithProgids"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.cls\\OpenWithProgids"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.cpp\\OpenWithProgids"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.cs\\OpenWithProgids"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.csproj\\OpenWithProgids"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.css\\OpenWithProgids"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.csv\\OpenWithProgids"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.cxx\\OpenWithProgids"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.dot\\OpenWithProgids"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.h\\OpenWithProgids"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.hpp\\OpenWithProgids"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.hxx\\OpenWithProgids"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.ini\\OpenWithProgids"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.jav\\OpenWithProgids"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.java\\OpenWithProgids"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.js\\OpenWithProgids"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.json\\OpenWithProgids"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.log\\OpenWithProgids"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.mk\\OpenWithProgids"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.pl\\OpenWithProgids"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.ps1\\OpenWithProgids"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.psd1\\OpenWithProgids"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.psm1\\OpenWithProgids"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.sql\\OpenWithProgids"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.txt\\OpenWithProgids"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.xaml\\OpenWithProgids"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.bash"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.bash_login"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.bash_logout"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.bash_profile"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.bashrc"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.bib"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.bowerrc"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.c++"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.cfg"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.cjs"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.clj"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.cljs"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.cljx"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.clojure"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.cmake"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.code-workspace"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.coffee"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.config"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.containerfile"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.cshtml"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.csx"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.ctp"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.dart"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.diff"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.dockerfile"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.dtd"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.editorconfig"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.edn"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.erb"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.eyaml"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.eyml"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.fs"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.fsi"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.fsscript"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.fsx"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.gemspec"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.gitattributes"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.gitconfig"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.gitignore"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.go"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.gradle"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.groovy"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.h++"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.handlebars"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.hbs"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.hh"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.ipynb"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.jade"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.jscsrc"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.jshintrc"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.jshtm"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.jsp"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.jsx"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.less"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.lua"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.m"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.makefile"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.markdown"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.md"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.mdoc"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.mdown"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.mdtext"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.mdtxt"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.mdwn"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.mjs"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.mkd"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.mkdn"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.ml"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.mli"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.npmignore"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.php"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.phtml"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.pl6"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.plist"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.pm"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.pm6"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.pod"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.pp"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.profile"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.properties"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.psgi"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.py"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.pyi"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.r"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.rb"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.rhistory"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.rprofile"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.rs"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.rst"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.rt"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.sass"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.scss"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.sh"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.t"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.tex"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.toml"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.tsx"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.vb"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.vue"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.wxi"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.wxl"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.wxs"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.yaml"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.yml"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.zsh"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000_Classes\\vscode"
+      },
+      "band": "Likely",
+      "preselected": false,
+      "scanner": "CLS-PROGID",
+      "category": "Association"
+    },
+    {
+      "target": {
+        "type": "Path",
+        "path": "C:\\Users\\tester\\AppData\\Roaming\\Code"
+      },
+      "band": "Likely",
+      "preselected": false,
+      "scanner": "FS-APPDATA",
+      "category": "UserData"
+    }
+  ]
+}

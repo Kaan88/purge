@@ -1,0 +1,14 @@
+{
+  "apps": [
+    {
+      "id": "7zip",
+      "dir": "runs/blm-7zip",
+      "tools": [
+        {
+          "tool": "purge",
+          "danger_listed": 0
+        }
+      ]
+    }
+  ]
+}

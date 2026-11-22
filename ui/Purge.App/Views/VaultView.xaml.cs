@@ -1,187 +1,126 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Purge.App.Shell;
-using Purge.Client.Model;
+using Purge.Client.Broker;
 
 namespace Purge.App.Views;
 
 /// <summary>
-/// Board 16 on sample data from <c>quarantine.status</c> (proposed). Put back and delete open the security prompt
-/// preview; nothing moves. Expiry follows ENGINE_PLAN.md §7.8: it proposes deletion and never acts on its own.
+/// Board 16 on real data (design 7a page table): use and real cap per volume and the cleanups that hold something,
+/// from <c>history.index</c> on the medium engine (no broker, no prompt to open the page). "Put back…" and "Review
+/// and delete…" start the broker on the click; its own dialogs ask before anything changes. All state lives in
+/// <see cref="VaultViewModel"/>.
 /// </summary>
 public sealed partial class VaultView : UserControl
 {
-    private List<VaultBatch> _batches = [];
-    private bool _promptOpen;
+    private readonly VaultViewModel _vm;
+    private string _rowsKey = "";
+    private bool _cancelShown;
 
     public VaultView()
     {
         InitializeComponent();
-        Loaded += async (_, _) =>
-        {
-            // The live store changes under the page (a cleanup, an undo): read it each time it is shown.
-            if (_batches.Count > 0 && !Program.Engine.IsLive) return;
-            await ReloadAsync();
-        };
+        _vm = new VaultViewModel(ct => Program.Engine.GetHistoryIndexAsync(ct), LaunchAsync);
+        _vm.Changed += () => DispatcherQueue.TryEnqueue(Render);
+        // The store changes under the page (a cleanup, an undo): read the index each time the page is shown.
+        Loaded += (_, _) => _ = _vm.LoadAsync();
+        Render();
     }
 
-    private async Task ReloadAsync()
+    private static async Task<VaultBrokerLaunch> LaunchAsync(CancellationToken ct)
     {
-        QuarantineStatus status;
-        try { status = await Program.Engine.GetQuarantineAsync(); }
-        catch (Exception e)
-        {
-            ShowInfo(InfoBarSeverity.Error, "Couldn't read the quarantine.", e.Message);
-            return;
-        }
-        InfoBarHost.Children.Clear();
-        Fill(status);
-        if (!Program.Engine.IsLive) return;
-        EmptyButton.IsEnabled = false;
-        EmptyButton.Content = "Delete for good: not in this build";
-        if (_batches.Count == 0)
-            ShowInfo(InfoBarSeverity.Informational, "The quarantine is empty.", "Cleanups you run from Leftovers appear here, with Put back.");
         try
         {
-            var pending = await Program.Engine.PendingRecoveryAsync();
-            if (pending.Count > 0)
-                InfoBarHost.Children.Insert(0, RecoveryBar.Create(
-                    string.Join(" · ", pending.Select(p => $"{p.SessionId} ({p.Kind}{(p.App.Length > 0 ? ", " + p.App : "")})")),
-                    () => _ = ReloadAsync()));
+            if (!await MainWindow.Instance.ConfirmFirstElevationAsync())
+                return new VaultBrokerLaunch(null, true, "");
+            var result = await BrokerLauncher.LaunchAsync(BrokerLauncher.PathBesideApp(), MainWindow.Instance.Hwnd, ct);
+            return result.Status switch
+            {
+                BrokerLaunchStatus.Started when result.Session is { } session =>
+                    new VaultBrokerLaunch(new HistoryBroker(session), false, ""),
+                BrokerLaunchStatus.Cancelled => new VaultBrokerLaunch(null, true, result.Message),
+                _ => new VaultBrokerLaunch(null, false, result.Message),
+            };
         }
-        catch (Exception e)
+        catch (Exception e) when (e is not OutOfMemoryException)
         {
-            ShowInfo(InfoBarSeverity.Error, "Couldn't check for interrupted cleanups.", e.Message);
+            return new VaultBrokerLaunch(null, false, e.Message);
         }
     }
 
-    private void Fill(QuarantineStatus status)
+    private void Render()
     {
-        var now = DateTimeOffset.Now;
-        _batches = status.Batches.OrderByDescending(b => b.Created).Select(b => new VaultBatch(b, now)).ToList();
-        Batches.ItemsSource = _batches;
-
-        var expiring = _batches.Where(b => b.Expiring || b.Expired).ToList();
-        Volumes.ItemsSource = status.Volumes
-            .Select(v => new VaultVolume(v, expiring.Where(b => b.Volume == v.Volume).Sum(b => b.Source.Bytes)))
-            .ToList();
-
-        var held = _batches.Where(b => b.Held).ToList();
-        Totals.Text = $"{held.Count} cleanups hold {ProgramRow.FormatSize(held.Sum(b => b.Source.Bytes))} · files 30 days, registry backups 180 days";
-        EmptyButton.IsEnabled = held.Count > 0;
-
-        if (expiring.Count > 0 && !Program.Engine.IsLive)
+        var key = string.Join("|", _vm.Batches.Select(b => $"{b.Id}:{b.State}:{b.Detail}")) + "#" +
+                  string.Join("|", _vm.Volumes.Select(v => $"{v.Root}:{v.Used}:{v.Cap}"));
+        if (key != _rowsKey)
         {
-            var items = expiring.Sum(b => b.Source.FileItems + b.Source.RegistryItems);
-            var bytes = ProgramRow.FormatSize(expiring.Sum(b => b.Source.Bytes));
-            var soonest = expiring.Min(b => b.FileDays);
-            var title = soonest == 0
-                ? $"{items} items ({bytes}) have expired."
-                : $"{items} items ({bytes}) expire in {soonest} {(soonest == 1 ? "day" : "days")}.";
-            var bar = ShowInfo(InfoBarSeverity.Warning, title,
-                "After that Purge offers to delete them and asks first; nothing is deleted on its own. User data is listed one by one.");
-            bar.IsClosable = true;
+            _rowsKey = key;
+            Batches.ItemsSource = _vm.Batches.Select(b => new VaultBatch(b)).ToList();
+            Volumes.ItemsSource = _vm.Volumes.Select(v => new VaultVolume(v)).ToList();
+        }
+        Totals.Text = _vm.Phase == VaultPhase.Ready ? _vm.Totals : "";
+        var expired = _vm.ExpiredBatches.ToList();
+        ReviewButton.IsEnabled = !_vm.Busy && expired.Count > 0;
+
+        InfoBarHost.Children.Clear();
+        switch (_vm.Phase)
+        {
+            case VaultPhase.Loading:
+                ShowInfo(InfoBarSeverity.Informational, "Reading the quarantine…", "");
+                break;
+            case VaultPhase.Error:
+                ShowInfo(InfoBarSeverity.Error, "Couldn't read the quarantine.", _vm.Error ?? "");
+                break;
+            case VaultPhase.Empty:
+                ShowInfo(InfoBarSeverity.Informational, "The quarantine is empty.",
+                    "Cleanups you run from Leftovers appear here, with Put back.");
+                break;
+        }
+        if (_vm.Interrupted > 0)
+        {
+            var bar = ShowInfo(InfoBarSeverity.Warning, "An earlier cleanup was interrupted.",
+                "Resume or roll it back from History & undo before the next change.");
+            var open = new Button { Content = "Open History & undo" };
+            open.Click += (_, _) => MainWindow.Instance.Navigate("history");
+            bar.ActionButton = open;
+        }
+        if (expired.Count > 0 && !_vm.Busy)
+        {
+            var bar = ShowInfo(InfoBarSeverity.Warning,
+                expired.Count == 1 ? "One cleanup is past its retention." : $"{expired.Count} cleanups are past their retention.",
+                "Purge offers to delete expired items and asks first in its security prompt; nothing is deleted on its own. " +
+                "User data is asked for one item at a time.");
             var review = new Button { Content = "Review and delete…" };
-            review.Click += async (_, _) => await ConfirmDelete(expiring, "expiring items");
+            review.Click += (_, _) => _ = _vm.ReviewExpiredAsync();
             bar.ActionButton = review;
         }
+        if (_vm.Waiting is { } waiting)
+            ShowInfo(InfoBarSeverity.Informational, waiting, "Nothing has changed yet.");
+        if (_vm.ResultTitle is { } title)
+            ShowInfo(_vm.ActionInfo is null ? InfoBarSeverity.Success : InfoBarSeverity.Warning, title, _vm.ActionInfo ?? "");
+        else if (_vm.ActionInfo is { } info)
+            ShowInfo(InfoBarSeverity.Informational, info, "");
+        if (_vm.ActionError is { } error)
+            ShowInfo(InfoBarSeverity.Error, "Couldn't finish that.", error);
+        // The shell's cancelled bar, once per cancelled prompt.
+        if (_vm.PromptCancelled && !_cancelShown)
+            MainWindow.Instance.ShowAdminPromptCancelled();
+        _cancelShown = _vm.PromptCancelled;
     }
 
-    private async void OnEmpty(object sender, RoutedEventArgs e) =>
-        await ConfirmDelete(_batches.Where(b => b.Held).ToList(), "quarantine");
-
-    private async void OnRestore(object sender, RoutedEventArgs e)
+    private void OnRestore(object sender, RoutedEventArgs e)
     {
-        if ((sender as FrameworkElement)?.DataContext is not VaultBatch b || _promptOpen) return;
-        var items = Lines(b).ToList();
-        if (Program.Engine.IsLive)
-        {
-            await UndoLiveAsync(b, items);
-            return;
-        }
-        await Confirm(new ConsentSummary(b.Name, items, DateTime.Today, ConsentAction.Restore), "put back");
+        if ((sender as FrameworkElement)?.DataContext is VaultBatch b) _ = _vm.RestoreAsync(b.Id);
     }
 
-    /// <summary>Puts back a whole session (<c>purge-engine undo --session</c>) after the prompt.</summary>
-    private async Task UndoLiveAsync(VaultBatch b, List<ConsentItem> items)
-    {
-        _promptOpen = true;
-        bool ok;
-        try { ok = await ConsentPrompt.ShowAsync(MainWindow.Instance.Hwnd, new ConsentSummary(b.Name, items, DateTime.Today, ConsentAction.Restore)); }
-        finally { _promptOpen = false; }
-        if (!ok) return;
-        var bar = ShowInfo(InfoBarSeverity.Informational, $"Putting back {b.Name}…", $"Session {b.Source.SessionId}");
-        bar.IsClosable = false;
-        try
-        {
-            var r = await Program.Engine.UndoSessionAsync(b.Source.SessionId);
-            await ReloadAsync();
-            var parts = new List<string> { $"Session {r.SessionId}: {r.State}", $"{r.Restored} put back" };
-            if (r.AlreadyRestored > 0) parts.Add($"{r.AlreadyRestored} already back");
-            if (r.NothingToUndo > 0) parts.Add($"{r.NothingToUndo} had nothing to undo");
-            if (r.Conflicts > 0) parts.Add($"{r.Conflicts} skipped because their place is taken");
-            if (r.Failed > 0) parts.Add($"{r.Failed} failed");
-            ShowInfo(r.ExitCode == 0 ? InfoBarSeverity.Success : InfoBarSeverity.Warning,
-                r.ExitCode == 0 ? $"{b.Name} is back." : $"{b.Name} is only partly back.", string.Join(" · ", parts));
-        }
-        catch (Purge.Client.Cli.EngineException e) when (e.NeedsRecovery)
-        {
-            InfoBarHost.Children.Remove(bar);
-            InfoBarHost.Children.Insert(0, RecoveryBar.Create(e.Message, () => _ = ReloadAsync()));
-        }
-        catch (Exception e)
-        {
-            InfoBarHost.Children.Remove(bar);
-            ShowInfo(InfoBarSeverity.Error, "Couldn't put it back.", e.Message);
-        }
-    }
+    private void OnReviewExpired(object sender, RoutedEventArgs e) => _ = _vm.ReviewExpiredAsync();
 
     private void OnDetails(object sender, RoutedEventArgs e) => MainWindow.Instance.Navigate("history");
 
-    private void OnExport(object sender, RoutedEventArgs e) =>
-        ShowInfo(InfoBarSeverity.Informational, "Export isn't connected yet.",
-            "In M3 this saves the quarantine journal as JSON, the same file History & undo exports.");
-
-    private async Task ConfirmDelete(List<VaultBatch> batches, string what)
-    {
-        if (batches.Count == 0 || _promptOpen) return;
-        var items = batches.SelectMany(Lines).ToList();
-        var name = batches.Count == 1 ? batches[0].Name : $"{batches.Count} cleanups";
-        await Confirm(new ConsentSummary(name, items, DateTime.Today, ConsentAction.Delete), "deleted");
-    }
-
-    /// <summary>
-    /// What the prompt lists. The sample has per-batch counts only, so each batch is one line, plus one line per
-    /// user-data item so they are confirmed one by one (the real list comes from the quarantine journal).
-    /// </summary>
-    private static IEnumerable<ConsentItem> Lines(VaultBatch b)
-    {
-        var s = b.Source;
-        var plain = s.FileItems + s.RegistryItems - s.UserDataItems;
-        if (plain > 0)
-            yield return new ConsentItem($"{b.Name}: {plain} items", LeftoverKind.File, Band.Safe,
-                ProgramRow.FormatSize(s.Bytes), s.Bytes, false);
-        for (var i = 1; i <= s.UserDataItems; i++)
-            yield return new ConsentItem($"{b.Name}: user data item {i} of {s.UserDataItems}", LeftoverKind.File, Band.Likely, "", 0, true);
-    }
-
-    private async Task Confirm(ConsentSummary summary, string verb)
-    {
-        _promptOpen = true;
-        var waiting = ShowInfo(InfoBarSeverity.Informational, "Confirm in the Purge security prompt.", "Nothing has changed yet.");
-        bool ok;
-        try { ok = await ConsentPrompt.ShowAsync(MainWindow.Instance.Hwnd, summary); }
-        finally { _promptOpen = false; InfoBarHost.Children.Remove(waiting); }
-        if (ok)
-            ShowInfo(InfoBarSeverity.Success, "Confirmed in the security prompt.",
-                $"This preview isn't connected to the engine, so nothing was {(verb == "put back" ? "put back" : "deleted")}.");
-    }
-
     private InfoBar ShowInfo(InfoBarSeverity severity, string title, string message)
     {
-        var bar = new InfoBar { Severity = severity, Title = title, Message = message, IsOpen = true, IsClosable = true };
+        var bar = new InfoBar { Severity = severity, Title = title, Message = message, IsOpen = true, IsClosable = false };
+        // Pin to the window theme: code-made InfoBars otherwise take their fill from the app theme.
         bar.RequestedTheme = MainWindow.Instance.ActualTheme;
-        bar.Closed += (s, _) => InfoBarHost.Children.Remove(s);
         InfoBarHost.Children.Add(bar);
         return bar;
     }

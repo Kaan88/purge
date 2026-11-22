@@ -214,10 +214,12 @@ fn programs_list_sends_raw_rows_first_then_patches() {
         &[json!({"jsonrpc": "2.0", "id": 1, "method": "programs.list"})],
     );
 
-    // The first line is the raw ARP batch, and it is well inside the 50 ms rule on a fixture.
+    // The first line is the raw ARP batch. The 50 ms rule is a latency target measured by
+    // `xtask bench-launch` on a quiet host; under `cargo test` the machine may be compiling, so this
+    // only guards against a stall (a batch held back behind the AppX patches would take seconds).
     assert_eq!(lines[0]["method"], "programs.batch");
     assert!(
-        first_batch.as_millis() < 50,
+        first_batch.as_millis() < 1_000,
         "the first batch took {first_batch:?}"
     );
     // The reply comes after every raw batch and before every patch: the UI paints from it, so the

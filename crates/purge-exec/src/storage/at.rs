@@ -35,6 +35,9 @@ pub(crate) const FILE_LIST_DIRECTORY: u32 = 0x1;
 /// `FILE_ADD_FILE`: what `FlushFileBuffers` on a directory needs.
 const FILE_ADD_FILE: u32 = 0x2;
 
+/// No sharing: while the handle is open, every other open that asks for data or delete access fails
+/// with a sharing violation.
+pub(crate) const SHARE_NONE: u32 = 0;
 /// `FILE_SHARE_READ`.
 pub(crate) const SHARE_READ: u32 = 0x1;
 /// `FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE`.

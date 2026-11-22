@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- S4: history and undo ("4 · History & undo" artboard), with the board 13 timeline above the list. History is the
-     list of events (what happened); the Quarantine page is the storage. The timeline is only a way to move through
-     the list: selecting a marker selects that cleanup below. It is a horizontal virtualized ListView, so hundreds of
-     cleanups stay cheap. -->
+<!-- S4: history and undo ("4 · History & undo" artboard, "Time scrubber" without the drag marker), with the board 13
+     timeline above the list. History is the list of events (what happened); the Quarantine page is the storage. The
+     timeline is only a way to move through the list: selecting a marker selects that cleanup below. It is a
+     horizontal virtualized ListView, so hundreds of cleanups stay cheap. Data: history.index on the medium engine;
+     "Show items" (history.get) and Restore (undo.run) start the broker on the click (design 6.3). -->
 <UserControl
     x:Class="Purge.App.Views.HistoryView"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -22,14 +23,26 @@
                 <TextBlock Text="Files can be put back for 30 days, registry and task backups for 180 days" Style="{StaticResource PageSubtitle}" />
             </StackPanel>
             <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Right" VerticalAlignment="Center">
-                <Button Content="Export log (JSON)" Click="OnSample" />
+                <!-- journal.pending starts the broker, so only on this click (design 6.3), never on page open. -->
+                <Button x:Name="CheckInterrupted" Content="Check for interrupted cleanups" Style="{StaticResource SubtleButton}"
+                        Click="OnCheckInterrupted" />
                 <Button Content="Open quarantine" Style="{StaticResource SubtleButton}" Click="OnOpenVault" />
             </StackPanel>
         </Grid>
-        <StackPanel x:Name="InfoBarHost" Grid.Row="1" />
+        <StackPanel x:Name="InfoBarHost" Grid.Row="1" Spacing="6" />
+
+        <!-- Loading, empty and error states take the place of the timeline and the list. -->
+        <StackPanel x:Name="StatePanel" Grid.Row="2" Grid.RowSpan="2" Spacing="6" Padding="4,24" HorizontalAlignment="Center"
+                    VerticalAlignment="Top" MaxWidth="520">
+            <ProgressRing x:Name="LoadingRing" IsActive="False" Width="28" Height="28" />
+            <TextBlock x:Name="StateTitle" FontWeight="SemiBold" FontSize="16" HorizontalAlignment="Center" TextWrapping="Wrap" TextAlignment="Center" />
+            <TextBlock x:Name="StateDetail" Style="{StaticResource Body13}" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                       HorizontalAlignment="Center" TextWrapping="Wrap" TextAlignment="Center" />
+            <Button x:Name="StateRetry" Content="Try again" HorizontalAlignment="Center" Margin="0,6,0,0" Click="OnRetryLoad" Visibility="Collapsed" />
+        </StackPanel>
 
         <!-- Board 13: timeline strip -->
-        <Border Grid.Row="2" Style="{StaticResource Card}" Padding="6,4">
+        <Border x:Name="StripCard" Grid.Row="2" Style="{StaticResource Card}" Padding="6,4">
             <ListView x:Name="Strip" SelectionMode="Single" SelectionChanged="OnStripSelectionChanged" Height="78"
                       ScrollViewer.HorizontalScrollMode="Enabled" ScrollViewer.HorizontalScrollBarVisibility="Auto"
                       ScrollViewer.VerticalScrollMode="Disabled" ScrollViewer.VerticalScrollBarVisibility="Disabled"
@@ -55,7 +68,7 @@
                             <Border Width="2" Height="18" HorizontalAlignment="Left" Visibility="{x:Bind DayVisibility}"
                                     Background="{ThemeResource ControlStrongFillColorDefaultBrush}" />
                             <TextBlock Grid.Row="1" TextTrimming="CharacterEllipsis" FontSize="12">
-                                <Run Text="{x:Bind MarkTitle}" FontWeight="SemiBold" /><Run Text=" " /><Run Text="{x:Bind Time}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                <Run Text="{x:Bind Title}" FontWeight="SemiBold" /><Run Text=" " /><Run Text="{x:Bind Time}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                             </TextBlock>
                             <TextBlock Grid.Row="2" Text="{x:Bind MarkRestorable}" FontSize="11" TextTrimming="CharacterEllipsis" Style="{StaticResource SecondaryText}" />
                         </Grid>
@@ -64,7 +77,7 @@
             </ListView>
         </Border>
 
-        <Grid Grid.Row="3" ColumnSpacing="16">
+        <Grid x:Name="ListAndDetail" Grid.Row="3" ColumnSpacing="16">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="460" />
@@ -100,11 +113,12 @@
                                         </TextBlock>
                                         <TextBlock Text="{x:Bind Detail}" FontSize="13" TextTrimming="CharacterEllipsis" Style="{StaticResource SecondaryText}" />
                                     </StackPanel>
-                                    <Grid Grid.Column="2">
+                                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6">
+                                        <Border Style="{StaticResource ChipCaution}" Visibility="{x:Bind AlertVisibility}" ToolTipService.ToolTip="{x:Bind AlertTip}"><TextBlock Style="{StaticResource ChipTextPrimary}"><Run Text="&#xE7BA;" FontFamily="Segoe Fluent Icons" FontSize="10" /><Run Text=" Check items" /></TextBlock></Border>
                                         <Border Style="{StaticResource ChipAttention}" Visibility="{x:Bind UndoableVisibility}"><TextBlock Style="{StaticResource ChipTextPrimary}"><Run Text="&#xE777;" FontFamily="Segoe Fluent Icons" FontSize="10" /><Run Text=" " /><Run Text="{x:Bind State}" /></TextBlock></Border>
-                                        <Border Style="{StaticResource ChipCaution}" Visibility="{x:Bind PartialVisibility}"><TextBlock Style="{StaticResource ChipTextPrimary}"><Run Text="&#xE7BA;" FontFamily="Segoe Fluent Icons" FontSize="10" /><Run Text=" " /><Run Text="{x:Bind State}" /></TextBlock></Border>
+                                        <Border Style="{StaticResource ChipCaution}" Visibility="{x:Bind CautionVisibility}"><TextBlock Style="{StaticResource ChipTextPrimary}"><Run Text="&#xE7BA;" FontFamily="Segoe Fluent Icons" FontSize="10" /><Run Text=" " /><Run Text="{x:Bind State}" /></TextBlock></Border>
                                         <Border Style="{StaticResource Chip}" Visibility="{x:Bind NeutralVisibility}"><TextBlock Style="{StaticResource ChipText}"><Run Text="&#xE73E;" FontFamily="Segoe Fluent Icons" FontSize="10" /><Run Text=" " /><Run Text="{x:Bind State}" /></TextBlock></Border>
-                                    </Grid>
+                                    </StackPanel>
                                 </Grid>
                             </Grid>
                         </DataTemplate>
@@ -115,22 +129,33 @@
             <Border Grid.Column="1" Style="{StaticResource Card}" Padding="18" VerticalAlignment="Top">
                 <StackPanel Spacing="12">
                     <TextBlock x:Name="DTitle" FontWeight="SemiBold" FontSize="16" />
-                    <TextBlock x:Name="DSummary" Style="{StaticResource Body13}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                    <Border BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="6" Padding="6">
+                    <TextBlock x:Name="DSummary" Style="{StaticResource Body13}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+                    <Button x:Name="ShowItems" Content="Show items" Click="OnShowItems" />
+                    <Border x:Name="ItemsBorder" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="6" Padding="6"
+                            Visibility="Collapsed">
                         <ItemsControl x:Name="DItems">
                             <ItemsControl.ItemTemplate>
-                                <DataTemplate x:DataType="local:HistoryItem">
+                                <DataTemplate x:DataType="local:HistoryItemRow">
                                     <Grid ColumnSpacing="8" Padding="8,2">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="28" />
                                             <ColumnDefinition Width="*" />
                                             <ColumnDefinition Width="Auto" />
                                         </Grid.ColumnDefinitions>
-                                        <CheckBox IsChecked="{x:Bind Checked, Mode=TwoWay}" MinWidth="0" Click="OnItemCheck"
-                                                  AutomationProperties.Name="{x:Bind Path}" />
-                                        <TextBlock Grid.Column="1" Text="{x:Bind Path}" Style="{StaticResource Mono}" VerticalAlignment="Center"
-                                                   TextTrimming="CharacterEllipsis" />
-                                        <TextBlock Grid.Column="2" Text="{x:Bind Size}" FontSize="12" VerticalAlignment="Center" Style="{StaticResource SecondaryText}" />
+                                        <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                                        <CheckBox IsChecked="{x:Bind Checked, Mode=TwoWay}" IsEnabled="{x:Bind Selectable}" MinWidth="0" Click="OnItemCheck"
+                                                  AutomationProperties.Name="{x:Bind Name}" />
+                                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                            <TextBlock Text="{x:Bind Name}" Style="{StaticResource Mono}" TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Text="{x:Bind Kind}" FontSize="11" Style="{StaticResource SecondaryText}" />
+                                        </StackPanel>
+                                        <TextBlock Grid.Column="2" Text="{x:Bind Outcome}" FontSize="12" VerticalAlignment="Center" Style="{StaticResource SecondaryText}" />
+                                        <!-- S5: what reconcile found in quarantine in this item's place. -->
+                                        <Grid Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" ColumnSpacing="6" Margin="0,2,0,4" Visibility="{x:Bind AlertVisibility}">
+                                            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition /></Grid.ColumnDefinitions>
+                                            <FontIcon Style="{StaticResource GlyphWarn}" FontSize="12" VerticalAlignment="Top" Margin="0,2,0,0" />
+                                            <TextBlock Grid.Column="1" Text="{x:Bind Alert}" FontSize="12" TextWrapping="Wrap" />
+                                        </Grid>
                                     </Grid>
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
@@ -140,15 +165,15 @@
                         <Grid ColumnSpacing="10">
                             <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition /></Grid.ColumnDefinitions>
                             <FontIcon Style="{StaticResource GlyphInfo}" VerticalAlignment="Top" Margin="0,1,0,0" />
-                            <TextBlock x:Name="DNote" Grid.Column="1" Style="{StaticResource Body13}" />
+                            <TextBlock x:Name="DNote" Grid.Column="1" Style="{StaticResource Body13}" TextWrapping="Wrap"
+                                       Text="Undo puts the leftovers back exactly as they were. It doesn't reinstall the program: run its installer for that." />
                         </Grid>
                     </Border>
                     <StackPanel Orientation="Horizontal" Spacing="8">
                         <Button x:Name="RestoreSelected" Style="{StaticResource AccentButtonStyle}" Click="OnRestore" Tag="selected" />
                         <Button x:Name="RestoreAll" Content="Restore all" Click="OnRestore" Tag="all" />
-                        <Button Content="Open System Restore" Style="{StaticResource SubtleButton}" Click="OnSample" />
                     </StackPanel>
-                    <TextBlock x:Name="DExpiry" Style="{StaticResource SmallSecondary}" />
+                    <TextBlock x:Name="DExpiry" Style="{StaticResource SmallSecondary}" TextWrapping="Wrap" />
                 </StackPanel>
             </Border>
         </Grid>

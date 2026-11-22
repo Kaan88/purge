@@ -231,6 +231,8 @@ struct FakeBackend {
     hold: Gate,
     holding: Mutex<bool>,
     started: Gate,
+    /// What `writer_busy` answers: another broker writes the store.
+    writer_busy: Mutex<bool>,
 }
 
 impl FakeBackend {
@@ -259,6 +261,7 @@ impl FakeBackend {
             hold: Gate::default(),
             holding: Mutex::new(false),
             started: Gate::default(),
+            writer_busy: Mutex::new(false),
         })
     }
 
@@ -283,6 +286,10 @@ impl FakeBackend {
 }
 
 impl Backend for Arc<FakeBackend> {
+    fn writer_busy(&self) -> bool {
+        *self.writer_busy.lock().unwrap()
+    }
+
     fn pending(&self) -> Result<PendingReport, BackendError> {
         self.log("pending");
         self.pending.lock().unwrap().clone()
@@ -614,6 +621,55 @@ fn an_interrupted_session_blocks_execute_and_a_damaged_one_is_store_integrity() 
     assert!(!rig.dialog_opens());
 }
 
+/// While another broker writes the store (single writer, review R3), its live run reads as an interrupted
+/// session: `plan.execute` answers `busy`, not `needs_recovery`, and shows no dialog.
+#[test]
+fn another_writer_of_the_store_makes_execute_busy_not_needs_recovery() {
+    let backend = FakeBackend::new();
+    *backend.writer_busy.lock().unwrap() = true;
+    *backend.pending.lock().unwrap() = Ok(PendingReport {
+        open: vec![pending_session()],
+        damaged: Vec::new(),
+    });
+    let rig = Rig::start(backend.clone());
+    let c = rig.client();
+    let execute = json!({ "plan_id": "p-0000000000000001", "restore_point": "off" });
+
+    c.send_line(&request(2, "plan.execute", &execute));
+    let reply = c.reply();
+    assert_eq!(kind(&reply), "busy", "{reply}");
+    assert!(
+        !backend.calls().contains(&"pending".to_owned()),
+        "the pending check is not asked while another writer runs"
+    );
+
+    *backend.writer_busy.lock().unwrap() = false;
+    c.send_line(&request(3, "plan.execute", &execute));
+    assert_eq!(kind(&c.reply()), "needs_recovery");
+    assert!(!rig.dialog_opens());
+}
+
+/// The pending list is read with the writer lock held; another writer that started after the probe makes
+/// the read `busy` (the live backend's `pending_at_rest`), and that is what `plan.execute` and
+/// `journal.pending` answer: a live run is never listed as interrupted.
+#[test]
+fn a_pending_read_refused_by_another_writer_is_busy_for_execute_and_journal_pending() {
+    let backend = FakeBackend::new();
+    *backend.pending.lock().unwrap() = Err(BackendError::Busy);
+    let rig = Rig::start(backend.clone());
+    let c = rig.client();
+
+    c.send_line(&request(
+        2,
+        "plan.execute",
+        &json!({ "plan_id": "p-0000000000000001", "restore_point": "off" }),
+    ));
+    assert_eq!(kind(&c.reply()), "busy");
+    c.send_line(&request(3, "journal.pending", &json!({})));
+    assert_eq!(kind(&c.reply()), "busy");
+    assert!(!rig.dialog_opens());
+}
+
 // ---------------------------------------------------------------------------------------------------
 // undo.run
 // ---------------------------------------------------------------------------------------------------
@@ -857,6 +913,33 @@ fn a_session_that_changed_after_the_dialog_is_not_undone() {
     assert!(rig.running());
 }
 
+/// An undo while another broker writes the store is `busy` before its dialog: the user is not asked to
+/// approve a run the store would refuse. A run whose own lock is refused (the other writer started after
+/// the dialog) is `busy` as well, and nothing was put back.
+#[test]
+fn an_undo_while_another_writer_holds_the_store_is_busy_before_and_after_the_dialog() {
+    let (rig, backend) = restore_rig(files_plan(), &[3, 2, 1]);
+    *backend.writer_busy.lock().unwrap() = true;
+    let c = rig.client();
+    c.send_line(&request(2, "undo.run", &undo_params(None)));
+    assert_eq!(kind(&c.reply()), "busy");
+    assert!(!rig.dialog_opens());
+    assert!(!backend.calls().contains(&"undo".to_owned()));
+
+    *backend.writer_busy.lock().unwrap() = false;
+    *backend.undo.lock().unwrap() = Err(BackendError::Busy);
+    let reply = ask(
+        &rig,
+        &c,
+        3,
+        "undo.run",
+        &undo_params(None),
+        Answer::Approved,
+    );
+    assert_eq!(kind(&reply), "busy", "{reply}");
+    assert!(rig.running(), "a refused change does not end the broker");
+}
+
 #[test]
 fn the_errors_of_the_store_are_the_errors_the_client_is_told() {
     let (rig, backend) = restore_rig(files_plan(), &[1]);
@@ -869,6 +952,7 @@ fn the_errors_of_the_store_are_the_errors_the_client_is_told() {
             "needs_recovery",
         ),
         (BackendError::Failed("x".into()), "runtime"),
+        (BackendError::Busy, "busy"),
     ] {
         *backend.undo_preview.lock().unwrap() = Err(error);
         c.send_line(&request(2, "undo.run", &undo_params(None)));
@@ -1307,4 +1391,17 @@ fn no_privilege_or_impersonation_outlives_a_request() {
     // The handler thread holds neither the restore privilege nor a token it set: the methods of this
     // package enable nothing, and the executor enables it only inside purge-win's closure.
     assert!(!rig.leaked.load(Ordering::SeqCst));
+}
+
+/// A recovery while another broker writes the store is `busy` before its dialog: that broker's live run is
+/// what reads as interrupted here.
+#[test]
+fn a_recovery_while_another_writer_holds_the_store_is_busy_before_the_dialog() {
+    let (rig, backend) = recover_rig(recover_preview(Some(files_plan()), Want::Rollback, &[2, 3]));
+    *backend.writer_busy.lock().unwrap() = true;
+    let c = rig.client();
+    c.send_line(&request(2, "journal.rollback", &session_params()));
+    assert_eq!(kind(&c.reply()), "busy");
+    assert!(!rig.dialog_opens());
+    assert!(backend.recovered.lock().unwrap().is_empty());
 }
