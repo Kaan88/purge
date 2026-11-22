@@ -496,13 +496,22 @@ function Get-RigExactBaseline([string]$Vm = $script:VmName) {
 }
 
 # Pure: the elevated guest job of Initialize-RigDataRoot. install.ps1 -DataRootOnly creates %ProgramData%\Purge as
-# documented (admin-only; also the Purge event-log source); then a harvest of a program id that does not exist starts
-# the engine's background build of the local baseline cache (%ProgramData%\Purge\baseline; nothing on a Windows whose
-# exact baseline is pushed) and waits for it; then `purge-engine hello`. Last line: 'DATA-ROOT OK baseline_trust=<t>'
+# documented (admin-only; also the Purge event-log source), after turning Store auto-updates off; then a harvest of
+# a program id that does not exist starts the engine's background build of the local baseline cache
+# (%ProgramData%\Purge\baseline; nothing on a Windows whose exact baseline is pushed) and waits for it; then
+# `purge-engine hello`. Last line: 'DATA-ROOT OK baseline_trust=<t>'
 # or 'DATA-ROOT FAILED: <why>'.
 function New-DataRootJobText {
     @'
 $ErrorActionPreference = 'Continue'
+# Store auto-updates off for the rest of the boot: an inbox package the Store updates between the warm-up and the
+# run's engine-hello makes the S4 part stale, so hello reports trust None (BL-GATE R4, blm-m1bcp-7zip 2026-11-22).
+# Both the policy and the Store's own machine setting; before snap 0, so it is never part of an app's truth.
+foreach ($k in 'HKLM:\SOFTWARE\Policies\Microsoft\WindowsStore', 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsStore\WindowsUpdate') {
+    # New-Item only when the key is missing: -Force on an existing registry key replaces it (its values go).
+    try { if (-not (Test-Path -LiteralPath $k)) { $null = New-Item -Path $k }; Set-ItemProperty -Path $k -Name AutoDownload -Value 2 -Type DWord; "store: $k AutoDownload=2" }
+    catch { "store: $k not set: $($_.Exception.Message)" }
+}
 $o = @(& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File 'C:\cr\install\install.ps1' -DataRootOnly 2>&1 | ForEach-Object { "$_" })
 $ic = $LASTEXITCODE
 foreach ($l in $o) { "install: $l" }

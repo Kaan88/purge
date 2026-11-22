@@ -1788,7 +1788,9 @@ Not settled without a VM run: (1) with the data root present the engine also kee
 (`%ProgramData%\Purge\fp\msitables`) during the run, so files created there between snap 0 and snap 2 land in the
 app's truth (default label leftover; rigtool's rig rules do not cover the data root). They cost recall, never
 `danger_listed`. (2) An inbox Store package updated between the warm-up and `engine-hello` makes the S4 part stale,
-trust None, and the run fails its hello check (the campaign does not disconnect the network).
+trust None, and the run fails its hello check. Seen once (blm-m1bcp-7zip on Clean-Pro, 2026-11-22); since then the
+data-root job sets the Store's `AutoDownload=2` (policy and machine setting) before the warm-up. The campaign still
+does not disconnect the network.
 
 ## 13. M3 rig spike: UAC on, secure desktop answered from the host, UIPI probe (`rig-m3.ps1`, M3-RIG-UAC)
 
