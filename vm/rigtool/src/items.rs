@@ -150,6 +150,14 @@ impl RigRules {
                 "rig:task signature".to_string(),
             ),
             (ci(r"^P:[A-Z]:\\Windows\\Prefetch\\RIGTOOL\.EXE-[0-9A-F]+\.pf$"), "rig:rigtool prefetch".to_string()),
+            // BL-GATE R4 (RIG.md section 12.9, open point 1): with the data root present the engine keeps its caches
+            // there (MSI tables under fp\msitables, fingerprints under fp, the local baseline, the kb); writes between
+            // snap 0 and snap 2 are the measuring tool's, not the app's. Only these cache folders: Quarantine and
+            // sessions stay visible (the executor writes there, and M2 traps plant there).
+            (
+                ci(r"^P:[A-Z]:\\ProgramData\\Purge\\(fp|baseline|kb)(\\|$)"),
+                "rig:Purge engine cache (data root)".to_string(),
+            ),
             // M1a engine runs (RIG.md section 4a): the engine is the measuring tool here, not the app.
             (
                 ci(r"^P:[A-Z]:\\Windows\\Prefetch\\PURGE-ENGINE\.EXE-[0-9A-F]+\.pf$"),
@@ -269,6 +277,14 @@ mod tests {
         let r = RigRules::new(&[&s]);
         assert!(r.check("P:C:\\cr\\out\\x.json").is_some());
         assert!(r.check("P:C:\\crx").is_none());
+        assert!(r.check("P:C:\\ProgramData\\Purge\\fp\\msitables").is_some());
+        assert!(r.check("P:C:\\ProgramData\\Purge\\fp\\msitables\\{GUID}.json").is_some());
+        assert!(r.check("P:C:\\ProgramData\\Purge\\baseline\\x.part").is_some());
+        assert!(r.check("P:C:\\ProgramData\\Purge\\kb").is_some());
+        assert!(r.check("P:C:\\ProgramData\\Purge\\Quarantine\\s1\\f").is_none());
+        assert!(r.check("P:C:\\ProgramData\\Purge\\sessions\\index.json").is_none());
+        assert!(r.check("P:C:\\ProgramData\\Purge").is_none());
+        assert!(r.check("P:C:\\ProgramData\\Purgex\\fp").is_none());
         assert!(r.check("P:C:\\Users\\tester\\AppData\\Local\\Temp\\vmjobs\\j1").is_some());
         assert!(r.check("P:C:\\Windows\\System32\\Tasks\\elevate2").is_some());
         assert!(r.check("P:C:\\Windows\\System32\\Tasks\\Mozilla").is_none());
