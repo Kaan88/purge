@@ -1,0 +1,39 @@
+{
+  "schema": "purge.rig.m3rec.expect/1",
+  "note": "Expectations of vm/truth/m3-recover-score.ps1 (vm/RIG.md section 15). Labels and outcome names are the broker's (bins/purge-broker/src/consent/view.rs, crates/purge-rpc). A value here that the real run contradicts is a finding to look at, never a value to bend to the run.",
+  "uac_admin": 0,
+  "owner": {
+    "service": "PurgeRigOwnSvc",
+    "recorded_owner": "SY",
+    "resume_label": "Finish the cleanup",
+    "resume_outcomes": ["complete"],
+    "history_states": ["Undone"],
+    "exec_outcomes": ["complete", "partial"],
+    "audit_object_pattern": "\\\\Services\\\\PurgeRigOwnSvc(\\\\|$)",
+    "required_shots": ["own-2-dialog"]
+  },
+  "recover": {
+    "afters": ["resume", "rollback"],
+    "labels": { "resume": "Finish the cleanup", "rollback": "Roll the cleanup back" },
+    "index_states": { "resume": ["Committed"], "rollback": ["Undone"] },
+    "recover_outcomes": ["complete", "partial"],
+    "classes": ["pending", "none", "finished", "unindexed"],
+    "require_ui": true,
+    "min_pending_rounds_per_after": 1,
+    "start_failure_events": [20, 21, 22, 23, 24, 25, 26, 27]
+  },
+  "extras": {
+    "irrev_dialog_text": "cannot be put back",
+    "rm_outcome": "partial",
+    "rm_held_file": "locked.dat",
+    "rm_boot_file": "locked.dll",
+    "rm_quarantine_marker": "\\Purge\\Quarantine\\",
+    "sr": {
+      "off": { "kind": "NotRequested", "dialog_line": false },
+      "disabled": { "kind": "Disabled", "dialog_line": true },
+      "created": { "kind": "Created", "dialog_line": true, "new_point": true },
+      "throttled": { "kind": "Throttled", "dialog_line": true, "new_point": false }
+    },
+    "restore_point_text": "restore point"
+  }
+}

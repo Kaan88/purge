@@ -2065,3 +2065,132 @@ powershell -NoProfile -File vm\truth\m3-clean-score.ps1 --self-test
   Automation as the row check expects; whether Smart App Control on this Insider build is off or in evaluation for an
   unsigned setup; whether the Inno uninstaller's first process waits for its `_iu*.tmp` copy (the rig waits for both
   either way).
+## 16. M3 recovery modes: `m3-owner`, `m3-recover`, `m3-extras` (`rig-m3-recover.ps1`, gate G8, G9)
+
+docs/M3_DESIGN.md 11.2 (`m3-owner`, `m3-recover`), 12 (G8, G9), open question 6 (`SeRestorePrivilege` only around
+undo's owner set, threat T10), M1B_GATE.md "Known limit, R8b M1"; docs/m3-notes/undo.md and exec.md (recovery
+choices, `allow_irreversible`, restore points); docs/M3_FINISH_PLAN.md B8. Host driver `vm\rig-m3-recover.ps1`
+(a file of its own: it dot-sources `rig-m3.ps1`, and through it `rig.ps1`, and changes neither; same refusals, lock
+and cleanup as section 13), guest side `vm\guest\m3-recover.ps1` (one agent job per phase, result lines `M3R ...`),
+the tool `m3rec.exe` built in the guest from `vm\guest\m3sec.cs` + `vm\guest\m3rec.cs` (m3sec.cs is a `partial` class
+with two empty hooks, `ExtMain` and `ExtStep`, that m3rec.cs fills; m3sec.cs alone still builds the m3sec.exe of
+section 14), expectations `vm\truth\m3-recover-expect.json`, scorer `vm\truth\m3-recover-score.ps1`.
+
+```powershell
+$env:VMPWFILE = 'C:\path\to\pw.txt'
+$rel = '<checkout>\target'                     # release builds (never the rig-exec engine, never a fault-inject broker)
+.\vm\rig-m3-recover.ps1 -Mode m3-owner   -Engine $rel\release\purge-engine.exe -Broker $rel\release\purge-broker.exe   # ~25 min
+.\vm\rig-m3-recover.ps1 -Mode m3-recover -Engine $rel\release\purge-engine.exe -Broker $rel\release\purge-broker.exe -UiPublish $rel\ui-publish   # ~6 min a round
+.\vm\rig-m3-recover.ps1 -Mode m3-extras  -Engine $rel\release\purge-engine.exe -Broker $rel\release\purge-broker.exe   # ~45 min
+powershell -NoProfile -File vm\truth\m3-recover-score.ps1 -Mode owner   -Evidence E:\purge-build\gate-evidence\m3-owner\<run>
+powershell -NoProfile -File vm\truth\m3-recover-score.ps1 -Mode recover -Evidence E:\purge-build\gate-evidence\m3-recover\<run>
+powershell -NoProfile -File vm\truth\m3-recover-score.ps1 -Mode extras  -Evidence E:\purge-build\gate-evidence\m3-extras\<run>
+powershell -NoProfile -File vm\truth\m3-recover-score.ps1 --self-test
+powershell -NoProfile -ExecutionPolicy Bypass -File vm\guest\tests\rig-m3-recover.tests.ps1     # host self-test, no VM
+```
+
+- **Evidence**: `E:\purge-build\gate-evidence\<mode>\<yyyyMMdd-HHmmss>\` (or `-Evidence`): `rig-m3-recover.log`,
+  `*.png`, `jobs\*.log`, `summary.json` (shots, the keys sent at each dialog, the rounds, the plan), and `guest\`
+  (owner, extras) or `rounds\<round>\guest\` (recover: the guest's `C:\cr\out\m3-recover\` after each round).
+- **Layout** (phase `install`): as section 14, `C:\Program Files\Purge` with the rig client (`m3rec.exe client`) as
+  `Purge.exe`, and with `-UiPublish` `C:\Program Files\PurgeUI` with the real UI and its own broker copy. Fixture
+  programs (phase `fixture -Fix <id>`), broker route: `PurgeRig<Id>` with an ARP key whose uninstaller
+  (`uninst.exe rec-uninstall <key>`) removes only that key and `app.exe`; files in `C:\Program Files\PurgeRig<Id>` and
+  `C:\ProgramData\PurgeRig<Id>`; `HKLM\SOFTWARE\PurgeRig<Id>` (with a subkey) and `HKCU\Software\PurgeRig<Id>`.
+  `own` adds the service `PurgeRigOwnSvc` (New-Service, own process, demand start, never started) with
+  `Parameters\Guarded` set to `O:SYG:SYD:P(A;CI;0x7003f;;;SY)(A;CI;0x7003f;;;BA)(A;CI;KR;;;BU)` (owner SYSTEM, a
+  protected DACL that grants nobody `WRITE_OWNER`: the key of R8b M1; set by `m3rec regsd` with the privilege enabled
+  in that tool only). `rm` adds `bin\locked.dll` and `C:\ProgramData\PurgeRigRm\locked.dat`; `sr1`..`sr4` are small.
+- **Disk truth** (`truth-<fixture>-<label>.json`): per root (the program folder without `app.exe`, the ProgramData
+  folder, the HKLM and HKCU keys, the service key for `own`) whether it exists and its canonical lines: `D|rel`,
+  `F|rel|sha256`, `K|rel[|sddl]`, `V|rel|name|kind|data`. The ARP key and `app.exe` are the uninstaller's, not
+  Purge's.
+- **m3rec.exe roles** (besides section 14's): `watch` (high; follows a session's `journal.jsonl` byte by byte and, at
+  the n-th complete line or at a line matching `match_regex`, suspends the broker with `NtSuspendProcess`, optionally
+  ends it; `record` only counts; the status file is written through and flushed so it survives the power cut),
+  `privmon` (high; samples the broker's process token and every thread's impersonation token for
+  `SeRestorePrivilege`, keeping per-thread episodes), `autopress` (high; answers each dialog of one install's brokers in
+  turn by `TDM_*` messages: approve = tick the box when there is one, wait for the arming delay, press 100; cancel = 2;
+  observes first), `focused` (the dialog as `observe` reads it plus the UI Automation focus), `uihist` (the real UI's
+  History & undo page: "Check for interrupted cleanups", the banner "The session was not recorded completely.",
+  Resume, Roll back), `hold` (a running app that holds a file open without delete sharing), `regsd`, `rec-uninstall`.
+  Client steps (spec `steps[]`): `call` (one request, no dialog), `consent` (one request through the dialog, with
+  `ready-<k>`/`go-<k>` as section 14), `scan_full` (every row kept), `execute` (`plan.create` of the rows `select`
+  names: `all`, `kind:<k>`, `not-kind:<k>`, `name:<text>`; `allow_irreversible`, `restore_point`; then `plan.execute`;
+  its session goes to `vars.session`), `sleep`; `"{session}"` in a parameter is `vars.session`.
+- **Consent by the host's keys** (the recover dialogs of both modes): the guest reports the dialog and the focused
+  element (`dialog-focus`), the host picks a key (`Get-RecKeyChoice`: Shift+Tab towards the primary button, Tab and
+  Space for an unticked box, wait while the button is still disarmed, Space on the armed primary) and sends its set-1
+  scancodes with `VBoxManage controlvm keyboardputscancode`, with a screenshot after each key, until the dialog is
+  gone. A dialog that does not have the keyboard focus is brought to the front by the agent first and that is recorded
+  (`refocused=True`).
+- **`m3-owner`** (G8; from `rig-base`, UAC silent). Fixture `own`. `own-exec`: prepare, uninstall, scan, execute of
+  every non-blocked candidate (autopress), the service gone. `own-undo-cut`: `undo.run`, and the watcher suspends and
+  ends the broker at the line `{"rec":"undo_intent","op":<the DeleteService op>}`; then the rest of that first attempt
+  is put in place as R8b M1 describes it (the service as the attempt creates it, `Guarded` re-created by Administrators
+  with the recorded group and DACL and the creator as owner, no values), every part found or set recorded, and
+  `journal.pending` must list the session. `own-resume-start`: Sensitive Privilege Use auditing on, `privmon` started,
+  the rig client asks `journal.pending` then `journal.resume` through the dialog ("Finish the cleanup"), answered by the
+  host's keys. `own-resume-result`: privmon, Security log 4673/4674 naming `SeRestorePrivilege`, `Purge` events, the
+  SDDL of `Guarded` and the whole service tree, `journal.pending` and `history.get`. Output `guest\m3-owner.json`.
+- **`m3-recover`** (G9). Live snapshot `m3-recover-base` (child of `rig-base`: payload + fixture `rec`, agent
+  running), rebuilt when missing, with `-Rebuild`, or when the payload hash (engine, broker, UI `Purge.exe`, guest
+  files) recorded in `vm\runs\m3-recover-base.json` differs. Round `cal`: one run not cut (`crash-arm 0`, the watcher
+  records): N = its journal's lines, the disk truth `complete`, the store. Round `k<NN>-<after>` for every k in 1..N
+  (`-Steps` for a subset, which the scorer never passes) and each `-After` (resume, rollback): restore, `crash-arm k`
+  (the uninstall, scan and execute approved by autopress; the watcher suspends the broker at k complete lines; the
+  rig's output files flushed), hard power-off (`controlvm poweroff`), cold start, `after-boot` (boot time, the durable
+  journal, `journal.pending` and `history.get` from a fresh broker; class `pending`, `none` (nothing durable),
+  `finished` (committed and indexed) or `unindexed` (committed, index entry missing)). `pending`: `ui-check` (the real
+  UI at medium, History & undo, Check: banner with Resume and Roll back; screenshot `-1-banner`), `recover-start -Via
+  ui` (the UI's Resume or Roll back; `-NoUi`: the rig client's `journal.resume`/`journal.rollback`), the broker's dialog
+  answered by the host's keys (screenshots `-2-dialog`, `-3-after-*`), `recover-result` (the broker exits; the UI's
+  result; `journal.pending`, `history.get`, the store: journal lines, index entry and state, quarantine op folders with
+  their files, registry backups; the disk truth `after`). `unindexed`: `bookkeeping` (`journal.resume` with no go file:
+  it must run without a dialog). Each round's guest tree is pulled before the next restore.
+- **`m3-extras`** (from `rig-base`). `allow_irreversible`: Notepad++ from the official installer in the rig cache
+  (`vm\cache\inst\npp.exe`, or `-NppInstaller`), `prepare`, a forced scan, the package rows alone selected: the flag
+  off (no dialog, "Leave alone"; the second scan still lists the package), the flag on (the first dialog is cancelled
+  by autopress after it observed the box, the disabled button and "cannot be put back"; the second is approved), then
+  `undo.run` (must not put the package back). Restart Manager (M3_DESIGN 7 answer 5: report-only): two lockers
+  (`PurgeRigLocker.exe hold`, medium) hold `C:\ProgramData\PurgeRigRm\locked.dat` (user-writable ancestors: held for a
+  retry) and `C:\Program Files\PurgeRigRm\bin\locked.dll` (admin-only: a boot-time move into quarantine); execute:
+  `partial`, `held[]` names the locker's pid, both lockers still run, the PFRO pair into `\Purge\Quarantine\`; the
+  rig ends the first locker (the user closing the app), `journal.retry_held` through the dialog moves the file; a
+  restart, then the dll is in quarantine. System Restore (`restore_point` of `plan.execute`): `off` (NotRequested, no
+  restore-point line in the dialog), `disabled` (`Disable-ComputerRestore C:\`; Disabled), `created`
+  (`Enable-ComputerRestore`, `SystemRestorePointCreationFrequency=0`; Created with a sequence that
+  `Get-ComputerRestorePoint` lists and did not before), `throttled` (the frequency value removed again: Throttled, no
+  new point). Output `guest\m3-extras.json`.
+- **Scorer** (fail-closed). owner: UAC silent; the fixture key owned by SY with no `WRITE_OWNER` ACE; execute removed
+  the service; the cut at the service op's `undo_intent` and the session pending; the half state (owner not the
+  recorded one, group and DACL equal); resume through the dialog ("Finish the cleanup", high), answered by scancode,
+  `complete`, screenshots `own-2-dialog` and one after the keys; `Guarded`'s SDDL equal to the recorded one (owner
+  included); the whole service tree as before; nothing pending, history `Undone`; T10: the process token never has
+  the privilege enabled, no thread impersonates at the end, no impersonation with the privilege left open, every 4674
+  of the broker names a key below `Services\PurgeRigOwnSvc`, and the privilege was seen in use at least once (a thread
+  sample or a 4674); no broker start failure (20-27). recover: the calibration (recorded, N lines, committed, the run
+  changed the disk); coverage of every k in 1..N for both afters, not a `-Steps` run, the real UI used; per round:
+  suspended at its step, a cold start, the round started from the calibration's start state, the disk after is the
+  start (rollback, `none`) or the finished run (resume, `finished`, `unindexed`) and never anything else (a half
+  state), and for `pending` the banner and its screenshot, the dialog at high with the after's label and a footer
+  code, its screenshot, answered by scancode, nothing pending after, the index listing the session as `Committed`
+  (resume) or `Undone` (rollback) and `history.get` agreeing, the quarantine holding the finished run's op folders
+  (resume) or no files (rollback), no start failures; for `unindexed` no dialog and the index entry written; at least
+  one recovery reached per after. extras: a package candidate; off: no dialog, package kept; on: box, disabled button,
+  the text, a decline; approval removes it, undo does not bring it back; RM held with its locker, nothing closed, the
+  boot-time move into quarantine done at the restart, the retry through consent; the four restore-point cases with
+  the dialog line as expected. `--self-test`: a passing synthetic directory per mode, an empty and a missing directory
+  fail, 31 single defects fail (among them a half state, a missing consent screenshot, an owner mismatch).
+- **Self-test** (`vm\guest\tests\rig-m3-recover.tests.ps1`, no VM): parse and ASCII of every file, the host's pure
+  functions (phase text, steps, round names, the key choice, the payload hash), host and guest agree on phases, roles
+  and client steps, the labels are the broker's (`consent/view.rs`) and the UI strings the UI's, `csc` builds
+  m3sec.cs + m3rec.cs and m3sec.cs alone without a warning, the scorer's self-test. `rig-selftest.ps1` parses
+  `m3-recover.ps1` with the other guest scripts.
+- **Not settled without a run**: whether the watcher reaches every step before the next line is written (the record
+  keeps `lines_seen_at_hit`; a round past its step is still a crash, and the scorer requires the step reached, not
+  exactness); the TaskDialog's tab order for the key loop; whether the scan of `PurgeRigOwn` offers the service and
+  its intent names `DeleteService`; whether Windows audits the `SeRestorePrivilege` reopen as 4674 with the key's name
+  (else the privmon sample must carry the positive row); whether Notepad++'s installer registers its sparse package in
+  the snapshot's build and the forced scan offers it; whether the RM ladder takes the boot-time move for the Program
+  Files file; the restore-point outcomes on this VM (System Restore off by default in rig-base).
