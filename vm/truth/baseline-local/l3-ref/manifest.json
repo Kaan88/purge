@@ -1,0 +1,12 @@
+{
+  "schema": "purge.rig.bl-l3-ref/1",
+  "note": "L3 reference of BL-GATE (truth/bl.sh, S4): the M1b gate replay plans of G1, copied from vm/runs/m1b-replay/<id>/replay.json as `bash truth/m1b.sh replay` wrote them at commit 7e885aa00e654d1b71236bfd548600ddfbce99b4 (replay block of truth/m1b-replay-score.json, written 2026-11-19T06:00:33+03:00; files 05:55-06:00). The exact replay of the same run must be byte-identical.",
+  "commit": "7e885aa00e654d1b71236bfd548600ddfbce99b4",
+  "plans": {
+    "vscode": "3d03ecde6b70ec278b8cb10ea5ccc1a4ce59900f56cb7c94744c7b7871882c95",
+    "git": "49de6175ea01ae872e44bb76ef79bc97c643a1c470e564f7dd5516ba8c71a7c7",
+    "firefox": "5d78707fbc65666a60b0323442abe5e0878bac6621df6d3ac29e80313b3ee715",
+    "npp": "7102e84fedd3e2ac191614022769362afe98b30ee5464858de557deb92a29732",
+    "7zip": "54c52a64b09f045f195a976e9a90e4028a67ad3711e33490beaa2438b1a901af"
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "schema": "purge.plan/0",
+  "app": "git",
+  "tool": "purge",
+  "mode": "post",
+  "items": [
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\UFH\\SHC",
+        "name": "1"
+      },
+      "band": "Likely",
+      "preselected": false,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKU\\S-1-5-21-1336749127-99101324-1432799918-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\UFH\\SHC",
+        "name": "2"
+      },
+      "band": "Likely",
+      "preselected": false,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\LibraryFolder\\background\\shell"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "CLS-VERBS",
+      "category": "ShellCom"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\sh_auto_file"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    }
+  ]
+}

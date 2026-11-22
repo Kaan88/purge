@@ -1,0 +1,32 @@
+{
+  "schema": "purge.rig.bl-run/1",
+  "run": "m1bcp-7zip",
+  "app": "7zip",
+  "os": "Professional 26340.9882",
+  "local": "fixture",
+  "local_sha256": null,
+  "neighbour": "fixture",
+  "neighbour_sha256": null,
+  "views": {
+    "exact": {
+      "exit": 0,
+      "secs": 1,
+      "plan_sha256": "06cf16b0fe56aab10b7b3e0df5dd1efba404096b24d874767252424573bdc62c"
+    },
+    "none": {
+      "exit": 0,
+      "secs": 1,
+      "plan_sha256": "8a548a8d092c4702c37c3dd83a0e867e4da2f53e094fc66e77b234aba718d372"
+    },
+    "merged": {
+      "exit": 0,
+      "secs": 1,
+      "plan_sha256": "8999a1401a237769709ea177408ec0346f4de8376634b170917e42c6876fc96d"
+    },
+    "local": {
+      "exit": 0,
+      "secs": 1,
+      "plan_sha256": "e9bc39680dc7b42cbd2b0b443c6549c2e856b5b2a1a277e412b3a8e92dee80a8"
+    }
+  }
+}

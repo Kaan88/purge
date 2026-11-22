@@ -1,0 +1,39 @@
+{
+  "schema": "purge.plan/0",
+  "app": "7zip",
+  "tool": "purge",
+  "mode": "post",
+  "items": [
+    {
+      "target": {
+        "type": "RegValue",
+        "path": "HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\UFH\\SHC",
+        "name": "0"
+      },
+      "band": "Likely",
+      "preselected": false,
+      "scanner": "REF-ANY",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKU\\S-1-5-21-1871224937-2691627691-3762806239-1000\\Software\\7-Zip"
+      },
+      "band": "Safe",
+      "preselected": true,
+      "scanner": "REG-SOFTWARE",
+      "category": "Registration"
+    },
+    {
+      "target": {
+        "type": "RegKey",
+        "path": "HKLM\\SOFTWARE\\Classes\\.7z"
+      },
+      "band": "Blocked",
+      "preselected": false,
+      "scanner": "REG-CLASSES",
+      "category": "Registration"
+    }
+  ]
+}
