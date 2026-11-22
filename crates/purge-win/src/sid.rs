@@ -7,6 +7,10 @@
 //!   ancestor are owned by an administrative principal and no effective allow ACE grants a
 //!   non-administrative principal the right to change the path (or, for an ancestor, to delete,
 //!   rename or re-ACL what lies below it).
+//! - [`is_admin_only_executable`] is the stricter rule for a file that is about to be *run*
+//!   elevated: on top of the above, no non-administrative principal may add a file or a
+//!   subdirectory to its directory, which the loader searches first for the DLLs the program
+//!   imports (review M3-R2 H3).
 //!
 //! Security descriptors are read through the Win32 API; the SIDs and ACLs inside them are decoded by
 //! pure byte parsers here ([`sid_bytes_to_string`], `parse_acl`), which keeps the `unsafe` surface to
@@ -51,9 +55,12 @@ const ADMIN_SIDS: [&str; 3] = [LOCAL_SYSTEM_SID, ADMINISTRATORS_SID, TRUSTED_INS
 
 const INHERIT_ONLY_ACE: u8 = 0x08;
 
-// File access rights (winnt.h).
+// File access rights (winnt.h). On a directory `FILE_WRITE_DATA` is `FILE_ADD_FILE` and
+// `FILE_APPEND_DATA` is `FILE_ADD_SUBDIRECTORY`.
 const FILE_WRITE_DATA: u32 = 0x0002;
 const FILE_APPEND_DATA: u32 = 0x0004;
+const FILE_ADD_FILE: u32 = FILE_WRITE_DATA;
+const FILE_ADD_SUBDIRECTORY: u32 = FILE_APPEND_DATA;
 const FILE_DELETE_CHILD: u32 = 0x0040;
 const DELETE: u32 = 0x0001_0000;
 const WRITE_DAC: u32 = 0x0004_0000;
@@ -70,9 +77,18 @@ const LEAF_WRITE_MASK: u32 = FILE_WRITE_DATA
     | WRITE_OWNER
     | GENERIC_ALL
     | GENERIC_WRITE;
-/// Rights on an ancestor that let a principal replace what lies below it. Adding new siblings
-/// (`FILE_ADD_SUBDIRECTORY`, granted to Authenticated Users on `C:\`) does not.
+/// Rights on an ancestor that let a principal delete, rename or re-ACL what lies below it, and so
+/// replace a component of the path. `FILE_ADD_FILE` and `FILE_ADD_SUBDIRECTORY` are left out: they
+/// only create new names beside the path (Authenticated Users may add a subdirectory to `C:\`;
+/// BUILTIN\Users may add files and folders to `C:\ProgramData` and, by inheritance, to the vendor
+/// folders below it). That keeps the path's own content admin-only, not the directory around it: a
+/// file a user adds there can be loaded by a program run from that directory, which
+/// [`PARENT_RUN_MASK`] covers for [`is_admin_only_executable`].
 const ANCESTOR_WRITE_MASK: u32 = FILE_DELETE_CHILD | DELETE | WRITE_DAC | WRITE_OWNER | GENERIC_ALL;
+/// Rights on the directory of a file about to be run that let a principal place something the
+/// loader picks up before the system copy: a DLL beside the executable (the application directory
+/// is searched first), an `<exe>.local` redirection folder, an `<exe>.manifest` (review M3-R2 H3).
+const PARENT_RUN_MASK: u32 = ANCESTOR_WRITE_MASK | FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY;
 
 /// One ACE from a DACL.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -397,8 +413,9 @@ fn file_sd_facts(path: &Path) -> Result<Option<SdFacts>, Win32Error> {
     facts.map(Some)
 }
 
-/// Whether the facts of one path component keep it admin-only. `leaf` selects the stricter mask.
-fn admin_only(facts: &SdFacts, leaf: bool) -> bool {
+/// Whether the facts of one path component keep it admin-only under `mask`: an administrative owner,
+/// a DACL, and no effective allow ACE that grants a right in `mask` to anyone else.
+fn admin_only(facts: &SdFacts, mask: u32) -> bool {
     let Some(owner) = facts.owner.as_deref() else {
         return false;
     };
@@ -407,11 +424,6 @@ fn admin_only(facts: &SdFacts, leaf: bool) -> bool {
     }
     let Some(dacl) = facts.dacl.as_deref() else {
         return false;
-    };
-    let mask = if leaf {
-        LEAF_WRITE_MASK
-    } else {
-        ANCESTOR_WRITE_MASK
     };
     !dacl.iter().any(|ace| {
         ace.is_allow()
@@ -431,18 +443,52 @@ fn admin_only(facts: &SdFacts, leaf: bool) -> bool {
 /// anywhere on the chain makes the answer `false`. Deny ACEs are ignored (they can only narrow
 /// access, and ignoring them errs towards `UserWritable`). Errors opening a component are returned.
 pub fn is_admin_only_writable(path: &Path) -> Result<bool, Win32Error> {
+    chain_admin_only(path, ANCESTOR_WRITE_MASK)
+}
+
+/// [`is_admin_only_writable`] for a file that is about to be run elevated (an uninstaller, or the
+/// script, DLL or package a host loads): in addition, its immediate parent directory grants no
+/// non-administrative principal `FILE_ADD_FILE` or `FILE_ADD_SUBDIRECTORY` ([`PARENT_RUN_MASK`]).
+///
+/// `C:\ProgramData` grants BUILTIN\Users `(CI)(WD,AD,WEA,WA)`, so a vendor folder below it usually
+/// inherits "add file" while the uninstaller in it is admin-only: a medium process can then put a
+/// `version.dll` beside `unins000.exe`, and the elevated run loads it (review M3-R2 H3). Ancestors
+/// above the parent keep the plain ancestor rule: the loader searches the application's own
+/// directory, not the ones above it, and a name added to an ancestor cannot replace or redirect a
+/// component that already exists (that takes `DELETE`, `FILE_DELETE_CHILD`, `WRITE_DAC` or
+/// `WRITE_OWNER`, which every ancestor is checked for).
+///
+/// Data trust (scan sources, baseline and cache directories, the store and data root, the boot-move
+/// chain) stays with [`is_admin_only_writable`]: a file added beside data changes nothing, and
+/// `C:\ProgramData\Purge` itself would fail this rule.
+pub fn is_admin_only_executable(path: &Path) -> Result<bool, Win32Error> {
+    chain_admin_only(path, PARENT_RUN_MASK)
+}
+
+/// The chain walk behind both rules: the path with [`LEAF_WRITE_MASK`], its parent with
+/// `parent_mask`, every ancestor above it with [`ANCESTOR_WRITE_MASK`].
+fn chain_admin_only(path: &Path, parent_mask: u32) -> Result<bool, Win32Error> {
     if !path.is_absolute() {
         return Err(Win32Error::INVALID_PARAMETER);
     }
-    for (i, p) in path.ancestors().enumerate() {
+    for (depth, p) in path.ancestors().enumerate() {
         let Some(facts) = file_sd_facts(p)? else {
             return Ok(false);
         };
-        if !admin_only(&facts, i == 0) {
+        if !admin_only(&facts, chain_mask(depth, parent_mask)) {
             return Ok(false);
         }
     }
     Ok(true)
+}
+
+/// The mask for the component `depth` levels above the judged path (0 is the path itself).
+fn chain_mask(depth: usize, parent_mask: u32) -> u32 {
+    match depth {
+        0 => LEAF_WRITE_MASK,
+        1 => parent_mask,
+        _ => ANCESTOR_WRITE_MASK,
+    }
 }
 
 #[cfg(test)]
@@ -522,7 +568,7 @@ mod tests {
             owner: Some(LOCAL_SYSTEM_SID.into()),
             dacl: Some(aces),
         };
-        assert!(admin_only(&facts, true));
+        assert!(admin_only(&facts, LEAF_WRITE_MASK));
 
         // Users may add a subdirectory: fine on an ancestor, not on the leaf.
         let add_sub = acl(&[
@@ -533,8 +579,8 @@ mod tests {
             owner: Some(TRUSTED_INSTALLER_SID.into()),
             dacl: Some(parse_acl(&add_sub).unwrap()),
         };
-        assert!(admin_only(&facts, false));
-        assert!(!admin_only(&facts, true));
+        assert!(admin_only(&facts, ANCESTOR_WRITE_MASK));
+        assert!(!admin_only(&facts, LEAF_WRITE_MASK));
 
         // Deny ACEs never make something writable; allow DELETE for users does.
         let del = acl(&[ace(1, 0, full, &users), ace(0, 0, DELETE, &users)]);
@@ -542,19 +588,19 @@ mod tests {
             owner: Some(ADMINISTRATORS_SID.into()),
             dacl: Some(parse_acl(&del).unwrap()),
         };
-        assert!(!admin_only(&facts, false));
+        assert!(!admin_only(&facts, ANCESTOR_WRITE_MASK));
 
         // Non-admin owner, NULL DACL.
         let facts = SdFacts {
             owner: Some("S-1-5-21-1-2-3-1001".into()),
             dacl: Some(vec![]),
         };
-        assert!(!admin_only(&facts, true));
+        assert!(!admin_only(&facts, LEAF_WRITE_MASK));
         let facts = SdFacts {
             owner: Some(LOCAL_SYSTEM_SID.into()),
             dacl: None,
         };
-        assert!(!admin_only(&facts, true));
+        assert!(!admin_only(&facts, LEAF_WRITE_MASK));
 
         // Malformed ACLs are rejected, not misread.
         let mut broken = good.clone();
@@ -612,5 +658,110 @@ mod tests {
         );
         let missing = windir.join("purge-test-no-such-dir-91c2");
         assert!(is_admin_only_writable(&missing).unwrap_err().is_not_found());
+    }
+
+    #[test]
+    fn a_parent_users_may_add_to_is_not_admin_only_for_a_run() {
+        // `C:\ProgramData` as Windows ships it (review M3-R2 H3).
+        let system = sid_bytes(5, &[18]);
+        let admins = sid_bytes(5, &[32, 544]);
+        let users = sid_bytes(5, &[32, 545]);
+        let creator = sid_bytes(3, &[0]);
+        let (oi, ci) = (0x01, 0x02);
+        let full = 0x001F_01FF;
+        let read_exec = 0x0012_00A9;
+        let wd_ad_wea_wa = FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY | 0x0010 | 0x0100;
+        let program_data = |users_add: u32| SdFacts {
+            owner: Some(LOCAL_SYSTEM_SID.into()),
+            dacl: Some(
+                parse_acl(&acl(&[
+                    ace(0, oi | ci, full, &system),
+                    ace(0, oi | ci, full, &admins),
+                    ace(0, oi | ci | INHERIT_ONLY_ACE, full, &creator),
+                    ace(0, oi | ci, read_exec, &users),
+                    ace(0, ci, users_add, &users),
+                ]))
+                .unwrap(),
+            ),
+        };
+        let facts = program_data(wd_ad_wea_wa);
+        assert!(
+            admin_only(&facts, ANCESTOR_WRITE_MASK),
+            "fine above the parent"
+        );
+        assert!(
+            !admin_only(&facts, PARENT_RUN_MASK),
+            "not as the parent of a run"
+        );
+        for add in [FILE_ADD_FILE, FILE_ADD_SUBDIRECTORY] {
+            assert!(!admin_only(&program_data(add), PARENT_RUN_MASK), "{add:#x}");
+        }
+        // Without the add rights (`Program Files`: Users read and execute only) the parent passes.
+        assert!(admin_only(&program_data(read_exec), PARENT_RUN_MASK));
+        // Inherit-only add rights reach only new children, and CREATOR OWNER is a placeholder.
+        let inherit_only = SdFacts {
+            owner: Some(TRUSTED_INSTALLER_SID.into()),
+            dacl: Some(
+                parse_acl(&acl(&[
+                    ace(0, oi | ci, full, &system),
+                    ace(0, oi | ci | INHERIT_ONLY_ACE, wd_ad_wea_wa, &users),
+                    ace(0, ci, FILE_ADD_FILE, &creator),
+                ]))
+                .unwrap(),
+            ),
+        };
+        assert!(admin_only(&inherit_only, PARENT_RUN_MASK));
+
+        // The walk: the path with the leaf mask, its parent with the given one, the rest as ancestors.
+        assert_eq!(chain_mask(0, PARENT_RUN_MASK), LEAF_WRITE_MASK);
+        assert_eq!(chain_mask(1, PARENT_RUN_MASK), PARENT_RUN_MASK);
+        assert_eq!(chain_mask(1, ANCESTOR_WRITE_MASK), ANCESTOR_WRITE_MASK);
+        assert_eq!(chain_mask(2, PARENT_RUN_MASK), ANCESTOR_WRITE_MASK);
+        assert_eq!(chain_mask(7, PARENT_RUN_MASK), ANCESTOR_WRITE_MASK);
+    }
+
+    #[test]
+    fn admin_only_executable_on_host() {
+        use crate::known_folders::{KnownFolder, known_folder};
+        // System32 grants Users read and execute only.
+        let cmd = known_folder(KnownFolder::System).unwrap().join("cmd.exe");
+        assert!(is_admin_only_writable(&cmd).unwrap(), "{cmd:?}");
+        assert!(is_admin_only_executable(&cmd).unwrap(), "{cmd:?}");
+        // `ProgramData\Microsoft` is admin-only itself, but its parent `ProgramData` lets Users add
+        // files and folders: data trust holds, a run from there does not.
+        let microsoft = known_folder(KnownFolder::ProgramData)
+            .unwrap()
+            .join("Microsoft");
+        assert!(is_admin_only_writable(&microsoft).unwrap(), "{microsoft:?}");
+        assert!(
+            !is_admin_only_executable(&microsoft).unwrap(),
+            "{microsoft:?}"
+        );
+        assert!(!is_admin_only_executable(&std::env::temp_dir()).unwrap());
+        assert_eq!(
+            is_admin_only_executable(Path::new(r"relative\path")),
+            Err(Win32Error::INVALID_PARAMETER)
+        );
+    }
+
+    #[test]
+    #[ignore = "needs Purge installed in %ProgramFiles%\\Purge"]
+    fn the_installed_purge_passes_the_run_rule() {
+        let dir =
+            crate::known_folders::known_folder(crate::known_folders::KnownFolder::ProgramFiles)
+                .unwrap()
+                .join("Purge");
+        let mut exes = 0;
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("exe"))
+            {
+                assert!(is_admin_only_executable(&path).unwrap(), "{path:?}");
+                exes += 1;
+            }
+        }
+        assert!(exes > 0, "no .exe in {dir:?}");
     }
 }

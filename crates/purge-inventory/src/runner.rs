@@ -137,7 +137,8 @@ pub struct Routing {
     /// How the engine ran the command.
     pub ran_as: RanAs,
     /// The entry should run in the medium engine: it is a per-user entry (`HKU` key or user-writable key),
-    /// or its uninstaller is not provably writable by administrators only.
+    /// or its uninstaller is not provably writable by administrators only, its directory included
+    /// (`is_admin_only_executable`).
     pub should_run_medium: bool,
 }
 
@@ -372,7 +373,7 @@ fn routing(
     sys: &dyn SystemSource,
 ) -> Routing {
     let per_user = entry.hive_sid.is_some() || entry.writable_by == WritableBy::User;
-    let exe_admin_only = matches!(fs.is_admin_only_writable(exe), Ok(true));
+    let exe_admin_only = matches!(fs.is_admin_only_executable(exe), Ok(true));
     Routing {
         ran_as: if sys.elevated() {
             RanAs::Elevated

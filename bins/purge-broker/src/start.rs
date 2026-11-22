@@ -146,7 +146,8 @@ pub trait StartFacts {
     fn exe_path(&self) -> Result<PathBuf, String>;
     /// The directory rule (`purge_win::secure::trusted_install_dir`).
     fn trusted_dir(&self, dir: &Path) -> Result<(), String>;
-    /// Whether only administrators can write the file and every ancestor.
+    /// Whether only administrators can write the file and every ancestor, and add to its directory
+    /// (`is_admin_only_executable`; each caller has already checked that directory with `trusted_dir`).
     fn trusted_file(&self, file: &Path) -> Result<(), String>;
     /// The files directly in `<kb>\baselines`, or none when that directory does not exist.
     fn kb_files(&self, kb_dir: &Path) -> Result<Vec<PathBuf>, String>;
@@ -178,7 +179,7 @@ impl StartFacts for LiveFacts {
     }
 
     fn trusted_file(&self, file: &Path) -> Result<(), String> {
-        match purge_win::sid::is_admin_only_writable(file) {
+        match purge_win::sid::is_admin_only_executable(file) {
             Ok(true) => Ok(()),
             Ok(false) => Err("a non-administrator can write it".into()),
             Err(e) => Err(format!("its protection could not be read: {e}")),
