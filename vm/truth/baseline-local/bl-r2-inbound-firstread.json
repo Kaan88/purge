@@ -6,19 +6,19 @@
     "os":  "EnterpriseSEval-26100.1742",
     "cpus":  4,
     "elevated":  true,
-    "engine_sha256":  "a6457922fec4f05584c1f6750847151a828af3c77b7b02c4360d2fbb0393b0a4",
-    "started":  "2026-11-21T22:14:16.9021482-08:00",
-    "finished":  "2026-11-21T22:20:39.5760279-08:00",
-    "seconds":  90.58,
+    "engine_sha256":  "ccf1f5212a71d34e35aece1bae88837dc4564bcecdb2e5fb7c07a4db55345e34",
+    "started":  "2026-11-22T13:15:37.9616477-08:00",
+    "finished":  "2026-11-22T13:21:56.0024625-08:00",
+    "seconds":  89.93,
     "exit":  0,
-    "uptime_sec":  423,
-    "peak_working_set_mb":  146,
-    "file_bytes":  9711991,
-    "total_line":  "timing: baseline.local.total 88.765 s (wall)",
-    "load_seconds":  2.87,
-    "budget_sec":  60,
-    "budget_source":  "review BL-RM S7: settled first build at most 60 s on the rig VM (design section 5: cold build at most 120 s on a 2-vCPU VM)",
-    "within_budget":  false,
+    "uptime_sec":  422,
+    "peak_working_set_mb":  146.9,
+    "file_bytes":  9711992,
+    "total_line":  "timing: baseline.local.total 88.480 s (wall)",
+    "load_seconds":  2.84,
+    "budget_sec":  120,
+    "budget_source":  "design section 5 as restated by the coordinator 2026-11-21 (DECISIONS \"W4 is restated\"): first-read build on a settled machine at most 120 s (4 CPUs)",
+    "within_budget":  true,
     "settle":  {
                    "boot":  {
                                 "session":  "ReadyBoot",
@@ -37,14 +37,14 @@
                                 "stopped":  true,
                                 "bounded":  false,
                                 "min_uptime_sec":  300,
-                                "floor_wait_sec":  233.1,
-                                "waited_sec":  252.6,
+                                "floor_wait_sec":  235.5,
+                                "waited_sec":  248.5,
                                 "uptime_sec":  300,
                                 "error":  null
                             },
                    "cpu_settled":  true,
-                   "cpu_percent":  3.6,
-                   "cpu_waited_sec":  30,
+                   "cpu_percent":  4.1,
+                   "cpu_waited_sec":  30.1,
                    "cache_purged":  true,
                    "error":  null
                },
@@ -64,8 +64,8 @@
                 "#src\tS4\tok\t46\t220\t0\tpackages=46; system=45; parsed=46; failed=0; not-inbox=2; machine-wide=true; provisioned=true; repository=true; file-types=1; protocols=26; classes=0; interfaces=0; type-libs=0; prog-ids=0; generated-prog-ids=27; declarations-skipped=0; first-failures="
             ],
     "problems":  [
-                     "W4 settled first read 90.58 s is over the budget of 60 s"
+
                  ],
-    "ok":  false,
+    "ok":  true,
     "engine_path":  "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\target\\release\\purge-engine.exe"
 }

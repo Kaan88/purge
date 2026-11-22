@@ -4,8 +4,8 @@
     "elevated":  true,
     "os":  "EnterpriseSEval-26100.1742",
     "cpus":  4,
-    "started":  "2026-11-21T22:14:16.9021482-08:00",
-    "engine_sha256":  "a6457922fec4f05584c1f6750847151a828af3c77b7b02c4360d2fbb0393b0a4",
+    "started":  "2026-11-22T13:15:37.9616477-08:00",
+    "engine_sha256":  "ccf1f5212a71d34e35aece1bae88837dc4564bcecdb2e5fb7c07a4db55345e34",
     "network_up":  {
                        "start":  [
 
@@ -18,11 +18,11 @@
                    {
                        "pass":  "first-read",
                        "exit":  0,
-                       "seconds":  90.58,
-                       "peak_working_set_mb":  146,
-                       "file_bytes":  9711991,
-                       "uptime_sec":  423,
-                       "total_line":  "timing: baseline.local.total 88.765 s (wall)"
+                       "seconds":  89.93,
+                       "peak_working_set_mb":  146.9,
+                       "file_bytes":  9711992,
+                       "uptime_sec":  422,
+                       "total_line":  "timing: baseline.local.total 88.480 s (wall)"
                    }
                ],
     "settle":  {
@@ -43,20 +43,20 @@
                                 "stopped":  true,
                                 "bounded":  false,
                                 "min_uptime_sec":  300,
-                                "floor_wait_sec":  233.1,
-                                "waited_sec":  252.6,
+                                "floor_wait_sec":  235.5,
+                                "waited_sec":  248.5,
                                 "uptime_sec":  300,
                                 "error":  null
                             },
                    "cpu_settled":  true,
-                   "cpu_percent":  3.6,
-                   "cpu_waited_sec":  30,
+                   "cpu_percent":  4.1,
+                   "cpu_waited_sec":  30.1,
                    "cache_purged":  true,
                    "error":  null
                },
     "info":  {
                  "exit":  0,
-                 "seconds":  2.87
+                 "seconds":  2.84
              },
-    "finished":  "2026-11-21T22:20:39.5760279-08:00"
+    "finished":  "2026-11-22T13:21:56.0024625-08:00"
 }
