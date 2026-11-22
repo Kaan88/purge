@@ -18,7 +18,7 @@ use std::time::SystemTime;
 use purge_engine::pipeline::{
     LocalCacheSource, SharedLocalCacheSource, SharedTableCacheSource, TableCacheSource,
 };
-use purge_exec::storage::{DocDir, StorageError, StorageRoots};
+use purge_exec::storage::{DocDir, StorageRoots};
 use purge_index::local_baseline::{CacheFiles, LocalCache};
 use purge_index::ownership::cache::{
     CacheKey, MAX_CACHE_FILE, TableCache, decode_cache_file, encode_cache_file, temp_file_name,
@@ -116,54 +116,22 @@ pub struct CheckedCacheFiles {
     dir: DocDir,
 }
 
-/// A store refusal as the cache sees it: a missing file is [`io::ErrorKind::NotFound`] (a miss), a
-/// file over the limit [`io::ErrorKind::InvalidData`], anything else (a planted object renamed aside,
-/// a name the store does not accept) another error, which the cache treats as a miss too.
-fn io_error(error: StorageError) -> io::Error {
-    match error {
-        StorageError::TooLarge { .. } => io::Error::new(io::ErrorKind::InvalidData, error),
-        other => io::Error::other(other),
-    }
-}
-
+/// Each method is the [`DocDir`] method of the same name, as purge-exec's tests drive it with the
+/// cache's real file names (`storage::tests`, "the caches' own names").
 impl CacheFiles for CheckedCacheFiles {
     fn list(&self) -> Vec<(String, SystemTime)> {
-        self.dir.list().unwrap_or_default()
+        self.dir.list_files()
     }
 
     fn read(&self, name: &str, max: u64) -> io::Result<Vec<u8>> {
-        self.dir
-            .read(name, max)
-            .map_err(io_error)?
-            .ok_or_else(|| io::ErrorKind::NotFound.into())
+        self.dir.read_file(name, max)
     }
 
     fn replace(&self, name: &str, temp: &str, bytes: &[u8]) -> io::Result<()> {
-        self.dir.replace(name, temp, bytes).map_err(io_error)
+        self.dir.replace_file(name, temp, bytes)
     }
 
     fn remove(&self, name: &str) -> io::Result<()> {
-        match self.dir.remove(name).map_err(io_error)? {
-            true => Ok(()),
-            false => Err(io::ErrorKind::NotFound.into()),
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn store_refusals_map_to_the_errors_the_cache_reads() {
-        let too_large = io_error(StorageError::TooLarge {
-            path: r"C:\ProgramData\Purge\baseline\x.sets".into(),
-            bytes: 3,
-            max: 2,
-        });
-        assert_eq!(too_large.kind(), io::ErrorKind::InvalidData);
-        let refused = io_error(StorageError::InvalidPath("a b".into()));
-        assert_ne!(refused.kind(), io::ErrorKind::NotFound);
-        assert_ne!(refused.kind(), io::ErrorKind::InvalidData);
+        self.dir.remove_file(name)
     }
 }

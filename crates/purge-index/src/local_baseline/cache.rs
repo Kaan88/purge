@@ -147,17 +147,53 @@ pub trait CacheFiles: std::fmt::Debug + Send + Sync {
     fn remove(&self, name: &str) -> io::Result<()>;
 }
 
+/// A rule a cache file must pass before [`PathFiles`] reads it ([`admin_only_file`] for an elevated
+/// engine).
+pub type FileRule = std::sync::Arc<dyn Fn(&Path) -> bool + Send + Sync>;
+
+/// Whether the file at `path` can be changed by administrators and the system alone, it and every
+/// ancestor (`purge_win::sid::is_admin_only_writable`: owner included, no reparse point on the chain),
+/// and has one name: the rule an elevated engine reads a cache file by path under, as
+/// `shipped_file_trusted` judges a shipped baseline. The directory rule does not cover a file: one
+/// moved into the directory keeps its own owner and DACL, and a hard link shares them with its other
+/// name.
+pub fn admin_only_file(path: &Path) -> bool {
+    purge_win::sid::is_admin_only_writable(path) == Ok(true)
+        && purge_win::fs::metadata(path).is_ok_and(|m| m.n_links == 1 && m.reparse_tag == 0)
+}
+
 /// [`CacheFiles`] by path, in a directory that passed the admin-only rule ([`LocalCache::open`]).
-#[derive(Debug, Clone)]
+/// With a [`FileRule`], a file that fails it is not read ([`io::ErrorKind::PermissionDenied`]; the
+/// load takes it as a miss, so the view only loses presence).
+#[derive(Clone)]
 pub struct PathFiles {
     dir: PathBuf,
+    rule: Option<FileRule>,
+}
+
+impl std::fmt::Debug for PathFiles {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PathFiles")
+            .field("dir", &self.dir)
+            .field("rule", &self.rule.is_some())
+            .finish()
+    }
 }
 
 impl PathFiles {
-    /// The files of `dir`.
+    /// The files of `dir`, read without a per-file rule.
     pub fn new(dir: &Path) -> PathFiles {
         PathFiles {
             dir: dir.to_path_buf(),
+            rule: None,
+        }
+    }
+
+    /// The files of `dir`; each must pass `rule` before it is read.
+    pub fn with_rule(dir: &Path, rule: FileRule) -> PathFiles {
+        PathFiles {
+            dir: dir.to_path_buf(),
+            rule: Some(rule),
         }
     }
 }
@@ -180,7 +216,18 @@ impl CacheFiles for PathFiles {
     }
 
     fn read(&self, name: &str, max: u64) -> io::Result<Vec<u8>> {
-        read_capped(&self.dir.join(name), max)
+        let path = self.dir.join(name);
+        if let Some(rule) = &self.rule {
+            // A missing file stays a missing file; one that is there must pass the rule.
+            fs::symlink_metadata(&path)?;
+            if !rule(&path) {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "a standard user can write it, it has more than one name or it is a link",
+                ));
+            }
+        }
+        read_capped(&path, max)
     }
 
     fn replace(&self, name: &str, temp: &str, bytes: &[u8]) -> io::Result<()> {
@@ -460,6 +507,17 @@ impl LocalCache {
     /// `writable`: the engine is elevated and may store. A writable cache removes the temporary
     /// files a writer left behind.
     pub fn open(dir: &Path, fs: &dyn FileSystemSource, writable: bool) -> Option<LocalCache> {
+        Self::open_with_rule(dir, fs, writable, None)
+    }
+
+    /// [`LocalCache::open`], reading each file only when it passes `rule` ([`PathFiles::with_rule`]):
+    /// the elevated live engine passes [`admin_only_file`].
+    pub fn open_with_rule(
+        dir: &Path,
+        fs: &dyn FileSystemSource,
+        writable: bool,
+        rule: Option<FileRule>,
+    ) -> Option<LocalCache> {
         let path = dir.to_str()?;
         // The directory itself is asked without following it: `Path::is_dir` would say yes to a
         // junction that leads somewhere else.
@@ -467,11 +525,11 @@ impl LocalCache {
         if fs.is_admin_only_writable(path) != Ok(true) || !plain_dir {
             return None;
         }
-        Some(Self::with_files(
-            dir,
-            std::sync::Arc::new(PathFiles::new(dir)),
-            writable,
-        ))
+        let files = match rule {
+            Some(rule) => PathFiles::with_rule(dir, rule),
+            None => PathFiles::new(dir),
+        };
+        Some(Self::with_files(dir, std::sync::Arc::new(files), writable))
     }
 
     /// The cache whose files `files` reaches, in the directory `dir` (named in messages and in the
@@ -983,13 +1041,31 @@ impl LocalCache {
                 "the local baseline cache is written only by an elevated engine",
             ));
         }
-        let temp = format!(
-            "{name}.{}.{}{TEMP_SUFFIX}",
-            std::process::id(),
-            TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
-        );
-        self.files.replace(name, &temp, bytes)
+        self.files.replace(name, &cache_temp_name(name), bytes)
     }
+}
+
+/// The temporary name a write of `name` goes to: `<name>.<pid>.<n>.tmp`, `n` counting this process's
+/// writes.
+pub fn cache_temp_name(name: &str) -> String {
+    format!(
+        "{name}.{}.{}{TEMP_SUFFIX}",
+        std::process::id(),
+        TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
+/// The name of the `source` part of `os` with this id (`None` for an edition the cache does not
+/// name), and the name of its derived sets file: what the cache stores, for the store's tests.
+pub fn part_file_names(os: &OsInfo, source: LocalSource, id: &str) -> Option<(String, String)> {
+    let part = part_name(&os_tag(os)?, source, id);
+    let sets = sets_name(&part);
+    Some((part, sets))
+}
+
+/// The name of the derived sets file of a shipped neighbour.
+pub fn shipped_sets_file_name(file: &NeighbourFile) -> String {
+    shipped_sets_name(file)
 }
 
 struct PartFileEntry {
@@ -2446,6 +2522,44 @@ mod tests {
         let (line, records) = read_live_s3(&Fixture::new());
         assert_eq!(line.status, SourceStatus::Failed);
         assert!(records.is_empty());
+    }
+
+    /// With a file rule, a part file that fails it is not read: a miss with a note, never an error,
+    /// and the other parts still load. A missing file stays a plain miss.
+    #[test]
+    fn a_file_that_fails_the_rule_is_a_miss() {
+        let dir = scratch("file-rule");
+        stored(&dir);
+        let rule: FileRule = std::sync::Arc::new(|p: &Path| !p.to_string_lossy().contains("-s1-"));
+        let c =
+            LocalCache::open_with_rule(&dir, &fs_saying(&dir, true), false, Some(rule)).unwrap();
+        let loaded = c.load(&os(), &ids(ID_A, ID_A, ID_A), s3());
+        let s = states(&loaded);
+        assert!(!matches!(s[0], PartState::Hit { .. }), "{s:?}");
+        assert!(matches!(s[1], PartState::Hit { .. }), "{s:?}");
+        assert!(matches!(s[2], PartState::Hit { .. }), "{s:?}");
+        assert!(
+            loaded.notes.iter().any(|n| n.contains("cannot be read")),
+            "{:?}",
+            loaded.notes
+        );
+        let missing = c.load(&os(), &ids(ID_B, ID_A, ID_A), s3());
+        assert!(
+            !missing
+                .notes
+                .iter()
+                .any(|n| n.contains(&format!("{ID_B}.tsv.gz cannot be read"))),
+            "{:?}",
+            missing.notes
+        );
+        // The live rule: a file in a temp directory a standard user can write fails it.
+        let part = fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .find(|p| p.to_string_lossy().ends_with(".tsv.gz"))
+            .unwrap();
+        assert!(!admin_only_file(&part));
+        let _ = fs::remove_dir_all(&dir);
     }
 
     /// Files held in memory, for [`LocalCache::with_files`]: nothing on disk exists.

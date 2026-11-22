@@ -125,7 +125,10 @@ and "baseline checked"): the broker reaches every file in them relative to the h
 through, never by path, and one that is a reparse point or that anyone but Administrators and SYSTEM may
 write is renamed aside to `<name>.rejected-<utc>` and replaced. A `msitables` or `baseline` an older
 broker or engine created by path (inherited, unprotected DACL) is renamed aside once that way and its
-cache rebuilt (the local baseline in the background, minutes).
+cache rebuilt (the local baseline in the background, minutes). An `fp` an older broker created that way
+is renamed aside too, but its fingerprints (`fp-<sha256>.json`, admin-owned plain files) are moved into
+the new `fp` at once and the broker starts normally. The broker removes what these directories renamed
+aside after 30 days.
 
 `-Check` re-runs both tree verdicts, the deployed-file rule, the shortcut target and the event-log source,
 so it fails when any row above would fail after the fact (a replaced binary, a `Users` write ACE added to

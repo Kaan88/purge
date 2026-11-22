@@ -95,7 +95,7 @@ use purge_win::fs_write::{
 use purge_win::secure;
 
 pub use cap::{CAP_ABSOLUTE_BYTES, CAP_VOLUME_PERCENT, CapExceeded, cap_bytes, check_cap};
-pub use doc_dir::{BASELINE_DIR, DocDir, FP_DIR, MSI_TABLES_DIR};
+pub use doc_dir::{BASELINE_DIR, DocDir, FP_DIR, MAX_MIGRATED_BYTES, MSI_TABLES_DIR, io_error};
 pub use integrity::{
     IntegrityFailure, IntegrityPolicy, ObjectFacts, ObjectKind, ROOT_TAKEOVER_RIGHTS,
     SDDL_DATA_ROOT, SDDL_INDEX, SDDL_SESSIONS, SDDL_STORE, SDDL_STORE_FILE, verdict,
@@ -1414,10 +1414,14 @@ impl StorageRoots {
         Ok(Some(checked(path, inspected)))
     }
 
-    /// Opens the directory `path` without following a final reparse point and checks it as `kind`.
-    /// `Ok(None)` when nothing has the name. With `parent`, the handle's final path must equal the
-    /// parent's plus the object's name, and a definite failure renames the object aside inside the
-    /// parent's handle.
+    /// Opens the directory `path` **by path** (`CreateFileW` on the whole path, a final reparse point
+    /// opened itself, never followed) and checks it as `kind` on that handle. `Ok(None)` when nothing
+    /// has the name. The components above the last are resolved by name again; what binds the handle
+    /// to the checked chain is that, with `parent`, its final path must equal the checked parent's
+    /// final path plus the object's name ([`IntegrityFailure::FinalPathMismatch`] otherwise, nothing
+    /// renamed), and the verdict is read from this very handle. A definite failure renames the object
+    /// aside inside the parent's handle. Files of the store, unlike directories, are opened relative to
+    /// their checked directory's handle ([`StorageRoots::open_file_at`], [`DocDir`]).
     fn inspect(
         &self,
         path: &Path,
@@ -1449,7 +1453,13 @@ impl StorageRoots {
     ) -> Result<(at::Facts, String), StorageError> {
         match self.check_handle(path, kind, parent, handle)? {
             Ok(checked) => Ok(checked),
-            Err((failure, id)) => Err(reject(path, parent, Some(id), failure)),
+            Err((failure, id)) => Err(reject(
+                path,
+                parent,
+                Some(id),
+                failure,
+                &self.policy.sddl_for(kind),
+            )),
         }
     }
 
@@ -1519,7 +1529,13 @@ impl StorageRoots {
             Ok((facts, _)) => Ok((File::from(handle), facts)),
             Err((failure, id)) => {
                 drop(handle);
-                Err(reject(path, Some(dir.as_parent()), Some(id), failure))
+                Err(reject(
+                    path,
+                    Some(dir.as_parent()),
+                    Some(id),
+                    failure,
+                    &self.policy.sddl_for(kind),
+                ))
             }
         }
     }
@@ -1653,6 +1669,7 @@ impl StorageRoots {
                     Some(parent),
                     None,
                     IntegrityFailure::IdentityChanged,
+                    "",
                 ));
             }
             mover
@@ -1799,16 +1816,18 @@ fn os_error(e: &std::io::Error) -> FsError {
 
 /// The error for an object that failed its check, renaming it aside when the failure is definite.
 /// `checked_id` is the identity the check read; the rename happens only on that same object, inside
-/// `parent` when given.
+/// `parent` when given. `sddl`: the descriptor of the kind the object was checked as, which the
+/// renamed object gets where the store may set it (see [`rename_aside`]); empty for none.
 fn reject(
     path: &Path,
     parent: Option<Parent<'_>>,
     checked_id: Option<FileId>,
     failure: IntegrityFailure,
+    sddl: &str,
 ) -> StorageError {
     let (mut renamed_to, mut rename_error) = (None, None);
     if let (true, Some(id)) = (failure.renames_aside(), checked_id) {
-        match rename_aside(path, parent, id) {
+        match rename_aside(path, parent, id, sddl) {
             Ok(to) => renamed_to = Some(to),
             Err(e) => rename_error = Some(e),
         }
@@ -1825,7 +1844,18 @@ fn reject(
 /// still the object with file id `id`. The object is opened (itself, not followed) and renamed
 /// relative to the handle of `parent`; without one (the data root, whose parent the store does not
 /// check), relative to a handle on the parent directory opened for the purpose.
-fn rename_aside(path: &Path, parent: Option<Parent<'_>>, id: FileId) -> Result<PathBuf, FsError> {
+///
+/// After the rename, the object itself (not what is below it, and a link as a link) gets `sddl`
+/// through the same handle when the handle could be opened with `WRITE_DAC` and `WRITE_OWNER`:
+/// with its owner part, or, when the owner cannot be assigned, its DACL alone (protected). A
+/// rejected object that a user could write so stops being theirs to change; where the security
+/// cannot be set the object keeps its own (best effort: the rename is what protects the store).
+fn rename_aside(
+    path: &Path,
+    parent: Option<Parent<'_>>,
+    id: FileId,
+    sddl: &str,
+) -> Result<PathBuf, FsError> {
     let (Some(parent_path), Some(leaf)) = (path.parent(), path.file_name()) else {
         return Err(FsError::Other(87));
     };
@@ -1838,16 +1868,24 @@ fn rename_aside(path: &Path, parent: Option<Parent<'_>>, id: FileId) -> Result<P
             &opened
         }
     };
-    let mover = at::open_at(
-        dir,
-        &leaf,
-        at::Open {
-            access: at::DELETE | at::FILE_READ_ATTRIBUTES,
-            share: at::SHARE_ALL,
-            create: None,
-            kind: at::Kind::File,
-        },
-    )?;
+    let open = |access: u32| {
+        at::open_at(
+            dir,
+            &leaf,
+            at::Open {
+                access,
+                share: at::SHARE_ALL,
+                create: None,
+                kind: at::Kind::File,
+            },
+        )
+    };
+    let move_access = at::DELETE | at::FILE_READ_ATTRIBUTES;
+    let (mover, securable) = match open(move_access | at::WRITE_DAC | at::WRITE_OWNER) {
+        Ok(handle) => (handle, true),
+        Err(FsError::AccessDenied) => (open(move_access)?, false),
+        Err(e) => return Err(e),
+    };
     if at::facts(&mover)?.file_id != id {
         return Err(FsError::Other(ERROR_FILE_INVALID));
     }
@@ -1860,7 +1898,17 @@ fn rename_aside(path: &Path, parent: Option<Parent<'_>>, id: FileId) -> Result<P
             format!("{leaf}.rejected-{stamp}-{n}")
         };
         match at::rename_at(&mover, dir, &name, false) {
-            Ok(()) => return Ok(parent_path.join(&name)),
+            Ok(()) => {
+                if securable && !sddl.is_empty() {
+                    let handle = MoveHandle::from_owned_handle(mover, false);
+                    if handle.set_security(sddl).is_err()
+                        && let Some(dacl) = sddl.find("D:")
+                    {
+                        let _ = handle.set_security(&sddl[dacl..]);
+                    }
+                }
+                return Ok(parent_path.join(&name));
+            }
             Err(FsError::AlreadyExists) => continue,
             Err(e) => return Err(e),
         }
@@ -1949,6 +1997,7 @@ impl SessionDir {
                 Some(layout.sessions.as_parent()),
                 None,
                 IntegrityFailure::IdentityChanged,
+                "",
             ));
         }
         Ok(dir)

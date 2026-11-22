@@ -4,7 +4,14 @@ Branch `baseline`, pushed to `origin/baseline` (8c7142f). Design `docs/BASELINE_
 decision of this work is a row in `docs/DECISIONS.md` (Post-M1b). This file is kept current so the work can be
 continued from any harness: read it, then `git log --oneline -15` and `git worktree list`.
 
-## FP CHECKED 2026-11-22 (branch `r3-fp-checked` from baseline 0d2879e; pushed, NOT merged: Fable review next).
+## FP CHECKED 2026-11-22 (branch `r3-fp-checked`; Fable review APPROVE with low findings, all fixed; pushed, NOT merged: the coordinator merges).
+- Third round (review follow-ups, DECISIONS row "fp checked, review follow-ups"; origin/baseline 1b4886c merged
+  first): an old inherited-ACL `fp` is replaced and its admin-owned plain `fp-<sha256>.json` files are moved over by
+  handle (no exit 22); the elevated live engine judges each cache file (`admin_only_file`) before reading it by
+  path; docs say directories are opened by path + final-path bound, files handle-relative; `rename_aside` gives
+  the rejected object its kind's descriptor; the broker prunes its directories' rejects after 30 days at start;
+  tests for the caches' real names through `DocDir`, concurrent replaces, and an elevated-only owner test
+  (`#[ignore]`). purge-exec gained dev-dependencies purge-index and purge-source (tests only).
 - Why: the R3 Fable re-review's follow-up. The elevated broker wrote, renamed and swept fingerprint files in
   `<data root>\fp` by path (and its MSI table cache wrote `fp\msitables` by path); `fp` was admin-only only by
   the installer's descriptor, never checked at run time. A user-writable `fp` would let a junction to

@@ -264,6 +264,19 @@ fn strict_policy_refuses_and_renames_aside_a_tree_owned_by_a_user() {
     );
     let to = renamed_to.clone().unwrap();
     assert!(!s.path("data").exists());
+    // The renamed directory got the data root's DACL: the user who made it lost every right but
+    // the ones an owner always has (it may read and write the DACL), so it re-grants itself here.
+    let me = purge_win::sid::current_user_sid().unwrap();
+    let sddl = sddl_of(&to);
+    let dacl = &sddl[sddl.find("D:").unwrap()..];
+    assert!(dacl.starts_with("D:P") && !dacl.contains(&me), "{sddl}");
+    let granted = Command::new("icacls")
+        .arg(&to)
+        .args(["/grant", &format!("*{me}:(OI)(CI)F"), "/q"])
+        .stdout(std::process::Stdio::null())
+        .status()
+        .unwrap();
+    assert!(granted.success());
     // Renamed, not recursed into or deleted: the tree is intact under its new name.
     assert_eq!(names(&to), ["Quarantine", "fp", "sessions"]);
     assert_eq!(
@@ -2298,4 +2311,430 @@ fn listing_and_removal_follow_nothing() {
         Err(StorageError::InvalidPath(_))
     ));
     assert_eq!(dir.read(PART, 16).unwrap().unwrap(), b"part");
+}
+
+// ---- review follow-ups (DECISIONS 2026-11-22, "fp checked" review) ----
+
+fn fp_name(c: char) -> String {
+    format!("fp-{}.json", c.to_string().repeat(64))
+}
+
+/// `fp` as an older broker made it: by path, so its DACL is inherited from the data root (admin-only,
+/// not protected).
+fn old_fp(roots: &StorageRoots) -> PathBuf {
+    let fp = roots.fp_path();
+    std::fs::remove_dir(&fp).unwrap();
+    std::fs::create_dir(&fp).unwrap();
+    assert!(!sddl_of(&fp).contains("D:P"), "{}", sddl_of(&fp));
+    fp
+}
+
+/// The one `fp.rejected-*` in the data root.
+fn rejected_fp(roots: &StorageRoots) -> PathBuf {
+    let found: Vec<String> = names(roots.data_root())
+        .into_iter()
+        .filter(|n| n.starts_with("fp.rejected-"))
+        .collect();
+    assert_eq!(found.len(), 1, "{found:?}");
+    roots.data_root().join(&found[0])
+}
+
+#[test]
+fn an_old_fp_is_replaced_and_its_fingerprints_move_over_without_a_refusal() {
+    let (_s, roots) = fixture("fpupgrade");
+    let fp = old_fp(&roots);
+    std::fs::write(fp.join(fp_name('a')), b"{\"a\":1}").unwrap();
+    std::fs::write(fp.join(fp_name('b')), b"{\"b\":2}").unwrap();
+    std::fs::create_dir(fp.join(MSI_TABLES_DIR)).unwrap();
+    std::fs::write(fp.join(MSI_TABLES_DIR).join("x.json"), b"cache").unwrap();
+    // The broker's start pre-flight passes: no exit 22 for an upgrade.
+    roots.check().unwrap();
+    let dir = roots.fp_dir().unwrap();
+    assert_eq!(dir.read(&fp_name('a'), 64).unwrap().unwrap(), b"{\"a\":1}");
+    assert_eq!(dir.read(&fp_name('b'), 64).unwrap().unwrap(), b"{\"b\":2}");
+    assert!(sddl_of(&roots.fp_path()).contains("D:P"));
+    // The rest (the MSI table cache) stays in the old directory, renamed aside.
+    let aside = rejected_fp(&roots);
+    assert_eq!(names(&aside), [MSI_TABLES_DIR]);
+    assert_eq!(names(&roots.fp_path()), [fp_name('a'), fp_name('b')]);
+}
+
+#[test]
+fn only_plain_admin_fingerprint_files_move_from_an_old_fp() {
+    let (s, roots) = fixture("fpupgrade-planted");
+    let fp = old_fp(&roots);
+    let canary = Canary::new(s.path("elsewhere"));
+    let outside = s.path("outside.json");
+    std::fs::write(&outside, b"outside").unwrap();
+    std::fs::write(fp.join(fp_name('a')), b"good").unwrap();
+    // Not moved: another name, a hard link, a junction, a file Users may write, a directory.
+    std::fs::write(fp.join("notes.json"), b"odd name").unwrap();
+    std::fs::write(
+        fp.join(format!("fp-{}.json", "G".repeat(64))),
+        b"upper case",
+    )
+    .unwrap();
+    std::fs::hard_link(&outside, fp.join(fp_name('b'))).unwrap();
+    junction(&fp.join(fp_name('c')), &canary.0);
+    let writable = format!(
+        "{}(A;;FA;;;BU)",
+        roots.policy().sddl_for(ObjectKind::StoreFile)
+    );
+    drop(fs_write::create_file_secure(&ext(&fp.join(fp_name('d'))).unwrap(), &writable).unwrap());
+    std::fs::create_dir(fp.join(fp_name('e'))).unwrap();
+    let has_symlink = std::os::windows::fs::symlink_file(&outside, fp.join(fp_name('f'))).is_ok();
+
+    roots.check().unwrap();
+    assert_eq!(names(&roots.fp_path()), [fp_name('a')]);
+    let aside = rejected_fp(&roots);
+    let mut left = vec![
+        format!("fp-{}.json", "G".repeat(64)),
+        fp_name('b'),
+        fp_name('c'),
+        fp_name('d'),
+        fp_name('e'),
+        "notes.json".to_owned(),
+    ];
+    if has_symlink {
+        left.push(fp_name('f'));
+    }
+    left.sort();
+    assert_eq!(names(&aside), left);
+    assert_eq!(std::fs::read(&outside).unwrap(), b"outside");
+    canary.intact();
+}
+
+#[test]
+fn an_fp_users_could_write_is_never_migrated() {
+    let (_s, roots) = fixture("fpupgrade-users");
+    std::fs::remove_dir(roots.fp_path()).unwrap();
+    // Unprotected (as an old `fp`), but Users may modify it: refused, nothing moves.
+    let open = format!(
+        "{}(A;OICI;0x1301bf;;;BU)",
+        roots
+            .policy()
+            .sddl_for(ObjectKind::Store)
+            .replacen("D:P", "D:", 1)
+    );
+    fs_write::create_dir_secure(&ext(&roots.fp_path()).unwrap(), &open).unwrap();
+    std::fs::write(roots.fp_path().join(fp_name('a')), b"planted").unwrap();
+    let err = roots.check().unwrap_err();
+    assert!(
+        matches!(
+            err,
+            StorageError::Integrity {
+                failure: IntegrityFailure::UnprotectedDacl,
+                renamed_to: Some(_),
+                ..
+            }
+        ),
+        "{err}"
+    );
+    let fp = roots.fp_dir().unwrap();
+    assert_eq!(fp.read(&fp_name('a'), 64).unwrap(), None);
+    assert_eq!(names(&rejected_fp(&roots)), [fp_name('a')]);
+}
+
+#[test]
+fn an_object_renamed_aside_loses_what_users_could_do_with_it() {
+    let (_s, roots) = fixture("rejectdacl");
+    std::fs::remove_dir(roots.fp_path()).unwrap();
+    let open = format!(
+        "{}(A;OICI;0x1301bf;;;BU)",
+        roots.policy().sddl_for(ObjectKind::Store)
+    );
+    fs_write::create_dir_secure(&ext(&roots.fp_path()).unwrap(), &open).unwrap();
+    let err = roots.check().unwrap_err();
+    let StorageError::Integrity {
+        renamed_to: Some(aside),
+        ..
+    } = err
+    else {
+        panic!("{err}");
+    };
+    let sddl = sddl_of(&aside);
+    assert!(sddl.contains("D:P") && !sddl.contains(";BU)"), "{sddl}");
+}
+
+#[test]
+fn rejected_objects_past_their_time_are_pruned_without_following_links() {
+    let (s, roots) = fixture("prune");
+    let root = roots.data_root().to_path_buf();
+    let canary = Canary::new(s.path("elsewhere"));
+    let recent = SessionId::new(sys::now(), 0);
+    let recent = &recent.as_str()[..16];
+    // In the data root: two old ones of `fp` and `baseline` go, with what is in them (a junction
+    // inside is deleted as a link); a recent one, one of `sessions` and a name without a time stay.
+    let old_fp = root.join("fp.rejected-20200101T000000Z");
+    std::fs::create_dir_all(old_fp.join(r"msitables\deep")).unwrap();
+    std::fs::write(old_fp.join(r"msitables\deep\x.json"), b"x").unwrap();
+    std::fs::write(old_fp.join(fp_name('a')), b"a").unwrap();
+    junction(&old_fp.join("link"), &canary.0);
+    std::fs::write(root.join("baseline.rejected-20200101T000000Z-2"), b"b").unwrap();
+    let kept = [
+        format!("fp.rejected-{recent}"),
+        "sessions.rejected-20200101T000000Z".to_owned(),
+        "fp.rejected-later".to_owned(),
+    ];
+    for name in &kept {
+        std::fs::create_dir(root.join(name)).unwrap();
+    }
+    // Inside the document directories.
+    let fp = roots.fp_dir().unwrap();
+    std::fs::write(
+        roots
+            .fp_path()
+            .join(format!("{}.rejected-20200101T000000Z", fp_name('b'))),
+        b"b",
+    )
+    .unwrap();
+    let tables = roots.msi_tables_dir().unwrap();
+    std::fs::write(
+        roots
+            .msi_tables_path()
+            .join("x.json.rejected-20200101T000000Z"),
+        b"x",
+    )
+    .unwrap();
+    let baseline = roots.baseline_dir().unwrap();
+    std::fs::write(
+        roots
+            .baseline_path()
+            .join(format!("{PART}.rejected-{recent}")),
+        b"recent",
+    )
+    .unwrap();
+    drop((fp, tables, baseline));
+
+    assert_eq!(roots.prune_rejected(Duration::from_secs(30 * 24 * 3600)), 4);
+    canary.intact();
+    let mut expected: Vec<String> = kept.to_vec();
+    expected.extend(
+        ["Quarantine", "baseline", "fp", "sessions"]
+            .iter()
+            .map(|s| s.to_string()),
+    );
+    expected.sort();
+    assert_eq!(names(&root), expected);
+    assert_eq!(names(&roots.fp_path()), [MSI_TABLES_DIR]);
+    assert!(names(&roots.msi_tables_path()).is_empty());
+    assert_eq!(
+        names(&roots.baseline_path()),
+        [format!("{PART}.rejected-{recent}")]
+    );
+}
+
+#[test]
+fn two_writers_of_one_document_never_tear_it() {
+    let (_s, roots) = fixture("fprace");
+    let fp = roots.fp_dir().unwrap();
+    let a = vec![b'a'; 1 << 20];
+    let b = vec![b'b'; 1 << 20];
+    for round in 0..8 {
+        let results = std::thread::scope(|scope| {
+            let one = scope.spawn(|| fp.replace(FP_DOC, &format!("{FP_DOC}.1-{round}.tmp"), &a));
+            let two = scope.spawn(|| fp.replace(FP_DOC, &format!("{FP_DOC}.2-{round}.tmp"), &b));
+            [one.join().unwrap(), two.join().unwrap()]
+        });
+        // Each write either took effect whole or failed cleanly; the document is one of the two.
+        assert!(results.iter().any(Result::is_ok), "{results:?}");
+        let doc = fp.read(FP_DOC, 2 << 20).unwrap().unwrap();
+        assert!(doc == a || doc == b, "round {round}: a torn document");
+        // No temporary file is left behind.
+        assert_eq!(names(&roots.fp_path()), [FP_DOC], "round {round}");
+    }
+}
+
+/// The caches' own names: every name the broker's MSI table cache and local baseline cache write is
+/// one `DocDir` accepts, and the cache code itself works over `DocDir` with them (a refused name
+/// would leave the cache empty and the view at None without a word).
+#[test]
+fn the_caches_own_names_go_through_doc_dir() {
+    use purge_index::local_baseline::{
+        BUILDER_VERSION, CacheFiles, LocalCache, LocalHeader, LocalPartFile, LocalSource, PartIds,
+        PartState, Records, SourceLine, SourceStatus, cache_temp_name, file::encode,
+        part_file_names, shipped_sets_file_name,
+    };
+    use purge_index::ownership::cache::{
+        CacheKey, MAX_CACHE_FILE, decode_cache_file, encode_cache_file, temp_file_name,
+    };
+
+    let (_s, roots) = fixture("cachenames");
+
+    // MSI table cache, as `store_caches::CheckedTableCache` reads and writes it.
+    let tables = roots.msi_tables_dir().unwrap();
+    let key = CacheKey {
+        local_package: r"C:\Windows\Installer\1a2b3c.msi".into(),
+        size: 4096,
+        mtime: 133_000_000_000_000_000,
+    };
+    let msi = purge_source::sysobj::MsiTables {
+        custom_action_count: 3,
+        ..Default::default()
+    };
+    let bytes = encode_cache_file(&key, &msi).unwrap();
+    tables
+        .replace(&key.file_name(), &temp_file_name(&key), &bytes)
+        .unwrap();
+    let back = tables
+        .read(&key.file_name(), MAX_CACHE_FILE)
+        .unwrap()
+        .unwrap();
+    assert_eq!(decode_cache_file(&key, &back), Some(msi.limited()));
+
+    // Local baseline cache, through `CacheFiles` delegating to `DocDir` exactly as the broker's
+    // `CheckedCacheFiles` does.
+    #[derive(Debug)]
+    struct Files(DocDir);
+    impl CacheFiles for Files {
+        fn list(&self) -> Vec<(String, std::time::SystemTime)> {
+            self.0.list_files()
+        }
+        fn read(&self, name: &str, max: u64) -> std::io::Result<Vec<u8>> {
+            self.0.read_file(name, max)
+        }
+        fn replace(&self, name: &str, temp: &str, bytes: &[u8]) -> std::io::Result<()> {
+            self.0.replace_file(name, temp, bytes)
+        }
+        fn remove(&self, name: &str) -> std::io::Result<()> {
+            self.0.remove_file(name)
+        }
+    }
+    let os = purge_model::OsInfo {
+        edition: "Professional".into(),
+        build: 26100,
+        ubr: 1742,
+    };
+    let line = |source| SourceLine {
+        source,
+        status: SourceStatus::Ok,
+        items: 1,
+        records: 1,
+        skipped: 0,
+        reasons: Vec::new(),
+        facts: vec![("unreadable".into(), "0".into())],
+    };
+    let part = |source, id: &str, key: &str| {
+        let header = LocalHeader {
+            built_at: "2026-11-22T00:00:00Z".into(),
+            computer: "PC".into(),
+            edition: os.edition.clone(),
+            build: os.build,
+            ubr: os.ubr,
+            builder_version: BUILDER_VERSION.into(),
+            source_id: id.into(),
+        };
+        let mut records = Records::new();
+        assert!(records.add_key(key));
+        let line = line(source);
+        let encoded = encode(&header, std::slice::from_ref(&line), &records).unwrap();
+        LocalPartFile {
+            source,
+            header,
+            line,
+            counts: records.counts(),
+            record_count: encoded.record_count,
+            sha256: encoded.sha256,
+            bytes: encoded.bytes,
+            timings: Default::default(),
+            threads: 1,
+        }
+    };
+    let id = "0123456789abcdef";
+    let cache = LocalCache::with_files(
+        &roots.baseline_path(),
+        Arc::new(Files(roots.baseline_dir().unwrap())),
+        true,
+    );
+    for (source, key) in [
+        (LocalSource::S1, r"HKLM\SOFTWARE\S1Key"),
+        (LocalSource::S2, r"HKU\S-1-5-21-0-0-0-1000\S2Key"),
+        (LocalSource::S4, r"HKLM\SOFTWARE\S4Key"),
+    ] {
+        cache.store_part(&os, &part(source, id, key)).unwrap();
+    }
+    let mut stored = names(&roots.baseline_path());
+    stored.sort();
+    let mut expected = Vec::new();
+    for source in [LocalSource::S1, LocalSource::S2, LocalSource::S4] {
+        let (part, sets) = part_file_names(&os, source, id).unwrap();
+        expected.push(part);
+        if source == LocalSource::S1 {
+            expected.push(sets);
+        }
+    }
+    expected.sort();
+    assert_eq!(stored, expected);
+    let ids = PartIds {
+        s1: Some(id.into()),
+        s2: Some(id.into()),
+        s4: Some(id.into()),
+        ..PartIds::default()
+    };
+    let mut s3 = Records::new();
+    assert!(s3.add_key(r"HKU\.DEFAULT\Software\S3Key"));
+    let loaded = cache.load(&os, &ids, (line(LocalSource::S3), s3));
+    assert_eq!(
+        loaded.parts.map(|(_, state)| state),
+        [
+            PartState::Hit { derived: true },
+            PartState::Hit { derived: false },
+            PartState::Hit { derived: false },
+        ],
+        "{:?}",
+        loaded.notes
+    );
+    assert!(loaded.local.is_some());
+    // The other names the cache writes: a shipped neighbour's sets, temporary files.
+    let baseline = roots.baseline_dir().unwrap();
+    let neighbour = purge_index::baseline_view::NeighbourFile {
+        path: PathBuf::from(r"C:\Program Files\Purge\kb\baselines\Professional-26100.1.tsv.gz"),
+        edition: "Professional".into(),
+        build: 26100,
+        ubr: 1,
+    };
+    for name in [shipped_sets_file_name(&neighbour), expected[0].clone()] {
+        let temp = cache_temp_name(&name);
+        baseline.replace_file(&name, &temp, b"x").unwrap();
+        assert_eq!(baseline.read_file(&name, 16).unwrap(), b"x");
+        assert!(baseline.list_files().iter().any(|(n, _)| *n == name));
+        baseline.remove_file(&name).unwrap();
+        assert_eq!(
+            baseline.remove_file(&name).unwrap_err().kind(),
+            std::io::ErrorKind::NotFound
+        );
+    }
+    // A refusal is never "no such file", so a cache notes it instead of taking it as absent.
+    assert_ne!(
+        baseline.read_file("a b", 16).unwrap_err().kind(),
+        std::io::ErrorKind::NotFound
+    );
+    assert_eq!(
+        baseline.read_file("missing.sets", 16).unwrap_err().kind(),
+        std::io::ErrorKind::NotFound
+    );
+}
+
+/// Under the strict policy (elevated): an old `fp`'s fingerprint owned by a user, not Administrators or
+/// SYSTEM, is not moved; one owned by Administrators is.
+#[test]
+#[ignore = "needs an elevated administrator"]
+fn strict_migration_moves_only_admin_owned_fingerprints() {
+    let s = Scratch::new("fpstrict");
+    let data = s.path("data");
+    fs_write::create_dir_secure(&ext(&data).unwrap(), SDDL_DATA_ROOT).unwrap();
+    let strict = StorageRoots::new(&data).unwrap();
+    strict.check().unwrap();
+    let fp = strict.fp_path();
+    std::fs::remove_dir(&fp).unwrap();
+    std::fs::create_dir(&fp).unwrap();
+    std::fs::write(fp.join(fp_name('a')), b"admin").unwrap();
+    std::fs::write(fp.join(fp_name('b')), b"user").unwrap();
+    let me = purge_win::sid::current_user_sid().unwrap();
+    MoveHandle::open_with_security_write(&ext(&fp.join(fp_name('b'))).unwrap())
+        .unwrap()
+        .set_security(&format!("O:{me}"))
+        .unwrap();
+    strict.check().unwrap();
+    assert_eq!(names(&fp), [fp_name('a')]);
 }

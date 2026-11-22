@@ -24,5 +24,11 @@ serde_json.workspace = true
 thiserror.workspace = true
 sha2.workspace = true
 
+[dev-dependencies]
+# The broker's caches' file names and formats, for the tests that drive `DocDir` with them
+# (storage/tests.rs, "the caches' own names"; DECISIONS 2026-11-22, "baseline checked").
+purge-index.workspace = true
+purge-source.workspace = true
+
 [lints]
 workspace = true

@@ -22,6 +22,10 @@ type Handle = *mut c_void;
 pub(crate) const DELETE: u32 = 0x0001_0000;
 /// `READ_CONTROL`.
 pub(crate) const READ_CONTROL: u32 = 0x0002_0000;
+/// `WRITE_DAC`.
+pub(crate) const WRITE_DAC: u32 = 0x0004_0000;
+/// `WRITE_OWNER`.
+pub(crate) const WRITE_OWNER: u32 = 0x0008_0000;
 /// `SYNCHRONIZE`.
 pub(crate) const SYNCHRONIZE: u32 = 0x0010_0000;
 /// `GENERIC_READ`.

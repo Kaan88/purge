@@ -49,8 +49,8 @@ use purge_index::baseline::{Baseline, RecordCounts};
 use purge_index::baseline_view::{BaselineView, HostOs, VIEW_FILE_NAME, ViewRules};
 use purge_index::local_baseline::cache::{load_neighbours, read_live_s3};
 use purge_index::local_baseline::{
-    BuildControl, BuildOptions, FileStamps, LocalCache, LocalSource, PartIds, PartState,
-    SealFloors, build_part, iso_utc,
+    BuildControl, BuildOptions, FileRule, FileStamps, LocalCache, LocalSource, PartIds, PartState,
+    SealFloors, admin_only_file, build_part, iso_utc,
 };
 use purge_model::{BaselineTrust, BaselineViewRef, OsInfo};
 use purge_rpc::{BaselineBuild, BaselineStatus};
@@ -256,7 +256,12 @@ pub fn local_cache(sources: Sources<'_>, settings: &Settings) -> Option<LocalCac
     if !on_volume(dir) {
         return None;
     }
-    LocalCache::open(dir, sources.fs, elevated)
+    // Elevated, the live engine also judges each file before it reads it, as it judges a shipped
+    // baseline file (`shipped_file_trusted`): the directory rule says who can add or remove files,
+    // not who can write a file that was moved or linked into it. A failing file is a miss.
+    let rule: Option<FileRule> =
+        (elevated && settings.check_shipped_dir).then(|| Arc::new(admin_only_file) as FileRule);
+    LocalCache::open_with_rule(dir, sources.fs, elevated, rule)
 }
 
 /// The baseline of a step for the Windows `os`. See the module documentation. Everything that
@@ -1521,6 +1526,57 @@ mod tests {
         assert!(loaded.parts.is_none());
         assert!(has(&warnings, "is not used"), "{warnings:?}");
         assert!(!t.cache.exists());
+    }
+
+    /// The live engine, elevated, reads a cache file by path only when the file itself is admin-only
+    /// and has one name (`admin_only_file`): the parts in this temp directory (which a standard user
+    /// can write) are misses then, so the view loses presence and never gains trust. Off for
+    /// fixtures (`check_shipped_dir` false), as the shipped-file check is.
+    #[test]
+    fn an_elevated_live_engine_reads_no_cache_file_a_user_can_write() {
+        let t = tree("filerule");
+        let f = t.machine(true, true);
+        let settings = t.settings();
+        assert!(matches!(
+            build_to_end(&f, &settings),
+            BaselineBuild::Done { .. }
+        ));
+        let mut warnings = Vec::new();
+        let fixture_load = load(Sources::of(&f), &settings, &os(), &mut warnings);
+        assert!(
+            fixture_load
+                .parts
+                .unwrap()
+                .iter()
+                .all(|(_, s)| matches!(s, PartState::Hit { .. }))
+        );
+        let live = Settings {
+            check_shipped_dir: true,
+            ..t.settings()
+        };
+        let mut warnings = Vec::new();
+        let loaded = load(Sources::of(&f), &live, &os(), &mut warnings);
+        let parts = loaded
+            .parts
+            .expect("the cache directory itself is accepted");
+        assert!(
+            parts
+                .iter()
+                .all(|(_, s)| !matches!(s, PartState::Hit { .. })),
+            "{parts:?}"
+        );
+        assert!(has(&warnings, "cannot be read"), "{warnings:?}");
+        assert_eq!(loaded.trust(), BaselineTrust::None);
+        assert!(!loaded.view.has_key(r"HKLM\SOFTWARE\PurgeS1Key"));
+        // Unelevated, nothing is judged per file (and nothing is written).
+        let medium = t.machine(false, true);
+        let mut warnings = Vec::new();
+        let loaded = load(Sources::of(&medium), &live, &os(), &mut warnings);
+        assert!(
+            loaded
+                .parts
+                .is_some_and(|p| p.iter().any(|(_, s)| matches!(s, PartState::Hit { .. })))
+        );
     }
 
     /// A cache directory that fails the rule is ignored and never repaired, whatever it holds. The

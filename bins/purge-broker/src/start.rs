@@ -233,9 +233,15 @@ impl StartFacts for LiveFacts {
     fn open_store(&self, data_root: &Path) -> Result<StorageRoots, String> {
         let roots = StorageRoots::new(data_root).map_err(|e| e.to_string())?;
         roots.check().map_err(|e| e.to_string())?;
+        // What `fp`, `fp\msitables` and `baseline` renamed aside more than 30 days ago goes
+        // (DECISIONS 2026-11-22, "fp checked" review follow-ups); failures change nothing.
+        roots.prune_rejected(REJECTED_KEPT);
         Ok(roots)
     }
 }
+
+/// How long the broker keeps what its document directories renamed aside.
+pub const REJECTED_KEPT: std::time::Duration = std::time::Duration::from_secs(30 * 24 * 60 * 60);
 
 /// `SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32)`: the first call of the broker's
 /// `main`. A failure is a start failure (review M3-R1 S4): without it the elevated process keeps the
