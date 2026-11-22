@@ -741,7 +741,8 @@ pub fn uninstall_commands(
 /// for the same reason (review M3-R2 B1). A known host executable (`cmd`, `rundll32`, `wscript`,
 /// `cscript`, `powershell`, `mshta`, `regsvr32`, `msiexec`, `java`, `sdbinst`) is judged on the script,
 /// DLL or package it is told to load as well; a load path that is user-writable, cannot be found or
-/// cannot be worked out makes the route medium (review M3-R2 M2).
+/// cannot be worked out makes the route medium (review M3-R2 M2); `powershell`/`pwsh` without a `-File`
+/// script (inline or encoded command text) is such a case.
 pub fn route(
     entry: &InventoryEntry,
     fs: &dyn FileSystemSource,
@@ -891,7 +892,7 @@ fn host_load_path(exe: &str, tokens: &[&str]) -> Option<String> {
         "wscript.exe" | "cscript.exe" | "mshta.exe" | "regsvr32.exe" | "sdbinst.exe" => {
             first_operand()
         }
-        "powershell.exe" | "pwsh.exe" => after_switch("-file").or_else(|| after_switch("-f")),
+        "powershell.exe" | "pwsh.exe" => powershell_file(tokens),
         "msiexec.exe" => tokens
             .iter()
             .map(|t| path_token(t))
@@ -901,6 +902,51 @@ fn host_load_path(exe: &str, tokens: &[&str]) -> Option<String> {
         "java.exe" | "javaw.exe" => after_switch("-jar"),
         _ => None,
     }
+}
+
+/// The script `powershell`/`pwsh` is told to run with `-File` (`-f`). Only listed switches may come before
+/// it: once a `-Command`, an `-EncodedCommand`, command text or any other token is seen, the rest of the
+/// line (a later `-File` included) can be command text, so the load path is not worked out.
+fn powershell_file(tokens: &[&str]) -> Option<String> {
+    // Switches that take no value, and switches whose value is the next token.
+    const FLAGS: &[&str] = &[
+        "nologo",
+        "nol",
+        "noexit",
+        "noe",
+        "sta",
+        "mta",
+        "noprofile",
+        "nop",
+        "noninteractive",
+        "noni",
+    ];
+    const WITH_VALUE: &[&str] = &[
+        "executionpolicy",
+        "ex",
+        "ep",
+        "windowstyle",
+        "w",
+        "inputformat",
+        "outputformat",
+        "version",
+        "v",
+    ];
+    let mut rest = tokens.iter();
+    while let Some(token) = rest.next() {
+        // Only the documented `-Name` spelling is a switch here; `/Name`, `--Name`, a prefix PowerShell
+        // would accept but this list lacks, or `-Name:value` end the walk, so they cost the route.
+        let name = token.strip_prefix('-')?.to_ascii_lowercase();
+        if name == "file" || name == "f" {
+            return rest.next().map(|t| path_token(t).to_owned());
+        }
+        if WITH_VALUE.contains(&name.as_str()) {
+            rest.next()?;
+        } else if !FLAGS.contains(&name.as_str()) {
+            return None;
+        }
+    }
+    None
 }
 
 /// The first operand of `msiexec` that looks like a path, so `/x C:\pkg.msi` is judged even without
@@ -929,15 +975,19 @@ fn command_loads_admin_only(command: &QuietCommand, fs: &dyn FileSystemSource) -
         return true;
     }
     let Some(load) = host_load_path(&command.exe, &tokens) else {
-        // A host that names no script, DLL or package: `msiexec` with a ProductCode and a shell with
-        // an inline command load no file of their own, everything else is undetermined.
+        // A host that names no script, DLL or package: only `msiexec` with a ProductCode loads no
+        // client-chosen file (it runs the cached package). Everything else is undetermined, and that
+        // includes `powershell`/`pwsh` without a `-File` path: inline command text (`-Command`, `-c`,
+        // positional text) can dot-source, `Import-Module` or `&` a user-writable file through a
+        // relative or `$env:` path or `PSModulePath`, and `-EncodedCommand` cannot be read at all
+        // (review M3-R2 M2: a load file that cannot be worked out makes the route medium).
         let name = command
             .exe
             .rsplit(['\\', '/'])
             .next()
             .unwrap_or(&command.exe)
             .to_ascii_lowercase();
-        return matches!(name.as_str(), "msiexec.exe" | "powershell.exe" | "pwsh.exe");
+        return name == "msiexec.exe";
     };
     is_absolute_path(&load) && fs.is_admin_only_writable(&load) == Ok(true)
 }
@@ -2368,8 +2418,14 @@ mod tests {
             .file(r"C:\Windows\System32\cmd.exe", 1)
             .file(r"C:\Windows\System32\rundll32.exe", 1)
             .file(r"C:\Windows\System32\msiexec.exe", 1)
+            .file(
+                r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+                1,
+            )
+            .file(r"C:\Program Files\PowerShell\7\pwsh.exe", 1)
             .file(r"C:\Program Files\App\unins000.exe", 1)
             .file(r"C:\ProgramData\Vendor\uninstall.cmd", 1)
+            .file(r"C:\ProgramData\Vendor\uninstall.ps1", 1)
             .file(r"C:\Users\tester\AppData\Local\App\evil.cmd", 1)
             .file(r"C:\Users\tester\AppData\Local\App\evil.dll", 1)
             .file(r"C:\Users\tester\AppData\Local\App\evil.ini", 1)
@@ -2465,6 +2521,111 @@ mod tests {
             ),
             purge_rpc::methods::Route::Broker,
             "msiexec with a ProductCode loads no client-chosen file"
+        );
+    }
+
+    const POWERSHELLS: [&str; 2] = [
+        r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+        r"C:\Program Files\PowerShell\7\pwsh.exe",
+    ];
+
+    fn shell_route(exe: &str, args: &str) -> purge_rpc::methods::Route {
+        let machine = env(&[("PROGRAMDATA", r"C:\ProgramData")]);
+        route(
+            &route_entry(&format!(r#""{exe}" {args}"#)),
+            &route_fixture(),
+            &machine,
+            &machine,
+        )
+    }
+
+    #[test]
+    fn inline_powershell_command_text_is_medium() {
+        for exe in POWERSHELLS {
+            for args in [
+                r#"-NoProfile -Command ". .\cleanup.ps1""#,
+                r#"-command "Import-Module VendorTools; Remove-VendorApp""#,
+                r#"-c "& $env:LOCALAPPDATA\App\undo.ps1""#,
+                "-ExecutionPolicy Bypass -Command Remove-Item x",
+            ] {
+                assert_eq!(
+                    shell_route(exe, args),
+                    purge_rpc::methods::Route::Medium,
+                    "{exe} {args}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn encoded_powershell_command_is_medium() {
+        // `Remove-Item x` as UTF-16LE base64; its content is never read.
+        let b64 = "UgBlAG0AbwB2AGUALQBJAHQAZQBtACAAeAA=";
+        for exe in POWERSHELLS {
+            for switch in ["-EncodedCommand", "-encodedcommand", "-enc", "-ec", "-e"] {
+                assert_eq!(
+                    shell_route(exe, &format!("-NoProfile {switch} {b64}")),
+                    purge_rpc::methods::Route::Medium,
+                    "{exe} {switch}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn positional_powershell_command_text_is_medium() {
+        for exe in POWERSHELLS {
+            for args in [
+                r#""& .\uninstall.ps1""#,
+                "Remove-VendorApp -Force",
+                // Command text before a `-File`: the `-File` is part of the command, not a load path.
+                r#"". .\evil.ps1" -File "C:\ProgramData\Vendor\uninstall.ps1""#,
+                r#"-c ". .\evil.ps1" -File "C:\ProgramData\Vendor\uninstall.ps1""#,
+                r#"/File "C:\ProgramData\Vendor\uninstall.ps1""#,
+            ] {
+                assert_eq!(
+                    shell_route(exe, args),
+                    purge_rpc::methods::Route::Medium,
+                    "{exe} {args}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn powershell_file_scripts_are_judged_on_the_script() {
+        for exe in POWERSHELLS {
+            for args in [
+                r#"-File "C:\ProgramData\Vendor\uninstall.ps1""#,
+                r#"-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -file "C:\ProgramData\Vendor\uninstall.ps1" -Quiet"#,
+                r#"-nop -ep Bypass -f "C:\ProgramData\Vendor\uninstall.ps1""#,
+            ] {
+                assert_eq!(
+                    shell_route(exe, args),
+                    purge_rpc::methods::Route::Broker,
+                    "an admin-only script stays broker-route: {exe} {args}"
+                );
+            }
+            for args in [
+                r#"-File "C:\Users\tester\AppData\Local\App\evil.cmd""#,
+                r#"-File "C:\ProgramData\Vendor\missing.ps1""#,
+                r"-File .\uninstall.ps1",
+                "-File",
+            ] {
+                assert_eq!(
+                    shell_route(exe, args),
+                    purge_rpc::methods::Route::Medium,
+                    "{exe} {args}"
+                );
+            }
+        }
+        assert_eq!(
+            shell_route(
+                r"C:\Windows\System32\msiexec.exe",
+                "/x {11111111-1111-1111-1111-111111111111} /qn"
+            ),
+            purge_rpc::methods::Route::Broker,
+            "msiexec with a ProductCode is unchanged"
         );
     }
 
