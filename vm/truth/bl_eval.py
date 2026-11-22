@@ -333,24 +333,27 @@ if MODE == 'evaluate':
             f'pass, {len(explained)} empty plan(s) explained (W3-R4); {len(k9)} trap row(s)',
             'all pass, danger rows for every set, a trap row per set', bool(mine) and all(good) and len(k9) >= len(sets)
             and per_set)
-        # danger_listed: not above the exact M1b gate run of the same set and app
+        # danger_listed: not above the exact M1b gate run of the same set and app (design S1 says "= 0"; the exact gate
+        # itself lists the deny-listed bam value Blocked, coordinator 2026-11-23); danger_offered: 0, literally
         for s in sets:
             got = load(os.path.join(OUT, f'r4-{m}', 'm1b-evidence', f'score-{s}.json'))
             ref = load(os.path.join(E['BL_EXACT_EVID'], f'score-{s}.json'))
 
-            def listed(doc):
+            def field(doc, name):
                 out = {}
                 for a in (doc or {}).get('apps', []) if isinstance(doc, dict) else []:
                     for t in a.get('tools', []):
                         if t.get('tool') == 'purge':
-                            out[a.get('id')] = t.get('danger_listed')
+                            out[a.get('id')] = t.get(name)
                 return out
-            g, x = listed(got), listed(ref)
+            g, x, o = field(got, 'danger_listed'), field(ref, 'danger_listed'), field(got, 'danger_offered')
             if not g:
                 row('S1', 'S', f'R4 {m} {s} danger_listed', 'missing: score-' + s + '.json', 'per app', False)
             for app, n in sorted(g.items()):
                 ok = isinstance(n, int) and isinstance(x.get(app), int) and n <= x[app]
                 row('S1', 'S', f'R4 {m} {s}/{app} danger_listed', f'{n} (exact gate {x.get(app)})', '<= exact gate', ok)
+                d = o.get(app)
+                row('S1', 'S', f'R4 {m} {s}/{app} danger_offered', f'{d}', '0', d == 0)
 
     s_rows = [r for r in rows if r['kind'] == 'S']
     need = {('S1', 'R3'), ('S1', 'R4'), ('S4', 'L3'), ('S4', 'L5')}
@@ -404,6 +407,9 @@ if MODE == 'mutate':  # mutate <fixture dir> <what> [path]
     elif what == 'danger':
         edit(J('r4-local', 'm1b-evidence', 'score-clean.json'),
              lambda s: s['apps'][0]['tools'][0].update(danger_listed=2))
+    elif what == 'offered':
+        edit(J('r4-merged', 'm1b-evidence', 'score-clean.json'),
+             lambda s: s['apps'][0]['tools'][0].update(danger_offered=1))
     elif what.startswith('empty'):
         # Merged clean/7zip plan empty with truth leftovers. 'emptyufh' sets up every condition of the R4 empty-plan
         # exception (bl_eval evaluate, empty_plan_explained); each other variant breaks exactly one of them.

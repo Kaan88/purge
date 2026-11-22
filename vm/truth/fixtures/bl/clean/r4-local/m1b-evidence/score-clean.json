@@ -6,7 +6,7 @@
       "tools": [
         {
           "tool": "purge",
-          "danger_listed": 0
+          "danger_listed": 0, "danger_offered": 0
         }
       ]
     }

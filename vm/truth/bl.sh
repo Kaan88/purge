@@ -24,7 +24,7 @@
 #   S1 R4  "danger_listed = 0 and every trap expectation met, in merged and in local mode, on both VMs": the m1b.sh rows
 #          RUN, K1, K2, K3, K9 of each set must be present and pass, and per app danger_listed must not exceed the
 #          exact M1b gate run's (m1b-evidence score-<set>.json; literal 0 would fail the exact runs, which list one
-#          deny-listed item Blocked).
+#          deny-listed item Blocked), and per app danger_offered must be 0.
 #          One exception (coordinator 2026-11-22, DECISIONS): a K1/K2/K3 row that m1b.sh fails only as an "empty plan"
 #          is a W3-R4 report row (recall cost) when the app's RUN row passed, its plan offered 0 items with
 #          danger_listed 0, the exact gate plan of that set and app offered items that are all UFH\SHC slot values
@@ -157,6 +157,7 @@ selftest() {
   run_case trap-fail 1 "S1 R4 merged K9 blm-m1b-traps-7zip" trap
   run_case r4-missing 1 "S1 R4 local (bll-): m1b.sh exit collect-skipped; score unreadable" rm r4-local/m1b-score.json
   run_case danger-listed 1 "S1 R4 local clean/7zip danger_listed: 2 (exact gate 0)" danger
+  run_case danger-offered 1 "S1 R4 merged clean/7zip danger_offered: 1" offered
   run_case empty-plan-ufh 0 "W3-R4 R4 merged K1 clean/7zip: empty plan" emptyufh
   run_case empty-plan-other 1 "S1 R4 merged K1 clean/7zip: empty plan" emptyother
   run_case empty-plan-mixed 1 "S1 R4 merged K1 clean/7zip: empty plan" emptymixed
@@ -164,7 +165,7 @@ selftest() {
   run_case empty-plan-danger 1 "S1 R4 merged K1 clean/7zip: empty plan" emptydanger
   run_case empty-plan-no-r3 1 "S1 R4 merged K1 clean/7zip: empty plan" emptynor3
   rm -rf "$tmp"
-  [ "$fails" -eq 0 ] && { echo "self-test: PASS (18 cases)"; return 0; }
+  [ "$fails" -eq 0 ] && { echo "self-test: PASS (19 cases)"; return 0; }
   echo "self-test: FAIL ($fails case(s))" >&2; return 1
 }
 
