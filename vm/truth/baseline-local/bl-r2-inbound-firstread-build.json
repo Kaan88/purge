@@ -1,0 +1,62 @@
+{
+    "schema":  "purge.rig.baseline-local-build/2",
+    "computer":  "INBOUND-WIN11-T",
+    "elevated":  true,
+    "os":  "EnterpriseSEval-26100.1742",
+    "cpus":  4,
+    "started":  "2026-11-21T22:14:16.9021482-08:00",
+    "engine_sha256":  "a6457922fec4f05584c1f6750847151a828af3c77b7b02c4360d2fbb0393b0a4",
+    "network_up":  {
+                       "start":  [
+
+                                 ],
+                       "settled":  [
+
+                                   ]
+                   },
+    "passes":  [
+                   {
+                       "pass":  "first-read",
+                       "exit":  0,
+                       "seconds":  90.58,
+                       "peak_working_set_mb":  146,
+                       "file_bytes":  9711991,
+                       "uptime_sec":  423,
+                       "total_line":  "timing: baseline.local.total 88.765 s (wall)"
+                   }
+               ],
+    "settle":  {
+                   "boot":  {
+                                "session":  "ReadyBoot",
+                                "active_at_start":  true,
+                                "first_query":  {
+                                                    "exit":  0,
+                                                    "out":  [
+                                                                "Name:                 ReadyBoot",
+                                                                "Status:               Running",
+                                                                "Root Path:            C:\\WINDOWS\\Prefetch\\ReadyBoot",
+                                                                "Segment:              Off",
+                                                                "Schedules:            On",
+                                                                "Segment Max Size:     20 MB"
+                                                            ]
+                                                },
+                                "stopped":  true,
+                                "bounded":  false,
+                                "min_uptime_sec":  300,
+                                "floor_wait_sec":  233.1,
+                                "waited_sec":  252.6,
+                                "uptime_sec":  300,
+                                "error":  null
+                            },
+                   "cpu_settled":  true,
+                   "cpu_percent":  3.6,
+                   "cpu_waited_sec":  30,
+                   "cache_purged":  true,
+                   "error":  null
+               },
+    "info":  {
+                 "exit":  0,
+                 "seconds":  2.87
+             },
+    "finished":  "2026-11-21T22:20:39.5760279-08:00"
+}

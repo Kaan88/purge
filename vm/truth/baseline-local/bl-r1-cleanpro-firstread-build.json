@@ -1,0 +1,58 @@
+{
+    "schema":  "purge.rig.baseline-local-build/2",
+    "computer":  "PURGE-CLEANPRO",
+    "elevated":  true,
+    "os":  "Professional-26340.9882",
+    "cpus":  4,
+    "started":  "2026-11-22T08:55:29.9368547+03:00",
+    "engine_sha256":  "a6457922fec4f05584c1f6750847151a828af3c77b7b02c4360d2fbb0393b0a4",
+    "network_up":  {
+                       "start":  [
+
+                                 ],
+                       "settled":  [
+
+                                   ]
+                   },
+    "passes":  [
+                   {
+                       "pass":  "first-read",
+                       "exit":  0,
+                       "seconds":  202.04,
+                       "peak_working_set_mb":  141.7,
+                       "file_bytes":  10454378,
+                       "uptime_sec":  1105,
+                       "total_line":  "timing: baseline.local.total 199.401 s (wall)"
+                   }
+               ],
+    "settle":  {
+                   "boot":  {
+                                "session":  "ReadyBoot",
+                                "active_at_start":  false,
+                                "first_query":  {
+                                                    "exit":  -2144337918,
+                                                    "out":  [
+                                                                "Error:",
+                                                                "Data Collector Set was not found."
+                                                            ]
+                                                },
+                                "stopped":  true,
+                                "bounded":  false,
+                                "min_uptime_sec":  300,
+                                "floor_wait_sec":  243.4,
+                                "waited_sec":  243.9,
+                                "uptime_sec":  300,
+                                "error":  null
+                            },
+                   "cpu_settled":  false,
+                   "cpu_percent":  27.5,
+                   "cpu_waited_sec":  600.7,
+                   "cache_purged":  true,
+                   "error":  null
+               },
+    "info":  {
+                 "exit":  0,
+                 "seconds":  3.95
+             },
+    "finished":  "2026-11-22T09:13:07.1577582+03:00"
+}

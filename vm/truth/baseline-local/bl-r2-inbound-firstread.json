@@ -1,0 +1,71 @@
+{
+    "schema":  "purge.rig.baseline-local-firstread/1",
+    "mode":  "R2",
+    "vm":  "Inbound-Win11-Test",
+    "run":  "bl-r2-inbound-firstread",
+    "os":  "EnterpriseSEval-26100.1742",
+    "cpus":  4,
+    "elevated":  true,
+    "engine_sha256":  "a6457922fec4f05584c1f6750847151a828af3c77b7b02c4360d2fbb0393b0a4",
+    "started":  "2026-11-21T22:14:16.9021482-08:00",
+    "finished":  "2026-11-21T22:20:39.5760279-08:00",
+    "seconds":  90.58,
+    "exit":  0,
+    "uptime_sec":  423,
+    "peak_working_set_mb":  146,
+    "file_bytes":  9711991,
+    "total_line":  "timing: baseline.local.total 88.765 s (wall)",
+    "load_seconds":  2.87,
+    "budget_sec":  60,
+    "budget_source":  "review BL-RM S7: settled first build at most 60 s on the rig VM (design section 5: cold build at most 120 s on a 2-vCPU VM)",
+    "within_budget":  false,
+    "settle":  {
+                   "boot":  {
+                                "session":  "ReadyBoot",
+                                "active_at_start":  true,
+                                "first_query":  {
+                                                    "exit":  0,
+                                                    "out":  [
+                                                                "Name:                 ReadyBoot",
+                                                                "Status:               Running",
+                                                                "Root Path:            C:\\WINDOWS\\Prefetch\\ReadyBoot",
+                                                                "Segment:              Off",
+                                                                "Schedules:            On",
+                                                                "Segment Max Size:     20 MB"
+                                                            ]
+                                                },
+                                "stopped":  true,
+                                "bounded":  false,
+                                "min_uptime_sec":  300,
+                                "floor_wait_sec":  233.1,
+                                "waited_sec":  252.6,
+                                "uptime_sec":  300,
+                                "error":  null
+                            },
+                   "cpu_settled":  true,
+                   "cpu_percent":  3.6,
+                   "cpu_waited_sec":  30,
+                   "cache_purged":  true,
+                   "error":  null
+               },
+    "network_up":  {
+                       "start":  [
+
+                                 ],
+                       "settled":  [
+
+                                   ]
+                   },
+    "source_id":  "4fce6cfee3eeea4b",
+    "src":  [
+                "#src\tS1\tok\t18489\t1430054\t0\tbase=C:\\\\WINDOWS\\\\WinSxS\\\\amd64_microsoft-windows-servicingstack_31bf3856ad364e35_10.0.26100.1738_none_a5031b637767a4e7\\\\wcp.dll (9066 bytes); manifests=18489; parsed=18489; dcm-expanded=18100; plain=389; unsupported=0; expand-failed=0; no-base=0; read-failed=0; parse-failed=0; keys=385330; values=1011357; dirs=5588; files=27779; registry-key-elements=368641; registry-value-elements=1012743; file-elements=28913; directory-elements=3020; files-without-destination=979; unknown-value-types=87193; wow64-manifests=4812; key-unknown-macro=0; value-unknown-macro=0; path-unknown-macro=17; unknown-root=0; too-long=0; not-absolute=0; incomplete-elements=2; orphan-values=0; values-of-skipped-keys=0; unknown-macros=runtime.windir:7,runtime.system:5,runtime.apppatch:3,build.nttree:1,runtime.startup:1; unknown-macros-unlisted=0; tokens=1fc8b3b9a1e18e3b:8,31bf3856ad364e35:16925,6595b64144ccf1df:374,b03f5f7f11d50a3a:988,b77a5c561934e089:192,cc7b13ffcd2ddd51:2; first-failures=",
+                "#src\tS2\tok\t1481\t1481\t0\torigin=C:\\\\Users\\\\Default\\\\NTUSER.DAT; keys=556; values=925; unreadable=0; vanished=0; links=0; capped=false; unreadable-keys=; vanished-keys=",
+                "#src\tS3\tok\t3051\t3051\t1\torigin=HKU\\\\.DEFAULT; keys=618; values=2433; unreadable=1; vanished=0; links=0; capped=false; unreadable-by-design=1; unreadable-keys=HKU\\\\.DEFAULT\\\\Software\\\\Microsoft\\\\SystemCertificates\\\\Root\\\\ProtectedRoots; vanished-keys=",
+                "#src\tS4\tok\t46\t220\t0\tpackages=46; system=45; parsed=46; failed=0; not-inbox=2; machine-wide=true; provisioned=true; repository=true; file-types=1; protocols=26; classes=0; interfaces=0; type-libs=0; prog-ids=0; generated-prog-ids=27; declarations-skipped=0; first-failures="
+            ],
+    "problems":  [
+                     "W4 settled first read 90.58 s is over the budget of 60 s"
+                 ],
+    "ok":  false,
+    "engine_path":  "C:\\Users\\kaank\\Desktop\\uninstall\\purge\\target\\release\\purge-engine.exe"
+}
