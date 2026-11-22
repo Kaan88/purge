@@ -1953,3 +1953,99 @@ powershell -NoProfile -File vm\truth\m3-sec-score.ps1 --self-test
   with their own attention entries (the scorer fails the paging row otherwise); whether the first-elevation dialog and
   the program row of the real UI are found by name; whether the credential prompt of this build focuses the password
   box of the one administrator account; whether `SystemDrive` in `HKCU\Environment` reaches the task-started client.
+
+## 15. M3 mode `m3-clean-start`: the Inno setup on clean Windows (`rig-m3-clean.ps1`, gate G11)
+
+docs/M3_DESIGN.md 11.2 (row `m3-clean-start`: Clean-Pro without .NET, Windows App SDK runtime or VC++
+redistributable; `Purge.exe` starts and shows names; WARP numbers reported), 12 G11, 9.1 ("VM: functional only; WARP
+numbers reported"); docs/M3_FINISH_PLAN.md B9; install/README.md "Inno installer". Host driver `vm\rig-m3-clean.ps1`
+(its own file; it dot-sources `rig.ps1 -VmName Purge-CleanPro` and changes neither `rig.ps1` nor `rig-m3.ps1`), guest
+side `vm\guest\m3-clean.ps1` (one agent job per phase, result lines `M3C ...`), scorer `vm\truth\m3-clean-score.ps1`.
+
+```powershell
+$env:VMPWFILE = 'C:\path\to\pw.txt'
+powershell -NoProfile -ExecutionPolicy Bypass -File install\inno\build-installer.ps1      # on the gate commit
+.\vm\rig-m3-clean.ps1 -Setup target\installer\Purge-Setup-0.1.0.exe [-Run <name>] [-BenchRuns 6]   # ~30-40 min
+powershell -NoProfile -File vm\truth\m3-clean-score.ps1 -Evidence E:\purge-build\gate-evidence\m3-clean-start\<run>
+powershell -NoProfile -File vm\truth\m3-clean-score.ps1 --self-test
+```
+
+- **VM and setup.** Purge-CleanPro `rig-base` only (`Assert-M3CleanVm`; never Inbound, which other modes have filled
+  with runtimes and apps). The script does not build: the gate uses a setup built from the gate commit by
+  `install\inno\build-installer.ps1` (`-Setup` must be a `Purge-Setup-<version>.exe`). `summary.json` records the
+  setup's SHA-256, size and time and this checkout's HEAD; the scorer requires the guest's hash of the setup it ran to
+  equal it. Same refusals as section 13 (VMPWFILE, one VM at a time, the lock `vm\runs\.lock-Purge-CleanPro`), plus a
+  missing or misnamed setup and an existing non-empty run directory. At the end the VM is powered off and `rig-base`
+  restored (left off).
+- **Evidence** `E:\purge-build\gate-evidence\m3-clean-start\<run>\` (run = `-Run`, default the start time):
+  `rig-m3-clean-<stamp>.log`, `jobs\*.log`, `pre.png`, `install-1.png`, `ui-names.png`, `uninstall-no.png`,
+  `install-2.png`, `uninstall-yes-dialog.png`, `uninstall-yes-done.png`, `rollback.png`, `guest\` (the guest's
+  `C:\cr\out\m3-clean\`: one JSON per phase, the Inno logs `setup-install-<n>.log`, `uninstall-no.log`,
+  `uninstall-yes.log`, `setup-rollback.log`, the `-Check` reports `check-<n>.json`, `bench\markers.txt`),
+  `summary.json`, and the scorer's `score.json`.
+- **Phases** (in this order):
+  - `pre`: preconditions, each a scorer row: no .NET runtime (`Program Files\dotnet\shared\*\*`), no Windows App
+    Runtime (appx `*WindowsAppRuntime*` for all users, or an ARP entry), no VC++ redistributable (ARP "Microsoft Visual
+    C++ ... Redistributable"), nothing of Purge yet. Reported only: Smart App Control
+    (`CI\Policy\VerifiedAndReputablePolicyState`: off / on / evaluation), SmartScreen (Explorer `SmartScreenEnabled`,
+    policy `EnableSmartScreen`), the setup's Authenticode status and mark of the web, Defender, UAC (the Windows
+    default; 11.2 says "default"), the display adapter, the VCLibs appx packages. The setup arrives by guestcontrol, so
+    it has **no mark of the web**: SmartScreen's reputation check of a downloaded file is not exercised (code signing
+    is the user's open item, M3_FINISH_PLAN "Needs the user"). With Smart App Control on, an unsigned setup is
+    blocked: the install rows then fail and `pre.json` says why (Code Integrity events 3033/3034/3076/3077 since the
+    setup started are kept in `install-<n>.json`).
+  - `install -Tag 1`: `Purge-Setup-*.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG=...` from the elevated agent
+    (`PrivilegesRequired=admin`, no prompt). Then: the layout (`purge-engine.exe`, `purge-broker.exe`, `Purge.exe`,
+    `kb\`, `setup\install.ps1`, `unins000.exe`, `unins000.dat`), the owners of the root and the binaries, the root's
+    SDDL, `{app}\setup\install.ps1 -Check -ReportPath check-1.json` (exit 0 and `ok`; `program_files` good and
+    `payload.ok` are the broker's start checks of `start.rs` as the script implements them), `%ProgramData%\Purge` with
+    `sessions`, `Quarantine`, `fp`, `kb`, `sessions\index.json` and a protected DACL (`D:P`), the `Purge` event-log key,
+    the ARP entry `HKLM\...\Uninstall\{7C1B9E64-2D58-4F1A-9B03-6E4C5A8D7F21}_is1` (DisplayName `Purge`; the AppId of
+    `purge.iss`, the self-test checks they agree), the Start-menu shortcut.
+  - `ui-start`: `Purge.exe` (no arguments) at medium through `LaunchMedium` (task `PurgeRigM3CleanUi`); the integrity
+    of `Purge.exe` and of the `purge-engine.exe` it started (token RID); UI Automation from the agent: the window by
+    process id, the list by automation id `ProgramList` (WinUI's `x:Name`), and which of the machine's ARP display
+    names appear as rows (an element whose name is the display name, or starts with it followed by a line break or
+    space). The `Purge` row is required: it exists only in the real engine's answer, never in the sample data the UI
+    falls back to. The modules of both processes are listed; any from `\dotnet\`, `\WindowsApps\` or a Windows App SDK
+    / runtime DLL outside `%ProgramFiles%\Purge` fails the row "no runtime loaded from outside". The host's screenshot
+    `ui-names` is taken with the window up; `ui-stop` closes it.
+  - `bench -Tag <n>` (default 6, `-BenchRuns`): the `--real-engine` protocol of `xtask bench-launch` without cargo in
+    the guest: `n` launches of `Purge.exe --bench-exit --bench-until icons_visible` at medium through a `launch.cmd`
+    that sets `PURGE_BENCH_OUT`, `PURGE_BENCH_ICON_ATLAS` (a fresh atlas: launch 1 is the cold icon cache and dropped)
+    and `PURGE_ENGINE` (the installed engine); nearest-rank p50/p90 of `first_tick`, `presented`, `names_visible`,
+    `icons_visible`, `list_reply`. **Report only** (9.1: the VM renders with WARP, 3D is off); the scorer requires only
+    that the numbers exist and that no launch fell back to the sample data (`engine_fallback`).
+  - `uninstall-no`: `Purge.exe` started at medium first (the UI and its engine), the data root listed, then the ARP
+    entry's `UninstallString` with `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG=`; the wait covers Inno's hand-off to
+    its `%TEMP%\_iu*.tmp` copy. Checked: the processes started before are gone, the ARP entry, the event-log key,
+    `%ProgramFiles%\Purge` (every leftover is listed) and both shortcuts are gone, no Purge process runs, and
+    `%ProgramData%\Purge` still exists with the same listing (path, size, last write): the silent default is No.
+  - `install -Tag 2`: the same as install 1; the kept data root must be adopted (no `C:\ProgramData\Purge*` renamed
+    aside).
+  - `uninstall-yes-start` / `uninstall-yes-answer`: the setup has **no switch for "delete the data folder"**
+    (`purge.iss` asks with `SuppressibleMsgBox`, whose silent answer is the default No). The rig runs the
+    `UninstallString` with `/SILENT /NORESTART /LOG=` and without `/SUPPRESSMSGBOXES`: no start confirmation, but the
+    question is shown; the agent (high, like the uninstaller) finds the window that shows "Also delete Purge", the host
+    takes `uninstall-yes-dialog.png`, then the agent invokes the `Yes` button (UIA `InvokePattern`). Checked:
+    everything of `uninstall-no` plus `%ProgramData%\Purge` gone.
+  - `rollback`: from the clean state left by Yes, a canary directory `C:\cr\m3clean-canary` and a junction
+    `C:\Program Files\Purge\zz-planted` to it (in a pre-created install directory) are planted: `install.ps1
+    -ProtectOnly`, the first post-install run, refuses a reparse point in the tree (`Protect-Tree`; `-Check`'s
+    `Test-PayloadLayout` names it too), so the `[Code]` step calls `FailSetup` and `Abort`. The setup runs silently.
+    Checked: exit not 0, no ARP entry, no payload file and nothing in the directory but the plant, no event-log key,
+    no data root (the failing run never reached `-DataRootOnly`), no shortcut, the canary unchanged (hash, DACL,
+    listing) and the junction still a junction (not followed). The plant is removed afterwards (`rmdir` on the link).
+- **Scorer** (`m3-clean-score.ps1`, fail-closed: a missing file, record or field fails its row): the rows above, the
+  screenshots `ui-names` and `uninstall-yes-dialog`, the VM name, and "every rig step ran" (`failed_step` false, not
+  aborted). Rows named `report: ...` (SmartScreen / Smart App Control state, the WARP numbers) need only that the
+  values were recorded. `--self-test`: a passing synthetic evidence directory passes; an empty and a missing directory
+  fail; 35 single defects each fail (among them: event source missing after install, a leftover file after
+  uninstall, `-Check` exit 1, the setup succeeding in the rollback, a runtime loaded from `WindowsApps`, the data root
+  deleted by the silent uninstall). The rig self-test checks the pure helpers (VM refusal, setup name, run name, job
+  text, step order, a guest branch per step, the AppId) and runs the scorer's self-test.
+- **Not settled without a run**: whether Inno's `Abort` from `CurStepChanged(ssPostInstall)` really rolls the install
+  back (install/README.md says so; the rollback rows decide it); whether the WinUI list exposes the rows' text to UI
+  Automation as the row check expects; whether Smart App Control on this Insider build is off or in evaluation for an
+  unsigned setup; whether the Inno uninstaller's first process waits for its `_iu*.tmp` copy (the rig waits for both
+  either way).
