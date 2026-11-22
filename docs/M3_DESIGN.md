@@ -163,7 +163,9 @@ only in a `rig-exec` build or when not elevated (package M3-HARDEN).
 - `plan.execute` draws the dialog from that `BoundPlan` and then runs the same frozen request. Package M3-EXEC adds
   `execute_bound`, so the executor takes the `BoundPlan` that was shown and derives nothing a second time.
 - The session's fingerprint is always passed to the object binding (`unbound_objects`). There is no optional `--fp`.
-- One mutating request at a time. A second one gets `busy`.
+- One mutating request at a time. A second one gets `busy`. Across brokers the store has one writer at a time
+  (`sessions\writer.lock`, purge-exec; DECISIONS 2026-11-22 R3): another broker's run, undo, recovery or purge
+  is `busy` too.
 
 | Event | The broker |
 |---|---|

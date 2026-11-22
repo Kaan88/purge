@@ -109,6 +109,7 @@
 #![allow(clippy::result_large_err)]
 
 use std::collections::BTreeSet;
+use std::time::Duration;
 
 use purge_guard::deny::DenyList;
 use purge_guard::prefix;
@@ -322,8 +323,19 @@ fn journal_missing(error: &JournalError) -> bool {
     )
 }
 
+/// [`pending`] read while holding the store's writer lock (waiting up to `wait` for it), released when
+/// the list is read. A run, undo or recovery of another process reads as interrupted while it works;
+/// with the lock held none works, so every session listed is one that stopped (review R3, single
+/// writer). [`StorageError::WriterBusy`] when another writer keeps the lock: the caller says so rather
+/// than list a live run as interrupted.
+pub fn pending_at_rest(roots: &StorageRoots, wait: Duration) -> Result<PendingList, StorageError> {
+    let _writer = roots.lock_writer_within(wait)?;
+    pending(roots)
+}
+
 /// Lists the sessions that need recovery (`journal recover`). Read-only apart from what the store's
-/// integrity check renames aside.
+/// integrity check renames aside. Another process's run, undo or recovery that is working now is
+/// listed too (its journal has no end yet); [`pending_at_rest`] reads only stopped ones.
 pub fn pending(roots: &StorageRoots) -> Result<PendingList, StorageError> {
     let mut list = PendingList::default();
     let listing = roots.list_sessions()?;
@@ -1137,6 +1149,8 @@ fn recover(
         warnings: Vec::new(),
         alerts: Vec::new(),
     };
+    // The store's single writer from the first read on (see `storage`).
+    let _writer = env.roots.lock_writer()?;
     env.roots.check()?;
     let session = env.roots.open_session(id)?;
     let index = undo::read_index(env.roots, &mut out.warnings)?;
@@ -1585,6 +1599,7 @@ fn retry(
         index_updated: false,
         warnings: Vec::new(),
     };
+    let _writer = env.roots.lock_writer()?;
     env.roots.check()?;
     let dir = env.roots.open_session(session)?;
     let index = undo::read_index(env.roots, &mut out.warnings)?;

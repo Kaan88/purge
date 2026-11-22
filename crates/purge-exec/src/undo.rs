@@ -1380,6 +1380,9 @@ fn run_undo(
     env: UndoEnv<'_>,
     expect: Option<&UndoExpect>,
 ) -> Result<UndoOutput, UndoError> {
+    // The store's single writer from the first read on: the journal and index this run reads are
+    // the ones no other run changes until it ends.
+    let _writer = env.roots.lock_writer()?;
     let started = now();
     let mut warnings = Vec::new();
     let mut alerts = Vec::new();

@@ -4,6 +4,32 @@ Branch `baseline`, pushed to `origin/baseline` (8c7142f). Design `docs/BASELINE_
 decision of this work is a row in `docs/DECISIONS.md` (Post-M1b). This file is kept current so the work can be
 continued from any harness: read it, then `git log --oneline -15` and `git worktree list`.
 
+## R3 SINGLE WRITER + UI FOLLOW-UPS 2026-11-22 (branch `r3-single-writer`; Fable re-review APPROVED, merged into baseline).
+- Verdict: two brokers (Leftovers' and History's/Vault's) could write one store at once with no guard. The index's
+  read-modify-write lost entries and failed its read-back (measured: 6 unlocked writers x 4 updates, 18 sharing
+  violations on `index.json.tmp`, 3 of 6 sessions gone from the index), so a finished cleanup could vanish from
+  History or read as `Unindexed` and block every execute; one broker's recovery could `remove_unstarted` another's
+  just-created session or write its report/index entry concurrently; two cap checks could both pass. A session's
+  journal was already single-writer (append handle shares read only): no interleaved journal, no double restore.
+- Fix (purge-exec, 3f9252d): `StorageRoots::lock_writer` = `sessions\writer.lock`, share mode 0, admin-only store
+  file, OS-released on process death; taken by execute, undo, recovery, retry_held and purge for their whole run;
+  2 s wait, then `StorageError::WriterBusy`. Broker (9468b56): `busy` for it, `writer_busy` probe before the execute,
+  undo and recovery dialogs; fingerprint temp names per process. DECISIONS: two "(coordinator)" rows (R3).
+- UI (eeb6806): models stay on the UI thread; Quarantine vault on `history.index` + `undo.run` +
+  `quarantine.expiring/purge` (no sample data, no Empty quarantine); History "Check for interrupted cleanups"
+  (`journal.pending` on the click, or after a `needs_recovery` refusal). Notes: `m3-notes/ui-history.md` (R3
+  section), `broker-core.md` point 5, M3_DESIGN 3.6, install/README layout.
+- Checks (unelevated, TEMP=C:\purge-build\tmp): fmt --check, clippy --workspace --all-targets -D warnings, rig clippy (rig-exec + test-support), check-deps, gen-dto --check (no RPC change), no-new-walks: ok. purge-exec (fault-inject + test-support) lib 481 (8 ignored) + every integration target incl. crash 16 and single_writer 2; purge-broker 223 + 10 + 1; purge-engine rig lib 73, exec_cli 43, engine 14. `dotnet build ui\Purge.App -c Release` 0 warnings; Purge.Client.Tests 130/130 (History 17, Vault 10, UiThread 3).
+- Fable review (lock sound; advisory layer) fixed: pending read with the lock held (`pending_at_rest`, `busy` for
+  `journal.pending` and the pre-execute check; UI lists nothing and drops stale marks on the next refresh); purge
+  probes before its first dialog; execute re-checks interrupted sessions under the lock (`ExecError::NeedsRecovery`/
+  `Damaged`); the probe retries 250 ms; stale fingerprint temporaries swept; two-process serialisation test, races of
+  resume vs rollback, pending at rest. CLI verified: it writes only through the locked entry points. Checks: fmt,
+  clippy (workspace, rig, mcp), check-deps, gen-dto ok; exec lib 484 + integration (single_writer 5); broker 227 +
+  10 + 1; engine rig 73/43/14; App Release 0 warnings; UI tests 133/133.
+- Open: one broker per app (ui-history.md); a fair queue instead of `busy` if users hit it; the VM rows in
+  ui-history.md. Fable re-review: approve; follow-up: make `fp` a checked Store directory with handle-relative ops (defence in depth).
+
 ## BL-GATE runbook (rig tooling on branch `bl-gate-rig`, 2026-11-22; not run on a VM yet)
 Rig rules apply (one VM at a time, VMPWFILE from the environment, never the clone/UT or DietPi). From the repo root,
 with `target\release\purge-engine.exe` and `vm\rigtool\target\release\rigtool.exe` built from this tree and the tree

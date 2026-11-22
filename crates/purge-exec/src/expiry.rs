@@ -349,6 +349,10 @@ pub enum PurgeError {
     /// The consent does not name these requested items.
     #[error("the consent does not name {} of the requested items", .0.len())]
     NotConsented(Vec<ExpiryId>),
+    /// The store's writer lock could not be taken: another operation holds it
+    /// ([`StorageError::WriterBusy`]), or the store refused the lock file. Nothing was done.
+    #[error("{0}")]
+    Store(#[from] StorageError),
 }
 
 /// Why an item was left untouched on purpose.
@@ -1015,6 +1019,8 @@ pub fn purge(
     if !missing.is_empty() {
         return Err(PurgeError::NotConsented(missing));
     }
+    // The store's single writer from the first read on (see `storage`).
+    let _writer = roots.lock_writer()?;
 
     let mut by_session: BTreeMap<&SessionId, Vec<&ExpiryId>> = BTreeMap::new();
     for id in &ids {

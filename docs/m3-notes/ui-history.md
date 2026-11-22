@@ -46,10 +46,48 @@ method the page calls already existed. Broker consent path, purge-exec and undo 
 
 ## Open points
 
-- **Two brokers.** The Leftovers page owns the broker S2 handed it; History launches its own. Whether a second broker
-  can run while the first holds the store (store lock, `busy`) is not checked here; one shared broker per app would
-  be the cleaner design.
-- Interrupted sessions are those `Open` in the index; `journal.pending` (broker) is not asked, so an `Unindexed`
-  session is not offered recovery from this page.
-- The Quarantine vault page still uses `GetQuarantineAsync` / `UndoSessionAsync`, which the stdio client refuses; it
-  could move onto `history.index` and `HistoryBroker` the same way.
+- **Two brokers.** The Leftovers page owns the broker S2 handed it; History and the Vault launch their own. Answered
+  by R3 (branch `r3-single-writer`, DECISIONS 2026-11-22): the store has one writer at a time across brokers
+  (`sessions\writer.lock` in purge-exec); a second writer is `busy`, which both pages show as "Another Purge window
+  is changing the quarantine". One shared broker per app is still the cleaner design (one UAC prompt, no `busy`).
+- Interrupted sessions: answered by R3 below.
+- The Quarantine vault: answered by R3 below.
+
+## R3 follow-ups (branch `r3-single-writer`)
+
+1. **Threading.** No XAML binding reads the page models: the views post `Render`/`Refresh` through their
+   `DispatcherQueue` on every `Changed` (as ProgramsView does), and the only `x:Bind` with change notification is on
+   `LeftoversRow`, raised on the UI thread. The race was elsewhere: the models rewrote `Sessions` / `Items` on pool
+   threads (after `ConfigureAwait(false)`) while a posted render enumerated them. The models now never leave the
+   context that drives them (the UI thread), and `LeftoversViewModel` posts the broker's `consent.shown` and
+   `baseline.changed` (reader thread) to the context it was made on. Tests: `UiThreadTests` (a single-thread
+   synchronization context stands for the UI thread; the engine and broker answer on pool threads; every `Changed`
+   must come on that thread; it fails with one `ConfigureAwait(false)` put back).
+2. **Quarantine vault on real calls** (design 7a page table: `history.index`, `quarantine.expiring`,
+   `quarantine.purge`). `ui/Purge.App/Views/VaultModel.cs` (`VaultViewModel`, `VaultBatchModel`, `VaultVolumeModel`,
+   no WinUI types, linked into the tests): the cleanups that still hold something and the real use and cap per
+   volume from `history.index` (no broker on page open); "Put back…" is `undo.run` for the whole session through the
+   broker's dialog; "Review and delete expired…" is `quarantine.expiring`, then `quarantine.purge` with every expiry id
+   (the broker's dialogs name every item, user data one per dialog); nothing expired is a note, not a dialog. No
+   "Empty quarantine" and no export (design), no sample data. An interrupted session in the index shows a bar that
+   opens History. `HistoryBroker` implements the new `IVaultBroker` too. `RecoveryBar` (CLI-only calls) is gone.
+   Tests: `VaultPageTests` (10).
+3. **Recovery of sessions the index does not show** (design 6.3: `journal.pending` is a broker `Read` method; the
+   page never starts the broker on open). The index gets a run's entry only when the run ends, so `Open` in the
+   index catches almost no interrupted run. History now asks `journal.pending` (a) on "Check for interrupted
+   cleanups" (header button; starts the broker on the click) and (b) when a restore it started is refused with
+   `needs_recovery` (the broker is up; no second prompt). A pending session the index lacks is listed from the
+   journal ("N of M items done · found in the journals") with Resume and Roll back; one the index lists is marked
+   Interrupted. The answer is shown once: the next index refresh drops its marks (a run that committed since is not
+   left Interrupted). While another broker writes the store the broker answers `busy` (it reads the list with the
+   writer lock held) and the page lists nothing ("Another Purge window is working on the quarantine"). Tests: `OpeningThePageNeverAsksForInterruptedSessions`,
+   `CheckForInterruptedListsASessionTheIndexDoesNotHaveAndOffersItsRecovery`,
+   `CheckForInterruptedMarksAnIndexedSessionWhoseReportWasNeverWritten`,
+   `CheckForInterruptedSaysSoWhenNothingWasInterrupted`,
+   `ARestoreRefusedForRecoveryListsTheInterruptedSessionsWithoutAnotherPrompt`,
+   `AnotherWriterOfTheStoreIsBusyNotAFailure`, `TheNextRefreshDropsTheMarksOfAnEarlierCheck`,
+   `AnotherWindowAtWorkListsNoInterruptedSession`; Vault `AnotherWriterSaysNothingWasDeleted`.
+
+Still needs the VM: the Vault's "Put back…" and "Review and delete expired…" through a real UAC prompt and the
+broker's dialogs; "Check for interrupted cleanups" on a session interrupted by killing the broker mid-run; two
+brokers at once (Leftovers moving while History restores) answering `busy`.

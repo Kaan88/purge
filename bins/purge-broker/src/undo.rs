@@ -64,6 +64,10 @@ pub fn run<H: Handler>(
             "the dialog does not describe the ops the undo would put back",
         ));
     }
+    // Not asked while another broker writes the store: the run would be refused after the approval.
+    if backend.writer_busy() {
+        return Err(BackendError::Busy.into_error());
+    }
     if dialog::ask(ctx, &view) != Outcome::Approved {
         return Err(ErrorObject::server(ErrorData::ConsentDeclined));
     }

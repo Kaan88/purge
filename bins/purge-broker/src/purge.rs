@@ -97,6 +97,14 @@ pub trait ExpirySource: Send + Sync + 'static {
     /// Lists what is due at `now`. Changes nothing.
     fn listing(&self, now: FileTime) -> Result<Listing, StorageError>;
 
+    /// Whether another operation writes the store now (another broker's run, undo, recovery or purge):
+    /// asked before the first dialog, so the user is not asked to delete what the purge's own lock
+    /// would refuse. Only a hint; [`ExpirySource::purge`] takes the lock. The tests' sources have no
+    /// other writer unless they say so.
+    fn writer_busy(&self) -> bool {
+        false
+    }
+
     /// Permanently deletes `ids`, gated by `consent` (see [`ExpirySource::listing`] and
     /// [`purge_exec::expiry::purge`]). `ids` are distinct and are the broker's own units.
     fn purge(
@@ -146,6 +154,11 @@ impl ExpirySource for StorageExpiry {
             backups: listing.backups,
             apps,
         })
+    }
+
+    fn writer_busy(&self) -> bool {
+        // A lock file the store refuses is not a busy writer: the purge's own lock reports it.
+        self.roots.writer_busy().unwrap_or(false)
     }
 
     fn purge(
@@ -273,6 +286,10 @@ impl Purger {
         // The executor's own user-data flag decides the dialog, never the client. `view_purge`
         // refuses a user-data unit, so a split that missed one fails closed.
         let (bulk, personal) = view::split_purge(&items, &backups);
+        // No dialog while another broker writes the store: the purge would be refused after it.
+        if self.source.writer_busy() {
+            return Err(ErrorObject::server(ErrorData::Busy));
+        }
         let mut named: Vec<ExecExpiryId> = Vec::new();
         let mut confirmed: Vec<ExecExpiryId> = Vec::new();
         let mut files: Vec<(ExecExpiryId, Vec<String>)> = Vec::new();
@@ -335,6 +352,7 @@ impl Purger {
                     "internal error: {} approved purge unit(s) were not named in the consent",
                     missing.len()
                 )),
+                PurgeError::Store(e) => store_error(e),
             })?;
 
         let purged = report
@@ -391,10 +409,12 @@ fn id_map(listing: &Listing) -> Result<BTreeMap<ExpiryId, ExecExpiryId>, ErrorOb
     Ok(map)
 }
 
-/// A store error as the RPC names it: the store's own check is `store_integrity`, anything else
-/// `runtime` (the design's 6.4 kinds, mirroring the CLI's `storage_exit`).
+/// A store error as the RPC names it: the store's own check is `store_integrity`, another writer of
+/// the store (another broker's run, undo, recovery or purge) is `busy`, anything else `runtime` (the
+/// design's 6.4 kinds, mirroring the CLI's `storage_exit`).
 fn store_error(e: StorageError) -> ErrorObject {
     match e {
+        StorageError::WriterBusy { .. } => ErrorObject::server(ErrorData::Busy),
         e @ (StorageError::Integrity { .. }
         | StorageError::VolumeRoot { .. }
         | StorageError::VolumeMismatch { .. }) => ErrorObject::server(ErrorData::StoreIntegrity {

@@ -32,6 +32,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime};
 
 use purge_engine::pipeline::{
     self, Harvested, PipelineError, Sources, UninstallCommands, Uninstalled,
@@ -152,11 +153,76 @@ pub trait Machine: Send + Sync + 'static {
 // The live machine
 // ---------------------------------------------------------------------------------------------------
 
+/// A temporary fingerprint file this much older than now belongs to no write in progress (a write takes
+/// milliseconds): one a broker that crashed between the write and the rename left behind.
+const FP_TEMP_STALE: Duration = Duration::from_secs(10 * 60);
+
+/// Whether `name` is exactly a temporary fingerprint file of [`LiveMachine::write_fingerprint`]:
+/// `fp-<64 lower-case hex>.json.<pid>-<call>.tmp`, both decimal. Nothing else is ever removed.
+fn is_fingerprint_temp(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix("fp-") else {
+        return false;
+    };
+    let Some((hash, rest)) = rest.split_at_checked(64) else {
+        return false;
+    };
+    let Some(rest) = rest
+        .strip_prefix(".json.")
+        .and_then(|r| r.strip_suffix(".tmp"))
+    else {
+        return false;
+    };
+    let Some((pid, call)) = rest.split_once('-') else {
+        return false;
+    };
+    let decimal = |s: &str| !s.is_empty() && s.len() <= 20 && s.bytes().all(|b| b.is_ascii_digit());
+    hash.bytes()
+        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        && decimal(pid)
+        && decimal(call)
+}
+
+/// Removes the temporary fingerprint files in `dir` (the admin-only `fp` directory of the data root)
+/// last written before `before`: only names [`is_fingerprint_temp`] accepts, only plain files (not a
+/// directory, a link or any reparse point; the attributes are read without following one). Failures are
+/// ignored: a file left stays harmless. Returns how many were removed.
+fn sweep_fingerprint_temps(dir: &Path, before: SystemTime) -> usize {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        if !name.to_str().is_some_and(is_fingerprint_temp) {
+            continue;
+        }
+        let path = entry.path();
+        let Ok(meta) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        let plain = meta.file_type().is_file()
+            && !meta.file_type().is_symlink()
+            && meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0;
+        if plain
+            && meta.modified().is_ok_and(|written| written < before)
+            && std::fs::remove_file(&path).is_ok()
+        {
+            removed += 1;
+        }
+    }
+    removed
+}
+
 /// The broker's machine: the live sources, the checked data root and the runner's options.
 pub struct LiveMachine {
     live: Live,
     store: StorageRoots,
     options: RunOptions,
+    /// When this machine was made (at the broker's start): a temporary fingerprint file older than
+    /// this is not one of this broker's writes.
+    started: SystemTime,
 }
 
 impl LiveMachine {
@@ -166,6 +232,7 @@ impl LiveMachine {
             live: Live::new(),
             store,
             options: RunOptions::default(),
+            started: SystemTime::now(),
         }
     }
 
@@ -251,15 +318,26 @@ impl Machine for LiveMachine {
             .map_err(|e| ErrorObject::runtime(format!("cannot create {}: {e}", dir.display())))?;
         let bytes = serde_json::to_vec(fingerprint)
             .map_err(|e| ErrorObject::runtime(format!("cannot serialise the fingerprint: {e}")))?;
+        // Temporary files a crashed broker left are removed first (never one of a write in progress).
+        if let Some(stale) = SystemTime::now().checked_sub(FP_TEMP_STALE) {
+            sweep_fingerprint_temps(&dir, self.started.min(stale));
+        }
         let path = self.fingerprint_path(program);
-        let temp = path.with_extension("json.tmp");
+        // A temporary name of this process and call: two brokers storing the same program's
+        // fingerprint at once never write into one temporary file, so the rename puts one whole
+        // document in place, never a mix of two (review R3, single writer).
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let call = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let temp = path.with_extension(format!("json.{}-{call}.tmp", std::process::id()));
         std::fs::write(&temp, &bytes)
             .map_err(|e| ErrorObject::runtime(format!("cannot write {}: {e}", temp.display())))?;
         // `std::fs::rename` replaces an existing file on Windows (`MOVEFILE_REPLACE_EXISTING`), so the
         // old fingerprint stays until the new one takes its place; no removal first, which would open
         // a window in which a crash loses it (review M3-R2 N1).
-        std::fs::rename(&temp, &path)
-            .map_err(|e| ErrorObject::runtime(format!("cannot replace {}: {e}", path.display())))
+        std::fs::rename(&temp, &path).map_err(|e| {
+            let _ = std::fs::remove_file(&temp);
+            ErrorObject::runtime(format!("cannot replace {}: {e}", path.display()))
+        })
     }
 
     fn unstorable(&self, candidates: &[&Candidate]) -> Result<Vec<Refusal>, ErrorObject> {
@@ -1028,5 +1106,59 @@ mod tests {
             start,
             FileTime(start.0.saturating_sub(10))
         ));
+    }
+
+    #[test]
+    fn only_stale_temporary_fingerprint_files_of_the_exact_pattern_are_swept() {
+        let dir = std::env::temp_dir().join(format!(
+            "purge-fp-sweep-{}-{:x}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let hash = "a".repeat(64);
+        let old = SystemTime::now() - Duration::from_secs(3600);
+        let make = |name: &str, written: SystemTime| {
+            let path = dir.join(name);
+            let file = std::fs::File::create(&path).unwrap();
+            file.set_modified(written).unwrap();
+            path
+        };
+        let stale = make(&format!("fp-{hash}.json.4242-0.tmp"), old);
+        let fresh = make(&format!("fp-{hash}.json.4242-1.tmp"), SystemTime::now());
+        let document = make(&format!("fp-{hash}.json"), old);
+        let other = [
+            make(&format!("fp-{hash}.json.tmp"), old),
+            make(&format!("fp-{}.json.1-2.tmp", "A".repeat(64)), old),
+            make(&format!("fp-{hash}.json.1-x.tmp"), old),
+            make("notes.tmp", old),
+        ];
+        // A directory with the pattern's name is never entered or removed.
+        let folder = dir.join(format!("fp-{hash}.json.7-7.tmp"));
+        std::fs::create_dir(&folder).unwrap();
+
+        let cutoff = SystemTime::now() - Duration::from_secs(60);
+        assert_eq!(sweep_fingerprint_temps(&dir, cutoff), 1);
+        assert!(!stale.exists());
+        assert!(
+            fresh.exists(),
+            "a temporary file younger than the cutoff may be a write in progress"
+        );
+        assert!(document.exists());
+        assert!(other.iter().all(|p| p.exists()));
+        assert!(folder.is_dir());
+        assert_eq!(sweep_fingerprint_temps(&dir, cutoff), 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_temporary_name_of_a_write_is_the_pattern_the_sweep_knows() {
+        let hash = purge_exec::journal::sha256_bytes(b"HKLM|64|Vendor_is1");
+        let name = format!("fp-{hash}.json.{}-{}.tmp", std::process::id(), 17);
+        assert!(is_fingerprint_temp(&name), "{name}");
+        assert!(!is_fingerprint_temp(&format!("fp-{hash}.json")));
     }
 }

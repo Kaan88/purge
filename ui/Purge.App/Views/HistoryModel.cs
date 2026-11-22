@@ -27,6 +27,26 @@ public enum HistoryChip { Undoable, Caution, Neutral }
 /// </summary>
 public sealed class HistorySessionModel
 {
+    /// <summary>
+    /// A session <c>journal.pending</c> found interrupted that the index does not list as open (an <c>Unindexed</c>
+    /// one, or a run that never reached its index entry): listed from the journal's facts, with recovery offered.
+    /// </summary>
+    public HistorySessionModel(PendingSession p, DateTimeOffset now)
+        : this(new SessionSummary
+        {
+            Id = p.Session,
+            App = p.App,
+            Started = p.Started,
+            State = SessionState.Open,
+            Counts = new OutcomeCounts { Done = p.Done },
+            Expires = new Expiry(),
+        }, now)
+    {
+        FromJournal = true;
+        Detail = $"{p.Done.ToString(CultureInfo.CurrentCulture)} of {p.Total.ToString(CultureInfo.CurrentCulture)} items done · " +
+                 "found in the journals";
+    }
+
     public HistorySessionModel(SessionSummary s, DateTimeOffset now)
     {
         Source = s;
@@ -72,8 +92,11 @@ public sealed class HistorySessionModel
     public DateTime Day { get; }
     public string Time { get; }
     public string Detail { get; }
-    public string State { get; }
-    public HistoryChip Chip { get; }
+
+    /// <summary>Listed from <c>journal.pending</c> (broker), not from the index.</summary>
+    public bool FromJournal { get; }
+    public string State { get; private set; }
+    public HistoryChip Chip { get; private set; }
     public DateTimeOffset FileExpiry { get; }
     public DateTimeOffset BackupExpiry { get; }
     public int FileDays { get; }
@@ -82,8 +105,19 @@ public sealed class HistorySessionModel
     /// <summary>Something is still in quarantine or in a backup to put back.</summary>
     public bool Held { get; }
 
-    /// <summary>The session was not recorded completely (<c>Open</c> in the index); recovery comes first.</summary>
-    public bool Interrupted { get; }
+    /// <summary>
+    /// The session was not recorded completely (<c>Open</c> in the index, or listed by <c>journal.pending</c>);
+    /// recovery comes first.
+    /// </summary>
+    public bool Interrupted { get; private set; }
+
+    /// <summary><c>journal.pending</c> lists a session the index shows as finished (its report was never written).</summary>
+    internal void MarkInterrupted()
+    {
+        Interrupted = true;
+        State = "Interrupted";
+        Chip = HistoryChip.Caution;
+    }
 
     /// <summary>A reconcile alert was found among the items read with "Show items" (review M3-R2 S5).</summary>
     public bool HasAlert { get; set; }
@@ -159,15 +193,29 @@ public sealed record HistoryBrokerLaunch(IHistoryBroker? Broker, bool Cancelled,
 
 /// <summary>
 /// The History page's view model. The list is <c>history.index</c> from the medium engine, so opening the page never
-/// starts the broker or a UAC prompt; "Show items" (<c>history.get</c>) and Restore (<c>undo.run</c>) start it on
-/// the click (design 6.3). Reconcile alerts (review M3-R2 S5) show per item and in the restore result.
+/// starts the broker or a UAC prompt; "Show items" (<c>history.get</c>), Restore (<c>undo.run</c>) and "Check for
+/// interrupted cleanups" (<c>journal.pending</c>) start it on the click (design 6.3). Reconcile alerts (review M3-R2
+/// S5) show per item and in the restore result.
+/// <para>
+/// Threading: the model is driven from the UI thread and never leaves its context (no <c>ConfigureAwait(false)</c>),
+/// so every state change and every <see cref="Changed"/> happens on the thread that drives it, and the view's render
+/// never reads a list while a pool thread rewrites it. The view still posts its render through its
+/// <c>DispatcherQueue</c>, as the Programs page does.
+/// </para>
 /// </summary>
 public sealed class HistoryViewModel
 {
+    private const string BusyText = "Another Purge window is changing the quarantine. Wait for it to finish, then try again.";
+
+    private const string PendingBusyText =
+        "Another Purge window is working on the quarantine. Try again when it has finished; nothing is listed until then.";
+
     private readonly Func<CancellationToken, Task<HistoryIndex>> _readIndex;
     private readonly Func<CancellationToken, Task<HistoryBrokerLaunch>> _launch;
+    private readonly Dictionary<string, PendingSession> _pending = new(StringComparer.Ordinal);
     private IHistoryBroker? _broker;
     private bool _busy;
+    private string? _selectAfterLoad;
 
     /// <param name="readIndex"><c>history.index</c> on the medium engine.</param>
     /// <param name="launch">Starts the broker (with the first-elevation explanation and the Windows prompt).</param>
@@ -178,7 +226,7 @@ public sealed class HistoryViewModel
         _launch = launch;
     }
 
-    /// <summary>Raised after every state change, on the caller's thread or a pool thread.</summary>
+    /// <summary>Raised after every state change, on the thread (synchronization context) that drives the model.</summary>
     public event Action? Changed;
 
     public HistoryPhase Phase { get; private set; } = HistoryPhase.Loading;
@@ -231,7 +279,7 @@ public sealed class HistoryViewModel
         HistoryIndex index;
         try
         {
-            index = await _readIndex(ct).ConfigureAwait(false);
+            index = await _readIndex(ct);
         }
         catch (Exception e) when (e is not OutOfMemoryException)
         {
@@ -246,10 +294,22 @@ public sealed class HistoryViewModel
         var now = DateTimeOffset.Now;
         var alerts = Sessions.Where(s => s.HasAlert).Select(s => s.Id).ToHashSet(StringComparer.Ordinal);
         Sessions.Clear();
-        Sessions.AddRange(index.Sessions.Select(s => new HistorySessionModel(s, now)).OrderByDescending(s => s.Started));
+        var listed = index.Sessions.Select(s => new HistorySessionModel(s, now)).ToList();
+        // What the journal.pending just read found is interrupted whatever the index says, and is listed from the
+        // journal when the index has no entry for it.
+        foreach (var s in listed.Where(s => _pending.ContainsKey(s.Id))) s.MarkInterrupted();
+        var ids = listed.Select(s => s.Id).ToHashSet(StringComparer.Ordinal);
+        listed.AddRange(_pending.Values.Where(p => !ids.Contains(p.Session)).Select(p => new HistorySessionModel(p, now)));
+        Sessions.AddRange(listed.OrderByDescending(s => s.Started));
         foreach (var s in Sessions) s.HasAlert = alerts.Contains(s.Id);
+        // A journal.pending answer is shown once: the next refresh drops its marks, so a session that ended
+        // since (its run committed, or it was recovered) is never left marked Interrupted. Asking again
+        // brings back what is still pending.
+        _pending.Clear();
         Error = null;
         Phase = Sessions.Count == 0 ? HistoryPhase.Empty : HistoryPhase.Ready;
+        if (_selectAfterLoad is { } jump) keep = jump;
+        _selectAfterLoad = null;
         var next = Sessions.FirstOrDefault(s => s.Id == keep) ?? Sessions.FirstOrDefault();
         if (next?.Id != Selected?.Id || next is null) Items = null;
         Selected = next;
@@ -278,8 +338,8 @@ public sealed class HistoryViewModel
         Begin("Reading the items of this cleanup…", "", clear);
         try
         {
-            if (await BrokerAsync(ct).ConfigureAwait(false) is not { } broker) return;
-            var detail = await broker.GetAsync(session.Id, ct).ConfigureAwait(false);
+            if (await BrokerAsync(ct) is not { } broker) return;
+            var detail = await broker.GetAsync(session.Id, ct);
             if (Selected != session) return;
             Items = detail.Items.Select(i => new HistoryEntryModel(i)).ToList();
             session.HasAlert = Items.Any(i => i.HasAlert);
@@ -290,7 +350,7 @@ public sealed class HistoryViewModel
         }
         catch (BrokerLinkException)
         {
-            await DropBrokerAsync().ConfigureAwait(false);
+            await DropBrokerAsync();
             ActionError = "The administrator part ended before it answered. Try again.";
         }
         catch (Exception e) when (e is not OutOfMemoryException and not OperationCanceledException)
@@ -319,14 +379,14 @@ public sealed class HistoryViewModel
         var changed = false;
         try
         {
-            if (await BrokerAsync(ct).ConfigureAwait(false) is not { } broker) return;
+            if (await BrokerAsync(ct) is not { } broker) return;
             broker.AllowForeground();
             var progress = new Progress<ProgressDto>(p =>
             {
                 Waiting = p.Phase;
                 Changed?.Invoke();
             });
-            var undo = await broker.UndoAsync(session.Id, ops, progress, ct).ConfigureAwait(false);
+            var undo = await broker.UndoAsync(session.Id, ops, progress, ct);
             changed = true;
             foreach (var conflict in undo.Conflicts)
                 RestoreLines.Add($"{conflict.DisplayName}: {conflict.Conflict.Kind}");
@@ -351,10 +411,16 @@ public sealed class HistoryViewModel
         catch (BrokerRpcException e) when (e.Kind == "needs_recovery")
         {
             ActionError = "An interrupted cleanup comes first. Finish or roll it back, then restore.";
+            // The broker is up already: list the interrupted sessions now, without another prompt.
+            changed = await ReadPendingAsync(ct);
+        }
+        catch (BrokerRpcException e) when (e.Kind == "busy")
+        {
+            ActionError = BusyText;
         }
         catch (BrokerLinkException)
         {
-            await DropBrokerAsync().ConfigureAwait(false);
+            await DropBrokerAsync();
             changed = true;
             ActionError = "The administrator part ended during the restore. Purge cannot tell what was put back; " +
                           "the list below is read again.";
@@ -369,8 +435,8 @@ public sealed class HistoryViewModel
         }
         if (!changed) return;
         var hadItems = Items is not null;
-        await LoadAsync(ct).ConfigureAwait(false);
-        if (hadItems && Selected?.Id == session.Id && _broker is { IsLive: true }) await ReadItemsAsync(clear: false, ct).ConfigureAwait(false);
+        await LoadAsync(ct);
+        if (hadItems && Selected?.Id == session.Id && _broker is { IsLive: true }) await ReadItemsAsync(clear: false, ct);
     }
 
     /// <summary>
@@ -387,10 +453,11 @@ public sealed class HistoryViewModel
         var changed = false;
         try
         {
-            if (await BrokerAsync(ct).ConfigureAwait(false) is not { } broker) return;
+            if (await BrokerAsync(ct) is not { } broker) return;
             broker.AllowForeground();
-            var result = await broker.RecoverAsync(session.Id, rollback, ct).ConfigureAwait(false);
+            var result = await broker.RecoverAsync(session.Id, rollback, ct);
             changed = true;
+            _pending.Remove(session.Id);
             foreach (var alert in result.Alerts)
                 RestoreLines.Add(ReconcileAlert.Text(alert));
             RestoreTitle = result.Outcome switch
@@ -406,9 +473,13 @@ public sealed class HistoryViewModel
         {
             ActionInfo = "Nothing was changed: the prompt was cancelled.";
         }
+        catch (BrokerRpcException e) when (e.Kind == "busy")
+        {
+            ActionError = BusyText;
+        }
         catch (BrokerLinkException)
         {
-            await DropBrokerAsync().ConfigureAwait(false);
+            await DropBrokerAsync();
             changed = true;
             ActionError = "The administrator part ended during the recovery. The list below is read again.";
         }
@@ -420,17 +491,73 @@ public sealed class HistoryViewModel
         {
             End();
         }
-        if (changed) await LoadAsync(ct).ConfigureAwait(false);
+        if (changed) await LoadAsync(ct);
+    }
+
+    /// <summary>
+    /// "Check for interrupted cleanups": <c>journal.pending</c> through the broker, which starts on this click, never on
+    /// page open (design 6.3). The index gets a run's entry only when the run ends, so a run cut short before that, and
+    /// one whose report or entry was never written (<c>Unindexed</c>), are found only here; each is then listed with
+    /// Resume and Roll back.
+    /// </summary>
+    public async Task CheckInterruptedAsync(CancellationToken ct = default)
+    {
+        if (_busy) return;
+        Begin("Looking for interrupted cleanups…", "");
+        var read = false;
+        try
+        {
+            if (await BrokerAsync(ct) is null) return;
+            read = await ReadPendingAsync(ct);
+            if (read && _pending.Count == 0) ActionInfo = "No cleanup was interrupted.";
+        }
+        finally
+        {
+            End();
+        }
+        if (read) await LoadAsync(ct);
+    }
+
+    /// <summary>Reads <c>journal.pending</c> on the live broker into the pending set; false when it could not.</summary>
+    private async Task<bool> ReadPendingAsync(CancellationToken ct)
+    {
+        if (_broker is not { IsLive: true } broker) return false;
+        try
+        {
+            var list = await broker.PendingAsync(ct);
+            _pending.Clear();
+            foreach (var p in list.Sessions) _pending[p.Session] = p;
+            // Show the first one found unless an interrupted session is selected already.
+            if (Selected is not { Interrupted: true } && list.Sessions.Count > 0) _selectAfterLoad = list.Sessions[0].Session;
+            return true;
+        }
+        catch (BrokerRpcException e) when (e.Kind == "busy")
+        {
+            // Another broker is changing the store: its live run would read as interrupted, so the broker does
+            // not list anything until it has finished.
+            _pending.Clear();
+            ActionError = PendingBusyText;
+        }
+        catch (BrokerLinkException)
+        {
+            await DropBrokerAsync();
+            ActionError = "The administrator part ended before it answered. Try again.";
+        }
+        catch (Exception e) when (e is not OutOfMemoryException and not OperationCanceledException)
+        {
+            ActionError = "Couldn't look for interrupted cleanups: " + e.Message;
+        }
+        return false;
     }
 
     /// <summary>Ends the broker this page started (the page is closing).</summary>
-    public async Task CloseAsync() => await DropBrokerAsync().ConfigureAwait(false);
+    public async Task CloseAsync() => await DropBrokerAsync();
 
     private async Task<IHistoryBroker?> BrokerAsync(CancellationToken ct)
     {
         if (_broker is { IsLive: true } live) return live;
-        await DropBrokerAsync().ConfigureAwait(false);
-        var launch = await _launch(ct).ConfigureAwait(false);
+        await DropBrokerAsync();
+        var launch = await _launch(ct);
         if (launch.Broker is { } broker) return _broker = broker;
         if (launch.Cancelled) PromptCancelled = true;
         else ActionError = launch.Message;
@@ -441,7 +568,7 @@ public sealed class HistoryViewModel
     {
         if (Interlocked.Exchange(ref _broker, null) is { } old)
         {
-            try { await old.DisposeAsync().ConfigureAwait(false); }
+            try { await old.DisposeAsync(); }
             catch (Exception e) when (e is not OutOfMemoryException) { }
         }
     }

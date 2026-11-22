@@ -1,7 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Board 16, Quarantine vault: where moved items wait (the storage). History & undo stays the list of events.
-     Capacity per drive, days left per batch, restore or empty. Restoring and emptying go through the broker's
-     security prompt; expiry only proposes (ENGINE_PLAN.md §7.8). Data: quarantine.status (proposed), sample today. -->
+     Use and real cap per drive, days left per cleanup, put back, and delete what is past retention. Data:
+     history.index (medium engine); "Put back" is undo.run and "Review and delete" quarantine.expiring and
+     quarantine.purge on the broker, each through the broker's security prompt. Expiry only proposes
+     (ENGINE_PLAN.md §7.8); there is no "Empty quarantine" in M3 (design 7a page table). -->
 <UserControl
     x:Class="Purge.App.Views.VaultView"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -20,11 +22,8 @@
                 <TextBlock Text="Where removed leftovers wait. Nothing here is gone until you delete it." Style="{StaticResource SecondaryText}" FontSize="13" />
             </StackPanel>
             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                <Button Click="OnExport">
-                    <StackPanel Orientation="Horizontal" Spacing="8"><FontIcon Glyph="&#xEDE1;" FontSize="14" /><TextBlock Text="Export log (JSON)" /></StackPanel>
-                </Button>
-                <Button x:Name="EmptyButton" Click="OnEmpty" IsEnabled="False">
-                    <StackPanel Orientation="Horizontal" Spacing="8"><FontIcon Glyph="&#xE74D;" FontSize="14" /><TextBlock Text="Empty quarantine…" /></StackPanel>
+                <Button x:Name="ReviewButton" Click="OnReviewExpired" IsEnabled="False">
+                    <StackPanel Orientation="Horizontal" Spacing="8"><FontIcon Glyph="&#xE74D;" FontSize="14" /><TextBlock Text="Review and delete expired…" /></StackPanel>
                 </Button>
             </StackPanel>
         </Grid>

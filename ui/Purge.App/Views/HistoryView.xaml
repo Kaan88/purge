@@ -23,6 +23,9 @@
                 <TextBlock Text="Files can be put back for 30 days, registry and task backups for 180 days" Style="{StaticResource PageSubtitle}" />
             </StackPanel>
             <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Right" VerticalAlignment="Center">
+                <!-- journal.pending starts the broker, so only on this click (design 6.3), never on page open. -->
+                <Button x:Name="CheckInterrupted" Content="Check for interrupted cleanups" Style="{StaticResource SubtleButton}"
+                        Click="OnCheckInterrupted" />
                 <Button Content="Open quarantine" Style="{StaticResource SubtleButton}" Click="OnOpenVault" />
             </StackPanel>
         </Grid>

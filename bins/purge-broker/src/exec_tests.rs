@@ -1584,4 +1584,24 @@ fn exec_errors_map_to_the_designs_kinds() {
         kind_of(ExecError::NotResumable("x".into())),
         Some("runtime")
     );
+    // Another writer of the store (another broker's run, undo, recovery or purge) holds it.
+    assert_eq!(
+        kind_of(ExecError::Store(
+            purge_exec::storage::StorageError::WriterBusy {
+                path: r"C:\ProgramData\Purge\sessions\writer.lock".into()
+            }
+        )),
+        Some("busy")
+    );
+    // An interrupted or damaged session the run found once it held the lock (after the dialog).
+    let sessions = vec!["20251115T101502Z-9f3a6c1d2b7e4a50".parse().unwrap()];
+    let reply = exec_error(ExecError::NeedsRecovery(sessions.clone()));
+    assert_eq!(
+        reply.data,
+        Some(purge_rpc::error::ErrorData::NeedsRecovery { sessions })
+    );
+    assert_eq!(
+        kind_of(ExecError::Damaged(vec!["s (cut)".into()])),
+        Some("store_integrity")
+    );
 }

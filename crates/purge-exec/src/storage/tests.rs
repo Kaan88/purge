@@ -1582,3 +1582,309 @@ fn a_backup_file_is_deleted_by_handle() {
     assert!(s.path("outside.json").exists());
     assert_eq!(std::fs::metadata(s.path("outside.json")).unwrap().len(), 0);
 }
+
+// ---------------------------------------------------------------------------------------------------
+// The writer lock (single writer, review R3)
+// ---------------------------------------------------------------------------------------------------
+
+/// A second writer is refused while the first holds the lock, waits for it when given the time, and
+/// gets it once the first drops it. The lock is a handle that shares nothing, so a second writer in
+/// this process is kept out exactly as one in another process.
+#[test]
+fn a_second_writer_waits_for_the_first_or_is_refused() {
+    let (_s, roots) = fixture("writer");
+    let first = roots.lock_writer_within(Duration::ZERO).unwrap();
+    assert!(roots.writer_busy().unwrap());
+
+    let started = std::time::Instant::now();
+    let err = roots
+        .lock_writer_within(Duration::from_millis(300))
+        .unwrap_err();
+    assert!(started.elapsed() >= Duration::from_millis(300));
+    assert_eq!(
+        err,
+        StorageError::WriterBusy {
+            path: roots.sessions_path().join(WRITER_LOCK_FILE)
+        }
+    );
+
+    // A waiting writer gets the lock as soon as the first is dropped.
+    std::thread::scope(|scope| {
+        let waiter = scope.spawn(|| {
+            let started = std::time::Instant::now();
+            let lock = roots.lock_writer_within(Duration::from_secs(10)).unwrap();
+            (started.elapsed(), lock)
+        });
+        std::thread::sleep(Duration::from_millis(400));
+        drop(first);
+        let (waited, second) = waiter.join().unwrap();
+        assert!(waited >= Duration::from_millis(300), "{waited:?}");
+        assert!(waited < Duration::from_secs(5), "{waited:?}");
+        assert!(roots.writer_busy().unwrap());
+        drop(second);
+    });
+    assert!(!roots.writer_busy().unwrap());
+    roots.lock_writer_within(Duration::ZERO).unwrap();
+}
+
+/// Index updates from many writers at once, each under the writer lock (as every writing operation
+/// makes them), keep every entry: the read-modify-write of one writer never overlaps another's.
+#[test]
+fn index_updates_under_the_writer_lock_keep_every_entry() {
+    let (_s, roots) = fixture("writer-index");
+    let ids: Vec<SessionId> = (0..6)
+        .map(|_| roots.create_session().unwrap().id().clone())
+        .collect();
+    std::thread::scope(|scope| {
+        for id in &ids {
+            let roots = &roots;
+            scope.spawn(move || {
+                for bytes in 1..=4 {
+                    let _writer = roots.lock_writer_within(Duration::from_secs(30)).unwrap();
+                    roots
+                        .update_index(|index| index.upsert(summary(id.clone(), 5, bytes)))
+                        .unwrap();
+                }
+            });
+        }
+    });
+    let index = roots.read_index().unwrap();
+    for id in &ids {
+        assert_eq!(
+            index.get(id).map(|entry| entry.backup_bytes),
+            Some(4),
+            "{id}"
+        );
+    }
+}
+
+/// Readers never take the lock: the layout check, the index, the session listing and a session
+/// read while a writer holds it.
+#[test]
+fn readers_are_not_blocked_by_the_writer_lock() {
+    let (_s, roots) = fixture("writer-read");
+    let session = roots.create_session().unwrap();
+    let written = roots
+        .update_index(|index| index.upsert(summary(session.id().clone(), 5, 10)))
+        .unwrap();
+    let _held = roots.lock_writer().unwrap();
+    roots.check().unwrap();
+    assert_eq!(roots.read_index().unwrap(), written);
+    assert_eq!(
+        roots.list_sessions().unwrap().sessions,
+        [session.id().clone()]
+    );
+    roots.open_session(session.id()).unwrap();
+}
+
+/// The lock file is created once, empty, with the store file descriptor (under the relaxed policy the
+/// test user's stand-in for the admin-only one), stays, and locks nothing while nobody holds it.
+#[test]
+fn the_lock_file_is_a_checked_store_file_that_stays() {
+    let (_s, roots) = fixture("writer-file");
+    let path = roots.sessions_path().join(WRITER_LOCK_FILE);
+    assert!(!path.exists());
+    drop(roots.lock_writer().unwrap());
+    assert!(path.is_file());
+    assert_eq!(std::fs::metadata(&path).unwrap().len(), 0);
+    let handle = secure::open_for_security(&ext(&path).unwrap()).unwrap();
+    let security = secure::handle_security(&handle).unwrap();
+    drop(handle);
+    let object = ObjectFacts {
+        reparse_tag: 0,
+        is_dir: false,
+        n_links: 1,
+        owner: security.owner.clone(),
+        dacl_protected: security.dacl_protected,
+        dacl: security.dacl,
+    };
+    verdict(roots.policy(), ObjectKind::StoreFile, &object).unwrap();
+    // The index and the session listing do not see it.
+    assert_eq!(roots.read_index().unwrap(), SessionIndex::default());
+    assert!(roots.list_sessions().unwrap().sessions.is_empty());
+    drop(roots.lock_writer_within(Duration::ZERO).unwrap());
+}
+
+/// An object planted at the lock's name that fails the store file check (here a directory) refuses
+/// that attempt and is renamed aside, never adopted; the next attempt creates the lock file.
+#[test]
+fn a_planted_lock_object_is_renamed_aside() {
+    let (_s, roots) = fixture("writer-planted");
+    let path = roots.sessions_path().join(WRITER_LOCK_FILE);
+    std::fs::create_dir(&path).unwrap();
+    let err = roots.lock_writer_within(Duration::ZERO).unwrap_err();
+    let StorageError::Integrity { renamed_to, .. } = &err else {
+        panic!("{err}");
+    };
+    assert!(renamed_to.is_some(), "{err}");
+    roots.lock_writer_within(Duration::ZERO).unwrap();
+    assert!(path.is_file());
+}
+
+/// Set only in the child process of [`a_writer_that_dies_releases_the_lock`]: the data root.
+const LOCK_CHILD_ROOT: &str = "PURGE_STORE_LOCK_CHILD_ROOT";
+
+/// The child of [`a_writer_that_dies_releases_the_lock`]: takes the lock, says so, and waits to be
+/// killed. Without its environment variable it does nothing.
+#[test]
+fn writer_lock_child() {
+    let Ok(root) = std::env::var(LOCK_CHILD_ROOT) else {
+        return;
+    };
+    let roots = StorageRoots::relaxed(Path::new(&root)).unwrap();
+    let _lock = roots.lock_writer_within(Duration::from_secs(10)).unwrap();
+    std::fs::write(Path::new(&root).with_extension("locked"), b"1").unwrap();
+    std::thread::sleep(Duration::from_secs(120));
+}
+
+/// A writer killed while it holds the lock (a crash) releases it: Windows closes the handle when the
+/// process ends, and the file left behind locks nothing.
+#[test]
+fn a_writer_that_dies_releases_the_lock() {
+    let (s, roots) = fixture("writer-crash");
+    let marker = s.path("data").with_extension("locked");
+    let mut child = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "storage::tests::writer_lock_child",
+            "--exact",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(LOCK_CHILD_ROOT, s.path("data"))
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    while !marker.exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the child never took the lock"
+        );
+        if let Some(status) = child.try_wait().unwrap() {
+            panic!("the child ended before it took the lock: {status}");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(roots.writer_busy().unwrap());
+    assert!(matches!(
+        roots.lock_writer_within(Duration::from_millis(100)),
+        Err(StorageError::WriterBusy { .. })
+    ));
+    child.kill().unwrap();
+    child.wait().unwrap();
+    roots.lock_writer_within(Duration::from_secs(10)).unwrap();
+}
+
+/// The probe before a dialog retries for [`WRITER_PROBE_WAIT`]: a lock held for a moment (another
+/// broker's probe, a scanner opening the file) is not a busy writer; one held throughout is.
+#[test]
+fn the_busy_probe_rides_out_a_momentary_holder() {
+    let (_s, roots) = fixture("writer-probe");
+    let held = roots.lock_writer_within(Duration::ZERO).unwrap();
+    std::thread::scope(|scope| {
+        scope.spawn(move || {
+            std::thread::sleep(Duration::from_millis(60));
+            drop(held);
+        });
+        assert!(!roots.writer_busy().unwrap(), "a 60 ms holder is not busy");
+    });
+    let _held = roots.lock_writer_within(Duration::ZERO).unwrap();
+    let started = std::time::Instant::now();
+    assert!(roots.writer_busy().unwrap());
+    assert!(started.elapsed() >= WRITER_PROBE_WAIT);
+}
+
+/// Set only in the children of [`two_processes_write_the_index_one_at_a_time`]: the data root, and the
+/// file the child writes its lock intervals to.
+const INDEX_CHILD_ROOT: &str = "PURGE_STORE_INDEX_CHILD_ROOT";
+const INDEX_CHILD_LOG: &str = "PURGE_STORE_INDEX_CHILD_LOG";
+/// Index updates each child makes.
+const INDEX_CHILD_UPDATES: usize = 12;
+
+/// A child of [`two_processes_write_the_index_one_at_a_time`]: each update under the writer lock, as
+/// every writing operation makes them, with the time the lock was held logged. Without its environment
+/// variables it does nothing.
+#[test]
+fn writer_index_child() {
+    let (Ok(root), Ok(log)) = (
+        std::env::var(INDEX_CHILD_ROOT),
+        std::env::var(INDEX_CHILD_LOG),
+    ) else {
+        return;
+    };
+    let roots = StorageRoots::relaxed(Path::new(&root)).unwrap();
+    let nanos = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    };
+    let mut lines = String::new();
+    for _ in 0..INDEX_CHILD_UPDATES {
+        let id = SessionId::new(sys::now(), sys::random_u64());
+        let writer = roots.lock_writer_within(Duration::from_secs(60)).unwrap();
+        let from = nanos();
+        roots
+            .update_index(|index| index.upsert(summary(id.clone(), 5, 1)))
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(5));
+        let to = nanos();
+        drop(writer);
+        lines.push_str(&format!("{from} {to}\n"));
+    }
+    std::fs::write(log, lines).unwrap();
+}
+
+/// Two processes updating one index at once, each under the writer lock: their lock intervals never
+/// overlap and the index keeps every entry of both (single writer, review R3; unlocked, such writers
+/// lost entries and failed with sharing violations on the index's temporary file).
+#[test]
+fn two_processes_write_the_index_one_at_a_time() {
+    let (s, roots) = fixture("writer-two-processes");
+    let spawn = |log: &str| {
+        Command::new(std::env::current_exe().unwrap())
+            .args([
+                "storage::tests::writer_index_child",
+                "--exact",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(INDEX_CHILD_ROOT, s.path("data"))
+            .env(INDEX_CHILD_LOG, s.path(log))
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap()
+    };
+    let mut children = [spawn("a.log"), spawn("b.log")];
+    for child in &mut children {
+        assert!(child.wait().unwrap().success());
+    }
+    let mut intervals: Vec<(u128, u128)> = ["a.log", "b.log"]
+        .iter()
+        .flat_map(|log| {
+            std::fs::read_to_string(s.path(log))
+                .unwrap()
+                .lines()
+                .map(|line| {
+                    let (from, to) = line.split_once(' ').unwrap();
+                    (from.parse().unwrap(), to.parse().unwrap())
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert_eq!(intervals.len(), 2 * INDEX_CHILD_UPDATES);
+    intervals.sort_unstable();
+    for pair in intervals.windows(2) {
+        assert!(
+            pair[0].1 <= pair[1].0,
+            "two writers held the lock at once: {pair:?}"
+        );
+    }
+    assert_eq!(
+        roots.read_index().unwrap().sessions.len(),
+        2 * INDEX_CHILD_UPDATES,
+        "no index update was lost"
+    );
+}
