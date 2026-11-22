@@ -207,6 +207,9 @@ public sealed class HistoryViewModel
 {
     private const string BusyText = "Another Purge window is changing the quarantine. Wait for it to finish, then try again.";
 
+    private const string PendingBusyText =
+        "Another Purge window is working on the quarantine. Try again when it has finished; nothing is listed until then.";
+
     private readonly Func<CancellationToken, Task<HistoryIndex>> _readIndex;
     private readonly Func<CancellationToken, Task<HistoryBrokerLaunch>> _launch;
     private readonly Dictionary<string, PendingSession> _pending = new(StringComparer.Ordinal);
@@ -292,13 +295,17 @@ public sealed class HistoryViewModel
         var alerts = Sessions.Where(s => s.HasAlert).Select(s => s.Id).ToHashSet(StringComparer.Ordinal);
         Sessions.Clear();
         var listed = index.Sessions.Select(s => new HistorySessionModel(s, now)).ToList();
-        // What the last journal.pending found is interrupted whatever the index says, and is listed from the journal
-        // when the index has no entry for it.
+        // What the journal.pending just read found is interrupted whatever the index says, and is listed from the
+        // journal when the index has no entry for it.
         foreach (var s in listed.Where(s => _pending.ContainsKey(s.Id))) s.MarkInterrupted();
         var ids = listed.Select(s => s.Id).ToHashSet(StringComparer.Ordinal);
         listed.AddRange(_pending.Values.Where(p => !ids.Contains(p.Session)).Select(p => new HistorySessionModel(p, now)));
         Sessions.AddRange(listed.OrderByDescending(s => s.Started));
         foreach (var s in Sessions) s.HasAlert = alerts.Contains(s.Id);
+        // A journal.pending answer is shown once: the next refresh drops its marks, so a session that ended
+        // since (its run committed, or it was recovered) is never left marked Interrupted. Asking again
+        // brings back what is still pending.
+        _pending.Clear();
         Error = null;
         Phase = Sessions.Count == 0 ? HistoryPhase.Empty : HistoryPhase.Ready;
         if (_selectAfterLoad is { } jump) keep = jump;
@@ -523,6 +530,13 @@ public sealed class HistoryViewModel
             // Show the first one found unless an interrupted session is selected already.
             if (Selected is not { Interrupted: true } && list.Sessions.Count > 0) _selectAfterLoad = list.Sessions[0].Session;
             return true;
+        }
+        catch (BrokerRpcException e) when (e.Kind == "busy")
+        {
+            // Another broker is changing the store: its live run would read as interrupted, so the broker does
+            // not list anything until it has finished.
+            _pending.Clear();
+            ActionError = PendingBusyText;
         }
         catch (BrokerLinkException)
         {

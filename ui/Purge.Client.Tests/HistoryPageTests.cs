@@ -300,6 +300,52 @@ public sealed class HistoryPageTests
     }
 
     [Fact]
+    public async Task TheNextRefreshDropsTheMarksOfAnEarlierCheck()
+    {
+        const string cut = "20251116T090000Z-00000000000000aa";
+        var broker = new ScriptedHistoryBroker
+        {
+            Pending = new PendingList
+            {
+                Sessions =
+                [
+                    new PendingSession { Session = cut, App = "Firefox", Started = 134077617020000000 },
+                    new PendingSession { Session = GitSession, App = "Git", Started = 134076753020000000 },
+                ],
+            },
+        };
+        var vm = new HistoryViewModel(_ => Task.FromResult(GitIndex()), _ => Launch(broker));
+        await vm.LoadAsync();
+        await vm.CheckInterruptedAsync();
+        Assert.Equal(2, vm.Sessions.Count(s => s.Interrupted));
+
+        // The run in the other window committed meanwhile; the page is shown again.
+        await vm.LoadAsync();
+
+        var git = Assert.Single(vm.Sessions);
+        Assert.False(git.Interrupted);
+        Assert.Equal("Undoable", git.State);
+    }
+
+    [Fact]
+    public async Task AnotherWindowAtWorkListsNoInterruptedSession()
+    {
+        var broker = new ScriptedHistoryBroker
+        {
+            PendingError = new BrokerRpcException(-32000, "busy", "another writer holds the store"),
+        };
+        var vm = new HistoryViewModel(_ => Task.FromResult(GitIndex()), _ => Launch(broker));
+        await vm.LoadAsync();
+
+        await vm.CheckInterruptedAsync();
+
+        Assert.Equal(1, broker.PendingCalls);
+        Assert.StartsWith("Another Purge window is working on the quarantine.", vm.ActionError);
+        Assert.DoesNotContain(vm.Sessions, s => s.Interrupted);
+        Assert.False(vm.Busy);
+    }
+
+    [Fact]
     public async Task CheckForInterruptedSaysSoWhenNothingWasInterrupted()
     {
         var broker = new ScriptedHistoryBroker();
@@ -384,6 +430,7 @@ public sealed class HistoryPageTests
         public UndoResult Undo { get; init; } = new();
         public OutcomeResult Recover { get; init; } = new();
         public PendingList Pending { get; init; } = new();
+        public Exception? PendingError { get; init; }
         public int PendingCalls { get; private set; }
         public Exception? GetError { get; init; }
         public Exception? UndoError { get; init; }
@@ -422,7 +469,7 @@ public sealed class HistoryPageTests
         public Task<PendingList> PendingAsync(CancellationToken ct)
         {
             PendingCalls++;
-            return Task.FromResult(Pending);
+            return PendingError is { } e ? Task.FromException<PendingList>(e) : Task.FromResult(Pending);
         }
 
         public ValueTask DisposeAsync()

@@ -158,6 +158,25 @@ public sealed class VaultPageTests
     }
 
     [Fact]
+    public async Task AnotherWriterSaysNothingWasDeleted()
+    {
+        var broker = new ScriptedVaultBroker
+        {
+            Expiring = Fixture<ExpiringList>("pipe.quarantine.expiring.result.json"),
+            PurgeError = new BrokerRpcException(-32000, "busy", "another writer holds the store"),
+        };
+        var vm = new VaultViewModel(_ => Task.FromResult(GitIndex()), _ => Launch(broker));
+        await vm.LoadAsync();
+
+        await vm.ReviewExpiredAsync();
+
+        Assert.Equal("Another Purge window is changing the quarantine; nothing was deleted. Try again when it has finished.",
+            vm.ActionError);
+        Assert.Null(vm.ResultTitle);
+        Assert.False(vm.Busy);
+    }
+
+    [Fact]
     public async Task NothingPastRetentionIsANoteNotADialog()
     {
         var broker = new ScriptedVaultBroker();
@@ -217,6 +236,7 @@ public sealed class VaultPageTests
         public PurgeResult Purge { get; init; } = new();
         public Exception? UndoError { get; set; }
         public Exception? ExpiringError { get; init; }
+        public Exception? PurgeError { get; init; }
         public List<(string, IReadOnlyList<uint>?)> UndoCalls { get; } = [];
         public List<List<string>> PurgeCalls { get; } = [];
         public int ExpiringCalls { get; private set; }
@@ -246,7 +266,7 @@ public sealed class VaultPageTests
         public Task<PurgeResult> PurgeAsync(IReadOnlyList<string> expiryIds, CancellationToken ct)
         {
             PurgeCalls.Add([.. expiryIds]);
-            return Task.FromResult(Purge);
+            return PurgeError is { } e ? Task.FromException<PurgeResult>(e) : Task.FromResult(Purge);
         }
 
         public ValueTask DisposeAsync()

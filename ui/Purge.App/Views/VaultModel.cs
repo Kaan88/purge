@@ -307,6 +307,10 @@ public sealed class VaultViewModel
                 ? $"{result.Kept.ToString(CultureInfo.CurrentCulture)} kept: you declined them, or they could not be deleted."
                 : null;
         }
+        catch (BrokerRpcException e) when (e.Kind == "busy")
+        {
+            ActionError = "Another Purge window is changing the quarantine; nothing was deleted. Try again when it has finished.";
+        }
         catch (BrokerRpcException e)
         {
             Describe(e, "Nothing was deleted: the prompt was cancelled.");
