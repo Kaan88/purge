@@ -5,6 +5,8 @@
 //!     [-n 21] [--out bench/launch] [--power <text>] [--purge-args "<switches>"] [--no-write]
 //! cargo xtask bench-launch --first-launch --purge <dir> [--out bench/launch]
 //! cargo xtask bench-launch --cold [--reset] --purge <dir> [--out bench/launch]
+//! cargo xtask bench-launch --real-engine --purge <dir> [--engine <purge-engine.exe>] [-n 21] [--no-write]
+//! cargo xtask bench-launch --s3-open --purge <dir> [-n 21] [--no-write]
 //! ```
 //!
 //! Runs `Purge.exe --bench-exit --bench-stub` and `BareWinUI.exe --bench-exit` in turn (the order
@@ -22,6 +24,22 @@
 //! not mostly idle, and appends the run (timestamp, uptime, markers) to `bench/launch/cold-<host>.json`.
 //! With 5 runs it gates `presented` at 1.0 s p50; `--reset` starts a new series. Five reboots are the
 //! documented procedure (docs/M3_BENCH.md).
+//!
+//! The modes above all run the stub engine (`--bench-stub`). Two more measure the rows of 9.1 the
+//! stub cannot, each into a file of its own so stub and engine numbers never mix:
+//!
+//! - `--real-engine` (`<date>-<time>-<host>-real-engine.json`) runs `Purge.exe --bench-exit
+//!   --bench-until icons_visible` without the stub: the real `purge-engine --stdio` (next to
+//!   `Purge.exe`, or `--engine`) and this host's ARP data. It gates `names_visible` (the presented
+//!   frame with rows: `presented` when the rows were in the first frame, else the frame after the
+//!   first row) at 400 ms p50 / 460 ms p90 and `icons_visible` (the first screenful of rows with its
+//!   icons settled) at 1 s p50 with a warm icon cache. The app gets an icon atlas of the run's own
+//!   (`PURGE_BENCH_ICON_ATLAS`), empty at launch 1: that launch is the reported cold-cache number and,
+//!   as in every mode, dropped from the warm ones. A launch that fell back to the sample data
+//!   (`engine_fallback`) fails the run. Regression is checked against the last real-engine file.
+//! - `--s3-open` (`<date>-<time>-<host>-s3-open.json`) runs `Purge.exe --bench-stub --bench-s3 2000
+//!   --bench-until s3_open`: after the first frame the app opens the Leftovers page (S3) on a
+//!   2,000-item sample fixture; the time is `s3_open - s3_start`. Reported, no gate (9.1).
 //!
 //! Not part of `xtask ci`: it needs published builds and a quiet machine.
 
@@ -54,6 +72,10 @@ const MARKERS: &[&str] = &[
     "first_row",
     "first_tick",
     "presented",
+    "names_visible",
+    "icons_visible",
+    "s3_start",
+    "s3_open",
 ];
 
 /// Gate rows (M3_DESIGN.json "budgets").
@@ -64,9 +86,15 @@ const NAMES_P50_MS: f64 = 400.0;
 const NAMES_P90_MS: f64 = 460.0;
 const FIRST_LAUNCH_P50_MS: f64 = 1200.0;
 const COLD_P50_MS: f64 = 1000.0;
+/// "Icons visible, warm icon cache: 1 s" (9.1), applied to the p50 of `--real-engine`.
+const ICONS_WARM_P50_MS: f64 = 1000.0;
+/// "S3 page open, 2,000-item fixture" (9.1): reported, no gate yet.
+const S3_ITEMS: u32 = 2000;
 /// A p50 this much over the last file of the same host fails the run.
 const REGRESSION: f64 = 1.10;
-const RUN_TIMEOUT: Duration = Duration::from_secs(30);
+/// Longer than the app's own bench timeout (20 s after the first frame) plus its wait for a live
+/// engine's icon load (at most 10 s), so the app's `bench_timeout` line is what a stall reports.
+const RUN_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// Cold-after-reboot protocol (ENGINE_PLAN.md 9.2(e)): 120 s of uptime, mostly idle, 5 reboots.
 const COLD_UPTIME_S: f64 = 120.0;
@@ -143,11 +171,48 @@ fn round1(x: f64) -> f64 {
     (x * 10.0).round() / 10.0
 }
 
+/// The time from marker `from` to marker `to` in one launch (the S3 page open is `s3_open - s3_start`).
+fn span(m: &Markers, from: &str, to: &str) -> Option<f64> {
+    let (a, b) = (m.get(from)?, m.get(to)?);
+    (b >= a).then_some(b - a)
+}
+
+/// Refuses a launch line that does not measure what the mode asks: the app gave up waiting for
+/// `until` (`bench_timeout`), never wrote it, or (with `real_engine`) showed the sample data because
+/// the engine could not be used (`engine_fallback`).
+fn check_line(m: &Markers, until: &str, real_engine: bool) -> Result<()> {
+    if m.contains_key("bench_timeout") {
+        bail!("the app did not reach '{until}' within its 20 s bench timeout");
+    }
+    if real_engine && m.contains_key("engine_fallback") {
+        bail!(
+            "the app fell back to the sample data (purge-engine missing, failing or slow): not a real-engine run"
+        );
+    }
+    if !m.contains_key(until) {
+        bail!("no '{until}' marker in the line");
+    }
+    Ok(())
+}
+
 /// One launch: starts `exe`, waits for exit, returns the marker line it wrote.
 fn launch(exe: &Path, args: &[&str], out_file: &Path) -> Result<Markers> {
+    launch_with(exe, args, out_file, &[], "presented", false)
+}
+
+/// [`launch`] with extra environment variables, waiting for the line to carry `until`.
+fn launch_with(
+    exe: &Path,
+    args: &[&str],
+    out_file: &Path,
+    env: &[(&str, &Path)],
+    until: &str,
+    real_engine: bool,
+) -> Result<Markers> {
     let _ = std::fs::remove_file(out_file);
     let mut child = Command::new(exe)
         .args(args)
+        .envs(env.iter().copied())
         .env("PURGE_BENCH_OUT", out_file)
         .current_dir(exe.parent().unwrap_or(Path::new(".")))
         .stdout(Stdio::null())
@@ -170,6 +235,7 @@ fn launch(exe: &Path, args: &[&str], out_file: &Path) -> Result<Markers> {
         .with_context(|| format!("{} wrote no marker file", exe.display()))?;
     let line = text.lines().last().unwrap_or("");
     let m = parse_markers(line);
+    check_line(&m, until, real_engine).with_context(|| format!("{}: {line:?}", exe.display()))?;
     if !m.contains_key("presented") {
         bail!("{}: no 'presented' marker in {line:?}", exe.display());
     }
@@ -188,6 +254,12 @@ struct Opts {
     write: bool,
     /// Extra switches for `Purge.exe` only (`--purge-args "--xaml-changes IconNoGridOptimization"`).
     purge_args: Vec<String>,
+    /// `--real-engine`: the real medium engine and ARP data, no `--bench-stub` (names and icons visible).
+    real_engine: bool,
+    /// `--engine <purge-engine.exe>` for `--real-engine` (default: next to `Purge.exe`).
+    engine: Option<PathBuf>,
+    /// `--s3-open`: the S3 page open timer on the 2,000-item fixture.
+    s3_open: bool,
 }
 
 fn parse_opts(root: &Path, args: &[String]) -> Result<Opts> {
@@ -202,6 +274,9 @@ fn parse_opts(root: &Path, args: &[String]) -> Result<Opts> {
         power: None,
         write: true,
         purge_args: Vec::new(),
+        real_engine: false,
+        engine: None,
+        s3_open: false,
     };
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -226,22 +301,41 @@ fn parse_opts(root: &Path, args: &[String]) -> Result<Opts> {
                     .collect();
             }
             "--no-write" => o.write = false,
+            "--real-engine" => o.real_engine = true,
+            "--engine" => o.engine = Some(PathBuf::from(val("--engine")?)),
+            "--s3-open" => o.s3_open = true,
             other => bail!("unknown option {other}"),
         }
     }
     if o.purge.as_os_str().is_empty() {
         bail!("--purge <publish dir of Purge.exe> is required");
     }
-    if o.first_launch && o.cold {
-        bail!("--first-launch and --cold are separate runs");
+    let modes = [o.first_launch, o.cold, o.real_engine, o.s3_open];
+    if modes.iter().filter(|&&m| m).count() > 1 {
+        bail!("--first-launch, --cold, --real-engine and --s3-open are separate runs");
     }
     if o.reset && !o.cold {
         bail!("--reset only applies to --cold");
     }
-    if !o.first_launch && !o.cold && o.bare.is_none() {
+    if o.engine.is_some() && !o.real_engine {
+        bail!("--engine only applies to --real-engine");
+    }
+    // The stub and the bench-end switches belong to the mode; a stray one would mix stub and engine numbers.
+    let owned = [
+        "--bench-stub",
+        "--sample",
+        "--bench-until",
+        "--bench-s3",
+        "--bench-exit",
+    ];
+    if let Some(bad) = o.purge_args.iter().find(|a| owned.contains(&a.as_str())) {
+        bail!("--purge-args may not carry {bad}: the bench mode sets it");
+    }
+    let warm = !modes.iter().any(|&m| m);
+    if warm && o.bare.is_none() {
         bail!("--bare <publish dir of BareWinUI.exe> is required");
     }
-    if o.n < 2 && !o.first_launch && !o.cold {
+    if o.n < 2 && (warm || o.real_engine || o.s3_open) {
         bail!("-n must be at least 2 (the first run is dropped)");
     }
     Ok(o)
@@ -257,6 +351,10 @@ pub fn run(root: &Path, args: &[String]) -> Result<bool> {
     std::fs::create_dir_all(&tmp)?;
     let result = if o.cold {
         cold(&o, &tmp)
+    } else if o.real_engine {
+        real_engine(&o, &tmp)
+    } else if o.s3_open {
+        s3_open(&o, &tmp)
     } else if o.first_launch {
         first_launch(&o, &tmp)
     } else {
@@ -561,19 +659,13 @@ fn warm(o: &Opts, tmp: &Path) -> Result<bool> {
     // Regression against the last file of the same host.
     let host = std::env::var("COMPUTERNAME").unwrap_or_else(|_| "unknown".into());
     let name = format!("{}-{}-{host}.json", today(), clock());
-    let mut regressions = Vec::new();
-    if let Some((prev_name, prev)) = last_file(&o.out, &host, &name) {
-        for marker in ["first_tick", "presented"] {
-            let before = prev["apps"]["purge"]["markers"][marker]["p50"].as_f64();
-            if let (Some(before), Some(now)) = (before, purge.p(marker, 50.0))
-                && regressed(before, now)
-            {
-                regressions.push(format!(
-                    "{marker}: p50 {now:.1} ms vs {before:.1} ms in {prev_name}"
-                ));
-            }
-        }
-    }
+    let regressions = regressions_since(
+        &o.out,
+        &format!("-{host}.json"),
+        &name,
+        &purge,
+        &["first_tick", "presented"],
+    );
     ok &= regressions.is_empty();
 
     let doc = json!({
@@ -588,7 +680,8 @@ fn warm(o: &Opts, tmp: &Path) -> Result<bool> {
         "apps": {"purge": purge.json(), "bare": bare.json()},
         "gates": gates,
         "regressions_over_10_percent": regressions,
-        "icons_visible_warm_cache": "not measured: the stub engine sends no icons (M3-S1 owns the icon pipeline)",
+        "icons_visible_warm_cache": "not in this file: the stub sends no icons; cargo xtask bench-launch --real-engine measures it",
+        "names_visible_real_engine": "not in this file: this run is the stub (300 rows after 20 ms); see --real-engine",
         "cold_after_reboot": "not in this file: cargo xtask bench-launch --cold appends to cold-<host>.json",
         "pass": ok,
     });
@@ -602,14 +695,14 @@ fn warm(o: &Opts, tmp: &Path) -> Result<bool> {
     Ok(ok)
 }
 
-/// The latest `*-<host>.json` under `dir` other than `exclude` (names start with the date and time).
-fn last_file(dir: &Path, host: &str, exclude: &str) -> Option<(String, Value)> {
-    let suffix = format!("-{host}.json");
+/// The latest `*<suffix>` under `dir` other than `exclude` (names start with the date and time;
+/// `-<host>.json` for the stub warm runs, `-<host>-real-engine.json` for the real-engine runs).
+fn last_file(dir: &Path, suffix: &str, exclude: &str) -> Option<(String, Value)> {
     let mut names: Vec<String> = std::fs::read_dir(dir)
         .ok()?
         .filter_map(|e| e.ok()?.file_name().into_string().ok())
         .filter(|n| {
-            n.ends_with(&suffix)
+            n.ends_with(suffix)
                 && n != exclude
                 && n.as_str() < exclude
                 && n.chars().next().is_some_and(|c| c.is_ascii_digit())
@@ -619,6 +712,227 @@ fn last_file(dir: &Path, host: &str, exclude: &str) -> Option<(String, Value)> {
     let name = names.pop()?;
     let v = serde_json::from_str(&std::fs::read_to_string(dir.join(&name)).ok()?).ok()?;
     Some((name, v))
+}
+
+/// The p50 regressions of `markers` against the last `*<suffix>` file under `dir` (other than `name`).
+fn regressions_since(
+    dir: &Path,
+    suffix: &str,
+    name: &str,
+    purge: &Series,
+    markers: &[&str],
+) -> Vec<String> {
+    let mut regressions = Vec::new();
+    if let Some((prev_name, prev)) = last_file(dir, suffix, name) {
+        for &marker in markers {
+            let before = prev["apps"]["purge"]["markers"][marker]["p50"].as_f64();
+            if let (Some(before), Some(now)) = (before, purge.p(marker, 50.0))
+                && regressed(before, now)
+            {
+                regressions.push(format!(
+                    "{marker}: p50 {now:.1} ms vs {before:.1} ms in {prev_name}"
+                ));
+            }
+        }
+    }
+    regressions
+}
+
+/// The gates of a `--real-engine` run (9.1): names visible (presented frame with rows) at 400 ms p50
+/// and 460 ms p90, icons visible with a warm icon cache at 1 s p50. `cold_icons` (the first launch,
+/// with an empty icon atlas) is reported and never gated.
+fn real_engine_gates(purge: &Series, cold_icons: Option<f64>) -> (Vec<Value>, bool) {
+    let (names, names_ok) = gate(
+        "names visible (presented frame with rows), real engine and ARP data",
+        purge.p("names_visible", 50.0),
+        purge.p("names_visible", 90.0),
+        NAMES_P50_MS,
+        Some(NAMES_P90_MS),
+    );
+    let (mut icons, icons_ok) = gate(
+        "icons visible, warm icon cache (first screenful settled)",
+        purge.p("icons_visible", 50.0),
+        purge.p("icons_visible", 90.0),
+        ICONS_WARM_P50_MS,
+        None,
+    );
+    icons["cold_cache_first_launch_ms"] = json!(cold_icons.map(round1));
+    icons["cold_cache"] =
+        json!("reported, no gate: launch 1 with an empty atlas (also the dropped warm-up run)");
+    (vec![names, icons], names_ok && icons_ok)
+}
+
+/// `--real-engine`: `Purge.exe` with the real medium engine and this machine's ARP data. Launch 1
+/// starts with an empty icon atlas of its own (`PURGE_BENCH_ICON_ATLAS`, never the user's) and is
+/// the cold-cache sample; it is dropped from the warm numbers like the first run of every mode.
+fn real_engine(o: &Opts, tmp: &Path) -> Result<bool> {
+    let purge_exe = o.purge.join("Purge.exe");
+    let engine = o
+        .engine
+        .clone()
+        .unwrap_or_else(|| o.purge.join("purge-engine.exe"));
+    if !engine.is_file() {
+        bail!(
+            "--real-engine needs {} (cargo build --release -p purge-engine, then copy it next to Purge.exe, or pass --engine)",
+            engine.display()
+        );
+    }
+    // The app runs in its own directory, so a relative path would name another file there.
+    let engine = std::path::absolute(&engine).context("--engine path")?;
+    let out_file = tmp.join("markers.txt");
+    let atlas = tmp.join("icons.atlas");
+    let _ = std::fs::remove_file(&atlas);
+    let mut purge_args = vec!["--bench-exit", "--bench-until", "icons_visible"];
+    purge_args.extend(o.purge_args.iter().map(String::as_str));
+    let env = [
+        ("PURGE_ENGINE", engine.as_path()),
+        ("PURGE_BENCH_ICON_ATLAS", atlas.as_path()),
+    ];
+    let at = |m: &Markers, name: &str| m.get(name).copied().unwrap_or(f64::NAN);
+    let mut purge = Series::default();
+    let mut cold_icons = None;
+    for i in 0..o.n {
+        let m = launch_with(
+            &purge_exe,
+            &purge_args,
+            &out_file,
+            &env,
+            "icons_visible",
+            true,
+        )?;
+        eprintln!(
+            "run {:2}/{}{}  list_reply {:6.1} names_visible {:6.1} icons_visible {:6.1}",
+            i + 1,
+            o.n,
+            if i == 0 {
+                " (dropped; cold icon cache)"
+            } else {
+                ""
+            },
+            at(&m, "list_reply"),
+            at(&m, "names_visible"),
+            at(&m, "icons_visible")
+        );
+        if i == 0 {
+            cold_icons = m.get("icons_visible").copied();
+        } else {
+            purge.runs.push(m);
+        }
+    }
+    let (gates, mut ok) = real_engine_gates(&purge, cold_icons);
+    let host = std::env::var("COMPUTERNAME").unwrap_or_else(|_| "unknown".into());
+    let name = format!("{}-{}-{host}-real-engine.json", today(), clock());
+    let regressions = regressions_since(
+        &o.out,
+        &format!("-{host}-real-engine.json"),
+        &name,
+        &purge,
+        &["names_visible", "icons_visible"],
+    );
+    ok &= regressions.is_empty();
+    let mut flavour = flavour();
+    flavour["stub_engine"] = json!(null);
+    flavour["engine"] = json!(format!(
+        "real purge-engine --stdio ({}), this host's ARP data",
+        engine.display()
+    ));
+    let doc = json!({
+        "schema": "purge.bench-launch-real/0",
+        "date": today(),
+        "host": host_json(o),
+        "flavour": flavour,
+        "purge_args": purge_args,
+        "xaml_changes": xaml_changes(&o.purge_args),
+        "n": o.n, "dropped_first": 1,
+        "percentile_rule": "nearest rank",
+        "apps": {"purge": purge.json()},
+        "gates": gates,
+        "regressions_over_10_percent": regressions,
+        "note": "kept apart from the stub runs: the program count and the engine's speed are this host's",
+        "pass": ok,
+    });
+    println!("{}", serde_json::to_string_pretty(&doc)?);
+    if o.write {
+        std::fs::create_dir_all(&o.out)?;
+        let path = o.out.join(&name);
+        std::fs::write(&path, serde_json::to_string_pretty(&doc)? + "\n")?;
+        eprintln!("wrote {}", path.display());
+    }
+    Ok(ok)
+}
+
+/// The S3 page open times (`s3_open - s3_start`) of the runs, and their p50 and p90.
+fn s3_summary(purge: &Series) -> Value {
+    let times: Vec<f64> = purge
+        .runs
+        .iter()
+        .filter_map(|m| span(m, "s3_start", "s3_open"))
+        .collect();
+    let complete = times.len() == purge.runs.len();
+    json!({
+        "metric": "S3 page open (s3_start: navigation asked, after the first frame; s3_open: the frame after the first list row)",
+        "items": S3_ITEMS,
+        "runs": times.len(),
+        "p50": complete.then(|| percentile(&times, 50.0)).flatten().map(round1),
+        "p90": complete.then(|| percentile(&times, 90.0)).flatten().map(round1),
+        "min": percentile(&times, 1.0).map(round1),
+        "max": percentile(&times, 100.0).map(round1),
+        "gate": "reported, no gate yet (9.1)",
+    })
+}
+
+/// `--s3-open`: after the first frame the app opens the Leftovers page (S3) on the sample client's
+/// 2,000-item fixture; the time is `s3_open - s3_start`. Reported, not gated.
+fn s3_open(o: &Opts, tmp: &Path) -> Result<bool> {
+    let purge_exe = o.purge.join("Purge.exe");
+    let out_file = tmp.join("markers.txt");
+    let items = S3_ITEMS.to_string();
+    let mut purge_args = vec![
+        "--bench-exit",
+        "--bench-stub",
+        "--bench-s3",
+        items.as_str(),
+        "--bench-until",
+        "s3_open",
+    ];
+    purge_args.extend(o.purge_args.iter().map(String::as_str));
+    let mut purge = Series::default();
+    for i in 0..o.n {
+        let m = launch_with(&purge_exe, &purge_args, &out_file, &[], "s3_open", false)?;
+        eprintln!(
+            "run {:2}/{}{}  S3 page open {:6.1} ms",
+            i + 1,
+            o.n,
+            if i == 0 { " (dropped)" } else { "" },
+            span(&m, "s3_start", "s3_open").unwrap_or(f64::NAN)
+        );
+        if i > 0 {
+            purge.runs.push(m);
+        }
+    }
+    let host = std::env::var("COMPUTERNAME").unwrap_or_else(|_| "unknown".into());
+    let doc = json!({
+        "schema": "purge.bench-launch-s3/0",
+        "date": today(),
+        "host": host_json(o),
+        "flavour": flavour(),
+        "purge_args": purge_args,
+        "n": o.n, "dropped_first": 1,
+        "percentile_rule": "nearest rank",
+        "s3_page_open": s3_summary(&purge),
+        "apps": {"purge": purge.json()},
+        "pass": true,
+    });
+    println!("{}", serde_json::to_string_pretty(&doc)?);
+    if o.write {
+        std::fs::create_dir_all(&o.out)?;
+        let path = o
+            .out
+            .join(format!("{}-{}-{host}-s3-open.json", today(), clock()));
+        std::fs::write(&path, serde_json::to_string_pretty(&doc)? + "\n")?;
+        eprintln!("wrote {}", path.display());
+    }
+    Ok(true)
 }
 
 fn copy_dir(from: &Path, to: &Path) -> Result<()> {
@@ -842,6 +1156,137 @@ mod tests {
         assert_eq!(c.len(), 6);
         assert!(c.chars().all(|ch| ch.is_ascii_digit()));
         assert_eq!(stamp().len(), 19);
+    }
+
+    fn opts(args: &[&str]) -> Result<Opts> {
+        let args: Vec<String> = args.iter().map(|&a| a.to_owned()).collect();
+        parse_opts(Path::new("."), &args)
+    }
+
+    #[test]
+    fn real_engine_and_s3_open_are_modes_of_their_own() {
+        let o = opts(&["--purge", "p", "--real-engine", "-n", "2"]).unwrap();
+        assert!(o.real_engine && !o.s3_open && o.bare.is_none());
+        let o = opts(&["--purge", "p", "--real-engine", "--engine", "e.exe"]).unwrap();
+        assert_eq!(o.engine, Some(PathBuf::from("e.exe")));
+        assert!(opts(&["--purge", "p", "--s3-open"]).unwrap().s3_open);
+        // The stub warm mode still needs the bare control; the new modes do not.
+        assert!(opts(&["--purge", "p"]).is_err());
+        for both in [
+            ["--real-engine", "--s3-open"],
+            ["--real-engine", "--cold"],
+            ["--s3-open", "--first-launch"],
+        ] {
+            assert!(
+                opts(&["--purge", "p", both[0], both[1]]).is_err(),
+                "{both:?}"
+            );
+        }
+        assert!(opts(&["--purge", "p", "--bare", "b", "--engine", "e.exe"]).is_err());
+        assert!(opts(&["--purge", "p", "--real-engine", "-n", "1"]).is_err());
+        assert!(opts(&["--purge", "p", "--s3-open", "-n", "1"]).is_err());
+    }
+
+    #[test]
+    fn purge_args_may_not_carry_the_switches_a_mode_sets() {
+        for bad in [
+            "--bench-stub",
+            "--sample",
+            "--bench-until icons_visible",
+            "--bench-s3 10",
+        ] {
+            assert!(
+                opts(&["--purge", "p", "--real-engine", "--purge-args", bad]).is_err(),
+                "{bad}"
+            );
+        }
+        let o = opts(&[
+            "--purge",
+            "p",
+            "--real-engine",
+            "--purge-args",
+            "--xaml-changes IconNoGridOptimization",
+        ])
+        .unwrap();
+        assert_eq!(xaml_changes(&o.purge_args), ["IconNoGridOptimization"]);
+    }
+
+    #[test]
+    fn a_line_is_refused_when_it_timed_out_fell_back_or_lacks_its_marker() {
+        let good = parse_markers("presented=300 names_visible=320 icons_visible=700");
+        assert!(check_line(&good, "icons_visible", true).is_ok());
+        let fell_back = parse_markers("presented=300 engine_fallback=200 icons_visible=700");
+        assert!(check_line(&fell_back, "icons_visible", true).is_err());
+        // The stub modes show the sample data on purpose.
+        assert!(check_line(&fell_back, "icons_visible", false).is_ok());
+        let timed_out = parse_markers("presented=300 bench_timeout=20300 icons_visible=20301");
+        assert!(check_line(&timed_out, "icons_visible", true).is_err());
+        let short = parse_markers("presented=300 names_visible=320");
+        assert!(check_line(&short, "icons_visible", true).is_err());
+        assert!(check_line(&short, "presented", false).is_ok());
+    }
+
+    #[test]
+    fn s3_page_open_is_the_span_from_start_to_open() {
+        let m = parse_markers("presented=300 s3_start=310.5 s3_open=420");
+        assert_eq!(span(&m, "s3_start", "s3_open"), Some(109.5));
+        assert_eq!(span(&m, "s3_open", "s3_start"), None);
+        assert_eq!(span(&m, "s3_start", "nope"), None);
+
+        let mut s = Series::default();
+        for (a, b) in [(300.0, 400.0), (300.0, 350.0), (310.0, 500.0)] {
+            s.runs
+                .push(parse_markers(&format!("s3_start={a} s3_open={b}")));
+        }
+        let v = s3_summary(&s);
+        assert_eq!(v["p50"], json!(100.0));
+        assert_eq!(v["p90"], json!(190.0));
+        assert_eq!(v["items"], json!(2000));
+        // A run without both markers leaves the percentiles out rather than skewing them.
+        s.runs.push(parse_markers("s3_start=1"));
+        assert_eq!(s3_summary(&s)["p50"], Value::Null);
+    }
+
+    #[test]
+    fn real_engine_gates_names_at_400_460_and_warm_icons_at_one_second() {
+        let series = |lines: &[&str]| Series {
+            runs: lines.iter().map(|l| parse_markers(l)).collect(),
+        };
+        let pass = series(&[
+            "names_visible=380 icons_visible=900",
+            "names_visible=390 icons_visible=950",
+        ]);
+        let (gates, ok) = real_engine_gates(&pass, Some(2500.0));
+        assert!(ok);
+        assert_eq!(gates.len(), 2);
+        // The cold cache is reported, never gated.
+        assert_eq!(gates[1]["cold_cache_first_launch_ms"], json!(2500.0));
+
+        let slow_names = series(&[
+            "names_visible=380 icons_visible=900",
+            "names_visible=470 icons_visible=950",
+        ]);
+        assert!(
+            !real_engine_gates(&slow_names, None).0[0]["pass"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(!real_engine_gates(&slow_names, None).1);
+        let slow_icons = series(&[
+            "names_visible=300 icons_visible=1100",
+            "names_visible=300 icons_visible=1200",
+        ]);
+        assert!(!real_engine_gates(&slow_icons, None).1);
+        // A run without names_visible fails the gate instead of being skipped.
+        let missing = series(&["names_visible=300 icons_visible=500", "icons_visible=500"]);
+        assert!(!real_engine_gates(&missing, None).1);
+    }
+
+    #[test]
+    fn the_new_markers_are_reported() {
+        for m in ["names_visible", "icons_visible", "s3_start", "s3_open"] {
+            assert!(MARKERS.contains(&m), "{m}");
+        }
     }
 
     #[test]

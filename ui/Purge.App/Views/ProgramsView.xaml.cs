@@ -80,11 +80,42 @@ public sealed partial class ProgramsView : UserControl
         UpdateCommandState();
         ProgramList.ContainerContentChanging += (_, _) =>
         {
-            if (!_firstRowSeen) { _firstRowSeen = true; LaunchMarkers.Mark("first_row"); }
+            if (_firstRowSeen) return;
+            _firstRowSeen = true;
+            LaunchMarkers.Mark("first_row");
+            // Rows that come after the first presented frame (a real engine's list): names are visible in the next one.
+            if (_presented) MainWindow.Instance.MarkAfterNextFrame("names_visible");
         };
     }
 
     private bool _firstRowSeen;
+    private bool _presented;
+
+    /// <summary>Row height of the list (M3 design 9.3), for the size of the first screenful.</summary>
+    private const double RowHeight = 40;
+
+    /// <summary>Bench only: the ids of the first screenful whose icons are not settled yet (<c>icons_visible</c>).</summary>
+    private HashSet<string>? _iconsPending;
+    private bool _iconsMarked;
+
+    /// <summary>The icon load in progress (completed when none is); the bench lets it save the atlas before exiting.</summary>
+    public Task IconsDone { get; private set; } = Task.CompletedTask;
+
+    /// <summary>
+    /// Bench only, right after the <c>presented</c> marker: rows realized before it were in that frame, so
+    /// <c>names_visible</c> is <c>presented</c>; otherwise it is marked after the frame that follows the first row.
+    /// </summary>
+    public void OnPresented()
+    {
+        _presented = true;
+        if (!_firstRowSeen || LaunchMarkers.Get("presented") is not { } presented) return;
+        LaunchMarkers.Record("names_visible", presented);
+        MainWindow.Instance.BenchReached("names_visible");
+    }
+
+    /// <summary>The icon atlas file: the user's, or a bench run's own (<c>PURGE_BENCH_ICON_ATLAS</c>, bench only).</summary>
+    private static string? BenchAtlasFile() =>
+        LaunchMarkers.Enabled && Environment.GetEnvironmentVariable("PURGE_BENCH_ICON_ATLAS") is { Length: > 0 } file ? file : null;
 
     /// <summary>All rows, for the command box in the title bar.</summary>
     public IReadOnlyList<ProgramRow> All => _all;
@@ -172,8 +203,24 @@ public sealed partial class ProgramsView : UserControl
         var order = shown.Concat(_all).Select(r => r.Entry).DistinctBy(e => e.ProgramId).ToList();
         _sizesDone = 0;
         _sizing = true;
-        _ = RunIconsAsync(engine, order, cts.Token);
+        // Bench only: the first screenful (rows the list can show at once) waits for its icons. Sample data has none.
+        if (LaunchMarkers.Enabled && engine.IsLive && _iconsPending is null && shown.Count > 0)
+        {
+            var rows = ProgramList.ActualHeight > 0 ? (int)Math.Ceiling(ProgramList.ActualHeight / RowHeight) : 20;
+            _iconsPending = shown.Take(rows).Select(r => r.Entry.ProgramId).ToHashSet(StringComparer.Ordinal);
+        }
+        IconsDone = RunIconsAsync(engine, order, cts.Token);
         _ = RunSizesAsync(engine, order.Select(e => e.ProgramId).ToList(), cts.Token);
+    }
+
+    /// <summary>Bench only: icons of these ids are applied or known to be missing; the last of the first screenful marks it.</summary>
+    private void OnIconsAnswered(IReadOnlyList<string> ids)
+    {
+        if (_iconsPending is null || _iconsMarked) return;
+        _iconsPending.ExceptWith(ids);
+        if (_iconsPending.Count > 0) return;
+        _iconsMarked = true;
+        MainWindow.Instance.MarkAfterNextFrame("icons_visible");
     }
 
     private async Task RunIconsAsync(IEngineClient engine, List<InventoryEntry> order, CancellationToken ct)
@@ -184,9 +231,11 @@ public sealed partial class ProgramsView : UserControl
             await Task.Run(async () =>
             {
                 // Sample data keeps no cache: its icons are made up and must not reach the user's atlas file.
-                var atlas = engine.IsLive ? _atlas ??= new IconAtlas() : null;
+                var atlas = engine.IsLive ? _atlas ??= new IconAtlas(BenchAtlasFile()) : null;
+                Action<IReadOnlyList<string>>? answered = _iconsPending is null ? null : ids =>
+                    DispatcherQueue.TryEnqueue(() => { if (!ct.IsCancellationRequested) OnIconsAnswered(ids); });
                 await IconLoader.LoadAsync(engine, atlas, request, (id, icon) =>
-                    DispatcherQueue.TryEnqueue(() => { if (!ct.IsCancellationRequested) ApplyIcon(id, icon); }), ct).ConfigureAwait(false);
+                    DispatcherQueue.TryEnqueue(() => { if (!ct.IsCancellationRequested) ApplyIcon(id, icon); }), ct, answered).ConfigureAwait(false);
             }, ct);
         }
         catch (OperationCanceledException) { }

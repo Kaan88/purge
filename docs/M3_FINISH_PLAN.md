@@ -59,3 +59,6 @@ VMs. Host replays (A2, B1) can overlap A3 but not B7 timings.
 ## Status
 - Done: cold bench PASS (559.7 ms), desktop trial PASS, unelevated ci PASS, M3-R2 cleanup, S2 test (bc0d558).
 - In progress: r2-m2-inline (rework after Fable), r3-history, bl-gate-rig, bl-gate-score.
+- Branch m3-bench-tools (not merged): B3 tooling written (`--real-engine` with `names_visible`/`icons_visible`,
+  `--s3-open` on the 2,000-item fixture; docs/M3_BENCH.md), functional smoke only; G1 owner tests made
+  elevation-aware (pass unelevated on the host; the elevated run is B2 in the Inbound VM).

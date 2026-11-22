@@ -1707,13 +1707,27 @@ fn segment_edits_bind_to_the_validated_type_not_the_content() {
     assert!(open_and_check_key(&ctx, id).is_vanished());
 }
 
+/// The owner a key this test process creates gets: the current user unelevated, Administrators
+/// (`S-1-5-32-544`) elevated, the default owner of an elevated administrator token (with the
+/// default "System objects: Default owner for objects created by members of the Administrators
+/// group" policy; the elevated ci runs in the Inbound VM, which keeps it).
+fn created_key_owner() -> String {
+    if purge_win::sid::is_elevated().unwrap() {
+        "S-1-5-32-544".to_owned()
+    } else {
+        current_user_sid().unwrap()
+    }
+}
+
+/// Runs unelevated and elevated (ruling G1, docs/M3_FINISH_PLAN.md): the recorded owner of the new
+/// key is the one [`created_key_owner`] expects for this token, not always the current user.
 #[test]
 fn key_actions_and_emptiness() {
     let k = TestKey::new();
     k.create(r"Vendor\App\Sub");
     k.set(r"Vendor\App", "v", REG_DWORD, &[1, 0, 0, 0]);
     let mut ctx = ctx(&[]);
-    let sid = current_user_sid().unwrap();
+    let sid = created_key_owner();
 
     let tree = ExecOp::DeleteKeyTree {
         key: k.wire(r"Vendor\App"),

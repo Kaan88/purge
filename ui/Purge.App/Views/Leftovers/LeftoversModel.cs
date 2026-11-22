@@ -845,12 +845,13 @@ public sealed class LeftoversViewModel : INotifyPropertyChanged
         }
     }
 
-    /// <summary>Sample rows for <c>--sample</c> and the Settings preview.</summary>
-    public void LoadSample(string name = "Mozilla Firefox")
+    /// <summary>Sample rows for <c>--sample</c> and the Settings preview; <paramref name="count"/> above zero loads the
+    /// <see cref="LeftoversSample.Fixture"/> of that many items instead (the launch bench's S3 timer).</summary>
+    public void LoadSample(string name = "Mozilla Firefox", int count = 0)
     {
         ProgramName = name;
         Items.Clear();
-        Items.AddRange(LeftoversSample.Items());
+        Items.AddRange(count > 0 ? LeftoversSample.Fixture(count) : LeftoversSample.Items());
         Scan = new ScanResult { ScanId = "sample", Mode = ScanMode.Forced };
         BuildGroups();
         ApplyTicks(null);
@@ -937,6 +938,25 @@ public static class LeftoversSample
         Item("c-000000000000000a", @"C:\Users\tester\AppData\Local\Temp\firefox-crash-reports", "Files & folders",
             Band.Weak, RpcCategory.Cache, RpcItemKind.Folder, 655_360),
     ];
+
+    /// <summary>
+    /// <paramref name="count"/> items for the launch bench's S3 timer (M3 design 9.1, "S3 page open, 2,000-item
+    /// fixture"): the sample items repeated in order, each copy with its own id and a numbered name, so every group of
+    /// the sample, the Protected section included, grows in proportion.
+    /// </summary>
+    public static List<LeftoverItemModel> Fixture(int count)
+    {
+        var template = Items();
+        var items = new List<LeftoverItemModel>(count);
+        for (var i = 0; i < count; i++)
+        {
+            var t = template[i % template.Count];
+            var copy = i / template.Count;
+            items.Add(Item($"c-{i + 1:x16}", copy == 0 ? t.DisplayName : $@"{t.DisplayName}\fixture-{copy:D4}", t.GroupName, t.Band,
+                t.Category, t.Kind, t.SizeBytes ?? 0, t.Preselected, t.Blockers.FirstOrDefault() ?? ""));
+        }
+        return items;
+    }
 
     private static LeftoverItemModel Item(string id, string name, string group, Band band, RpcCategory category,
         RpcItemKind kind, ulong bytes, bool preselected = false, string why = "")

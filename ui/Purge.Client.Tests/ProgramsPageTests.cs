@@ -352,15 +352,37 @@ public sealed class ProgramsPageTests
     }
 
     [Fact]
+    public async Task Answered_names_cached_ids_and_each_ended_chunk_after_their_icons()
+    {
+        using var files = new AtlasFile();
+        using var engine = IconEngine();
+        await using var client = engine.Client;
+        var atlas = files.Open();
+        atlas.Put(IconLoader.AtlasPath(Hklm + "Cached"), 1L, 24, Enumerable.Repeat((byte)0x11, 24 * 24 * 4).ToArray());
+        var events = new List<string>();
+
+        await IconLoader.LoadAsync(client, atlas, [(Hklm + "Cached", 1L), (Hklm + "New", 1L), (Hklm + "bad", 1L)],
+            (id, _) => { lock (events) events.Add("icon " + id); }, CancellationToken.None,
+            ids => { lock (events) events.Add("answered " + string.Join(",", ids)); });
+
+        // A program the engine has no icon for ("bad") is still answered: it keeps its tile, and the screenful is settled.
+        Assert.Equal(["icon " + Hklm + "Cached", "answered " + Hklm + "Cached", "icon " + Hklm + "New", "answered " + Hklm + "New," + Hklm + "bad"], events);
+    }
+
+    [Fact]
     public async Task An_engine_that_ends_leaves_the_placeholders_and_does_not_throw()
     {
         using var files = new AtlasFile();
         using var engine = new ScriptedEngine((_, e) => e.End());
         await using var client = engine.Client;
         var delivered = 0;
-        var fetched = await IconLoader.LoadAsync(client, files.Open(), [(Hklm + "A", 1L)], (_, _) => delivered++, CancellationToken.None);
+        var answered = 0;
+        var fetched = await IconLoader.LoadAsync(client, files.Open(), [(Hklm + "A", 1L)], (_, _) => delivered++, CancellationToken.None,
+            _ => answered++);
         Assert.Equal(0, fetched);
         Assert.Equal(0, delivered);
+        // A failed chunk is not settled: the bench reports no icons_visible rather than a time for tiles.
+        Assert.Equal(0, answered);
     }
 
     [Fact]

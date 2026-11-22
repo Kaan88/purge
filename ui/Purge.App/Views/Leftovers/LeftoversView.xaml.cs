@@ -33,7 +33,19 @@ public sealed partial class LeftoversView : UserControl, ILeftoversPage
         if (!Program.Engine.IsLive)
         {
             Use(new LeftoversViewModel(new OfflineBroker()));
-            _vm!.LoadSample();
+            // The launch bench's S3 timer (--bench-s3 N) opens the page on an N-item fixture.
+            var benchItems = Program.Options.BenchS3Items;
+            _vm!.LoadSample(count: benchItems);
+            if (benchItems > 0 && LaunchMarkers.Enabled)
+            {
+                var seen = false;
+                Items.ContainerContentChanging += (_, _) =>
+                {
+                    if (seen) return;
+                    seen = true;
+                    MainWindow.Instance.MarkAfterNextFrame("s3_open");
+                };
+            }
         }
         else
         {

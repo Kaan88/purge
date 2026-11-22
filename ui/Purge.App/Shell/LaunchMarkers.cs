@@ -38,6 +38,14 @@ public static partial class LaunchMarkers
         return ms;
     }
 
+    /// <summary>Records <paramref name="name"/> at an earlier marker's time (<c>names_visible</c> when the rows were in the
+    /// first presented frame).</summary>
+    public static void Record(string name, double ms)
+    {
+        if (!Enabled) return;
+        lock (Gate) Marks.Add((name, ms));
+    }
+
     public static IReadOnlyList<(string Name, double Ms)> Snapshot()
     {
         lock (Gate) return Marks.ToArray();
