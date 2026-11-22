@@ -4,9 +4,15 @@ Branch `baseline`, pushed to `origin/baseline` (8c7142f). Design `docs/BASELINE_
 decision of this work is a row in `docs/DECISIONS.md` (Post-M1b). This file is kept current so the work can be
 continued from any harness: read it, then `git log --oneline -15` and `git worktree list`.
 
-## M3-R2 M2: FABLE RE-REVIEW OF 113b721 ANSWERED 2026-11-22 (branch `r2-m2-inline`, pushed, NOT merged).
-- Fable re-review of 113b721: round 1 closed, changes needed (M3, M4, L3; H3 in sid.rs) → fixed in 5a902e3, pending
-  the third Fable review. Merge only after it.
+## M3-R2 M2: THIRD FABLE REVIEW OF 3a135ed ANSWERED 2026-11-22 (branch `r2-m2-inline`, pushed, NOT merged).
+- Third Fable review of 3a135ed: changes needed (M5); H3, M3, M4, L3 closed → M5 + PATH filter fixed in d3178fd,
+  pending the fourth Fable review. Merge only after it.
+- M5: a fully qualified argument path that does not exist is judged by its nearest existing folder, which must be
+  admin-only (`is_admin_only_writable`); any other error is `Medium`. Drive-relative or `//` parts keep the old
+  rule; switches, `-key:value`, URLs and GUIDs are not judged.
+- PATH: an elevated run's machine `PATH` keeps only admin-only directories, in order (DECISIONS B1+S4 row); the
+  command text is unchanged (B1). Medium runs unchanged.
+- Earlier round (Fable re-review of 113b721: changes needed (M3, M4, L3; H3 in sid.rs) → fixed in 5a902e3):
 - M3: `cmd` reads the raw line; `/s`, quotes cmd could strip differently, or `&<>()@^|` in the program → `Medium`.
   M4: a `cmd` program without an extension → `Medium`. L3: `NAME=value` values and `;`-parts are judged.
 - H3 (new DECISIONS row): `sid::is_admin_only_executable` = the old chain rule + the file's parent directory grants
