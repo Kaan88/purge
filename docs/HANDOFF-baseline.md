@@ -30,7 +30,18 @@ Next, in order:
 3. Ask the user, then push `baseline`. Then hand over the installer (desktop-PC trial, conditions below).
 4. Remaining M3-R2 items ("Still open from M3-R2" below).
 
+Resumed unelevated 2026-11-22: unelevated `xtask ci` ALL PASS on fe444fd; Fable approved 3b9c9f6; `baseline`
+pushed (fe444fd). Installer rebuilt from fe444fd: `Purge-Setup-0.1.0.exe` 41.0 MB, SHA-256
+`89767b0e537346cbb62bf219fd2595a4594d81a52bafd20ea3202064d0d83391`, kept as
+`C:\purge-build\installer\Purge-Setup-0.1.0-fe444fd.exe` and copied over SSH to the desktop PC (192.168.1.115,
+DESKTOP-9SOIUCB) as `Desktop\Purge-Setup-0.1.0-fe444fd.exe`, hash verified there. The older
+`Desktop\Purge-Setup-0.1.0.exe` on that PC is the pre-merge b5b9fa4 build (b49ff9...): no M1 broker dialog, do not use.
+Next: the user's desktop-PC trial (conditions below), then "Still open from M3-R2".
+
 ### Harness notes (this session)
+- `build-installer.ps1`: run it as its own `powershell.exe -File` process (inside a PS 5.1 session, `*>` turns
+  cargo's stderr into a terminating error under its `ErrorActionPreference=Stop`), and put
+  `C:\Program Files (x86)\Microsoft Visual Studio\Installer` on PATH (the AOT link step calls `vswhere.exe`).
 - Git Bash (MSYS) enables SeBackup/SeRestore in its own token when elevated; `cargo test` started from it fails
   `undo_tests::no_privilege_or_impersonation_outlives_a_request`. Run Rust tests from PowerShell (or unelevated).
 - The suite assumes an UNELEVATED runner (owner checks). Elevated sessions give false failures.
