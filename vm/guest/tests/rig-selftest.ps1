@@ -859,10 +859,18 @@ function New-StubEngine([string]$Dir, [string]$MainKey, [string]$Trust = 'Exact'
     $ErrorActionPreference = 'Stop'
     function Log([string]$Message) { }
     function Copy-DefenderLogs([string]$OutDir) { }
+    # A virtual clock (no wall time: the checks below were load-dependent with real Get-Date/Start-Sleep and
+    # PollSec 0, e.g. a busy wait overrunning the bound left one attempt where two are asserted). Get-Date without
+    # arguments reads it; Start-Sleep advances it by its time (at least 100 ms, so a PollSec 0 loop still moves);
+    # a fake MpCmdRun advances it by its own `sec`. Get-Date with arguments stays the real cmdlet.
+    $script:clk = [datetime]'2026-01-01T00:00:00'
+    function Get-Date { if ($args.Count) { Microsoft.PowerShell.Utility\Get-Date @args } else { $script:clk } }
+    function Start-Sleep([int]$Milliseconds = 0, [int]$Seconds = 0) { $script:clk = $script:clk.AddMilliseconds([math]::Max(100, $Milliseconds + 1000 * $Seconds)) }
+    function Step-Clock([double]$Sec) { $script:clk = $script:clk.AddSeconds($Sec) }
     # a version record: $age days old, out of date when older than 7 days (as Defender says)
     $V = { param($sig, $age = 0) [ordered]@{ source = 'fake'; av_signature = $sig; as_signature = $sig; engine = '1.1.1.1'; platform = '4.18.1.1'
             av_signature_age = $age; signatures_out_of_date = ($age -gt 7); error = $null } }
-    $Fake = { param($exit, $sec = 0.1) [ordered]@{ exe = 'C:\fake\MpCmdRun.exe'; args = '-SignatureUpdate'; start = 'x'; exit = $exit; timed_out = $false; sec = $sec; error = $null } }
+    $Fake = { param($exit, $sec = 0.1) Step-Clock $sec; [ordered]@{ exe = 'C:\fake\MpCmdRun.exe'; args = '-SignatureUpdate'; start = 'x'; exit = $exit; timed_out = $false; sec = $sec; error = $null } }
     function Get-DefenderVersions { & $V '1.437.1.0' 427 }
 
     # current from the start: MpCmdRun exits 0 at once, nothing changes, signatures current -> one attempt, done
@@ -918,7 +926,7 @@ function New-StubEngine([string]$Dir, [string]$MainKey, [string]$Trust = 'Exact'
 
     # MpCmdRun hangs: its timeout is capped by what is left of the overall bound; recorded, the wait still ends
     $script:to = @()
-    function Invoke-DefenderSignatureUpdate([int]$TimeoutSec = 300) { $script:to += $TimeoutSec; [ordered]@{ exe = 'C:\fake\MpCmdRun.exe'; args = '-SignatureUpdate'; exit = $null; timed_out = $true; sec = $TimeoutSec; error = $null } }
+    function Invoke-DefenderSignatureUpdate([int]$TimeoutSec = 300) { $script:to += $TimeoutSec; Step-Clock $TimeoutSec; [ordered]@{ exe = 'C:\fake\MpCmdRun.exe'; args = '-SignatureUpdate'; exit = $null; timed_out = $true; sec = $TimeoutSec; error = $null } }
     function Get-DefenderFingerprint { [pscustomobject]@{ versions = (& $V '1.463.359.0' 0); text = 'same' } }
     $r = Wait-DefenderIdle -UpdateTimeoutSec 300 -StableSec 1 -BusyWaitSec 1 -MaxWaitSec 3 -PollSec 0
     Check 'Wait-DefenderIdle, MpCmdRun timed out: recorded, its timeout within the overall bound, bounded' ($r.trigger.timed_out -eq $true -and $r.bounded -eq $true -and @($script:to | Where-Object { $_ -gt 3 }).Count -eq 0) "timeouts=$($script:to -join ',') $($r | ConvertTo-Json -Depth 4 -Compress)"
