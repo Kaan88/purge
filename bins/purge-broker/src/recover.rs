@@ -97,6 +97,11 @@ fn run<H: Handler>(
                         "the dialog does not describe the ops the recovery can change",
                     ));
                 }
+                // Not asked while another broker writes the store (its live run reads as
+                // interrupted here); the recovery itself would be refused after the approval.
+                if backend.writer_busy() {
+                    return Err(BackendError::Busy.into_error());
+                }
                 if dialog::ask(ctx, &view) != Outcome::Approved {
                     return Err(ErrorObject::server(ErrorData::ConsentDeclined));
                 }

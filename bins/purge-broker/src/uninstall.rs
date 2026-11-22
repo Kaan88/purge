@@ -252,14 +252,21 @@ impl Machine for LiveMachine {
         let bytes = serde_json::to_vec(fingerprint)
             .map_err(|e| ErrorObject::runtime(format!("cannot serialise the fingerprint: {e}")))?;
         let path = self.fingerprint_path(program);
-        let temp = path.with_extension("json.tmp");
+        // A temporary name of this process and call: two brokers storing the same program's
+        // fingerprint at once never write into one temporary file, so the rename puts one whole
+        // document in place, never a mix of two (review R3, single writer).
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let call = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let temp = path.with_extension(format!("json.{}-{call}.tmp", std::process::id()));
         std::fs::write(&temp, &bytes)
             .map_err(|e| ErrorObject::runtime(format!("cannot write {}: {e}", temp.display())))?;
         // `std::fs::rename` replaces an existing file on Windows (`MOVEFILE_REPLACE_EXISTING`), so the
         // old fingerprint stays until the new one takes its place; no removal first, which would open
         // a window in which a crash loses it (review M3-R2 N1).
-        std::fs::rename(&temp, &path)
-            .map_err(|e| ErrorObject::runtime(format!("cannot replace {}: {e}", path.display())))
+        std::fs::rename(&temp, &path).map_err(|e| {
+            let _ = std::fs::remove_file(&temp);
+            ErrorObject::runtime(format!("cannot replace {}: {e}", path.display()))
+        })
     }
 
     fn unstorable(&self, candidates: &[&Candidate]) -> Result<Vec<Refusal>, ErrorObject> {

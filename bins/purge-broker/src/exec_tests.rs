@@ -1584,4 +1584,13 @@ fn exec_errors_map_to_the_designs_kinds() {
         kind_of(ExecError::NotResumable("x".into())),
         Some("runtime")
     );
+    // Another writer of the store (another broker's run, undo, recovery or purge) holds it.
+    assert_eq!(
+        kind_of(ExecError::Store(
+            purge_exec::storage::StorageError::WriterBusy {
+                path: r"C:\ProgramData\Purge\sessions\writer.lock".into()
+            }
+        )),
+        Some("busy")
+    );
 }

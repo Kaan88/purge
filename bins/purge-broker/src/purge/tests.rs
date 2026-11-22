@@ -109,6 +109,8 @@ struct Scripted {
     apps: BTreeMap<SessionId, String>,
     calls: Mutex<Vec<Call>>,
     fail: Mutex<Option<StorageError>>,
+    /// What `purge` refuses with, after recording the call.
+    refuse: Mutex<Option<PurgeError>>,
     gate: Mutex<Option<Arc<Gate>>>,
     purge_started: Gate,
 }
@@ -202,6 +204,9 @@ impl ExpirySource for Scripted {
             );
         }
         self.calls.lock().unwrap().push(call);
+        if let Some(refusal) = self.refuse.lock().unwrap().clone() {
+            return Err(refusal);
+        }
 
         if let Some(gate) = self.gate.lock().unwrap().clone() {
             self.purge_started.open();
@@ -909,5 +914,28 @@ fn a_store_that_cannot_be_listed_purges_nothing() {
     assert_eq!(kind(&reply), "store_integrity", "{reply}");
     assert_eq!(source.call_count(), 0);
     assert!(!live.consent.wait_open(Duration::from_millis(150)));
+    live.finish();
+}
+
+/// A purge whose store lock another broker holds (single writer, review R3) is `busy`, and nothing was
+/// deleted.
+#[test]
+fn a_purge_refused_by_another_writer_of_the_store_is_busy() {
+    let source = Arc::new(Scripted::new());
+    source.add_item(item(1, false));
+    *source.refuse.lock().unwrap() = Some(PurgeError::Store(StorageError::WriterBusy {
+        path: PathBuf::from(r"C:\ProgramData\Purge\sessions\writer.lock"),
+    }));
+    let live = Live::start(source.clone());
+    let one = live.wire(&expiry(1));
+
+    live.send_purge(2, &[one]);
+    live.consent
+        .next_dialog(0, SECS)
+        .expect("the bulk dialog opened");
+    live.consent.answer(Outcome::Approved);
+    let reply = live.client.reply();
+    assert_eq!(kind(&reply), "busy", "{reply}");
+    assert_eq!(source.held_ids(), vec![expiry(1)], "nothing was deleted");
     live.finish();
 }

@@ -335,6 +335,7 @@ impl Purger {
                     "internal error: {} approved purge unit(s) were not named in the consent",
                     missing.len()
                 )),
+                PurgeError::Store(e) => store_error(e),
             })?;
 
         let purged = report
@@ -391,10 +392,12 @@ fn id_map(listing: &Listing) -> Result<BTreeMap<ExpiryId, ExecExpiryId>, ErrorOb
     Ok(map)
 }
 
-/// A store error as the RPC names it: the store's own check is `store_integrity`, anything else
-/// `runtime` (the design's 6.4 kinds, mirroring the CLI's `storage_exit`).
+/// A store error as the RPC names it: the store's own check is `store_integrity`, another writer of
+/// the store (another broker's run, undo, recovery or purge) is `busy`, anything else `runtime` (the
+/// design's 6.4 kinds, mirroring the CLI's `storage_exit`).
 fn store_error(e: StorageError) -> ErrorObject {
     match e {
+        StorageError::WriterBusy { .. } => ErrorObject::server(ErrorData::Busy),
         e @ (StorageError::Integrity { .. }
         | StorageError::VolumeRoot { .. }
         | StorageError::VolumeMismatch { .. }) => ErrorObject::server(ErrorData::StoreIntegrity {

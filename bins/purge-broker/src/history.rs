@@ -32,7 +32,13 @@ pub fn pending(backend: &dyn Backend) -> Result<PendingList, ErrorObject> {
 
 /// Refuses a request that needs the store at rest while a session is interrupted or damaged. A damaged
 /// journal is named first: it cannot be recovered, so `needs_recovery` would send the user nowhere.
+///
+/// Another writer of the store comes before both: while another broker runs, its session reads as
+/// interrupted, so the answer is `busy`, not `needs_recovery` (review R3, single writer).
 pub fn check_nothing_pending(backend: &dyn Backend) -> Result<(), ErrorObject> {
+    if backend.writer_busy() {
+        return Err(BackendError::Busy.into_error());
+    }
     let report = backend.pending().map_err(BackendError::into_error)?;
     if !report.damaged.is_empty() {
         let sessions: Vec<String> = report

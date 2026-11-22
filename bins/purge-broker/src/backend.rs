@@ -40,6 +40,9 @@ pub enum BackendError {
     NeedsRecovery(Vec<SessionId>),
     /// The session is not as it was when the dialog was drawn: nothing was done.
     NotAsShown,
+    /// Another operation writes the store now (a run, undo, recovery or purge of another broker):
+    /// nothing was done (the store's single-writer lock, DECISIONS 2026-11-22).
+    Busy,
     /// The request cannot be given to this session, with the reason.
     Refused(String),
     /// Anything else, with the reason.
@@ -62,6 +65,7 @@ impl BackendError {
             BackendError::NeedsRecovery(sessions) => {
                 ErrorObject::server(ErrorData::NeedsRecovery { sessions })
             }
+            BackendError::Busy => ErrorObject::server(ErrorData::Busy),
             BackendError::NotAsShown => ErrorObject::runtime(
                 "the session is not as it was when the dialog was shown; nothing was done",
             ),
@@ -75,6 +79,14 @@ impl BackendError {
 pub trait Backend: Send + Sync + 'static {
     /// The sessions that need recovery (`journal.pending`).
     fn pending(&self) -> Result<PendingReport, BackendError>;
+
+    /// Whether another operation holds the store's writer lock now (another broker's run, undo,
+    /// recovery or purge). A hint taken before a dialog, so that the user is not asked to approve a
+    /// change that would be refused, and a run of another broker is not mistaken for an interrupted
+    /// session; the run itself takes the lock. The fakes of the tests have no other writer.
+    fn writer_busy(&self) -> bool {
+        false
+    }
 
     /// What a session holds (`history.get`).
     fn history(&self, session: &SessionId) -> Result<HistoryDetail, BackendError>;
@@ -179,6 +191,7 @@ mod tests {
             kind(BackendError::NeedsRecovery(vec![])),
             Some("needs_recovery")
         );
+        assert_eq!(kind(BackendError::Busy), Some("busy"));
         assert_eq!(kind(BackendError::NotAsShown), Some("runtime"));
         assert_eq!(kind(BackendError::Refused("x".into())), Some("runtime"));
         assert_eq!(kind(BackendError::Failed("x".into())), Some("runtime"));

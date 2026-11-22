@@ -343,6 +343,8 @@ pub fn exec_error(error: ExecError) -> ErrorObject {
                 .collect(),
         }),
         ExecError::NeedsElevation(_) => ErrorObject::server(ErrorData::NotElevated),
+        // Another writer of the store (another broker's run, undo, recovery or purge) holds it.
+        ExecError::Store(StorageError::WriterBusy { .. }) => ErrorObject::server(ErrorData::Busy),
         ExecError::Store(StorageError::Cap(cap)) => ErrorObject::server(ErrorData::CapExceeded {
             volume: cap.root.clone(),
             used: cap.held,

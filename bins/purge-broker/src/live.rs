@@ -111,6 +111,7 @@ impl LiveBackend {
 fn store_error(e: StorageError) -> BackendError {
     match e {
         StorageError::SessionNotFound(_) => BackendError::Gone,
+        StorageError::WriterBusy { .. } => BackendError::Busy,
         StorageError::Integrity { .. }
         | StorageError::IndexMalformed { .. }
         | StorageError::IndexLost { .. } => BackendError::Integrity(e.to_string()),
@@ -293,6 +294,11 @@ fn taken(live: &Live, op: &ExecOp) -> bool {
 }
 
 impl Backend for LiveBackend {
+    fn writer_busy(&self) -> bool {
+        // A lock file the store refuses is not a busy writer: the run's own lock reports it.
+        self.roots.writer_busy().unwrap_or(false)
+    }
+
     fn pending(&self) -> Result<PendingReport, BackendError> {
         let list = recover::pending(&self.roots).map_err(store_error)?;
         let index = self.roots.read_index().ok();
