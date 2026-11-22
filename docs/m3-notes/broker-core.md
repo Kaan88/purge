@@ -110,6 +110,30 @@ progress is not interrupted). No cargo feature anywhere.
 | `baseline.changed`, rescan offered | `serve::baseline_changed_is_sent_with_the_scans_made_during_the_build` |
 | cancel | `serve::cancel_stops_a_cancellable_request_and_is_ignored_for_the_others` |
 
+## Timing records (branch `m3-timings`, 2026-11-22; gate G12)
+
+| Where | What |
+|---|---|
+| `purge-rpc` `timing.rs` | `TimingName` (12 marks), `TimingMark {mark, ms, wall_unix_ms}`, `Timings {process_created_unix_ms?, marks[]}`, `TimingLine` (one event-log line), `TIMING_EVENT_ID` 100 |
+| `purge-rpc` `methods.rs` | optional `timings` on `PrepareResult`, `ScanResult`, `PlanCreated`, `ExecResult`; fixtures of scan and execute carry one, prepare and plan do not (both ways tested) |
+| broker `timing.rs` | `Timer` (`ProcessTimer`: `Instant` plus the creation offset), `Timings` (process marks, sink), `RequestMarks`, `ChannelSink` (writer thread, queue 256, drops when full, `flush` bounded) |
+| broker `serve.rs` | `run_timed` (`run` = default timer counting from the call); `pipe_connected` after the hello answer in `accept`; `Ctx::mark`, `Ctx::timings`; `first_progress` in `Ctx::notify` after a `*.progress` line was written; `consent_shown`/`_answered` in `Ctx::consent` (first dialog of the request) |
+| handlers | `harvest_start`/`_complete` (`uninstall::prepare`), `scan_start`/`_complete` (`scan::handle`), `plan_ready` (`plan::create`), `execute_start`/`_complete` around `ExecBackend::execute` (`execute.rs`); each result gets `ctx.timings()` |
+| `main.rs` | `broker_start` right after the DLL-search and working-directory restriction (nothing loads before it); the event-log sink (`purge-win` `eventlog::report_info`) attached after the pipe exists; `flush(1 s)` before `process::exit` |
+| rig | `vm/guest/broker-timings.ps1 -Out x.jsonl [-Since t]` (FilterXPath: the unregistered source cannot be named with `-ProviderName`); `cargo xtask broker-timings x.jsonl --out x.json` (`purge.broker-timings/1`: per broker `harvests[].after_uac_ms`, `scans[].duration_ms`, `cold`, `first_progress_ms`, `within_gate`, `problems`) |
+
+Rules: a mark is taken once per name per request (per process for the two process marks); the marks of one
+process never go back; a clock that cannot be read, a timer that panics or a sink that panics leaves the mark out
+and the request unchanged (`catch_unwind` around every timer and sink call). No mark is logged before the pipe
+exists, so a refused start writes no timing line. Tests: `timing::tests` (timer, once-only, sink replay, failing
+and panicking timer and sink, channel sink order and flush), `timing_tests` (first progress only after a written
+progress line, none for a failed write or a non-progress notification, failing timer changes no answer),
+`exec_tests::the_flow_results_carry_their_timing_marks_in_order`, `exec_tests::a_failing_timer_changes_no_step_of_the_flow`;
+xtask `broker_timings::tests`; C# `LeftoversBrokerTests.TheTimingsMemberIsReadWhenPresentAndIgnoredWhenAbsent`.
+
+Not verified on the host: the event-log lines of a real elevated broker (the unelevated host refuses at the start
+check, before any timing line). The reader script was checked against the broker's existing start-failure events.
+
 ## Still needs the VM (the coordinator's elevated part)
 
 - The broker elevated through `runas` (real UAC), serving `engine.hello` to the UI stub; `Purge.exe` beside it.

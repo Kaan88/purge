@@ -17,6 +17,7 @@
 //! | [`purge`] | `quarantine.expiring` and `quarantine.purge` through the purge dialog |
 //! | [`store_caches`] | the MSI table cache and the local baseline cache in the store's checked `fp\msitables` and `baseline` |
 //! | [`wire`] | the named pipe, the TaskDialog and the parent handle |
+//! | [`timing`] | the timing marks of design 9.1 (gate G12): on four results and in the event log |
 //!
 //! There is no cargo feature: the scripted fakes of the tests exist only under `cfg(test)`.
 
@@ -50,6 +51,7 @@ pub mod serve;
 pub mod session;
 pub mod start;
 pub mod store_caches;
+pub mod timing;
 pub mod uninstall;
 pub mod wire;
 
@@ -57,3 +59,5 @@ pub mod wire;
 mod flow_tests;
 #[cfg(test)]
 mod testkit;
+#[cfg(test)]
+mod timing_tests;

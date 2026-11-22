@@ -41,7 +41,8 @@ Clean-Pro `rig-base-off`, `rig-base`, `m2-base`.
 - B6 G5 m3-uac from `m3-uac-on`: No -> 1223, Yes -> full flow, standard-user refusal, secure-desktop dialog
   (arming, paging, footer code, foreground). WRITE (extend rig-m3.ps1).
 - B7 G6/G7/G12 m3-e2e on the M1 apps (VS Code system + user, Git, Firefox+Thunderbird, Notepad++, 7-Zip, one M1b
-  service/task app) + failed uninstaller 1603/3010. WRITE UIA driver, scorer, broker timing records.
+  service/task app) + failed uninstaller 1603/3010. WRITE UIA driver, scorer. Broker timing records: written
+  (branch `m3-timings`; collect with `vm/guest/broker-timings.ps1`, reduce with `cargo xtask broker-timings`).
 - B8 G8/G9 m3-owner, m3-recover (crash at every step), allow_irreversible, Restart Manager, System Restore. WRITE.
 - B9 G11 m3-clean-start + Inno setup install/uninstall on Clean-Pro. WRITE.
 - B10 G13 re-run M1b scan + executor gates on the M3 commit (~10 h; cut allowed: G2 rig-base + G5 elevated).
@@ -59,3 +60,6 @@ VMs. Host replays (A2, B1) can overlap A3 but not B7 timings.
 ## Status
 - Done: cold bench PASS (559.7 ms), desktop trial PASS, unelevated ci PASS, M3-R2 cleanup, S2 test (bc0d558).
 - In progress: r2-m2-inline (rework after Fable), r3-history, bl-gate-rig, bl-gate-score.
+- Branch m3-bench-tools (not merged): B3 tooling written (`--real-engine` with `names_visible`/`icons_visible`,
+  `--s3-open` on the 2,000-item fixture; docs/M3_BENCH.md), functional smoke only; G1 owner tests made
+  elevation-aware (pass unelevated on the host; the elevated run is B2 in the Inbound VM).

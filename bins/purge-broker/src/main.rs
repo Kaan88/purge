@@ -9,8 +9,10 @@
 //! Order: the DLL search is restricted to System32; the start checks run (elevation first, then the
 //! directories); the command line is read; the parent process is opened and its creation time
 //! compared; the pipe is created (first instance only: a name that exists ends the broker); the
-//! standard handles are closed; the local-baseline build starts on its own thread; and the serving
-//! loop runs until it ends. The handler is [`purge_broker::broker::BrokerHandler`]: the flow over the live
+//! standard handles are closed; the timing lines start going to the event log (`purge_broker::timing`,
+//! the `broker_start` mark was taken right after the DLL-search and working-directory restriction);
+//! the local-baseline build starts on its own thread; and the serving loop runs until it ends. The
+//! timing lines are flushed for at most `FLUSH_WAIT` before the process ends. The handler is [`purge_broker::broker::BrokerHandler`]: the flow over the live
 //! machine (M3-BROKER-FLOW), `plan.execute` (M3-EXEC), history, undo and recovery (M3-UNDO) and the purge
 //! of expired quarantine (M3-PURGE).
 
@@ -23,12 +25,14 @@ use purge_broker::exec_live::LiveExec;
 use purge_broker::lifetime::{SystemClock, codes};
 use purge_broker::live::LiveBackend;
 use purge_broker::purge::Purger;
-use purge_broker::serve::{Limits, Wiring, run};
+use purge_broker::serve::{Limits, Wiring, run_timed};
+use purge_broker::timing::{ChannelSink, FLUSH_WAIT, ProcessTimer, Timings};
 use purge_broker::undo::UndoMethods;
 use purge_broker::uninstall::{Flow, LiveMachine};
 use purge_broker::wire::{PipeLink, ProcessParent, TaskDialogConsent};
 use purge_broker::{args, start};
 use purge_engine::pipeline::{self, Sources};
+use purge_rpc::timing::{TIMING_EVENT_ID, TimingName};
 use purge_source::live::{Live, LiveLocal};
 use purge_win::pipe::{ExpectedPeer, PipeError};
 
@@ -47,6 +51,13 @@ fn main() -> ExitCode {
         failure.report();
         return ExitCode::from(failure.exit_code());
     }
+    // Timing (design 9.1): marks count from the process creation; nothing depends on them. The
+    // event-log sink is attached once the pipe exists, so a refused start writes no timing line.
+    let timings = Arc::new(Timings::new(
+        ProcessTimer::of_this_process(),
+        std::process::id(),
+    ));
+    timings.mark_process(TimingName::BrokerStart);
     let started = match start::check() {
         Ok(started) => started,
         Err(failure) => {
@@ -96,6 +107,11 @@ fn main() -> ExitCode {
         }
     };
     purge_win::os::close_std_handles();
+    if let Some(sink) = ChannelSink::start(|line| {
+        let _ = purge_win::eventlog::report_info(start::EVENT_SOURCE, TIMING_EVENT_ID, line);
+    }) {
+        timings.attach(sink);
+    }
 
     let expected = ExpectedPeer {
         pid: args.parent_pid,
@@ -118,26 +134,30 @@ fn main() -> ExitCode {
             purge_win::sxs::find_base().map_err(|e| e.to_string())
         });
         settings.local_build = build.clone();
-        let exit = run(Wiring {
-            link,
-            handler: BrokerHandler::new(
-                Flow::new(Arc::new(LiveMachine::new(started.store.clone()))),
-                Purger::from_store(started.store.clone()),
-                UndoMethods::new(LiveBackend::new(
-                    started.store.clone(),
-                    settings.purge_dirs.clone(),
-                )),
-                Arc::new(LiveExec::new(started.store, settings.purge_dirs.clone())),
-            ),
-            expected,
-            parent: Arc::new(parent),
-            consent: Arc::new(TaskDialogConsent),
-            host: Arc::new(LiveHost::new(settings.clone())),
-            clock: Arc::new(SystemClock::new()),
-            build: build.map(|b| Arc::new(b) as Arc<dyn BuildHandle>),
-            settings: settings.clone(),
-            limits: Limits::design(),
-        });
+        let exit = run_timed(
+            Wiring {
+                link,
+                handler: BrokerHandler::new(
+                    Flow::new(Arc::new(LiveMachine::new(started.store.clone()))),
+                    Purger::from_store(started.store.clone()),
+                    UndoMethods::new(LiveBackend::new(
+                        started.store.clone(),
+                        settings.purge_dirs.clone(),
+                    )),
+                    Arc::new(LiveExec::new(started.store, settings.purge_dirs.clone())),
+                ),
+                expected,
+                parent: Arc::new(parent),
+                consent: Arc::new(TaskDialogConsent),
+                host: Arc::new(LiveHost::new(settings.clone())),
+                clock: Arc::new(SystemClock::new()),
+                build: build.map(|b| Arc::new(b) as Arc<dyn BuildHandle>),
+                settings: settings.clone(),
+                limits: Limits::design(),
+            },
+            timings.clone(),
+        );
+        timings.flush(FLUSH_WAIT);
         if exit.code() != 0 {
             start::report_exit(exit.code(), &exit.line());
         }

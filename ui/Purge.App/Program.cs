@@ -105,6 +105,19 @@ public sealed class StartupOptions
     /// <summary><c>--xaml-changes A,B</c>: XAML optional changes to enable (launch bench; the three of §9.2 step 8 only).</summary>
     public IReadOnlyList<string> XamlChanges { get; private init; } = [];
 
+    /// <summary>
+    /// <c>--bench-until marker</c>: the launch marker after which the bench writes its line (and, with <c>--bench-exit</c>,
+    /// closes): <c>presented</c> (default), <c>names_visible</c>, <c>icons_visible</c> or <c>s3_open</c>.
+    /// </summary>
+    public string BenchUntil { get; private init; } = "presented";
+
+    /// <summary><c>--bench-s3 N</c>: after the first frame, open the Leftovers page (S3) on an N-item sample fixture and
+    /// mark <c>s3_start</c> and <c>s3_open</c> (launch bench, M3 design 9.1). Needs <c>--bench-stub</c>.</summary>
+    public int BenchS3Items { get; private init; }
+
+    /// <summary>The markers <c>--bench-until</c> accepts.</summary>
+    private static readonly string[] BenchEnds = ["presented", "names_visible", "icons_visible", "s3_open"];
+
     /// <summary>The XAML optional changes the bench may try, one at a time (ENGINE_PLAN.md §9.2 step 8).</summary>
     private static readonly string[] XamlChangeNames =
     [
@@ -119,6 +132,8 @@ public sealed class StartupOptions
         var benchExit = false;
         var sample = false;
         var benchStub = false;
+        var benchUntil = "presented";
+        var benchS3 = 0;
         IReadOnlyList<string> xamlChanges = [];
         string? page = null;
         for (var i = 0; i < args.Length; i++)
@@ -152,11 +167,31 @@ public sealed class StartupOptions
                 case "--bench-stub":
                     benchStub = true;
                     break;
+                case "--bench-until" when i + 1 < args.Length:
+                    benchUntil = args[++i];
+                    if (!BenchEnds.Contains(benchUntil, StringComparer.Ordinal))
+                        throw new ArgumentException($"--bench-until takes one of {string.Join(", ", BenchEnds)}, not '{benchUntil}'");
+                    break;
+                case "--bench-until":
+                    throw new ArgumentException("--bench-until needs a marker name");
+                case "--bench-s3" when i + 1 < args.Length:
+                    if (!int.TryParse(args[++i], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out benchS3) || benchS3 < 1)
+                        throw new ArgumentException("--bench-s3 needs a positive item count");
+                    break;
+                case "--bench-s3":
+                    throw new ArgumentException("--bench-s3 needs an item count");
                 case "--sample":
                     sample = true;
                     break;
             }
         }
-        return new StartupOptions { Theme = theme, BenchExit = benchExit, Page = page, Sample = sample, BenchStub = benchStub, XamlChanges = xamlChanges };
+        // The fixture is the sample client's page: with the real engine S3 would show "No scan yet" and never open.
+        if (benchS3 > 0 && !benchStub)
+            throw new ArgumentException("--bench-s3 needs --bench-stub");
+        return new StartupOptions
+        {
+            Theme = theme, BenchExit = benchExit, Page = page, Sample = sample, BenchStub = benchStub, XamlChanges = xamlChanges,
+            BenchUntil = benchUntil, BenchS3Items = benchS3,
+        };
     }
 }

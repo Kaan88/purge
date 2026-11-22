@@ -243,10 +243,37 @@ fn missing_data_root_is_not_installed_and_missing_children_are_recreated() {
     assert_eq!(roots.read_index().unwrap(), SessionIndex::default());
 }
 
+/// Elevated, the objects a test creates are owned by Administrators (the elevated token's default
+/// owner), which the strict policy accepts. This gives `path` and everything below it to the current
+/// user, the owner an unelevated run gets by itself. A token may always name its own user as owner,
+/// so no privilege (SeRestorePrivilege, SeTakeOwnershipPrivilege) is needed; the creator holds
+/// `WRITE_OWNER` through the descriptor's Administrators entry.
+fn give_tree_to_current_user(path: &Path) {
+    let sid = purge_win::sid::current_user_sid().unwrap();
+    let handle = purge_win::fs_write::MoveHandle::open_with_security_write(
+        &secure::extended_path(path).unwrap(),
+    )
+    .unwrap();
+    handle.set_security(&format!("O:{sid}")).unwrap();
+    drop(handle);
+    if path.is_dir() {
+        for e in std::fs::read_dir(path).unwrap() {
+            give_tree_to_current_user(&e.unwrap().path());
+        }
+    }
+}
+
+/// Runs unelevated and elevated (ruling G1, docs/M3_FINISH_PLAN.md). Unelevated, the relaxed install
+/// is owned by the test user already. Elevated, it would be owned by Administrators and pass the owner
+/// rule, so the test hands the tree to the current user first; either way it proves the refusal of a
+/// tree a user owns.
 #[test]
 fn strict_policy_refuses_and_renames_aside_a_tree_owned_by_a_user() {
     let (s, relaxed) = fixture("strict");
     drop(relaxed);
+    if purge_win::sid::is_elevated().unwrap() {
+        give_tree_to_current_user(&s.path("data"));
+    }
     let strict = StorageRoots::new(&s.path("data")).unwrap();
     let err = strict.check().unwrap_err();
     let StorageError::Integrity {
@@ -257,7 +284,8 @@ fn strict_policy_refuses_and_renames_aside_a_tree_owned_by_a_user() {
     else {
         panic!("{err}");
     };
-    // Unelevated, the owner is the test user, never Administrators or SYSTEM.
+    // The owner is the test user (by creation unelevated, by the hand-over above elevated), never
+    // Administrators or SYSTEM.
     assert!(
         matches!(failure, IntegrityFailure::Owner { .. }),
         "{failure}"

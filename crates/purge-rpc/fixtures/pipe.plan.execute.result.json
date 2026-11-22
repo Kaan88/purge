@@ -24,5 +24,40 @@
     "kind": "Created",
     "sequence": 42
   },
-  "session": "20251115T101502Z-9f3a6c1d2b7e4a50"
+  "session": "20251115T101502Z-9f3a6c1d2b7e4a50",
+  "timings": {
+    "marks": [
+      {
+        "mark": "broker_start",
+        "ms": 41,
+        "wall_unix_ms": 1795000000041
+      },
+      {
+        "mark": "pipe_connected",
+        "ms": 180,
+        "wall_unix_ms": 1795000000180
+      },
+      {
+        "mark": "consent_shown",
+        "ms": 14002,
+        "wall_unix_ms": 1795000014002
+      },
+      {
+        "mark": "consent_answered",
+        "ms": 16480,
+        "wall_unix_ms": 1795000016480
+      },
+      {
+        "mark": "execute_start",
+        "ms": 16481,
+        "wall_unix_ms": 1795000016481
+      },
+      {
+        "mark": "execute_complete",
+        "ms": 19900,
+        "wall_unix_ms": 1795000019900
+      }
+    ],
+    "process_created_unix_ms": 1795000000000
+  }
 }

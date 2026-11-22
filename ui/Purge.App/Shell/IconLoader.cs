@@ -37,18 +37,28 @@ public static class IconLoader
     /// Delivers the cached icons at once, asks the engine for the rest in chunks and delivers those as they come,
     /// then saves the atlas (a null atlas is no cache: sample data keeps nothing). <paramref name="deliver"/> may run on any thread. Returns the number of icons that came
     /// from the engine.
+    /// <para><paramref name="answered"/> (optional, any thread) names the ids that are settled: the cached ones once they are
+    /// delivered, and each engine chunk once its request has ended, whether or not an icon came for every id (a program
+    /// without one keeps its tile). It always follows the <paramref name="deliver"/> calls of those ids. The ids of a chunk
+    /// the engine failed are not named. The launch bench's <c>icons_visible</c> marker waits for the first screenful.</para>
     /// </summary>
     public static async Task<int> LoadAsync(IEngineClient engine, IconAtlas? atlas, IReadOnlyList<(string Id, long Stamp)> order,
-        Action<string, AtlasIcon> deliver, CancellationToken ct)
+        Action<string, AtlasIcon> deliver, CancellationToken ct, Action<IReadOnlyList<string>>? answered = null)
     {
         var stamps = new Dictionary<string, long>(order.Count, StringComparer.Ordinal);
         var misses = new List<string>();
+        var hits = new List<string>();
         foreach (var (id, stamp) in order)
         {
             if (!stamps.TryAdd(id, stamp)) continue;
-            if (atlas is not null && atlas.TryGet(AtlasPath(id), stamp, out var cached)) deliver(id, cached);
+            if (atlas is not null && atlas.TryGet(AtlasPath(id), stamp, out var cached))
+            {
+                deliver(id, cached);
+                hits.Add(id);
+            }
             else misses.Add(id);
         }
+        if (hits.Count > 0) answered?.Invoke(hits);
 
         var fetched = 0;
         try
@@ -69,6 +79,7 @@ public static class IconLoader
                         deliver(icon.ProgramId, made);
                     }
                 }, ct).ConfigureAwait(false);
+                answered?.Invoke(ids);
             }
         }
         catch (OperationCanceledException) { throw; }

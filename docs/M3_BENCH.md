@@ -29,6 +29,16 @@ once the first frame has been presented. The markers, in launch order:
 | `first_row` | First list container realized (`ContainerContentChanging`). |
 | `first_tick` | First `CompositionTarget.Rendering` tick. |
 | `presented` | After `DwmFlush()` on the dispatcher thread, i.e. the next committed frame after `first_tick`. |
+| `names_visible` | The presented frame with rows: `presented` itself when `first_row` came before it (the stub, and a real list that was in by then), else `DwmFlush()` after the frame that follows `first_row`. Gated in `--real-engine` only. |
+| `icons_visible` | The first screenful of rows (list height / 40 px) has its icons settled: applied from the atlas or the engine, or answered without one (that row keeps its tile); then `DwmFlush()`. Live engine only (the stub sends no icons). A failed icon request never marks it. |
+| `s3_start`, `s3_open` | `--bench-s3 N`: the Leftovers page (S3) is asked for after the first frame (`s3_start`) and its list has a realized row in a presented frame (`s3_open`, after `DwmFlush()`). The S3 page open time is `s3_open - s3_start`. |
+| `engine_fallback` | The engine could not be used and the sample data stands in; `--real-engine` refuses such a launch. |
+| `bench_timeout` | The `--bench-until` marker did not come within 20 s of the first frame; the line is written as it is and the bench refuses it. |
+
+The app writes its line when the marker named by `--bench-until` arrives (`presented` by default; also
+`names_visible`, `icons_visible`, `s3_open`), and with `--bench-exit` then closes. With a live engine it
+first lets the icon load finish (at most 10 s) so the icon atlas is saved for the next launch; the line
+is already written, so this does not change the numbers.
 
 Only `PURGE_BENCH_OUT` turns markers on: `LaunchMarkers.Enabled` is false in a normal run, where `Mark`
 returns immediately and no process times are read.
@@ -44,6 +54,13 @@ grid), built with the same flavour as `Purge.App` (unpackaged, self-contained, N
 - First launch after install: the publish folder is copied to 5 fresh directories; launches 1 to 5 are timed
   in each copy. The gated number is launch 1 of each of the 5 copies.
 - Cold after reboot: one launch per reboot, appended to `cold-<host>.json`; the gate applies from 5 runs.
+- Real engine (`--real-engine`): `-n 21` launches of `Purge.exe` alone, without `--bench-stub`, so the
+  real `purge-engine --stdio` reads this host's ARP data. The run uses an icon atlas of its own (in the
+  bench's temp directory, never `%LOCALAPPDATA%\Purge\icons.atlas`), empty at launch 1: launch 1 is the
+  cold-icon-cache sample (reported) and is dropped from the warm numbers; launches 2 to 21 are warm.
+- S3 page open (`--s3-open`): `-n 21` launches with the stub and a 2,000-item S3 fixture (the sample
+  leftovers repeated with their own ids, every group and the Protected section in proportion), the
+  first dropped.
 
 ## Gates
 
@@ -51,10 +68,13 @@ grid), built with the same flavour as `Purge.App` (unpackaged, self-contained, N
 |---|---|---|
 | First Rendering tick vs the bare control | control p50 + 60 ms | 1.3 / 9.2 |
 | First Rendering tick, absolute guard | 360 ms p50, 420 ms p90 | 1.3 |
-| Names visible (presented frame with rows) | 400 ms p50, 460 ms p90 | 1.3 |
+| Names visible (presented frame with rows), stub | 400 ms p50, 460 ms p90 on `presented`, rows before it in every run | 1.3 |
+| Names visible (presented frame with rows), real engine and ARP data (`--real-engine`) | 400 ms p50, 460 ms p90 on `names_visible` | 1.3 / M3 9.1 |
+| Icons visible, warm icon cache (`--real-engine`) | 1 s p50 on `icons_visible`; the cold cache (launch 1) is reported | M3 9.1 |
+| S3 page open, 2,000-item fixture (`--s3-open`) | reported, no gate yet | M3 9.1 |
 | First launch after install | 1.2 s p50 over 5 fresh copies | 1.3 (U3) |
 | Cold after reboot | 1.0 s p50, N >= 5 | 1.3 / 9.2(e) |
-| Regression | any p50 more than 10 % over the last result file of the same host fails the run | 9.2(b) |
+| Regression | any p50 more than 10 % over the last result file of the same host and mode fails the run (stub: `first_tick`, `presented`; real engine: `names_visible`, `icons_visible`) | 9.2(b) |
 
 `OptimizeApplyStyles` stays off on Windows App SDK 2.6.5 (ContentDialog regression) and `--xaml-changes`
 refuses it by name, like any name outside the three of 9.2 step 8.
@@ -95,7 +115,20 @@ cargo xtask bench-launch --first-launch --purge out\purge
 # 4. Cold after reboot: one run per reboot, five reboots in all
 cargo xtask bench-launch --cold --reset --purge out\purge   # the first run of a new series
 cargo xtask bench-launch --cold --purge out\purge           # after each of the next four reboots
+
+# 5. Names and icons visible with the real engine and this host's ARP data
+cargo build --release -p purge-engine
+Copy-Item target\release\purge-engine.exe out\purge\
+cargo xtask bench-launch --real-engine --purge out\purge   # or --engine <path to purge-engine.exe>
+
+# 6. S3 page open on the 2,000-item fixture (reported, no gate)
+cargo xtask bench-launch --s3-open --purge out\purge
 ```
+
+`--real-engine` and `--s3-open` take `-n`, `--out`, `--no-write`, `--power` and `--purge-args` like the warm
+run, need no `--bare`, and refuse `--purge-args` that carry `--bench-stub`, `--sample`, `--bench-exit`,
+`--bench-until` or `--bench-s3` (the mode sets those). A real-engine launch that shows the sample data
+(`engine_fallback`) or times out fails the run.
 
 `cargo xtask bench-launch` prints the result JSON on stdout and exits 0 on pass, 1 on a gate breach or a
 regression.
@@ -123,6 +156,10 @@ The result files are committed under `bench/launch/` and summarised here.
 | Warm, Purge | TBD | TBD | TBD | TBD | TBD |
 | Warm, bare control | TBD | TBD | TBD | TBD | TBD |
 | First launch after install | TBD | TBD | TBD | n/a | TBD |
+| Names visible, real engine (`--real-engine`) | TBD | TBD | TBD | TBD | TBD |
+| Icons visible, warm icon cache (`--real-engine`) | TBD | TBD | TBD | TBD | TBD |
+| Icons visible, cold icon cache (`--real-engine`, launch 1) | TBD | TBD | TBD | n/a | reported |
+| S3 page open, 2,000 items (`--s3-open`) | TBD | TBD | TBD | TBD | reported |
 | Cold after reboot (N = 5) | 2026-11-22 | `bench/launch/cold-DESKTOP-K1F333G.json` (laptop, fe444fd publish) | 559.7 ms | n/a | PASS (limit 1000 ms; runs 544-584 ms, CPU 96-98 % idle) |
 | XAML changes, one at a time | TBD | TBD | TBD | TBD | TBD |
 
@@ -132,6 +169,8 @@ The result files are committed under `bench/launch/` and summarised here.
 |---|---|
 | Warm | `bench/launch/<YYYY-MM-DD>-<HHMMSS>-<COMPUTERNAME>.json` |
 | First launch | `bench/launch/<YYYY-MM-DD>-<HHMMSS>-<COMPUTERNAME>-first-launch.json` |
+| Real engine | `bench/launch/<YYYY-MM-DD>-<HHMMSS>-<COMPUTERNAME>-real-engine.json` (schema `purge.bench-launch-real/0`) |
+| S3 page open | `bench/launch/<YYYY-MM-DD>-<HHMMSS>-<COMPUTERNAME>-s3-open.json` (schema `purge.bench-launch-s3/0`) |
 | Cold | `bench/launch/cold-<COMPUTERNAME>.json` (a JSON array, one object per run with `at`, `uptime_s`, `presented`, `markers`) |
 
 The warm file carries the host facts (OS, CPU/GPU, power/battery), the flavour, the actual arguments, the
@@ -143,8 +182,9 @@ or the regression baseline.
 
 - **TraceLogging.** 9.2(a) asks for the markers in TraceLogging as well as `PURGE_BENCH_OUT`; only the file
   exists.
-- **Icons visible with a warm icon cache (1 s).** The stub engine sends no icons; the icon pipeline is
-  M3-S1. The result file says so instead of measuring it.
+- **Icons visible in the stub runs.** The stub sends no icons; `--real-engine` measures `icons_visible`.
+  Its warm cache is the run's own atlas after launch 1, not the user's atlas (which may be older or
+  hold other programs).
 - **DWM present-event cross-check.** The `presented` marker uses `DwmFlush`, not the `Microsoft-Windows-
   Dwm-Core` present events in WPR.
 - **Defender-on check for the first-launch run.** The tool records the gate as "Defender state as on the

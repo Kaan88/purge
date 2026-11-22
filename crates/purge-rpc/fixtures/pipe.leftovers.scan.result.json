@@ -9,5 +9,35 @@
   },
   "mode": "post",
   "scan_id": "s-0123456789abcdef",
+  "timings": {
+    "marks": [
+      {
+        "mark": "broker_start",
+        "ms": 41,
+        "wall_unix_ms": 1795000000041
+      },
+      {
+        "mark": "pipe_connected",
+        "ms": 180,
+        "wall_unix_ms": 1795000000180
+      },
+      {
+        "mark": "scan_start",
+        "ms": 9020,
+        "wall_unix_ms": 1795000009020
+      },
+      {
+        "mark": "first_progress",
+        "ms": 9034,
+        "wall_unix_ms": 1795000009034
+      },
+      {
+        "mark": "scan_complete",
+        "ms": 12310,
+        "wall_unix_ms": 1795000012310
+      }
+    ],
+    "process_created_unix_ms": 1795000000000
+  },
   "warnings": []
 }

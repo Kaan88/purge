@@ -38,6 +38,26 @@ public sealed class LeftoversPageTests
     }
 
     [Fact]
+    public void TheBenchFixtureHasTheAskedCountUniqueIdsAndEveryGroupOfTheSample()
+    {
+        var vm = new LeftoversViewModel(new ScriptedBroker());
+        vm.LoadSample(count: 2_000);
+
+        Assert.Equal(LeftoversPhase.Review, vm.Phase);
+        Assert.Equal(2_000, vm.Items.Count);
+        Assert.Equal(2_000, vm.Items.Select(i => i.CandidateId).Distinct(StringComparer.Ordinal).Count());
+        Assert.Equal(2_000, vm.Items.Select(i => i.DisplayName).Distinct(StringComparer.Ordinal).Count());
+
+        var sample = new LeftoversViewModel(new ScriptedBroker());
+        sample.LoadSample();
+        Assert.Equal(sample.Groups.Select(g => g.Name), vm.Groups.Select(g => g.Name));
+        // The sample's one Protected item in ten stays one in ten.
+        Assert.Equal(200, vm.Items.Count(i => i.IsProtected));
+        // count 0 is the 10-item sample, as before.
+        Assert.Equal(10, sample.Items.Count);
+    }
+
+    [Fact]
     public async Task AForcedScanPreselectsNothing()
     {
         var broker = new ScriptedBroker();

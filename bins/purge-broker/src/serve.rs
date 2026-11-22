@@ -30,6 +30,10 @@
 //! consent dialog as Cancel, lets every mutating request finish (its answer cannot be sent), gives a
 //! read-only one [`Limits::read_grace`], and ends. At the end the local-baseline build is asked to stop
 //! before its next part.
+//!
+//! **Timing** (`crate::timing`, design 9.1): [`run_timed`] takes the recorder; the loop marks
+//! `pipe_connected`, and [`Ctx`] gives a request [`Ctx::mark`], [`Ctx::timings`] and the
+//! `first_progress` and consent marks. Nothing here depends on a mark.
 
 use std::collections::HashMap;
 use std::io::{self, BufReader, Read};
@@ -49,6 +53,7 @@ use purge_rpc::methods::{
 };
 use purge_rpc::sets::{CapSet, OUT_LIMIT, PIPE_IN_LIMIT, Transport};
 use purge_rpc::table::{Method, Routed, route, write_notification, write_response};
+use purge_rpc::timing::TimingName;
 use purge_rpc::{BaselineBuild, EngineHello};
 use purge_win::pipe::ExpectedPeer;
 use purge_win::taskdialog::{Outcome, Page};
@@ -61,6 +66,7 @@ use crate::lifetime::{
 };
 use crate::link::{Link, LinkError, Refusal};
 use crate::session::{Tables, gone, program_hive_allowed};
+use crate::timing::{RequestMarks, Timings};
 
 /// Most non-mutating requests that run at once.
 pub const MAX_READS: usize = 8;
@@ -266,6 +272,8 @@ struct Shared<H: Handler> {
     /// the one that found it and the channel may be full (review M3-R2 S1).
     broken: AtomicBool,
     events: SyncSender<Event>,
+    /// The timing records (design 9.1); nothing depends on them.
+    timings: Arc<Timings>,
 }
 
 impl<H: Handler> Shared<H> {
@@ -321,12 +329,36 @@ pub struct Ctx<'a, H: Handler> {
     shared: &'a Shared<H>,
     request: RequestId,
     cancel: &'a AtomicBool,
+    marks: &'a RequestMarks,
+}
+
+/// Whether a notification is a `*.progress` line (the request's first one is a timing mark).
+fn is_progress(notification: &ServerNotification) -> bool {
+    matches!(
+        notification,
+        ServerNotification::UninstallProgress(_)
+            | ServerNotification::PrepareProgress(_)
+            | ServerNotification::ScanProgress(_)
+            | ServerNotification::ExecProgress(_)
+            | ServerNotification::UndoProgress(_)
+    )
 }
 
 impl<H: Handler> Ctx<'_, H> {
     /// The request being run: progress notifications carry it as `request`.
     pub fn request(&self) -> RequestId {
         self.request
+    }
+
+    /// Takes a timing mark of this request (`crate::timing`; once per name). Never fails and never
+    /// changes the request.
+    pub fn mark(&self, name: TimingName) {
+        self.shared.timings.mark_request(self.marks, name);
+    }
+
+    /// The `timings` member of this request's result: the process marks and this request's so far.
+    pub fn timings(&self) -> Option<purge_rpc::timing::Timings> {
+        self.shared.timings.result_timings(self.marks)
     }
 
     /// The broker's tables.
@@ -345,9 +377,14 @@ impl<H: Handler> Ctx<'_, H> {
     }
 
     /// Sends a notification. An error means the client is gone or the line cannot be sent: stop
-    /// sending, and finish a mutating request without it.
+    /// sending, and finish a mutating request without it. The request's first `*.progress` line
+    /// that was written is the `first_progress` mark.
     pub fn notify(&self, notification: &ServerNotification) -> Result<(), FrameError> {
-        self.shared.notify(notification)
+        let sent = self.shared.notify(notification);
+        if sent.is_ok() && is_progress(notification) {
+            self.mark(TimingName::FirstProgress);
+        }
+        sent
     }
 
     /// Whether the request should stop: `$/cancel` named it (a cancellable request only), or the
@@ -381,21 +418,30 @@ impl<H: Handler> Ctx<'_, H> {
     /// approved. A dialog that cannot be shown, one whose broker is ending (parent or pipe lost),
     /// and one closed because of that, are [`Outcome::Declined`]. When the window is up the client is
     /// sent `consent.shown` with `code`; a client that cannot be written to is lost, which closes the
-    /// dialog as Cancel.
+    /// dialog as Cancel. The request's first dialog is timed: `consent_shown` when it is up,
+    /// `consent_answered` when it ended.
     pub fn consent(&self, pages: &[Page], primary: i32, code: ConfirmCode) -> Outcome {
         if self.shared.closer.fired() || self.lost() {
             return Outcome::Declined;
         }
+        let was_shown = AtomicBool::new(false);
         let shown = || {
+            self.mark(TimingName::ConsentShown);
+            was_shown.store(true, Ordering::SeqCst);
             let _ = self.notify(&ServerNotification::ConsentShown(ConsentShown {
                 request: self.request,
                 code,
             }));
         };
-        self.shared
+        let answer = self
+            .shared
             .consent
             .ask(pages, primary, &self.shared.closer, &shown)
-            .unwrap_or(Outcome::Declined)
+            .unwrap_or(Outcome::Declined);
+        if was_shown.load(Ordering::SeqCst) {
+            self.mark(TimingName::ConsentAnswered);
+        }
+        answer
     }
 }
 
@@ -483,10 +529,11 @@ fn read_first_line<L: Link>(
 /// Accepts clients until one passes: identified, and `engine.hello` first. Its hello is answered here.
 /// Returns what it sent after the hello line, the build state the hello carried and the time of the
 /// hello (read before the answer, so the idle count starts no later than the client's next move).
-/// `Err` is the end of the broker.
+/// The answered hello is the `pipe_connected` mark. `Err` is the end of the broker.
 fn accept<L: Link>(
     w: &mut Wiring<L, impl Handler>,
     refusals: &mut Vec<Refusal>,
+    timings: &Timings,
 ) -> Result<(Vec<u8>, Option<BaselineBuild>, Duration), ExitReason> {
     let started = w.clock.now();
     loop {
@@ -517,7 +564,10 @@ fn accept<L: Link>(
                                 .map_err(|e| ErrorObject::runtime(e.to_string()));
                             let mut writer = FrameWriter::new(LinkSink(&w.link), OUT_LIMIT);
                             match write_response(&mut writer, &Response { id: Some(id), body }) {
-                                Ok(()) => return Ok((rest, state, at)),
+                                Ok(()) => {
+                                    timings.mark_process(TimingName::PipeConnected);
+                                    return Ok((rest, state, at));
+                                }
                                 Err(_) => Refusal::Gone,
                             }
                         }
@@ -546,10 +596,16 @@ struct Drain {
 }
 
 /// Runs the broker: accepts and checks a client, serves it, and returns how the broker ended. The
-/// caller reports a non-zero [`Exit::code`] and ends the process.
-pub fn run<L: Link, H: Handler>(mut w: Wiring<L, H>) -> Exit {
+/// caller reports a non-zero [`Exit::code`] and ends the process. The timing marks count from this
+/// call; the binary uses [`run_timed`] with marks that count from the process creation.
+pub fn run<L: Link, H: Handler>(w: Wiring<L, H>) -> Exit {
+    run_timed(w, Arc::new(Timings::default()))
+}
+
+/// [`run`] with the broker's timing recorder (`crate::timing`; design 9.1).
+pub fn run_timed<L: Link, H: Handler>(mut w: Wiring<L, H>, timings: Arc<Timings>) -> Exit {
     let mut refusals = Vec::new();
-    let (rest, last_state, hello_at) = match accept(&mut w, &mut refusals) {
+    let (rest, last_state, hello_at) = match accept(&mut w, &mut refusals, &timings) {
         Ok(ok) => ok,
         Err(reason) => {
             return finish(&w.build, &w.limits, reason, refusals);
@@ -585,6 +641,7 @@ pub fn run<L: Link, H: Handler>(mut w: Wiring<L, H>) -> Exit {
         stop: AtomicBool::new(false),
         broken: AtomicBool::new(false),
         events: events.clone(),
+        timings,
     });
     let reader = {
         let shared = shared.clone();
@@ -904,10 +961,12 @@ impl<H: Handler> Core<H> {
         let started = std::thread::Builder::new()
             .name(format!("purge-broker-{}", spec.name))
             .spawn(move || {
+                let marks = RequestMarks::new(id, spec.name);
                 let ctx = Ctx {
                     shared: &shared,
                     request: id,
                     cancel: &thread_cancel,
+                    marks: &marks,
                 };
                 let result =
                     std::panic::catch_unwind(AssertUnwindSafe(|| handler.call(&ctx, call)))

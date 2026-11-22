@@ -71,7 +71,12 @@ public sealed partial class MainWindow : Window
         // The "Administrator" chip shows only when the UI itself runs elevated (7a delta 2); the token is read
         // off the UI thread, so it also holds when the engine is not used.
         ElevationChip.Visibility = data.UiElevated ? Visibility.Visible : Visibility.Collapsed;
-        if (data.Error is { } error) _programs.ShowEngineNotice(error);
+        if (data.Error is { } error)
+        {
+            // The bench's --real-engine mode refuses a run whose list is the sample data.
+            LaunchMarkers.Mark("engine_fallback");
+            _programs.ShowEngineNotice(error);
+        }
     }
 
     private StackPanel? _barHost;
@@ -130,16 +135,79 @@ public sealed partial class MainWindow : Window
             {
                 LaunchMarkers.DwmFlush();
                 LaunchMarkers.Mark("presented");
-                LaunchMarkers.Flush();
+                _programs.OnPresented();
             }
+            // With the default --bench-until presented this writes the line and queues the exit, as before.
+            BenchReached("presented");
             _programs.OnFirstTick();
-            if (Program.Options.BenchExit)
-                // Close runs the Closed handler (engine disposal); Exit ends Application.Start, which
-                // closing the last window does not do on its own for an unpackaged app.
-                DispatcherQueue.TryEnqueue(() => { Close(); Application.Current.Exit(); });
-            else
-                DispatcherQueue.TryEnqueue(() => _programs.ShowLaunchTime());
+            if (_benchDone && Program.Options.BenchExit) return;
+            DispatcherQueue.TryEnqueue(() => _programs.ShowLaunchTime());
+            if (Program.Options.BenchExit) StartBenchTimeout();
+            if (Program.Options.BenchS3Items > 0)
+                DispatcherQueue.TryEnqueue(() =>
+                {
+                    LaunchMarkers.Mark("s3_start");
+                    Navigate("leftovers");
+                });
         });
+    }
+
+    private bool _benchDone;
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _benchTimer;
+
+    /// <summary>A later bench marker the app waits for (<c>--bench-until</c>) gets at most this long after the first frame.</summary>
+    private static readonly TimeSpan BenchTimeout = TimeSpan.FromSeconds(20);
+
+    /// <summary>
+    /// Marks <paramref name="name"/> after the next DWM composition (the same approximation as <c>presented</c>), then
+    /// tells <see cref="BenchReached"/>. A no-op off the bench.
+    /// </summary>
+    public void MarkAfterNextFrame(string name)
+    {
+        if (!LaunchMarkers.Enabled) return;
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+        {
+            LaunchMarkers.DwmFlush();
+            LaunchMarkers.Mark(name);
+            BenchReached(name);
+        });
+    }
+
+    /// <summary>
+    /// The bench end: when <paramref name="name"/> is the <c>--bench-until</c> marker, writes the marker line once and,
+    /// with <c>--bench-exit</c>, closes the app. A live engine's icon load is let finish first (at most 10 s) so the
+    /// icon atlas is saved and the next launch finds a warm cache.
+    /// </summary>
+    public void BenchReached(string name)
+    {
+        if (_benchDone || name != Program.Options.BenchUntil) return;
+        _benchDone = true;
+        LaunchMarkers.Flush();
+        if (Program.Options.BenchExit) _ = ExitAfterIconsAsync();
+    }
+
+    private async Task ExitAfterIconsAsync()
+    {
+        if (Program.Engine.IsLive) await Task.WhenAny(_programs.IconsDone, Task.Delay(TimeSpan.FromSeconds(10)));
+        // Close runs the Closed handler (engine disposal); Exit ends Application.Start, which closing the last
+        // window does not do on its own for an unpackaged app.
+        DispatcherQueue.TryEnqueue(() => { Close(); Application.Current.Exit(); });
+    }
+
+    /// <summary>A bench run whose <c>--bench-until</c> marker never comes writes what it has and ends.</summary>
+    private void StartBenchTimeout()
+    {
+        // Kept in a field: a DispatcherQueueTimer nobody references can be collected before it fires.
+        var timer = _benchTimer = DispatcherQueue.CreateTimer();
+        timer.Interval = BenchTimeout;
+        timer.IsRepeating = false;
+        timer.Tick += (_, _) =>
+        {
+            if (_benchDone) return;
+            LaunchMarkers.Mark("bench_timeout");
+            BenchReached(Program.Options.BenchUntil);
+        };
+        timer.Start();
     }
 
     private void OnRailClick(object sender, RoutedEventArgs e)
