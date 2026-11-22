@@ -15,6 +15,7 @@
 //! | [`baseline`] | the local-baseline build as the loop sees it, `engine.hello` from the live machine |
 //! | [`consent`] | the consent view model and the dialog, four variants |
 //! | [`purge`] | `quarantine.expiring` and `quarantine.purge` through the purge dialog |
+//! | [`store_caches`] | the MSI table cache and the local baseline cache in the store's checked `fp\msitables` and `baseline` |
 //! | [`wire`] | the named pipe, the TaskDialog and the parent handle |
 //! | [`timing`] | the timing marks of design 9.1 (gate G12): on four results and in the event log |
 //!
@@ -49,6 +50,7 @@ pub mod scan;
 pub mod serve;
 pub mod session;
 pub mod start;
+pub mod store_caches;
 pub mod timing;
 pub mod uninstall;
 pub mod wire;

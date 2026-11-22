@@ -1,6 +1,6 @@
 {
   "id": "_m3-e2e",
-  "note": "m3-e2e (vm/RIG.md section 15): added to every app's labels by vm/truth/m3-e2e-score.ps1 -Collect. Purge itself is installed and running in the e2e runs (installed before snap 0, used between snap 1 and snap 2), so its own data root, install, settings, event source and traces are ambient for the app under test, never the app's leftover. Hand-written.",
+  "note": "m3-e2e (vm/RIG.md section 16): added to every app's labels by vm/truth/m3-e2e-score.ps1 -Collect. Purge itself is installed and running in the e2e runs (installed before snap 0, used between snap 1 and snap 2), so its own data root, install, settings, event source and traces are ambient for the app under test, never the app's leftover. Hand-written.",
   "rules": [
     {
       "label": "ambient",

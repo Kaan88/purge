@@ -1,6 +1,6 @@
 {
   "id": "e2e-execapp",
-  "note": "m3-e2e (vm/RIG.md section 15): the M1b executor app PurgeExecApp planted by vm/guest/m1b-exec.ps1 (New-ExApp, Add-ExObject svc-full and task-simple of truth/m1b-exec-cases.json) after snap 0, uninstalled through the UI with its fixture uninstaller (m3sec fixture-uninstall PurgeExecApp: the ARP key and app.exe only). Hand-written: every rig-owned object of the app is its leftover; the helper build directory is the rig's.",
+  "note": "m3-e2e (vm/RIG.md section 16): the M1b executor app PurgeExecApp planted by vm/guest/m1b-exec.ps1 (New-ExApp, Add-ExObject svc-full and task-simple of truth/m1b-exec-cases.json) after snap 0, uninstalled through the UI with its fixture uninstaller (m3sec fixture-uninstall PurgeExecApp: the ARP key and app.exe only). Hand-written: every rig-owned object of the app is its leftover; the helper build directory is the rig's.",
   "include": [
     "_os.json"
   ],

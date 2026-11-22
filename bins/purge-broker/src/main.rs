@@ -119,7 +119,9 @@ fn main() -> ExitCode {
         image: started.client_image.clone(),
         user_sid,
     };
-    let mut settings = started.engine_settings();
+    // The MSI table cache and the local baseline cache are the store's checked `fp\msitables` and
+    // `baseline`, never the directories by path.
+    let mut settings = started.broker_settings();
     let live = Live::new();
     let local = LiveLocal::new();
     let sources = Sources {

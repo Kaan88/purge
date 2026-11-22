@@ -22,6 +22,10 @@ type Handle = *mut c_void;
 pub(crate) const DELETE: u32 = 0x0001_0000;
 /// `READ_CONTROL`.
 pub(crate) const READ_CONTROL: u32 = 0x0002_0000;
+/// `WRITE_DAC`.
+pub(crate) const WRITE_DAC: u32 = 0x0004_0000;
+/// `WRITE_OWNER`.
+pub(crate) const WRITE_OWNER: u32 = 0x0008_0000;
 /// `SYNCHRONIZE`.
 pub(crate) const SYNCHRONIZE: u32 = 0x0010_0000;
 /// `GENERIC_READ`.
@@ -464,6 +468,8 @@ pub(crate) struct Facts {
     pub size: u64,
     /// Volume serial and file id.
     pub file_id: FileId,
+    /// Last write time (`FILETIME`, 100 ns since 1601 UTC).
+    pub last_write: i64,
 }
 
 /// The facts of the object behind `h`.
@@ -486,6 +492,7 @@ pub(crate) fn facts(h: &impl AsHandle) -> Result<Facts, FsError> {
             volume_serial: id.volume_serial,
             id: id.file_id,
         },
+        last_write: basic.last_write,
     })
 }
 

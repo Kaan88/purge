@@ -20,7 +20,7 @@ Write-Host "PowerShell $($PSVersionTable.PSVersion) ($($PSVersionTable.PSEdition
 
 try {
 # ------------------------------------------------------------------------------------------ parse
-foreach ($f in @(Get-ChildItem -LiteralPath $Guest -Filter '*.ps1') + @(Get-Item (Join-Path $Vm 'rig.ps1')) + @(Get-Item (Join-Path $Vm 'rig-baseline-local.ps1')) + @(Get-Item (Join-Path $Vm 'rig-m3.ps1')) + @(Get-Item (Join-Path $Vm 'truth\m3-sec-score.ps1')) + @(Get-Item (Join-Path $Vm 'truth\m3-e2e-score.ps1')) + @(Get-Item $PSCommandPath)) {
+foreach ($f in @(Get-ChildItem -LiteralPath $Guest -Filter '*.ps1') + @(Get-Item (Join-Path $Vm 'rig.ps1')) + @(Get-Item (Join-Path $Vm 'rig-baseline-local.ps1')) + @(Get-Item (Join-Path $Vm 'rig-m3.ps1')) + @(Get-Item (Join-Path $Vm 'truth\m3-sec-score.ps1')) + @(Get-Item (Join-Path $Vm 'rig-m3-clean.ps1')) + @(Get-Item (Join-Path $Vm 'truth\m3-clean-score.ps1')) + @(Get-Item (Join-Path $Vm 'truth\m3-e2e-score.ps1')) + @(Get-Item $PSCommandPath)) {
     $tok = $null; $err = $null
     $null = [Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$tok, [ref]$err)
     Check "parse $($f.Name)" (@($err).Count -eq 0) (@($err | ForEach-Object { "line $($_.Extent.StartLineNumber): $($_.Message)" }) -join '; ')
@@ -1924,7 +1924,7 @@ function Invoke-M2Script([string]$Script, [string]$Arguments = '', [int]$Timeout
     Check 'm3-sec: m3sec.cs is ASCII (csc reads it in the guest code page)' (-not ([IO.File]::ReadAllText((Join-Path $Guest 'm3sec.cs')) -match '[^\x00-\x7F]'))
 }
 
-# ------------------------------------------------------------------------- m3-e2e (rig-m3.ps1, RIG.md section 15)
+# ------------------------------------------------------------------------- m3-e2e (rig-m3.ps1, RIG.md section 16)
 & {
     . (Join-Path $Vm 'rig-m3.ps1')
     $ErrorActionPreference = 'Stop'
@@ -1992,6 +1992,52 @@ function Invoke-M2Script([string]$Script, [string]$Arguments = '', [int]$Timeout
             Check 'm3-e2e-msi: 3010 fixture (ScheduleReboot on REMOVE="ALL", REBOOT=ReallySuppress)' $ok
         }
     }
+}
+
+# ------------------------------------------------- M3 m3-clean-start (rig-m3-clean.ps1, RIG.md section 15)
+& {
+    . (Join-Path $Vm 'rig-m3-clean.ps1')
+    $ErrorActionPreference = 'Stop'
+    $threw = $false; try { Assert-M3CleanVm 'Inbound-Win11-Test' } catch { $threw = $true }
+    Check 'm3-clean: Inbound-Win11-Test is refused' $threw
+    $threw = $false; try { Assert-M3CleanVm 'purge-cleanpro' } catch { $threw = $true }
+    Check 'm3-clean: the VM name is case-sensitive' $threw
+    $threw = $false; try { Assert-M3CleanVm 'Purge-CleanPro' } catch { $threw = $true }
+    Check 'm3-clean: Purge-CleanPro is accepted' (-not $threw)
+    $threw = $false; try { $null = Resolve-M3CleanSetup '' } catch { $threw = ($_.Exception.Message -match 'build-installer') }
+    Check 'm3-clean: no -Setup names build-installer.ps1' $threw
+    $sd = Join-Path $Work 'm3clean-setup'; New-Item -ItemType Directory -Force $sd | Out-Null
+    $good = Join-Path $sd 'Purge-Setup-0.1.0.exe'; [IO.File]::WriteAllText($good, 'x')
+    $bad = Join-Path $sd 'Other-Setup.exe'; [IO.File]::WriteAllText($bad, 'x')
+    Check 'm3-clean: a Purge-Setup-<version>.exe is taken' ((Resolve-M3CleanSetup $good) -eq $good)
+    $threw = $false; try { $null = Resolve-M3CleanSetup $bad } catch { $threw = $true }
+    Check 'm3-clean: another file name is refused' $threw
+    $threw = $false; try { $null = Resolve-M3CleanSetup (Join-Path $sd 'Purge-Setup-9.9.9.exe') } catch { $threw = $true }
+    Check 'm3-clean: a missing setup is refused' $threw
+    Check 'm3-clean: run name from the start time' ((Get-M3CleanRunName '' ([datetime]'2026-11-22T10:11:12')) -eq '20261122-101112')
+    $threw = $false; try { $null = Get-M3CleanRunName '..\x' } catch { $threw = $true }
+    Check 'm3-clean: a run name with a path is refused' $threw
+    Check 'm3-clean: phase job text' ((New-M3CleanPhaseText 'install' '2' 900) -eq "& 'C:\cr\guest\m3-clean.ps1' -Phase 'install' -Tag '2' -WaitSec 900")
+    $threw = $false; try { $null = New-M3CleanPhaseText 'install' "1'; Remove-Item C:\" } catch { $threw = $true }
+    Check 'm3-clean: a tag with quotes is refused' $threw
+    $steps = @(Get-M3CleanSteps 6)
+    $order = @($steps | ForEach-Object { "$($_.phase)$(if ($_.tag) { ':' + $_.tag })" }) -join ' '
+    Check 'm3-clean: step order' ($order -eq 'pre motw-start motw-end install:1 ui-start ui-stop bench:6 uninstall-no install:2 uninstall-yes-start uninstall-yes-answer rollback') $order
+    Check 'm3-clean: Esc twice before motw-end' ((@($steps | Where-Object { $_.phase -eq 'motw-end' })[0]['keys'] -join ',') -eq 'esc,esc' -and $M3CleanKeys['esc'].Count -eq 2)
+    $orderNo = @(Get-M3CleanSteps 6 -NoMotw | ForEach-Object { "$($_.phase)$(if ($_.tag) { ':' + $_.tag })" }) -join ' '
+    Check 'm3-clean: -NoMotw drops the two MOTW steps' ($orderNo -eq 'pre install:1 ui-start ui-stop bench:6 uninstall-no install:2 uninstall-yes-start uninstall-yes-answer rollback') $orderNo
+    $gm = [IO.File]::ReadAllText((Join-Path $Guest 'm3-clean.ps1'))
+    Check 'm3-clean: the guest writes ZoneId=3 with a GitHub release HostUrl' ($gm.Contains('ZoneId=3') -and $gm.Contains('HostUrl=https://github.com/') -and $gm.Contains('-Stream Zone.Identifier'))
+    Check 'm3-clean: the names and the data-folder dialog have screenshots' ((@($steps | Where-Object { $_.shot -eq 'ui-names' }).Count -eq 1) -and (@($steps | Where-Object { $_.shot -eq 'uninstall-yes-dialog' }).Count -eq 1))
+    $guestText = [IO.File]::ReadAllText((Join-Path $Guest 'm3-clean.ps1'))
+    $missing = @(@(@($steps | ForEach-Object { $_.phase }) + 'pack') | Sort-Object -Unique | Where-Object { $guestText -notmatch ("(?m)^\s*'" + [regex]::Escape($_) + "' \{") })
+    Check 'm3-clean: m3-clean.ps1 has a branch for every step' ($missing.Count -eq 0) ($missing -join ', ')
+    # The ARP key the guest checks is the setup's fixed AppId.
+    $iss = [IO.File]::ReadAllText((Join-Path (Split-Path -Parent $Vm) 'install\inno\purge.iss'))
+    $m = [regex]::Match($iss, '(?m)^AppId=\{(\{[0-9A-Fa-f-]+\})')
+    Check 'm3-clean: guest ARP key = purge.iss AppId' ($m.Success -and $guestText.Contains("'$($m.Groups[1].Value)_is1'")) $(if ($m.Success) { $m.Groups[1].Value })
+    $o = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Vm 'truth\m3-clean-score.ps1') --self-test 2>&1 | ForEach-Object { "$_" })
+    Check 'm3-clean: m3-clean-score.ps1 --self-test passes' ($LASTEXITCODE -eq 0) (@($o | Select-Object -Last 1) -join '')
 }
 
 } catch {

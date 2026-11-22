@@ -106,7 +106,10 @@ fn settings_from(facts: ProcessFacts) -> Settings {
         baseline_dir,
         purge_dirs,
         msi_table_dir,
+        // By path, as `pipeline::table_cache` decides: the engine has no checked store.
+        msi_table_source: None,
         local_baseline_dir,
+        local_baseline_source: None,
         data_root,
         check_shipped_dir: true,
         volume_rule,

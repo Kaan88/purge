@@ -56,7 +56,7 @@ Clean-Pro `rig-base-off`, `rig-base`, `m2-base`.
 - B7 G6/G7/G12 m3-e2e on the M1 apps (VS Code system + user, Git, Firefox+Thunderbird, Notepad++, 7-Zip, one M1b
   service/task app) + failed uninstaller 1603/3010. WRITE UIA driver, scorer. Broker timing records: written
   (branch `m3-timings`; collect with `vm/guest/broker-timings.ps1`, reduce with `cargo xtask broker-timings`).
-  Tooling done, branch m3-e2e (vm/RIG.md section 15; not run yet): `rig-m3.ps1 -Mode m3-e2e` (one rig-base boot per
+  Tooling done, branch m3-e2e (vm/RIG.md section 16; not run yet): `rig-m3.ps1 -Mode m3-e2e` (one rig-base boot per
   app, the real UI driven by UI Automation ids from `vm/guest/m3-e2e-ui.ps1`, UAC answered by scancode when a prompt
   is up, the broker dialogs approved by the elevated `m3sec press`), the M1b app = PurgeExecApp with svc-full +
   task-simple, MSI fixtures 1603 / 3010 written with the Windows Installer automation interface
@@ -67,7 +67,20 @@ Clean-Pro `rig-base-off`, `rig-base`, `m2-base`.
   powershell -NoProfile -File vm\truth\m3-e2e-score.ps1 -Evidence E:\purge-build\gate-evidence\m3-e2e\<run> -Collect
   ```
 - B8 G8/G9 m3-owner, m3-recover (crash at every step), allow_irreversible, Restart Manager, System Restore. WRITE.
-- B9 G11 m3-clean-start + Inno setup install/uninstall on Clean-Pro. WRITE.
+- B9 G11 m3-clean-start + Inno setup install/uninstall on Clean-Pro. Tooling: done, branch m3-rig-clean (vm/RIG.md
+  section 15; `vm\rig-m3-clean.ps1`, guest `vm\guest\m3-clean.ps1`, scorer `vm\truth\m3-clean-score.ps1`, not run
+  yet). Clean-Pro `rig-base` only: preconditions (no .NET / Windows App Runtime / VC++ redist), SmartScreen and SAC
+  reported, a mark of the web (ZoneId=3, GitHub release URL; `-NoMotw` skips it) with one interactive shell start
+  and its screenshot (report-only rows, never PASS/FAIL), silent elevated install, layout + `install.ps1 -Check` + data root + event source + ARP entry, Purge.exe at
+  medium shows the ARP names (UIA `ProgramList`), WARP numbers (report only), silent uninstall (data root kept), second
+  install, uninstall answering Yes by UIA (the setup has no silent switch for it), rollback with a planted junction.
+  Run (host, unelevated, no other VM running), with a setup built from the gate commit:
+  ```
+  powershell -NoProfile -ExecutionPolicy Bypass -File install\inno\build-installer.ps1
+  $env:VMPWFILE = '<pw file>'
+  .\vm\rig-m3-clean.ps1 -Setup target\installer\Purge-Setup-0.1.0.exe        # ~30-40 min
+  powershell -NoProfile -File vm\truth\m3-clean-score.ps1 -Evidence E:\purge-build\gate-evidence\m3-clean-start\<run>
+  ```
 - B10 G13 re-run M1b scan + executor gates on the M3 commit (~10 h; cut allowed: G2 rig-base + G5 elevated).
 - B11 G14 M3-R3 Fable review, then docs/M3_GATE.md (M2_GATE format).
 

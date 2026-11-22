@@ -372,7 +372,10 @@ Exact when their `os` matches a shipped baseline and as None otherwise, which is
   a standard user can read can be held open against the elevated engine's writes.
 - **Why a standard user cannot plant or poison it.** A removed line could make a Windows key look
   absent, so the file must not be writable below admin. The directory rule gives that; the `#end` line
-  only detects truncation. Writes go to a temporary name in the same directory and are renamed.
+  only detects truncation. Writes go to a temporary name in the same directory and are renamed. Since
+  2026-11-22 ("baseline checked" in DECISIONS) the broker's cache is its store's checked `baseline`
+  directory: every list, read, write, rename and removal goes relative to the handle it was checked
+  through and follows no reparse point; the engine keeps the directory rule and its by-path access.
 - **Key and invalidation** (as built in BL-CACHE, `purge_index::local_baseline::cache`; DECISIONS 2026-11-21,
   review BL-RM S1 and S7). The cache holds one text file **per source**, each in the format of §3.5 with that
   source's one `#src` line: `local-<EditionID>-<build>.<ubr>-s1-<id>.tsv.gz` (S1; id over the count, total size

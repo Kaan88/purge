@@ -1,4 +1,4 @@
-# Purge rig, M3 e2e: the UI Automation driver of the real UI (vm\RIG.md section 15; docs\M3_DESIGN.md 11.2, 13 "UI
+# Purge rig, M3 e2e: the UI Automation driver of the real UI (vm\RIG.md section 16; docs\M3_DESIGN.md 11.2, 13 "UI
 # Automation of a WinUI AOT app is flaky in the VM"). Windows PowerShell 5.1, functions only: dot-sourced by
 # m3-e2e.ps1, which runs elevated through the agent (UI Automation from high integrity reads and drives a medium
 # window; the reverse is what m3-consent proves impossible). The host self-test dot-sources it for the pure helpers.

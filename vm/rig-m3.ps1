@@ -44,7 +44,7 @@
   Evidence default: E:\purge-build\gate-evidence\<mode>\ (an existing non-empty one is moved aside first, so the
   scorer never reads an older run): rig-m3-<stamp>.log, *.png, jobs\*.log, guest\ (C:\cr\out\m3-sec\), summary.json.
 
-  M3 end to end (vm\RIG.md section 15; M3_DESIGN.md 11.2 row m3-e2e, gate G6, G7, G12; M3_FINISH_PLAN.md B7). Guest
+  M3 end to end (vm\RIG.md section 16; M3_DESIGN.md 11.2 row m3-e2e, gate G6, G7, G12; M3_FINISH_PLAN.md B7). Guest
   side vm\guest\m3-e2e.ps1 (phases), m3-e2e-ui.ps1 (the UI Automation driver), m3-e2e-msi.ps1 (the 1603 / 3010 MSI
   fixtures); expectations vm\truth\m3-e2e-expect.json; scorer vm\truth\m3-e2e-score.ps1. One boot of rig-base per app
   (UAC silent in design 11.2; a prompt that comes up is answered by scancode), the real UI installed as C:\Program Files\Purge\Purge.exe, every step driven through the UI:
@@ -511,7 +511,7 @@ function Invoke-M3SecUac {
     Complete-M3Sec $base @{ keys = $keys }
 }
 
-# ----------------------------------------------------------------------------------- m3-e2e (RIG.md section 15)
+# ----------------------------------------------------------------------------------- m3-e2e (RIG.md section 16)
 
 $M3E2eExpect = Join-Path $script:RigDir 'truth\m3-e2e-expect.json'
 $script:E2eDir = $null

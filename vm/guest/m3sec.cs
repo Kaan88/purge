@@ -1112,7 +1112,7 @@ static class M3Sec {
 
     // The fixture program's uninstaller: removes its ARP entry and its main exe (so verify-gone passes) and leaves
     // everything else as leftovers; writes C:\cr\out\m3-sec\fixture-uninstalled.json as the proof that it ran.
-    // m3-e2e (vm\RIG.md section 15) names another ARP key: "fixture-uninstall <Key>" (letters and digits only, HKLM
+    // m3-e2e (vm\RIG.md section 16) names another ARP key: "fixture-uninstall <Key>" (letters and digits only, HKLM
     // 64-bit Uninstall\<Key>); its proof is then C:\cr\out\m3-e2e\fixture-<Key>.json. A first argument starting with
     // '/' (m3-sec's quiet "/S") keeps the default key.
     static int FixtureUninstall(string[] a) {

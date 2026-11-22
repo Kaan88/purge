@@ -1,5 +1,5 @@
 <#
-  Purge rig, M3 mode m3-e2e (vm\RIG.md section 15; docs\M3_DESIGN.md 11.2 row m3-e2e, 12 G6, G7, G12, 9.1;
+  Purge rig, M3 mode m3-e2e (vm\RIG.md section 16; docs\M3_DESIGN.md 11.2 row m3-e2e, 12 G6, G7, G12, 9.1;
   docs\M3_FINISH_PLAN.md B7). Guest side, Windows PowerShell 5.1, run elevated by C:\cr\agent.ps1 as one job per
   phase; the host driver is vm\rig-m3.ps1 -Mode m3-e2e (one VM boot per app, from rig-base).
 

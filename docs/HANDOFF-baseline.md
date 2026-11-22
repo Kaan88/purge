@@ -4,6 +4,57 @@ Branch `baseline`, pushed to `origin/baseline` (8c7142f). Design `docs/BASELINE_
 decision of this work is a row in `docs/DECISIONS.md` (Post-M1b). This file is kept current so the work can be
 continued from any harness: read it, then `git log --oneline -15` and `git worktree list`.
 
+## FP CHECKED 2026-11-22 (branch `r3-fp-checked`; Fable review APPROVE with low findings, all fixed; pushed, NOT merged: the coordinator merges).
+- Third round (review follow-ups, DECISIONS row "fp checked, review follow-ups"; origin/baseline 1b4886c merged
+  first): an old inherited-ACL `fp` is replaced and its admin-owned plain `fp-<sha256>.json` files are moved over by
+  handle (no exit 22); the elevated live engine judges each cache file (`admin_only_file`) before reading it by
+  path; docs say directories are opened by path + final-path bound, files handle-relative; `rename_aside` gives
+  the rejected object its kind's descriptor; the broker prunes its directories' rejects after 30 days at start;
+  tests for the caches' real names through `DocDir`, concurrent replaces, and an elevated-only owner test
+  (`#[ignore]`). purge-exec gained dev-dependencies purge-index and purge-source (tests only).
+- Fourth round (Fable re-check of a62111f, DECISIONS row "fp checked, re-check follow-ups"; origin/baseline
+  f7200f1 merged first): no descriptor reset on a hard-linked file; an interrupted upgrade finishes from the newest
+  `fp.rejected-*` when `fp` has no fingerprint (never replacing a name); the prune creates no cache directory.
+- Why: the R3 Fable re-review's follow-up. The elevated broker wrote, renamed and swept fingerprint files in
+  `<data root>\fp` by path (and its MSI table cache wrote `fp\msitables` by path); `fp` was admin-only only by
+  the installer's descriptor, never checked at run time. A user-writable `fp` would let a junction to
+  `\RPC Control` + object symlink turn the rename into an arbitrary overwrite and the sweep into an arbitrary
+  delete.
+- Second round (coordinator rulings): Q1 accepted (noted in the "fp checked" row); `<data root>\baseline` (local
+  baseline cache) made checked the same way, DECISIONS row "baseline checked". purge-exec: `storage/fp.rs` is now
+  `storage/doc_dir.rs`, `FpDir` is `DocDir` (+ `list`, `remove`), `StorageRoots::baseline_dir`. purge-index:
+  `LocalCache` reaches files only through the new `CacheFiles` trait (`PathFiles` by path for the engine,
+  `LocalCache::with_files` for the broker). Engine: `Settings::local_baseline_source` / `LocalCacheSource`.
+  Broker: `msitables.rs` is now `store_caches.rs` (`StoreTableCaches`, `StoreLocalCaches`, `CheckedCacheFiles`);
+  `Started::broker_settings` sets both sources. Merged origin/baseline (91a930c, the m3_stdio timing fix).
+  Checks after the merge: fmt, clippy (workspace, rig, mcp), check-deps, no-new-walks, gen-dto --check,
+  baseline-sites: ok; purge-exec lib 495 (8 ignored) + all integration; broker 228 + 10 + 1; index 170 + 12 + 42 +
+  21; engine default lib 70, engine 40, exec_cli 4; rig lib 75, engine 43, exec_cli 14 (parallel, all pass);
+  `bash truth/bl.sh --self-test` PASS (12 cases); `BL_RUNS=7zip bash truth/bl.sh replay` (runs from the main
+  checkout, output in a scratch dir): exact, none, merged, local exit 0; exact plan sha256 54c52a64... = the L3 ref;
+  merged and local L5 against none: 0 violations. (The replay injects its views, so it does not exercise the
+  cache files; the cache is covered by the unit tests.)
+- First round fix (purge-exec `storage/fp.rs`): `StorageRoots::fp_dir` / `msi_tables_dir` = checked `Store` directories
+  (relative to the checked data root, created with `Store` when missing, failing ones renamed aside);
+  `check()` covers `fp`; `install_relaxed` creates it. `DocDir::{read, replace, sweep}` act relative to the
+  checked handle only (files are `StoreFile`s; temp leftovers checked then deleted by handle; sweep only old
+  plain one-link files). `at::Facts` gained `last_write`. Broker: fingerprint read/write/sweep through `DocDir`
+  (`uninstall.rs`), MSI table cache `store_caches::StoreTableCaches` via the new `Settings::msi_table_source`
+  (`pipeline::table_cache` takes it before any path). purge-index: `encode_cache_file`/`decode_cache_file`/
+  `temp_file_name` (same format, same names). Engine unchanged by path (justified in DECISIONS row "fp checked").
+- Effect on installs: an old `fp\msitables` (made by path, inherited DACL) is renamed aside once to
+  `msitables.rejected-<utc>`; the cache refills.
+- Checks (unelevated, TEMP=C:\purge-build\tmp): fmt --check, clippy --workspace --all-targets -D warnings, rig
+  clippy (rig-exec + test-support), purge-mcp clippy, check-deps, no-new-walks, gen-dto --check: ok. purge-exec
+  (fault-inject + test-support) lib 491 (8 ignored) + every integration target; purge-broker 227 + 10 + 1;
+  purge-index 169 + 12 + 42 + 21; purge-engine default lib 69, engine 40, exec_cli 4; rig lib 74, engine 43,
+  exec_cli 14 (engine run with --test-threads=1: `m3_stdio::programs_list_sends_raw_rows_first_then_patches`
+  asserts a 50 ms wall clock and failed twice under the parallel run's load on this laptop, passes alone and
+  single-threaded; it reads no fp/msitables).
+- Symlink case of the tests runs only where the account may create symbolic links (skipped otherwise).
+- Open: none blocking. The engine (medium and elevated CLI) keeps `DiskTableCache` and `PathFiles` by path, behind
+  the admin-only directory rule (reasons in the two DECISIONS rows).
+
 ## M3-R2 M2: APPROVED 2026-11-22 (branch `r2-m2-inline`, pushed; the coordinator merges it).
 - Fifth Fable review of 518b48b: changes needed (M7); M6, L4, interpreters, PATH closed → M7 fixed in 6e0d958;
   sixth Fable review of 9126b48: approved; optional follow-ups (`:` split, 8.3 names) in 2eb3360 (no further
@@ -47,6 +98,7 @@ continued from any harness: read it, then `git log --oneline -15` and `git workt
   uses a vendor key), `tests/privacy/ufh.rs::ufh_shc_below_exact_is_windows_own`,
   `reg_privacy::the_slot_store_is_a_framework_slot_store`; `baseline-sites` row updated.
 - Re-check after merge: the full R3 replay (`bash truth/bl.sh replay`, 2.5-3 h) and `evaluate` with R4.
+
 ## R3 SINGLE WRITER + UI FOLLOW-UPS 2026-11-22 (branch `r3-single-writer`; Fable re-review APPROVED, merged into baseline).
 - Verdict: two brokers (Leftovers' and History's/Vault's) could write one store at once with no guard. The index's
   read-modify-write lost entries and failed its read-back (measured: 6 unlocked writers x 4 updates, 18 sharing
