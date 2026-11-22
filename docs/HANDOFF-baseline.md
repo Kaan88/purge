@@ -4,6 +4,16 @@ Branch `baseline`, pushed to `origin/baseline` (8c7142f). Design `docs/BASELINE_
 decision of this work is a row in `docs/DECISIONS.md` (Post-M1b). This file is kept current so the work can be
 continued from any harness: read it, then `git log --oneline -15` and `git worktree list`.
 
+## M3-R2 M2: FABLE RE-REVIEW OF 113b721 ANSWERED 2026-11-22 (branch `r2-m2-inline`, pushed, NOT merged).
+- Fable re-review of 113b721: round 1 closed, changes needed (M3, M4, L3; H3 in sid.rs) → fixed in 5a902e3, pending
+  the third Fable review. Merge only after it.
+- M3: `cmd` reads the raw line; `/s`, quotes cmd could strip differently, or `&<>()@^|` in the program → `Medium`.
+  M4: a `cmd` program without an extension → `Medium`. L3: `NAME=value` values and `;`-parts are judged.
+- H3 (new DECISIONS row): `sid::is_admin_only_executable` = the old chain rule + the file's parent directory grants
+  no non-admin add-file/add-subdirectory. Used by the route, `should_run_medium` and the broker's `trusted_file`;
+  the data rule `is_admin_only_writable` is unchanged for every other caller (`C:\ProgramData\Purge` would fail the
+  run rule). Cost: vendor uninstallers in ProgramData folders that inherit the Users add right run at `Medium`.
+
 ## M3-R2 CLEANUP DONE 2026-11-22 (40e82ba code, 1f969c4 docs; pushed).
 - `docs/reviews/m3/r2-review.md` has its "Fixes" section: every B/M/S finding, flagged point and note mapped to its
   fix commit and tests (test names checked against the tree).
