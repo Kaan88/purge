@@ -4,9 +4,14 @@ Branch `baseline`, pushed to `origin/baseline` (8c7142f). Design `docs/BASELINE_
 decision of this work is a row in `docs/DECISIONS.md` (Post-M1b). This file is kept current so the work can be
 continued from any harness: read it, then `git log --oneline -15` and `git worktree list`.
 
-## M3-R2 M2: THIRD FABLE REVIEW OF 3a135ed ANSWERED 2026-11-22 (branch `r2-m2-inline`, pushed, NOT merged).
-- Third Fable review of 3a135ed: changes needed (M5); H3, M3, M4, L3 closed → M5 + PATH filter fixed in d3178fd,
-  pending the fourth Fable review. Merge only after it.
+## M3-R2 M2: FOURTH FABLE REVIEW OF f9bc039 ANSWERED 2026-11-22 (branch `r2-m2-inline`, pushed, NOT merged).
+- Fourth Fable review of f9bc039: changes needed (M6, L4); M5 + PATH filter closed → M6, L4, interpreter hosts
+  fixed in 5268a09, pending the fifth Fable review. Merge only after it.
+- M6: `sid` refuses any path not on a local fixed drive (UNC incl. `\\?\UNC\` and `\\localhost\c$`, mapped,
+  `subst`, removable) for both the run and the data rule (DECISIONS H3 row). L4: a leading `//` is UNC in the
+  argument check. Interpreter hosts (`pipeline::INTERPRETERS`: python, node, java, wsl, wscript, mshta, ...) are
+  always `Medium`, also under `cmd /c`; `cmd`, `rundll32`, `regsvr32`, `msiexec` keep their judged rules.
+- Earlier round (third Fable review of 3a135ed: changes needed (M5); H3, M3, M4, L3 closed → fixed in d3178fd):
 - M5: a fully qualified argument path that does not exist is judged by its nearest existing folder, which must be
   admin-only (`is_admin_only_writable`); any other error is `Medium`. Drive-relative or `//` parts keep the old
   rule; switches, `-key:value`, URLs and GUIDs are not judged.
