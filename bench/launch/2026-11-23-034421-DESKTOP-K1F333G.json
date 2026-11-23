@@ -1,0 +1,212 @@
+{
+  "apps": {
+    "bare": {
+      "markers": {
+        "first_tick": {
+          "max": 286.0,
+          "min": 243.5,
+          "p50": 251.1,
+          "p90": 257.2
+        },
+        "main": {
+          "max": 17.3,
+          "min": 12.6,
+          "p50": 13.4,
+          "p90": 14.2
+        },
+        "module_init": {
+          "max": 13.7,
+          "min": 10.1,
+          "p50": 10.8,
+          "p90": 11.6
+        },
+        "on_launched": {
+          "max": 52.4,
+          "min": 43.2,
+          "p50": 46.1,
+          "p90": 47.8
+        },
+        "presented": {
+          "max": 297.4,
+          "min": 257.1,
+          "p50": 262.7,
+          "p90": 267.5
+        },
+        "window_ctor": {
+          "max": 74.1,
+          "min": 66.2,
+          "p50": 69.5,
+          "p90": 72.8
+        }
+      },
+      "runs": 20
+    },
+    "purge": {
+      "markers": {
+        "engine_ready": {
+          "max": 18.8,
+          "min": 13.4,
+          "p50": 13.9,
+          "p90": 15.5
+        },
+        "first_row": {
+          "max": 356.3,
+          "min": 323.0,
+          "p50": 338.6,
+          "p90": 345.7
+        },
+        "first_tick": {
+          "max": 401.7,
+          "min": 372.2,
+          "p50": 386.1,
+          "p90": 394.9
+        },
+        "list_reply": {
+          "max": 62.4,
+          "min": 40.1,
+          "p50": 45.9,
+          "p90": 56.3
+        },
+        "main": {
+          "max": 18.6,
+          "min": 13.1,
+          "p50": 13.6,
+          "p90": 15.2
+        },
+        "module_init": {
+          "max": 15.9,
+          "min": 10.5,
+          "p50": 11.0,
+          "p90": 12.2
+        },
+        "names_visible": {
+          "max": 454.4,
+          "min": 425.8,
+          "p50": 444.1,
+          "p90": 451.4
+        },
+        "on_launched": {
+          "max": 51.8,
+          "min": 44.2,
+          "p50": 46.7,
+          "p90": 49.3
+        },
+        "presented": {
+          "max": 454.4,
+          "min": 425.8,
+          "p50": 444.1,
+          "p90": 451.4
+        },
+        "programs_ctor": {
+          "max": 279.1,
+          "min": 253.2,
+          "p50": 271.0,
+          "p90": 278.2
+        },
+        "programs_enter": {
+          "max": 271.2,
+          "min": 245.9,
+          "p50": 264.1,
+          "p90": 270.5
+        },
+        "programs_xaml": {
+          "max": 278.5,
+          "min": 252.7,
+          "p50": 270.5,
+          "p90": 277.6
+        },
+        "rows_set": {
+          "max": 293.8,
+          "min": 268.9,
+          "p50": 286.7,
+          "p90": 293.6
+        },
+        "w_backdrop": {
+          "max": 88.0,
+          "min": 79.0,
+          "p50": 81.4,
+          "p90": 86.1
+        },
+        "w_icon": {
+          "max": 264.5,
+          "min": 238.9,
+          "p50": 258.0,
+          "p90": 263.8
+        },
+        "w_size": {
+          "max": 268.7,
+          "min": 242.7,
+          "p50": 261.8,
+          "p90": 267.6
+        },
+        "w_titlebar": {
+          "max": 263.0,
+          "min": 237.5,
+          "p50": 256.5,
+          "p90": 262.4
+        },
+        "window_ctor": {
+          "max": 85.1,
+          "min": 76.2,
+          "p50": 78.5,
+          "p90": 82.7
+        }
+      },
+      "runs": 20
+    }
+  },
+  "cold_after_reboot": "not in this file: cargo xtask bench-launch --cold appends to cold-<host>.json",
+  "date": "2026-11-23",
+  "dropped_first": 1,
+  "flavour": {
+    "deploy": "unpackaged, self-contained, Native AOT, x64, custom Main",
+    "stub_engine": "engine.hello + 300 rows after 20 ms (--bench-stub)",
+    "winappsdk": "2.6.5"
+  },
+  "gates": [
+    {
+      "gate": "first Rendering tick vs bare control (relative, ms over control)",
+      "limit_p50": 60.0,
+      "limit_p90": null,
+      "p50": 135.0,
+      "p90": null,
+      "pass": false
+    },
+    {
+      "gate": "first Rendering tick, absolute guard",
+      "limit_p50": 360.0,
+      "limit_p90": 420.0,
+      "p50": 386.1,
+      "p90": 394.9,
+      "pass": false
+    },
+    {
+      "gate": "names visible (presented frame with rows)",
+      "limit_p50": 400.0,
+      "limit_p90": 460.0,
+      "p50": 444.1,
+      "p90": 451.4,
+      "pass": false,
+      "rows_before_presented_in_every_run": true
+    }
+  ],
+  "host": {
+    "hardware": "Intel(R) Core(TM) i7-6700HQ CPU @ 2.60GHz; NVIDIA GeForce GTX 1060",
+    "host": "DESKTOP-K1F333G",
+    "note": "a shared dev host: other work on the machine invalidates a run (docs/M3_BENCH.md)",
+    "os": "Microsoft Windows 11 Pro 26100",
+    "power": "battery status=2 charge=%; plan=Balanced"
+  },
+  "icons_visible_warm_cache": "not in this file: the stub sends no icons; cargo xtask bench-launch --real-engine measures it",
+  "n": 21,
+  "names_visible_real_engine": "not in this file: this run is the stub (300 rows after 20 ms); see --real-engine",
+  "pass": false,
+  "percentile_rule": "nearest rank",
+  "purge_args": [
+    "--bench-exit",
+    "--bench-stub"
+  ],
+  "regressions_over_10_percent": [],
+  "schema": "purge.bench-launch/0",
+  "xaml_changes": []
+}
