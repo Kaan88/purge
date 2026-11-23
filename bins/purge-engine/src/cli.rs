@@ -60,7 +60,7 @@ use purge_source::metered::{Meter, MeterSnapshot};
 use crate::pipeline::{self, PipelineError, Scanned, Settings, Sources};
 use args::{
     ExecVerb, HarvestArgs, InventoryArgs, Invocation, PlanShowArgs, ScanArgs, ScanFrom, USAGE,
-    UninstallArgs,
+    UninstallArgs, WalkFloorArgs,
 };
 
 /// The process exit code of a CLI run.
@@ -406,6 +406,7 @@ fn run_inner(
         ),
         Invocation::BaselineInfo(a) => baseline::info_verb(&a, env),
         Invocation::Hello => hello(env),
+        Invocation::WalkFloor(a) => walk_floor(&a, env),
         Invocation::Stdio => run_stdio(env),
         Invocation::Executor(verb) => executor(verb, env),
     }
@@ -433,6 +434,66 @@ fn hello(env: &mut Env<'_>) -> Exit {
     let hello = pipeline::hello(env.sources, &env.settings, &mut warnings);
     env.warnings(&warnings);
     env.emit(None, &output::json_text(&hello), "hello")
+}
+
+/// The schema of the `walk-floor` document.
+pub const WALK_FLOOR_SCHEMA: &str = "purge.walk-floor/1";
+
+/// `walk-floor`: how long the registry itself takes for the walk a harvest makes on this machine
+/// (M3_DESIGN.md 9.1, gate G12: the harvest's time is held against this floor, measured in the same
+/// run on the same machine). The scope is the one the harvest's reference scan walks for the
+/// interactive user ([`purge_harvest::refsnap::scope_for_sids`]), read by
+/// [`purge_index::refscan::bare_walk`]: the scan's own walk, with no value tested. Read-only: no
+/// build is started and, without `-o`, nothing is written.
+///
+/// The document: the scope's roots, the threads, one record per walk (`ms` and what was read) and
+/// `floor_ms`, the shortest walk (a floor is a lower bound, and the first walk may also pay for
+/// hive pages that are not in memory yet).
+fn walk_floor(a: &WalkFloorArgs, env: &mut Env<'_>) -> Exit {
+    let Sources { reg, sys, .. } = env.sources;
+    let sids: Vec<String> = sys.user_sid().ok().into_iter().collect();
+    let mut warnings = Vec::new();
+    let scope = purge_harvest::refsnap::scope_for_sids(reg, &sids, &mut warnings);
+    if sids.is_empty() {
+        warnings
+            .push("walk-floor: the interactive user is unknown; no user hive was walked".into());
+    }
+    if purge_source::metered::installed().is_some() {
+        warnings.push(
+            "walk-floor: PURGE_TIMING is set; a metered walk is slower than the floor".into(),
+        );
+    }
+    let mut runs = Vec::new();
+    let mut threads = 0;
+    for _ in 0..a.runs {
+        let started = Instant::now();
+        let walk = purge_index::refscan::bare_walk(reg, &scope);
+        let ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        threads = walk.threads;
+        let s = walk.stats;
+        runs.push(serde_json::json!({
+            "ms": ms,
+            "keys": s.keys_visited,
+            "values": s.values_tested,
+            "pruned": s.pruned,
+            "links_skipped": s.links_skipped,
+            "unreadable": s.unreadable_total,
+            "roots_missing": s.roots_missing,
+        }));
+    }
+    let floor = runs.iter().filter_map(|r| r["ms"].as_u64()).min();
+    let doc = serde_json::json!({
+        "schema": WALK_FLOOR_SCHEMA,
+        "engine": env!("CARGO_PKG_VERSION"),
+        "elevated": sys.elevated(),
+        "user_sids": sids,
+        "roots": scope.roots(),
+        "threads": threads,
+        "runs": runs,
+        "floor_ms": floor,
+    });
+    env.warnings(&warnings);
+    env.emit(a.out.as_deref(), &output::json_text(&doc), "walk floor")
 }
 
 fn inventory(a: &InventoryArgs, env: &mut Env<'_>, started: Instant) -> Exit {
@@ -792,6 +853,73 @@ mod tests {
             Exit::from(&PipelineError::Runtime(String::new())),
             Exit::Runtime
         );
+    }
+
+    /// `walk-floor` walks the scope a harvest walks for the interactive user, as often as asked,
+    /// counts what it read and reports the shortest walk; it tests no value and writes nothing but
+    /// its document.
+    #[test]
+    fn walk_floor_reads_the_harvest_scope_and_reports_the_shortest_walk() {
+        const SID: &str = "S-1-5-21-1-2-3-1001";
+        let mut fixture = Fixture::builder()
+            .os("Professional", 26340, 9882)
+            .user_sid(SID)
+            .sz(r"HKLM\SOFTWARE\Vendor\App", "Path", r"C:\Program Files\App")
+            .sz(r"HKLM\SOFTWARE\Vendor\App", "Other", "x")
+            .sz(r"HKLM\SOFTWARE\Classes\Installer\Products\P", "pruned", "x")
+            .sz(r"HKLM\SYSTEM\ControlSet001\Services\Svc", "ImagePath", "x")
+            .sz(r"HKLM\SYSTEM\ControlSet001\Control\Other", "outside", "x")
+            .sz(&format!(r"HKU\{SID}\Software\Vendor"), "a", "b")
+            .sz(&format!(r"HKU\{SID}_Classes\.app"), "", "App.File")
+            .sz(
+                r"HKU\S-1-5-21-1-2-3-1002\Software\Vendor",
+                "another user",
+                "x",
+            )
+            .build();
+        fixture.system_mut().elevated = true;
+        let mut host = NoHost;
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let exit = run(
+            &["walk-floor".to_owned(), "--runs".to_owned(), "2".to_owned()],
+            &mut Env {
+                sources: Sources::of(&fixture),
+                host: &mut host,
+                settings: Settings::default(),
+                run_options: RunOptions::default(),
+                stdout: &mut out,
+                stderr: &mut err,
+            },
+        );
+        assert_eq!(exit, Exit::Ok, "{}", String::from_utf8_lossy(&err));
+        let doc: serde_json::Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(doc["schema"], WALK_FLOOR_SCHEMA);
+        assert_eq!(doc["elevated"], true);
+        assert_eq!(doc["user_sids"], serde_json::json!([SID]));
+        assert_eq!(
+            doc["roots"],
+            serde_json::json!([
+                r"HKLM\SOFTWARE",
+                r"HKLM\SYSTEM\ControlSet001\Services",
+                r"HKLM\SYSTEM\ControlSet001\Control\Session Manager\Environment",
+                format!(r"HKU\{SID}\Software"),
+                format!(r"HKU\{SID}\Environment"),
+                format!(r"HKU\{SID}_Classes"),
+            ])
+        );
+        let runs = doc["runs"].as_array().unwrap();
+        assert_eq!(runs.len(), 2);
+        for walk in runs {
+            // The five values inside the scope: not the pruned store, the key outside the roots or
+            // the other user's hive.
+            assert_eq!(walk["values"], 5, "{walk}");
+            assert_eq!(walk["pruned"], 1, "{walk}");
+            assert_eq!(walk["unreadable"], 0, "{walk}");
+            assert!(walk["keys"].as_u64().unwrap() >= 7, "{walk}");
+        }
+        assert_eq!(runs[0]["keys"], runs[1]["keys"]);
+        let shortest = runs.iter().map(|w| w["ms"].as_u64().unwrap()).min();
+        assert_eq!(doc["floor_ms"].as_u64(), shortest);
     }
 
     /// `hello` prints the result of `engine.hello`: with the shipped baseline of the machine's

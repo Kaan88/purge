@@ -1961,7 +1961,7 @@ function Invoke-M2Script([string]$Script, [string]$Arguments = '', [int]$Timeout
     Check 'm3-e2e: the app list is the expectations list, in order' (($ids -join ',') -eq 'vscode,vscode-user,git,firefox-tb,npp,7zip,execapp,msi1603,msi3010') ($ids -join ',')
     Check 'm3-e2e: seven executing apps (G6), the two failing uninstallers' (@($x.apps | Where-Object { $_.kind -in 'app', 'fixture' }).Count -eq 7 -and @($x.apps | Where-Object { $_.kind -like 'fail-*' }).Count -eq 2)
     Check 'm3-e2e: exactly one medium-route app (vscode-user)' ((@($x.apps | Where-Object { $_.route -eq 'medium' } | ForEach-Object { $_.id }) -join ',') -eq 'vscode-user')
-    Check 'm3-e2e: the design gates (3 s, 10 s, 100 ms)' ([int]$x.gates.harvest_after_uac_ms -eq 3000 -and [int]$x.gates.scan_ms -eq 10000 -and [int]$x.gates.first_progress_ms -eq 100)
+    Check 'm3-e2e: the design gates (harvest 2x the walk floor and 20 s, 10 s, 100 ms)' ([double]$x.gates.harvest_floor_factor -eq 2 -and [int]$x.gates.harvest_cap_ms -eq 20000 -and -not $x.gates.PSObject.Properties['harvest_after_uac_ms'] -and [int]$x.gates.scan_ms -eq 10000 -and [int]$x.gates.first_progress_ms -eq 100)
     Check 'm3-e2e: -Apps keeps the named apps in list order' ((@(Get-M3E2eApps -ExpectFile $expect -Only @('msi1603', 'npp') | ForEach-Object { $_.id }) -join ',') -eq 'npp,msi1603')
     $threw = $false; try { $null = Get-M3E2eApps -ExpectFile $expect -Only @('nope') } catch { $threw = $true }
     Check 'm3-e2e: an unknown -Apps name throws' $threw

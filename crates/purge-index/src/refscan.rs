@@ -724,10 +724,11 @@ impl Tally {
     }
 }
 
-/// How one key is read: the scope, the matcher and the options of the scan.
+/// How one key is read: the scope, the matcher and the options of the scan. Without a matcher the
+/// values are read and counted, not tested ([`bare_walk`]).
 #[derive(Clone, Copy)]
 struct Visit<'a> {
-    matcher: &'a RefMatcher,
+    matcher: Option<&'a RefMatcher>,
     scope: &'a Scope,
     options: &'a RefScanOptions,
 }
@@ -776,6 +777,10 @@ impl Visit<'_> {
         if info.n_values > 0 {
             match walker.values() {
                 Ok(mut values) => {
+                    let Some(matcher) = self.matcher else {
+                        out.scan.stats.values_tested += values.len() as u64;
+                        return self.list(walker, key, info, out, children);
+                    };
                     sort_values(&mut values);
                     for value in &values {
                         out.scan.stats.values_tested += 1;
@@ -783,7 +788,7 @@ impl Visit<'_> {
                             out.scan.stats.incomplete_values += 1;
                         }
                         let hits = value_hits(
-                            self.matcher,
+                            matcher,
                             key,
                             value,
                             info.n_values,
@@ -800,6 +805,18 @@ impl Visit<'_> {
                 Err(error) => out.unreadable(key, error),
             }
         }
+        self.list(walker, key, info, out, children);
+    }
+
+    /// The second half of [`Visit::read`]: lists the subkeys of the key into `children`.
+    fn list(
+        &self,
+        walker: &mut dyn KeyWalker,
+        key: &str,
+        info: &KeyInfo,
+        out: &mut Tally,
+        children: &mut Vec<String>,
+    ) {
         if info.n_subkeys > 0 {
             match walker.subkeys() {
                 Ok(mut names) => {
@@ -1093,14 +1110,37 @@ pub fn scan(
     } else {
         1
     };
-    scan_with_threads(reg, matcher, scope, options, progress, threads)
+    scan_with_threads(reg, Some(matcher), scope, options, progress, threads)
+}
+
+/// What [`bare_walk`] read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BareWalk {
+    /// The counters of the walk; [`RefScanStats::values_tested`] counts the values read.
+    pub stats: RefScanStats,
+    /// The threads the walk read with (what a [`scan`] without progress reports uses).
+    pub threads: usize,
+}
+
+/// The walk of [`scan`] with nothing done to what is read: every key of `scope` is entered, its
+/// values are read and its subkeys listed, through the same walker, on the same threads, in the same
+/// order and with the same prune list as a scan without progress reports, and no value is tested.
+/// Read-only. Its time is what the registry itself costs a reference scan on this machine: the floor
+/// the harvest's time is held against (M3_DESIGN.md 9.1, gate G12).
+pub fn bare_walk(reg: &dyn RegistrySource, scope: &Scope) -> BareWalk {
+    let threads = default_threads();
+    let scan = scan_with_threads(reg, None, scope, &RefScanOptions::default(), None, threads);
+    BareWalk {
+        stats: scan.stats,
+        threads,
+    }
 }
 
 /// [`scan`] on at most `threads` threads (1: the sequential walk, which progress reports and a key
 /// budget need).
 fn scan_with_threads(
     reg: &dyn RegistrySource,
-    matcher: &RefMatcher,
+    matcher: Option<&RefMatcher>,
     scope: &Scope,
     options: &RefScanOptions,
     progress: Option<&mut ProgressFn<'_>>,
@@ -2179,7 +2219,7 @@ mod tests {
                     ..RefScanOptions::default()
                 },
             ] {
-                let one = scan_with_threads(&source, &m, &scope, &options, None, 1);
+                let one = scan_with_threads(&source, Some(&m), &scope, &options, None, 1);
                 assert!(one.hits.len() > 100, "{}", one.hits.len());
                 assert!(one.stats.pruned > 0 && one.stats.links_skipped > 0);
                 if flaky > MAX_UNREADABLE_LISTED {
@@ -2187,7 +2227,8 @@ mod tests {
                     assert!(one.stats.unreadable_total > MAX_UNREADABLE_LISTED as u64);
                 }
                 for threads in [2, 3, 8, 32] {
-                    let many = scan_with_threads(&source, &m, &scope, &options, None, threads);
+                    let many =
+                        scan_with_threads(&source, Some(&m), &scope, &options, None, threads);
                     assert_eq!(many.hits, one.hits, "{threads} threads, {flaky} flaky");
                     assert_eq!(many.stats, one.stats, "{threads} threads, {flaky} flaky");
                 }
@@ -2214,20 +2255,57 @@ mod tests {
         );
         let source = Flaky(&f);
         let options = RefScanOptions::default();
-        let one = scan_with_threads(&source, &matcher(), &scope, &options, None, 1);
+        let one = scan_with_threads(&source, Some(&matcher()), &scope, &options, None, 1);
         assert_eq!(
             one.stats.roots_missing,
             [r"HKLM\SOFTWARE\Missing", r"HKLM\SOFTWARE\Nothing\Here"]
         );
         assert_eq!((one.stats.pruned, one.stats.links_skipped), (1, 1));
         for threads in [2, 4, 16] {
-            let many = scan_with_threads(&source, &matcher(), &scope, &options, None, threads);
+            let many =
+                scan_with_threads(&source, Some(&matcher()), &scope, &options, None, threads);
             assert_eq!(many.hits, one.hits);
             assert_eq!(many.stats, one.stats);
         }
         // The public entry point picks its own number of threads and agrees too.
         let auto = scan(&source, &matcher(), &scope, &options, None);
         assert_eq!((auto.hits, auto.stats), (one.hits, one.stats));
+    }
+
+    /// The bare walk enters the keys a scan enters and reads the values a scan tests: the same
+    /// counters for keys, values, pruned keys, links, missing roots and unreadable keys; it reports
+    /// no hit and judges no value.
+    #[test]
+    fn the_bare_walk_reads_what_a_scan_reads() {
+        let f = big_tree(5);
+        let scope = Scope::custom(
+            [
+                r"HKLM\SOFTWARE\Missing".to_string(),
+                r"HKLM\SOFTWARE".to_string(),
+                hku("Software"),
+            ],
+            default_prune(),
+        );
+        for flaky in [false, true] {
+            let plain: &dyn RegistrySource = &f;
+            let flaking = Flaky(&f);
+            let source: &dyn RegistrySource = if flaky { &flaking } else { plain };
+            let scanned = scan(source, &matcher(), &scope, &RefScanOptions::default(), None);
+            assert!(!scanned.hits.is_empty());
+            let bare = bare_walk(source, &scope);
+            assert_eq!(bare.threads, default_threads());
+            let expected = RefScanStats {
+                incomplete_values: 0,
+                cut_edge_hits: 0,
+                ..scanned.stats.clone()
+            };
+            assert_eq!(bare.stats, expected, "{flaky} flaky");
+            assert!(bare.stats.keys_visited > 0 && bare.stats.values_tested > 0);
+            // On one thread too.
+            let one = scan_with_threads(source, None, &scope, &RefScanOptions::default(), None, 1);
+            assert!(one.hits.is_empty());
+            assert_eq!(one.stats, expected, "{flaky} flaky, one thread");
+        }
     }
 
     #[test]
@@ -2304,10 +2382,10 @@ mod tests {
         let source = Flaky(&f);
         let scope = Scope::standard(&f).unwrap();
         let options = RefScanOptions::default();
-        let one = scan_with_threads(&source, &matcher(), &scope, &options, None, 1);
+        let one = scan_with_threads(&source, Some(&matcher()), &scope, &options, None, 1);
         for started in [0, 2] {
             let many = with_spawn_budget(started, || {
-                scan_with_threads(&source, &matcher(), &scope, &options, None, 8)
+                scan_with_threads(&source, Some(&matcher()), &scope, &options, None, 8)
             });
             assert_eq!((&many.hits, &many.stats), (&one.hits, &one.stats));
         }
@@ -2321,7 +2399,7 @@ mod tests {
         let options = RefScanOptions::default();
         let small = big_tree(40);
         let scope = Scope::standard(&small).unwrap();
-        let few = scan_with_threads(&Flaky(&small), &m, &scope, &options, None, 1);
+        let few = scan_with_threads(&Flaky(&small), Some(&m), &scope, &options, None, 1);
         assert_eq!(
             few.stats.unreadable_total,
             few.stats.unreadable.len() as u64
@@ -2333,7 +2411,7 @@ mod tests {
         let big = big_tree(flaky);
         let scope = Scope::standard(&big).unwrap();
         for threads in [1, 4] {
-            let scan = scan_with_threads(&Flaky(&big), &m, &scope, &options, None, threads);
+            let scan = scan_with_threads(&Flaky(&big), Some(&m), &scope, &options, None, threads);
             assert_eq!(scan.stats.unreadable.len(), MAX_UNREADABLE_LISTED);
             assert_eq!(
                 scan.stats.unreadable_total,
@@ -2419,7 +2497,7 @@ mod tests {
         let m = matcher();
         let options = RefScanOptions::default();
         let reg: &dyn RegistrySource = &live.registry;
-        let old = scan_with_threads(&PathCalls(reg), &m, &scope, &options, None, 1);
+        let old = scan_with_threads(&PathCalls(reg), Some(&m), &scope, &options, None, 1);
         assert!(old.hits.len() > 25, "{}", old.hits.len());
         assert!(old.stats.keys_visited > 400, "{}", old.stats.keys_visited);
         assert_eq!(
@@ -2448,8 +2526,8 @@ mod tests {
                 .any(|h| h.key == tree.canon(r"B\QueryOnly\Inner"))
         );
 
-        let walker_one = scan_with_threads(reg, &m, &scope, &options, None, 1);
-        let walker_four = scan_with_threads(reg, &m, &scope, &options, None, 4);
+        let walker_one = scan_with_threads(reg, Some(&m), &scope, &options, None, 1);
+        let walker_four = scan_with_threads(reg, Some(&m), &scope, &options, None, 4);
         let shipped = scan(reg, &m, &scope, &options, None);
         let mut reports = 0;
         let mut progress = |_: &RefScanProgress<'_>| {

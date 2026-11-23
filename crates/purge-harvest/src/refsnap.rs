@@ -410,8 +410,17 @@ pub fn entries_from_hits(ctx: &HarvestCtx<'_>, hits: &[RefHit]) -> (Vec<RefSnapE
 /// [`HarvestCtx::user_sids`]. Falls back to the roots that do not depend on the control set when the
 /// source cannot tell which one is current.
 pub fn scope(ctx: &HarvestCtx<'_>, warnings: &mut Vec<String>) -> Scope {
-    let sids = ctx.user_sids();
-    match Scope::for_sids(ctx.reg, &sids) {
+    scope_for_sids(ctx.reg, &ctx.user_sids(), warnings)
+}
+
+/// [`scope`] for the given users: what the harvest's reference scan walks when it reads the hives of
+/// `sids` (also the scope of the engine's `walk-floor` measurement, which must walk the same keys).
+pub fn scope_for_sids(
+    reg: &dyn RegistrySource,
+    sids: &[String],
+    warnings: &mut Vec<String>,
+) -> Scope {
+    match Scope::for_sids(reg, sids) {
         Ok(scope) => scope,
         Err(error) => {
             warnings.push(format!(
@@ -419,7 +428,7 @@ pub fn scope(ctx: &HarvestCtx<'_>, warnings: &mut Vec<String>) -> Scope {
                  environment were not scanned"
             ));
             let mut roots = vec![r"HKLM\SOFTWARE".to_owned()];
-            for sid in &sids {
+            for sid in sids {
                 roots.push(format!(r"HKU\{sid}\Software"));
                 roots.push(format!(r"HKU\{sid}\Environment"));
                 roots.push(format!(r"HKU\{sid}_Classes"));
