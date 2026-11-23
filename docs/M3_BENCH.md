@@ -20,13 +20,13 @@ once the first frame has been presented. The markers, in launch order:
 | `on_launched` | `Application.OnLaunched`. |
 | `window_ctor` | `MainWindow` constructor entered. |
 | `w_backdrop` | `MicaBackdrop` set. |
-| `w_titlebar` | `ExtendsContentIntoTitleBar` and `SetTitleBar` done. |
 | `w_icon` | Window icon set. |
 | `w_size` | `SizeAndCenter` done. |
 | `programs_enter`, `programs_xaml` | `ProgramsView` constructor, before and after `InitializeComponent`. |
 | `programs_ctor` | `ProgramsView` built and attached. |
-| `rows_set` | `ItemsSource`/selection prepared (before `Activate()` when the reply is in). |
-| `first_row` | First list container realized (`ContainerContentChanging`). |
+| `rows_set` | `ItemsSource`/selection prepared (before `Activate()` when the reply is in). When the reply comes in only during the title bar wait, it is marked after `w_titlebar`. |
+| `first_row` | First list container realized (`ContainerContentChanging`). Since the pre-layout of the Programs page (see *Launch path*) this comes before `w_titlebar` and `Activate()` when the reply was in at `rows_set`. |
+| `w_titlebar` | `ExtendsContentIntoTitleBar` and `SetTitleBar` done. Since branch `m3-launch-perf` this is the last step of the `MainWindow` constructor, after `rows_set`, not after `w_backdrop`. |
 | `first_tick` | First `CompositionTarget.Rendering` tick. |
 | `presented` | After `DwmFlush()` on the dispatcher thread, i.e. the next committed frame after `first_tick`. |
 | `names_visible` | The presented frame with rows: `presented` itself when `first_row` came before it (the stub, and a real list that was in by then), else `DwmFlush()` after the frame that follows `first_row`. Gated in `--real-engine` only. |
@@ -92,6 +92,35 @@ refuses it by name, like any name outside the three of 9.2 step 8.
   (`GetSystemTimes`). The tool warns rather than refuses when the machine is busy.
 - The machine is a shared dev host. Any other build, indexer or browser invalidates a run; the result file
   records the host and the power/battery state so a suspicious run can be recognised later.
+
+## Launch path
+
+Facts the launch-time work in branch `m3-launch-perf` rests on, measured on the bench laptop (i7-6700HQ,
+Intel HD 530 + GTX 960M) with extra markers in builds that were not committed:
+
+- The first `ExtendsContentIntoTitleBar` call blocks the UI thread until the window's composition is ready.
+  Moving the call later in the constructor does not move the time it returns (it returns at about the time
+  the bare control has its first Rendering tick); the UI thread is busy for only about a quarter of that time
+  (`QueryThreadCycleTime`). A `D3D11CreateDevice` on a thread of its own, started in `Main`, took about
+  210 ms on this laptop and made the wait longer, not shorter. Creating a `Window` or asking for the
+  compositor earlier did not change when the wait ends.
+- `AppWindow.TitleBar.ExtendsContentIntoTitleBar` blocks the same way. Calling either after `Activate()`
+  (with or without cloaking the window) ends later than calling it before, and the layout still waits.
+- So the `MainWindow` constructor now builds the Programs page, loads the rows and lays the page out once
+  (`PreMeasurePrograms`) before that call, all inside the wait, and only then extends the title bar; the
+  window is still not shown before `Activate()`. What is left after the wait is `Activate()`, the live
+  layout of the whole window and the first render.
+- The rows of the first list are built and sorted on the thread that read the `programs.list` reply
+  (`ProgramsView.Prepare`, the same filter and sort as `Refresh`), so a real engine's reply that comes in
+  during the wait costs the UI thread almost nothing after it.
+- The program `ListView` has no container transitions until `OnFirstTick`, which restores the ListView
+  defaults.
+- Without `ExtendsContentIntoTitleBar` at all (the system caption; a design change, not made) `Activate()`
+  and part of the layout run inside the wait: in an interleaved run on a loaded host this was 93 ms
+  earlier on `first_tick` and `presented` than the extended title bar with the changes above.
+- Tried and not kept, each within the noise of interleaved runs on a loaded host: the three XAML optional
+  changes of 9.2 step 8, no `x:Phase` on the size column, two plain `TextBlock`s for the name cell, the
+  sort `DropDownButton` hidden, `SelectedItem` set after the first tick, `SelectionMode="Single"`.
 
 ## Running it
 

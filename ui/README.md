@@ -77,8 +77,9 @@ Development switches:
 | `--xaml-changes A,B` | Enable XAML optional changes, one at a time: `DefaultStyleOptimizations`, `IconNoGridOptimization`, `DeferContextFlyoutInit` (`OptimizeApplyStyles` is refused on 2.6.5). |
 
 Launch markers (milliseconds since process creation): `module_init`, `main`, `engine_ready`, `list_reply`,
-`on_launched`, `window_ctor`, `w_backdrop`, `w_titlebar`, `w_icon`, `w_size`, `programs_enter`,
-`programs_xaml`, `programs_ctor`, `rows_set`, `first_row`, `first_tick`, `presented`.
+`on_launched`, `window_ctor`, `w_backdrop`, `w_icon`, `w_size`, `programs_enter`, `programs_xaml`,
+`programs_ctor`, `rows_set`, `first_row`, `w_titlebar`, `first_tick`, `presented` (the title bar goes last in
+the window constructor; `docs/M3_BENCH.md`, *Launch path*).
 They show in Settings when present, and append one line per launch to the file named by `PURGE_BENCH_OUT`
 (only that file turns them on). The bench itself is `docs/M3_BENCH.md`.
 
