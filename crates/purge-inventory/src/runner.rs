@@ -21,7 +21,9 @@
 //!    `Global\_MSIExecute` is absent **and** the ARP key is gone, on [`RunOptions::quiet_polls`] (two)
 //!    consecutive polls ([`WaitEnd::Settled`]). If the tree and MSI are idle but the ARP key stays for
 //!    [`RunOptions::arp_grace`] (180 s), the wait gives up ([`WaitEnd::ArpStayed`]); that is not a
-//!    timeout, and verify-gone will fail. After [`RunOptions::timeout`] (30 min) the wait ends with
+//!    timeout, and verify-gone will fail. When the root has already exited with a failure code (1603,
+//!    1602, 1...), the grace is [`RunOptions::fail_grace`] (10 s): the uninstaller said it did not
+//!    remove the program (M3 e2e chain: a failed MSI removal sat out the whole 180 s). After [`RunOptions::timeout`] (30 min) the wait ends with
 //!    [`RunOutcome::TimedOut`] and **nothing is killed**: there is no kill-on-timeout behaviour, and the
 //!    [`ProcessHost`] trait has no way to terminate anything.
 //! 6. Map the root's exit code (§4.4 table, [`RunOutcome::from_exit_code`]): 0 success candidate, 1605
@@ -108,6 +110,10 @@ pub struct RunOptions {
     pub quiet_polls: u32,
     /// How long the ARP key may stay after the tree and MSI went idle before the wait gives up.
     pub arp_grace: Duration,
+    /// The same, when the root process has exited with a code that is not a success (anything but 0,
+    /// 1605, 1641 and 3010): the uninstaller has said it did not remove the program, so the ARP key is
+    /// not about to go. Never longer than `arp_grace`.
+    pub fail_grace: Duration,
     /// Overall limit of the wait, from the start of the command. Nothing is killed when it elapses.
     pub timeout: Duration,
 }
@@ -118,6 +124,7 @@ impl Default for RunOptions {
             poll: Duration::from_secs(1),
             quiet_polls: 2,
             arp_grace: Duration::from_secs(180),
+            fail_grace: Duration::from_secs(10),
             timeout: Duration::from_secs(30 * 60),
         }
     }
@@ -347,7 +354,18 @@ fn wait(
 
         if idle && arp != ExistsState::Absent {
             let since = *idle_since.get_or_insert(now);
-            if elapsed(since, now) >= opts.arp_grace {
+            // The root's code is only read once everything is idle: an exit code of a root whose
+            // children still run says nothing about how the removal ends.
+            let failed = matches!(
+                host.job_exit_code(job),
+                Ok(Some(code)) if !RunOutcome::from_exit_code(code).is_success()
+            );
+            let grace = if failed {
+                opts.fail_grace.min(opts.arp_grace)
+            } else {
+                opts.arp_grace
+            };
+            if elapsed(since, now) >= grace {
                 return Waited {
                     end: WaitEnd::ArpStayed,
                     t_end: now,
@@ -1358,6 +1376,34 @@ mod tests {
         let mut c = Case::new(secs(1), 0, Some(secs(1)));
         c.opts.quiet_polls = 0; // treated as 1
         assert_eq!(ms_since_start(&c.run()), secs(1));
+    }
+
+    #[test]
+    fn a_failed_root_ends_the_wait_after_the_short_grace() {
+        for code in [1603u32, 1602, 1, 2] {
+            let mut c = Case::new(secs(2), code, None);
+            let r = c.run();
+            assert_eq!(r.wait_end, WaitEnd::ArpStayed, "{code}");
+            // Idle from 2 s; a failure code ends the wait 10 s later, not 180 s.
+            assert_eq!(ms_since_start(&r), secs(12), "{code}");
+            assert_eq!(r.doc.exit_code, Some(code));
+            assert!(!r.doc.outcome.is_success());
+        }
+        // Success codes keep the full grace: the ARP key of a reboot-pending removal may still go.
+        for code in [0u32, 1605, 1641, 3010] {
+            let mut c = Case::new(secs(2), code, None);
+            assert_eq!(ms_since_start(&c.run()), secs(182), "{code}");
+        }
+        // A failed root whose key does go in time still settles normally.
+        let mut c = Case::new(secs(2), 1603, Some(secs(5)));
+        let r = c.run();
+        assert_eq!(r.wait_end, WaitEnd::Settled);
+        assert_eq!(ms_since_start(&r), secs(6));
+        // fail_grace is never longer than arp_grace.
+        let mut c = Case::new(secs(2), 1603, None);
+        c.opts.arp_grace = Duration::from_secs(4);
+        c.opts.fail_grace = Duration::from_secs(60);
+        assert_eq!(ms_since_start(&c.run()), secs(6));
     }
 
     #[test]
