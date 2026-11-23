@@ -145,8 +145,8 @@
                                     </StackPanel>
                                 </Grid>
                                 <StackPanel Grid.Column="4" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center" HorizontalAlignment="Right">
-                                    <Button Content="Put back…" Click="OnRestore" Visibility="{x:Bind HeldVisibility}"
-                                            IsEnabled="{x:Bind CanAct, Mode=OneWay}" AutomationProperties.Name="Put back" />
+                                    <Button Content="{x:Bind RestoreText}" Click="OnRestore" Visibility="{x:Bind HeldVisibility}"
+                                            IsEnabled="{x:Bind CanAct, Mode=OneWay}" AutomationProperties.Name="{x:Bind RestoreText}" />
                                     <!-- Before the retention ends too: the broker's prompt names every item and says it is for good. -->
                                     <Button Content="Delete now…" Click="OnDeleteNow" Visibility="{x:Bind DeleteVisibility}"
                                             IsEnabled="{x:Bind CanAct, Mode=OneWay}" AutomationProperties.Name="Delete the files of this cleanup now"

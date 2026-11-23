@@ -74,6 +74,27 @@ public sealed class VaultPageTests
     }
 
     [Fact]
+    public async Task OnceTheFilesAreDeletedTheRowSaysOnlyTheRegistryChangesCanBeUndone()
+    {
+        var index = GitIndex();
+        var s = index.Sessions[0];
+        var now = DateTimeOffset.Now;
+        s.Started = (ulong)now.AddDays(-2).ToFileTime();
+        s.Expires.Quarantine = (ulong)now.AddDays(28).ToFileTime();
+        s.Expires.Backups = (ulong)now.AddDays(178).ToFileTime();
+        s.Purged.Add(RetentionClass.Quarantine);
+        var vm = new VaultViewModel(_ => Task.FromResult(index), _ => Launch(new ScriptedVaultBroker()));
+
+        await vm.LoadAsync();
+
+        var git = Assert.Single(vm.Batches);
+        Assert.True(git.RegistryOnly);
+        Assert.Equal("Registry undo only", git.State);
+        Assert.Equal("Files deleted · its registry changes can be undone for 178 more days", git.Detail);
+        Assert.DoesNotContain("restorable", git.Detail, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task NothingHeldIsTheEmptyStateAndAnInterruptedSessionIsCounted()
     {
         var index = GitIndex();

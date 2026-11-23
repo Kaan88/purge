@@ -51,6 +51,9 @@ public sealed partial class VaultBatch(VaultBatchModel model) : System.Component
     /// <summary>"Delete now" is offered while the cleanup still has files in quarantine; backups are not deleted early.</summary>
     public Visibility DeleteVisibility => Model.FilesPurged ? Visibility.Collapsed : Visibility.Visible;
 
+    /// <summary>"Put back…", or "Undo registry changes…" once the files are gone and only registry backups are left.</summary>
+    public string RestoreText => Model.RegistryOnly ? "Undo registry changes…" : "Put back…";
+
     public VaultBatchModel Model { get; } = model;
     public string Id => Model.Id;
     public string Name => Model.Name;

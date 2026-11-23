@@ -48,6 +48,9 @@ public sealed class VaultBatchModel
         FileDays = FilesPurged ? 0 : DaysLeft(FileExpiry, now);
         BackupDays = BackupsPurged ? 0 : DaysLeft(BackupExpiry, now);
 
+        // The files were deleted (after their retention or with Delete now) and only the registry backups are left:
+        // Put back can then undo the registry changes only, and the row must not read as if the files could return.
+        RegistryOnly = FilesPurged && !BackupsPurged;
         Partial = s.State == SessionState.PartiallyUndone;
         Expired = !FilesPurged && FileDays == 0 || !BackupsPurged && BackupDays == 0;
         Expiring = !Expired && !FilesPurged && FileDays <= WarnDays;
@@ -58,10 +61,12 @@ public sealed class VaultBatchModel
             : FileDays > 0 ? $"Files restorable for {FileDays.ToString(CultureInfo.CurrentCulture)} more days"
             : "Files expired · waiting for you to decide");
         parts.Add(BackupsPurged ? "registry backups deleted"
+            : RegistryOnly ? $"its registry changes can be undone for {BackupDays.ToString(CultureInfo.CurrentCulture)} more days"
             : $"registry backups {BackupDays.ToString(CultureInfo.CurrentCulture)} days");
         if (s.Undone > 0) parts.Add($"{s.Undone.ToString(CultureInfo.CurrentCulture)} put back");
         Detail = string.Join(" · ", parts);
-        State = Expired ? "Expired" : Expiring ? "Expiring" : Partial ? "Partly restored" : "Restorable";
+        State = Expired ? "Expired" : Expiring ? "Expiring" : RegistryOnly ? "Registry undo only"
+            : Partial ? "Partly restored" : "Restorable";
         DaysLeftShown = FilesPurged ? BackupDays : FileDays;
         RingPercent = FilesPurged ? 0 : 100.0 * FileDays / Math.Max(1, (FileExpiry - Created).TotalDays);
     }
@@ -76,6 +81,9 @@ public sealed class VaultBatchModel
     public uint Items { get; }
     public bool FilesPurged { get; }
     public bool BackupsPurged { get; }
+
+    /// <summary>Files deleted, registry backups kept: Put back undoes the registry changes only.</summary>
+    public bool RegistryOnly { get; }
     public DateTimeOffset FileExpiry { get; }
     public DateTimeOffset BackupExpiry { get; }
     public int FileDays { get; }
