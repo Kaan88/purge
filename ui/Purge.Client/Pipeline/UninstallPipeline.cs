@@ -554,9 +554,9 @@ public sealed class UninstallController : IAsyncDisposable
     private async Task PrepareAsync(CancellationToken ct)
     {
         var target = Target!;
-        SetStep(UninstallStep.Record, StepState.Active, "Recording what the program registered");
+        SetStep(UninstallStep.Record, StepState.Active, RecordPhaseText(null));
         var prepared = await _broker!.PrepareAsync([target.ProgramId],
-            p => SetStep(UninstallStep.Record, StepState.Active, p.Phase), ct).ConfigureAwait(false);
+            p => SetStep(UninstallStep.Record, StepState.Active, RecordPhaseText(p.Phase)), ct).ConfigureAwait(false);
         var program = prepared.Programs.Count > 0 ? prepared.Programs[0] : null;
         if (program is null)
             throw new InvalidDataException("The administrator part recorded no program.");
@@ -594,6 +594,25 @@ public sealed class UninstallController : IAsyncDisposable
         CurrentStep = UninstallStep.Run;
         Raise();
     }
+
+    /// <summary>
+    /// The Record step's line for one broker harvest phase. The phases are the engine's own log lines; the longest is
+    /// the snapshot of the PC taken before the uninstaller runs (about 10 to 20 seconds on a full PC, the same for any
+    /// program), so it says what it is for and how long it takes instead of sitting on a technical line (user feedback:
+    /// the first step "takes too long").
+    /// </summary>
+    public static string RecordPhaseText(string? phase) => phase switch
+    {
+        null => "Recording what the program registered",
+        _ when phase.StartsWith("harvest: reading roots", StringComparison.Ordinal) =>
+            "Taking a snapshot of this PC to compare with after the uninstall. This usually takes 10 to 20 seconds.",
+        _ when phase.StartsWith("loading the baseline", StringComparison.Ordinal)
+               || phase.StartsWith("baseline view", StringComparison.Ordinal) =>
+            "Loading what a clean Windows looks like",
+        _ when phase.StartsWith("harvest: reading the inventory", StringComparison.Ordinal)
+               || phase.Contains(" entries; target ", StringComparison.Ordinal) => "Finding the program",
+        _ => "Recording what the program registered",
+    };
 
     private UninstallConfirmation BuildConfirmation()
     {
