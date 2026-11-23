@@ -43,7 +43,7 @@ param(
     [Parameter(Mandatory)]
     [ValidateSet('setup', 'prepare', 'ui-start', 'ui-uninstall', 'uac-front', 'ui-await-confirm', 'ui-confirm', 'consent-wait', 'consent-approve',
                  'consent-cancel', 'ui-wait-scan', 'capture-post', 'ui-move', 'ui-wait-result', 'capture-exec', 'ui-undo', 'ui-wait-undone',
-                 'capture-undo', 'fail-check', 'finish')]
+                 'capture-undo', 'fail-check', 'finish', 'watch-uninstallers', 'msi-smoke')]
     [string] $Phase,
     [Parameter(Mandatory)] [string] $App,
     [ValidateSet('', 'run', 'plan', 'undo')] [string] $Step = '',
@@ -75,7 +75,8 @@ $UiExe = Join-Path $PF 'Purge.exe'
 $UiTask = 'PurgeRigM3E2eUi'
 $StateFile = Join-Path $AD 'state.json'
 New-Item -ItemType Directory -Force $Out, $AD, $W, $Bin | Out-Null
-Set-RunLog (Join-Path $AD 'e2e.log')
+# The background uninstaller watcher (phase watch-uninstallers) runs beside the other phases: a log of its own.
+Set-RunLog (Join-Path $AD $(if ($Phase -eq 'watch-uninstallers') { 'watch.log' } else { 'e2e.log' }))
 
 # The app kinds (the scorer's expectations name the same ids, vm\truth\m3-e2e-expect.json).
 $E2eRealApps = @('vscode', 'vscode-user', 'git', 'firefox-tb', 'npp', '7zip')
@@ -248,6 +249,43 @@ function Update-E2eUninstallers($List, [datetime]$Since, [string]$Loc) {
     }
 }
 
+# The background uninstaller watcher (vm\RIG.md section 17, "Uninstaller watcher"): a detached elevated PowerShell
+# running phase watch-uninstallers, started before Uninstall is pressed, so an uninstaller that starts and ends
+# between two host phases (the uninstall consent, a short Inno or NSIS run) is still seen with its integrity.
+# ui-wait-scan stops it and merges its records; finish stops it in any case. Its file: uninstallers-watch.json.
+$E2eWatchFile = Join-Path $AD 'uninstallers-watch.json'
+$E2eWatchStop = Join-Path $AD 'watch.stop'
+function Test-E2eWatcher($State) {
+    if (-not $State.watch_pid) { return $false }
+    $p = Get-Process -Id ([int]$State.watch_pid) -ErrorAction SilentlyContinue
+    [bool]($p -and $p.ProcessName -eq 'powershell')
+}
+function Start-E2eWatcher($State) {
+    if (Test-E2eWatcher $State) { return [int]$State.watch_pid }
+    Remove-Item -LiteralPath $E2eWatchStop, $E2eWatchFile -Force -ErrorAction SilentlyContinue
+    Set-StateValue $State 'watch_since' (NowIso)
+    Save-State $State
+    $a = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', 'C:\cr\guest\m3-e2e.ps1', '-Phase', 'watch-uninstallers', '-App', $App, '-WaitSec', '3600')
+    if ($NullRun) { $a += '-NullRun' }
+    # Start-Process (ShellExecute): no handle of this job's redirected output is inherited, so the agent does not
+    # wait for the watcher.
+    $p = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -ArgumentList $a -PassThru -WindowStyle Hidden
+    Set-StateValue $State 'watch_pid' $p.Id
+    Log "  uninstaller watcher started (pid $($p.Id))"
+    $p.Id
+}
+# Stops the watcher (stop file, then up to 20 s, then a kill) and returns its record (purge.rig.m3e2e.watch/1) or $null.
+function Stop-E2eWatcher($State) {
+    if ($State.watch_pid) {
+        New-Item -ItemType File -Force $E2eWatchStop | Out-Null
+        $p = Get-Process -Id ([int]$State.watch_pid) -ErrorAction SilentlyContinue
+        if ($p -and $p.ProcessName -eq 'powershell') {
+            if (-not $p.WaitForExit(20000)) { Log "  !! the uninstaller watcher (pid $($State.watch_pid)) did not stop; killed"; Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+        }
+    }
+    Read-Json $E2eWatchFile
+}
+
 # --------------------------------------------------------------------------------------- fixture programs
 
 function Install-E2eExecApp($Fx) {
@@ -415,6 +453,8 @@ switch ($Phase) {
         $w = Wait-E2eElement { Find-E2eById $win 'UninstallButton' } 60 -Enabled
         $rec.retries = $w.retries
         if ($w.el) {
+            # The uninstaller watcher first: a short uninstaller can start and end before the next host phase.
+            $rec.watch_pid = Start-E2eWatcher $st
             $rec.invoked = Invoke-E2eElement $w.el
             Set-StateValue $st 't_uninstall_click' (NowIso)
             $script:continued = $null
@@ -500,6 +540,8 @@ switch ($Phase) {
         $rec.route = $route
         Set-StateValue $st 'route' $route
         if ($btn) {
+            # Still watching before the uninstaller can start (started again if it ended)?
+            $rec.watch_pid = Start-E2eWatcher $st
             $rec.invoked = Invoke-E2eElement $btn
             Set-StateValue $st 't_confirm' (NowIso)
             $rec.ok = [bool]$rec.invoked
@@ -539,9 +581,12 @@ switch ($Phase) {
             $rec.press = Read-Json $spec.out
             $rec.ok = [bool]($rec.press -and $rec.press.found -and $rec.press.button_enabled -and -not $rec.press.dialog_alive_after)
         }
-        Set-StateValue $st "t_approved_$Step" (NowIso)
+        # Only a press that happened (m3sec found the dialog and clicked a button) has a time: no dialog, no broker or
+        # a disabled button leave the approval time unset.
+        $rec.pressed = [bool]($rec.press -and $rec.press.found -eq $true -and $rec.press.PSObject.Properties['pressed'] -and $null -ne $rec.press.pressed)
+        if ($rec.pressed) { Set-StateValue $st "t_approved_$Step" (NowIso) }
         Save-State $st; Save-Step $rec "consent-approve-$Step"
-        "M3E APPROVE $App $Step ok=$($rec.ok) broker=$bp enabled=$(if ($rec.press) { $rec.press.button_enabled }) gone=$(if ($rec.press) { -not $rec.press.dialog_alive_after })"
+        "M3E APPROVE $App $Step ok=$($rec.ok) broker=$bp pressed=$($rec.pressed) enabled=$(if ($rec.press) { $rec.press.button_enabled }) gone=$(if ($rec.press -and $rec.press.found) { -not $rec.press.dialog_alive_after })"
     }
 
     'consent-cancel' {
@@ -560,7 +605,7 @@ switch ($Phase) {
             $rec.press = Read-Json $spec.out
             $rec.ok = [bool]($rec.press -and $rec.press.found -and [int]$rec.press.pressed -eq 2 -and -not $rec.press.dialog_alive_after)
         }
-        Set-StateValue $st "t_cancelled_$Step" (NowIso)
+        if ($rec.press -and $rec.press.found -eq $true -and $rec.press.PSObject.Properties['pressed'] -and $null -ne $rec.press.pressed) { Set-StateValue $st "t_cancelled_$Step" (NowIso) }
         Save-State $st; Save-Step $rec "consent-cancel-$Step"
         $nw = New-E2eStep 'null-wait'
         $nw.seconds = $WaitSec
@@ -585,7 +630,13 @@ switch ($Phase) {
             if ($t -contains 'The uninstaller failed.') { return 'failed' }
             foreach ($x in 'The wrong part was asked to run this.', 'The administrator part ended.', "Purge's engine ended.", 'Something went wrong.', 'The administrator part refused the request.') { if ($t -contains $x) { return 'error' } }
             $null
-        } $(if ($WaitSec) { $WaitSec } else { 2400 }) -Each { Update-E2eUninstallers $procs $since $loc } -PollMs 600
+        } $(if ($WaitSec) { $WaitSec } else { 2400 }) -Each { if (-not (Test-E2eWatcher $st)) { Update-E2eUninstallers $procs $since $loc } } -PollMs 600
+        # The watcher (started before Uninstall) saw the uninstallers since then; its records come first.
+        $wr = Stop-E2eWatcher $st
+        $rec.watcher = [ordered]@{ pid = $st.watch_pid; since = $st.watch_since; file = [bool]$wr; ended = $(if ($wr) { $wr.ended }); polls = $(if ($wr) { $wr.polls }) }
+        $merged = @(Merge-E2eUninstallers @(if ($wr) { @($wr.procs) }) @($procs))
+        $procs = New-Object System.Collections.ArrayList
+        foreach ($p in $merged) { [void]$procs.Add($p) }
         $rec.state = $watch.state
         # The pipeline page holds the stepper details and the bars (a failure stays on it; after a scan the UI moves to
         # the leftovers page): for the failing uninstallers, and whenever the stepper did not reach its end, read it
@@ -667,6 +718,30 @@ switch ($Phase) {
     'ui-move' {
         $rec = New-E2eStep 'ui-move'
         $win = Get-UiWindow $st
+        $pre = $(if ($st.cli -and $null -ne $st.cli.preselected_n) { [int]$st.cli.preselected_n } else { $null })
+        $rec.cli_preselected_n = $pre
+        if ($pre -eq 0) {
+            # Nothing preselected (vm\RIG.md section 17, "Nothing preselected"): the rig CLI plan ticks nothing, so the
+            # review page must tick nothing either: MoveButton present and not enabled, read a few times over 3 s. Move
+            # is never pressed; the host skips the plan consent and the result wait, and capture-exec checks that no
+            # session exists and that the window has no collateral.
+            $w = Wait-E2eElement { Find-E2eById $win 'MoveButton' } 60
+            $rec.retries = $w.retries
+            $rec.move_present = [bool]$w.el
+            $en = @()
+            if ($w.el) { for ($i = 0; $i -lt 4; $i++) { try { $en += [bool]$w.el.Current.IsEnabled } catch { $en += $null }; if ($i -lt 3) { Start-Sleep -Milliseconds 1000 } } }
+            $rec.move_enabled_reads = $en
+            $rec.move_enabled = $(if (-not $en.Count -or @($en | Where-Object { $null -eq $_ }).Count) { $null } else { [bool](@($en | Where-Object { $_ }).Count) })
+            $rec.footer = Get-E2eName (Find-E2eById $win 'FooterCount')
+            $rec.move_text = Get-E2eName (Find-E2eById $win 'MoveText')
+            if ($NullRun) { $rec.state = 'empty-null'; $rec.detail = 'a null run needs a preselected item: there is no plan consent to cancel' }
+            elseif (-not $w.el) { $rec.state = 'no-move'; $rec.detail = 'MoveButton not found' }
+            elseif ($rec.move_enabled -ne $false) { $rec.state = 'move-enabled'; $rec.detail = "the rig CLI preselected nothing, but Move is enabled (reads: $($en -join ','))" }
+            else { $rec.state = 'skip-empty'; $rec.ok = $true; Set-StateValue $st 'empty_plan' $true }
+            Save-State $st; Save-Step $rec 'ui-move'
+            "M3E UI-MOVE $App ok=$($rec.ok) state=$($rec.state) footer=$($rec.footer -replace '\s', '_') enabled=$($rec.move_enabled)"
+            return
+        }
         $w = Wait-E2eElement { Find-E2eById $win 'MoveButton' } 60 -Enabled
         $rec.retries = $w.retries
         $rec.footer = Get-E2eName (Find-E2eById $win 'FooterCount')
@@ -722,6 +797,26 @@ switch ($Phase) {
                 # (finish zips it; the host renames it snap-<run>-a / -b.tsv.gz for rigtool ambient --m2 --added).
                 if ($new.Count) { throw "a null run made a session: $($new -join ', ')" }
                 foreach ($s in 'a', 'b') { Copy-Item -LiteralPath (Join-Path $W "snap-$s.tsv.gz") -Destination (Join-Path $AD "snap-$s.tsv.gz") -Force }
+                $rec.ok = $true
+            } elseif ($st.empty_plan -eq $true) {
+                # Nothing preselected (ui-move skip-empty): the executed set is empty == the CLI's empty preselected set;
+                # no session may exist, and execdiff over the window, against the rig's empty journal and report
+                # (New-E2eEmptyExecDocs), still has to find collateral 0.
+                $rec.empty = $true
+                if ($new.Count) { throw "nothing was preselected, but a session was made: $($new -join ', ')" }
+                if (@($st.cli.preselected_keys | Where-Object { $_ }).Count) { throw 'empty_plan is set, but the CLI preselected set is not empty' }
+                $docs = New-E2eEmptyExecDocs $App ([uint64](Get-Date).ToUniversalTime().ToFileTimeUtc())
+                $journal = Join-Path $AD 'empty-journal.jsonl'; $report = Join-Path $AD 'empty-report.json'
+                [IO.File]::WriteAllText($journal, $docs.journal, (New-Object System.Text.UTF8Encoding($false)))
+                [IO.File]::WriteAllText($report, $docs.report, (New-Object System.Text.UTF8Encoding($false)))
+                $v = Invoke-M2Execdiff -Before (Join-Path $W 'snap-a.tsv.gz') -After (Join-Path $W 'snap-b.tsv.gz') -Journal $journal -Report $report `
+                    -DeepBefore (Join-Path $AD 'deep-a.json') -DeepAfter (Join-Path $AD 'deep-b.json') -Out (Join-Path $AD 'execdiff.json')
+                $ed = Read-Json (Join-Path $AD 'execdiff.json')
+                $rec.execdiff = [ordered]@{ ok = $v.ok; counts = $ed.counts }
+                $exec = [ordered]@{ schema = 'purge.rig.m3e2e.executed/1'; app = $App; session = $null; state = 'Empty'; counts = $null; restore_point = $null; items = @() }
+                Write-JsonFile $exec (Join-Path $RD 'executed.json') 12
+                $rec.compare = Compare-E2eSets @($st.cli.preselected_keys) @()
+                $rec.report_state = 'Empty'
                 $rec.ok = $true
             } else {
             $session = $(if ($new.Count) { $new[$new.Count - 1] } else { $null })
@@ -811,8 +906,66 @@ switch ($Phase) {
         "M3E FAIL-CHECK $App arp_present=$($rec.arp_present) fixture_key=$($rec.fixture_key_present) sessions_new=$($rec.sessions_new.Count) quarantine=$($rec.quarantine_before)->$($rec.quarantine_after)"
     }
 
+    'watch-uninstallers' {
+        # Detached (Start-E2eWatcher), never a host job: polls the uninstallers (Update-E2eUninstallers) until the stop
+        # file, or -WaitSec, and rewrites uninstallers-watch.json whenever its list grows (once more at the end).
+        # Reads state.json once, writes only its own file and the proc-<pid>.json records.
+        $since = $(if ($st.watch_since) { [datetime]$st.watch_since } else { (Get-Date).AddSeconds(-5) })
+        $loc = "$($st.program.loc)"
+        $list = New-Object System.Collections.ArrayList
+        $doc = [ordered]@{ schema = 'purge.rig.m3e2e.watch/1'; app = $App; pid = $PID; since = $since.ToString('o'); started = (NowIso); ended = $null; stopped_by = $null; polls = 0; procs = @() }
+        $deadline = (Get-Date).AddSeconds($(if ($WaitSec) { $WaitSec } else { 3600 }))
+        $n = -1
+        while ($true) {
+            if (Test-Path -LiteralPath $E2eWatchStop) { $doc.stopped_by = 'stop-file'; break }
+            if ((Get-Date) -ge $deadline) { $doc.stopped_by = 'timeout'; break }
+            try { Update-E2eUninstallers $list $since $loc } catch { Log "!! watch: $($_.Exception.Message)" }
+            $doc.polls++
+            if ($list.Count -ne $n) { $n = $list.Count; $doc.procs = @($list); Write-JsonFile $doc $E2eWatchFile 6 }
+            Start-Sleep -Milliseconds 300
+        }
+        $doc.ended = NowIso; $doc.procs = @($list)
+        Write-JsonFile $doc $E2eWatchFile 6
+        Log "watch: $($list.Count) uninstaller(s) in $($doc.polls) polls, stopped by $($doc.stopped_by)"
+    }
+
+    'msi-smoke' {
+        # Before the chain uses msi1603 / msi3010 (host Invoke-M3E2eMsiSmoke, one boot of its own): does each fixture
+        # MSI install? `msiexec /i` must exit 0 and leave the ARP entry; a package that does not install (the Media
+        # table bug of 2026-11-23: exit 1603, error 2228) fails those apps before their own boots, with this detail.
+        # App is 'msi-smoke' (its own output folder); the phase zips that folder itself.
+        $rec = New-E2eStep 'msi-smoke'
+        $rec.variants = @()
+        foreach ($v in '1603', '3010') {
+            $r = [ordered]@{ variant = $v; app = "msi$v"; product = $null; sha256 = $null; exit = $null; arp = $null; ok = $false; error = $null; log_errors = @() }
+            try {
+                $msi = New-E2eMsi $v (Join-Path $W "smoke-$v.msi")
+                $r.product = $msi.product; $r.sha256 = $msi.sha256
+                $log = Join-Path $AD "msi-smoke-$v.log"
+                $x = Invoke-Native (Join-Path $env:SystemRoot 'System32\msiexec.exe') ('/i "' + $msi.path + '" /qn /norestart /L*v "' + $log + '"') 600
+                $r.exit = $x.exit
+                $r.arp = [bool](@(UninstallEntries | Where-Object { $_.key -like "*\Uninstall\$($msi.product)" }).Count)
+                if (Test-Path -LiteralPath $log) {
+                    $r.log_errors = @(Get-Content -LiteralPath $log -ErrorAction SilentlyContinue | Where-Object { $_ -match 'Error \d{4}|Return value 3' } | Select-Object -First 5)
+                }
+                $r.ok = ($r.exit -eq 0 -and $r.arp)
+                if (-not $r.ok) { $r.error = "msiexec /i exited $($r.exit)$(if ($r.exit -eq 0 -and -not $r.arp) { ', no ARP entry' })" }
+            } catch { $r.error = $_.Exception.Message }
+            Log "msi-smoke $v`: exit=$($r.exit) arp=$($r.arp) ok=$($r.ok) $($r.error)"
+            $rec.variants += $r
+        }
+        $rec.ok = (@($rec.variants | Where-Object { -not $_.ok }).Count -eq 0)
+        Save-Step $rec 'msi-smoke'
+        $zip = Join-Path 'C:\cr\out' "m3-e2e-$App.zip"
+        Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
+        Compress-Archive -Path (Join-Path $AD '*') -DestinationPath $zip -Force
+        "M3E MSI-SMOKE $App ok=$($rec.ok) $(@($rec.variants | ForEach-Object { "msi$($_.variant)=$(if ($_.ok) { 'ok' } else { 'fail' }):$($_.exit)" }) -join ' ')"
+    }
+
     'finish' {
         $rec = New-E2eStep 'finish'
+        # The uninstaller watcher, if a flow ended before ui-wait-scan stopped it.
+        if (Test-E2eWatcher $st) { $null = Stop-E2eWatcher $st; $rec.watcher_stopped = $true }
         $since = $(if ($st.t0) { [datetime]$st.t0 } else { (Get-Date).AddHours(-3) })
         try { $null = & C:\cr\guest\broker-timings.ps1 -Out (Join-Path $AD 'timings.jsonl') -Since $since } catch { $rec.detail = "broker-timings: $($_.Exception.Message)"; Log "!! $($rec.detail)" }
         $rec.brokers_alive = @(Get-Process -Name 'purge-broker' -ErrorAction SilentlyContinue | ForEach-Object { $_.Id })

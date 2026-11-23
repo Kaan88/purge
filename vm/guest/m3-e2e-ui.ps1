@@ -53,6 +53,37 @@ function Compare-E2eSets([string[]]$Cli, [string[]]$Ui) {
     [ordered]@{ equal = ($missing.Count -eq 0 -and $extra.Count -eq 0); cli_n = $a.Count; ui_n = $b.Count; missing = $missing; extra = $extra }
 }
 
+# Pure: the journal text and the report of an empty execution, for `rigtool execdiff` on the window of an app whose
+# plan preselected nothing (vm\RIG.md section 17, "Nothing preselected"): no session exists, Move was never pressed,
+# but snap A / snap B must still show no collateral. The rig writes them (session rig-empty-<app>, zero items,
+# committed), never Purge; execdiff then authorises nothing by op, so every record of the window is ambient,
+# store, broker-exit or collateral. $At: FILETIME (100 ns since 1601) of the record times.
+function New-E2eEmptyExecDocs([string]$App, [uint64]$At) {
+    if ($App -cnotmatch '^[a-z0-9][a-z0-9-]*$') { throw "bad app '$App'" }
+    $session = "rig-empty-$App"
+    $zero = ('0' * 64)
+    $counts = [ordered]@{ done = 0; vanished = 0; skipped = 0; held_retry = 0; pending_reboot = 0; failed = 0 }
+    $header = [ordered]@{ rec = 'header'; schema = 'purge.journal/1'; session = $session; created = $At; engine_version = 'rig'; app = $App
+                          plan_hash = $zero; selection_hash = $zero; policy_version = 'rig'; mode = 'post'; items = 0; allow_irreversible = $false; volumes = @() }
+    $commit = [ordered]@{ rec = 'commit'; at = $At; counts = $counts; backup_bytes = 0 }
+    $journal = (ConvertTo-Json $header -Compress -Depth 5) + "`n" + (ConvertTo-Json $commit -Compress -Depth 5) + "`n"
+    $report = [ordered]@{ schema = 'purge.exec/1'; session = $session; app = $App; plan_hash = $zero; selection_hash = $zero; state = 'Committed'
+                          started = $At; finished = $At; items = @(); counts = $counts; backup_bytes = 0; pending_reboot = $false
+                          restore_point = [ordered]@{ kind = 'NotRequested' }; warnings = @('rig: nothing was preselected; no session exists') }
+    [ordered]@{ session = $session; journal = $journal; report = (ConvertTo-Json $report -Depth 5) }
+}
+
+# Pure: the uninstaller records of the background watcher ($Watch, its procs) and of ui-wait-scan's own polling ($List)
+# in one list, each pid once (the watcher's record first: it saw the process earlier).
+function Merge-E2eUninstallers($Watch, $List) {
+    $out = New-Object System.Collections.ArrayList
+    foreach ($p in @(@($Watch) + @($List) | Where-Object { $_ })) {
+        if (@($out | Where-Object { "$($_.pid)" -eq "$($p.pid)" }).Count) { continue }
+        [void]$out.Add($p)
+    }
+    $out.ToArray()
+}
+
 # Pure: the exit code a step detail or a bar names ("Finished, exit code 3010", "... exit code 1603. ..."), or $null.
 function Get-E2eExitCodeFromText([string]$Text) {
     $m = [regex]::Match("$Text", 'exit code (\d+)')

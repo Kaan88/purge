@@ -63,16 +63,40 @@ function Arr($X) { @(@($X) | Where-Object { $null -ne $_ }) }
 function Num($V) { if ($null -eq $V -or "$V" -eq '') { $null } else { [double]$V } }
 
 $script:Rows = New-Object System.Collections.ArrayList
-function Row([string]$Name, $Ok, [string]$Detail = '') {
-    [void]$script:Rows.Add([ordered]@{ row = $Name; ok = ($Ok -eq $true); detail = $Detail })
+function Row([string]$Name, $Ok, [string]$Detail = '', [switch]$Warn) {
+    [void]$script:Rows.Add([ordered]@{ row = $Name; ok = ($Ok -eq $true); warn = [bool]$Warn; detail = $Detail })
+}
+
+# Pure: the Application events the guest's finish collected (guest\app-events.json: "Purge" source events other than
+# id 100, and Application Error / Windows Error Reporting / .NET Runtime events naming Purge) sorted into crashes of a
+# Purge process (Application Error 1000, .NET Runtime 1026, a WER report of event name APPCRASH, BEX, BEX64,
+# MoAppCrash or CLR20r3 whose P1 is Purge.exe or purge-*.exe) and the rest (leaks such as RADAR_PRE_LEAK_64, hangs,
+# Purge's own warnings): {crashes, warnings}, each a list of one-line texts.
+function Get-E2eAppEventClasses($Events) {
+    $crash = @(); $warn = @()
+    foreach ($e in @(Arr $Events)) {
+        $m = "$($e.message)"
+        $p1 = [regex]::Match($m, '(?m)^P1:\s*(\S+)').Groups[1].Value
+        $name = [regex]::Match($m, '(?m)^Event Name:\s*(\S+)').Groups[1].Value
+        $app = [regex]::Match($m, '(?m)^Faulting application name:\s*([^,\s]+)').Groups[1].Value
+        $purgeImage = { param($x) "$x" -match '(?i)^(purge\.exe|purge-[a-z0-9-]+\.exe)$' }
+        $isCrash = $false
+        if ("$($e.provider)" -eq 'Application Error' -and [int]$e.id -eq 1000 -and (& $purgeImage $app)) { $isCrash = $true }
+        elseif ("$($e.provider)" -eq '.NET Runtime' -and [int]$e.id -eq 1026 -and $m -match '(?i)Application:\s*purge') { $isCrash = $true }
+        elseif ("$($e.provider)" -eq 'Windows Error Reporting' -and $name -match '^(APPCRASH|BEX|BEX64|MoAppCrash|CLR20r3)$' -and (& $purgeImage $p1)) { $isCrash = $true }
+        $what = "$($e.provider) $($e.id)$(if ($name) { " $name" })$(if ($p1) { " $p1" } elseif ($app) { " $app" }) at $($e.t)"
+        if ($isCrash) { $crash += $what } else { $warn += $what }
+    }
+    [ordered]@{ crashes = $crash; warnings = $warn }
 }
 
 # The screenshot names an app's flow takes (vm\rig-m3.ps1 Get-M3E2eShotNames, kept equal by the rig self-test).
-function Get-E2eShotNames($AppDef, [bool]$Undo) {
+function Get-E2eShotNames($AppDef, [bool]$Undo, [bool]$Empty = $false) {
     $n = @('01-programs-row', '02-uninstall-clicked', '03-confirm')
     if ("$($AppDef.route)" -eq 'broker') { $n += '04-consent-run', '05-run-approved' }
     $n += '06-scan-done'
     if ("$($AppDef.kind)" -like 'fail-*') { return @($n + '07-failure') }
+    if ($Empty) { return @($n + '07-move-waiting') }
     $n += '07-move-waiting', '08-consent-plan', '09-result'
     if ($Undo) { $n += '10-undo-waiting', '11-consent-undo', '12-undone' }
     $n
@@ -261,9 +285,24 @@ function Test-App([string]$Ev, $A, $X, $Score, [bool]$Undo, [string]$AmbSha = ''
     $dir = Join-Path $Ev $id
     $e2e = Read-J (Join-Path $dir 'guest\e2e.json')
     $host_ = Read-J (Join-Path $dir 'host.json')
-    Row "$id evidence (guest\e2e.json, host.json)" ($null -ne $e2e -and $null -ne $host_ -and $host_.pulled -eq $true) $(if (-not $e2e) { 'no e2e.json' } elseif (-not $host_) { 'no host.json' } elseif ($host_.pulled -ne $true) { 'guest outputs not pulled' })
+    # The host's own error (a failed boot, a step that failed fast, the MSI smoke) names why evidence is missing.
+    $hostErr = $(if ($host_ -and (Has $host_ 'error')) { "host: $(if (Has $host_ 'failed_step') { "step $($host_.failed_step): " })$($host_.error)" } else { '' })
+    $evWhy = $(if (-not $e2e) { 'no e2e.json' } elseif (-not $host_) { 'no host.json' } elseif ($host_.pulled -ne $true) { 'guest outputs not pulled' } else { '' })
+    Row "$id evidence (guest\e2e.json, host.json)" ($null -ne $e2e -and $null -ne $host_ -and $host_.pulled -eq $true) (@($evWhy, $hostErr | Where-Object { $_ }) -join '; ')
     if (-not $e2e) { return }
-    $miss = Test-Shots $dir $host_ (Get-E2eShotNames $A $Undo)
+    # Application events (finish, guest\app-events.json): a crash of a Purge process fails; a leak report
+    # (RADAR_PRE_LEAK_64), a hang or Purge's own warnings are a warning row only.
+    $evPath = Join-Path $dir 'guest\app-events.json'
+    if (-not (Test-Path -LiteralPath $evPath -PathType Leaf)) { Row "$id app events: no crash of a Purge process" $false 'no app-events.json' }
+    else {
+        $cls = Get-E2eAppEventClasses (Read-J $evPath)
+        $evDetail = @($(if ($cls.crashes.Count) { "crash: $($cls.crashes -join '; ')" }), $(if ($cls.warnings.Count) { "warning: $($cls.warnings -join '; ')" }) | Where-Object { $_ }) -join '; '
+        Row "$id app events: no crash of a Purge process" ($cls.crashes.Count -eq 0) $evDetail -Warn:($cls.crashes.Count -eq 0 -and $cls.warnings.Count -gt 0)
+    }
+    # Nothing preselected (RIG.md section 17): the rig CLI plan ticked nothing and ui-move found Move disabled.
+    $mv0 = Get-Step $e2e 'ui-move'
+    $empty = [bool]($mv0 -and "$($mv0.state)" -ceq 'skip-empty')
+    $miss = Test-Shots $dir $host_ (Get-E2eShotNames $A $Undo $empty)
     Row "$id screenshots per step" ($miss.Count -eq 0) $(if ($miss.Count) { "missing: $($miss -join ', ')" })
     $start = Get-Step $e2e 'ui-start'; $un = Get-Step $e2e 'ui-uninstall'; $conf = Get-Step $e2e 'ui-confirm'; $scan = Get-Step $e2e 'ui-wait-scan'
     $why = @()
@@ -319,16 +358,32 @@ function Test-App([string]$Ev, $A, $X, $Score, [bool]$Undo, [string]$AmbSha = ''
     }
     $post = Get-Step $e2e 'capture-post'; $move = Get-Step $e2e 'ui-move'; $ap = Get-Step $e2e 'consent-approve-plan'; $res = Get-Step $e2e 'ui-wait-result'; $cx = Get-Step $e2e 'capture-exec'
     $why = @()
+    $preN = $(if ($post -and (Has $post 'cli') -and (Has $post.cli 'preselected_n')) { [int]$post.cli.preselected_n } else { $null })
     if (-not ($scan -and "$($scan.state)" -eq 'review')) { $why += "scan ended '$(if ($scan) { $scan.state })'" }
     if (-not ($post -and $post.ok -eq $true)) { $why += 'no CLI plan / snap A' }
-    if (-not ($move -and $move.ok -eq $true)) { $why += "Move: $(if ($move) { $move.state } else { 'no step' })" }
-    if (-not ($ap -and $ap.ok -eq $true)) { $why += 'plan consent not approved' }
-    if (-not ($res -and "$($res.state)" -eq 'result' -and "$($res.title)" -match '^Moved ')) { $why += "result: $(if ($res) { "$($res.state) '$($res.title)'" } else { 'no step' })" }
-    Row "$id UI: review, Move, consent, result" ($why.Count -eq 0) ($why -join '; ')
+    if ($empty) {
+        # Nothing preselected: the CLI's preselected set is empty, Move is there and disabled, and nothing followed it
+        # (no plan consent, no result page).
+        if ($preN -ne 0) { $why += "Move skipped as empty, but the CLI preselected $preN" }
+        if (-not ($move.ok -eq $true -and $move.move_present -eq $true -and $move.move_enabled -eq $false)) { $why += "Move: present $($move.move_present), enabled $($move.move_enabled)" }
+        if ($ap -or (Get-Step $e2e 'consent-wait-plan') -or $res) { $why += 'a plan consent or a result step ran after an empty review' }
+        Row "$id UI: review, nothing preselected, Move disabled" ($why.Count -eq 0) $(if ($why.Count) { $why -join '; ' } else { 'CLI preselected 0; Move present, not enabled' })
+    } else {
+        if (-not ($move -and $move.ok -eq $true)) { $why += "Move: $(if ($move) { "$($move.state)$(if ("$($move.state)" -ceq 'move-enabled') { ' (the CLI preselected nothing, the UI enabled Move)' })" } else { 'no step' })" }
+        if (-not ($ap -and $ap.ok -eq $true)) { $why += 'plan consent not approved' }
+        if (-not ($res -and "$($res.state)" -eq 'result' -and "$($res.title)" -match '^Moved ')) { $why += "result: $(if ($res) { "$($res.state) '$($res.title)'" } else { 'no step' })" }
+        Row "$id UI: review, Move, consent, result" ($why.Count -eq 0) ($why -join '; ')
+    }
     $cmp = $(if ($cx) { $cx.compare })
-    $eq = ($cmp -and $cmp.equal -eq $true -and [int]$cmp.cli_n -eq [int]$cmp.ui_n -and [int]$cmp.ui_n -gt 0)
-    Row "$id executed set == preselected set of the rig CLI plan" $eq $(if ($cmp) { "cli $($cmp.cli_n), ui $($cmp.ui_n), missing $(@(Arr $cmp.missing).Count), extra $(@(Arr $cmp.extra).Count)$(if (@(Arr $cmp.missing).Count) { ': ' + ((Arr $cmp.missing | Select-Object -First 3) -join '; ') })$(if (@(Arr $cmp.extra).Count) { ' extra: ' + ((Arr $cmp.extra | Select-Object -First 3) -join '; ') })" } else { 'no comparison' })
-    Row "$id session committed" ($cx -and "$($cx.report_state)" -eq 'Committed') "$(if ($cx) { $cx.report_state })"
+    # Both sides non-empty, or (nothing preselected) both empty with the guest's empty capture.
+    $sizeOk = $(if ($empty) { $cmp -and [int]$cmp.cli_n -eq 0 -and [int]$cmp.ui_n -eq 0 -and $cx.empty -eq $true -and $preN -eq 0 } else { $cmp -and [int]$cmp.ui_n -gt 0 })
+    $eq = ($cmp -and $cmp.equal -eq $true -and [int]$cmp.cli_n -eq [int]$cmp.ui_n -and $sizeOk)
+    Row "$id executed set == preselected set of the rig CLI plan" $eq $(if ($cmp) { "$(if ($empty) { 'nothing preselected: ' })cli $($cmp.cli_n), ui $($cmp.ui_n), missing $(@(Arr $cmp.missing).Count), extra $(@(Arr $cmp.extra).Count)$(if (@(Arr $cmp.missing).Count) { ': ' + ((Arr $cmp.missing | Select-Object -First 3) -join '; ') })$(if (@(Arr $cmp.extra).Count) { ' extra: ' + ((Arr $cmp.extra | Select-Object -First 3) -join '; ') })" } else { 'no comparison' })
+    if ($empty) {
+        Row "$id no session (nothing preselected)" ($cx -and "$($cx.report_state)" -ceq 'Empty' -and @(Arr $cx.sessions_new).Count -eq 0) "$(if ($cx) { "$($cx.report_state), new sessions $(@(Arr $cx.sessions_new).Count)" })"
+    } else {
+        Row "$id session committed" ($cx -and "$($cx.report_state)" -eq 'Committed') "$(if ($cx) { $cx.report_state })"
+    }
     $ui = Get-ScoreTool $Score $id 'ui'; $cli = Get-ScoreTool $Score $id 'purge'
     $dOk = ($ui -and $cli -and [int]$ui.danger_offered -eq 0 -and [int]$ui.danger_preselected -eq 0 -and [int]$cli.danger_blocking -eq 0)
     Row "$id danger 0 (executed set; CLI plan blocking)" $dOk $(if ($ui -and $cli) { "ui danger $($ui.danger_offered) (preselected $($ui.danger_preselected)), cli danger_blocking $($cli.danger_blocking)" } else { 'no rigtool score (run -Collect)' })
@@ -347,7 +402,11 @@ function Test-App([string]$Ev, $A, $X, $Score, [bool]$Undo, [string]$AmbSha = ''
     $short = { param($s) if ($s) { "$s".Substring(0, [Math]::Min(12, "$s".Length)) } else { 'none' } }
     Row "$id ambient set pushed (host == guest == committed m3-e2e set)" $aOk "committed $(& $short $AmbSha), host $(& $short $hs), declared $(& $short $ds), guest $(& $short $gs)"
     Test-Timings $id (Read-J (Join-Path $dir 'timings.json')) $X $true (@(Arr $X.gates.harvest_apps) -contains $id) (Read-J (Join-Path $dir 'guest\walk-floor.json'))
-    if ($Undo) {
+    if ($Undo -and ($empty -or $preN -eq 0)) {
+        # An undo app must execute something to undo: nothing preselected is a FAIL of both undo rows, never a pass.
+        Row "$id undo through the UI" $false 'an undo app with nothing preselected (pick an undo app whose plan preselects items)'
+        Row "$id undo_fidelity 100 %" $false 'nothing executed, nothing to undo'
+    } elseif ($Undo) {
         $uu = Get-Step $e2e 'ui-undo'; $ua = Get-Step $e2e 'consent-approve-undo'; $ud = Get-Step $e2e 'ui-wait-undone'
         $w = @()
         if (-not ($uu -and $uu.ok -eq $true)) { $w += 'Undo all not pressed' }
@@ -397,7 +456,7 @@ function Invoke-Score([string]$Ev, $X, [string[]]$Only = @(), [switch]$Quiet, [s
     Row 'at least one app undone through the UI with undo_fidelity 100 %' ($undone.Count -gt 0) (@($undone | ForEach-Object { $_.id }) -join ',')
     $pass = (@($script:Rows | Where-Object { -not $_.ok }).Count -eq 0) -and $script:Rows.Count -gt 0
     if (-not $Quiet) {
-        foreach ($r in $script:Rows) { Write-Host ("{0} {1}{2}" -f $(if ($r.ok) { 'PASS' } else { 'FAIL' }), $r.row, $(if ($r.detail) { "  ($($r.detail))" } else { '' })) }
+        foreach ($r in $script:Rows) { Write-Host ("{0} {1}{2}" -f $(if (-not $r.ok) { 'FAIL' } elseif ($r.warn) { 'WARN' } else { 'PASS' }), $r.row, $(if ($r.detail) { "  ($($r.detail))" } else { '' })) }
     }
     $gate = ($only.Count -eq 0 -and $ambIsCommitted)
     $notGate = @($(if ($only.Count) { 'a subset of the apps (-Apps)' }), $(if (-not $ambIsCommitted) { "another ambient file than the VM's committed set (-AmbientFile $ambPath)" }) | Where-Object { $_ })
@@ -425,6 +484,7 @@ function New-PassEvidence($X, [string]$Dir) {
         $id = "$($a.id)"; $ad = Join-Path $Dir $id; $gd = Join-Path $ad 'guest'
         New-Item -ItemType Directory -Force $gd | Out-Null
         $isUndo = ($undo -contains $id)
+        [IO.File]::WriteAllText((Join-Path $gd 'app-events.json'), '[]')
         $shots = @(Get-E2eShotNames $a $isUndo | ForEach-Object { [IO.File]::WriteAllBytes((Join-Path $ad "$_.png"), [byte[]](137, 80, 78, 71)); [ordered]@{ name = $_; file = "$_.png"; bytes = 4 } })
         Write-J ([ordered]@{ app = $id; pulled = $true; shots = $shots; ambient = [ordered]@{ file = $amb; sha256 = $ambSha } }) (Join-Path $ad 'host.json')
         $steps = [ordered]@{
@@ -503,8 +563,21 @@ function Get-E2eDefects {
         @{ name = 'executed set empty on both sides'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'git\guest\e2e.json') { param($d) $c = $d.steps.'capture-exec'.compare; $c.cli_n = 0; $c.ui_n = 0 } } },
         @{ name = 'danger in the executed set'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'score-rigtool.json') { param($d) ($d.apps | Where-Object { $_.id -eq 'firefox-tb' }).tools[0].danger_offered = 1 } } },
         @{ name = 'no rigtool score for an app'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'score-rigtool.json') { param($d) $d.apps = @($d.apps | Where-Object { $_.id -ne 'execapp' }) } } },
-        @{ name = 'undo fidelity row failing'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'npp\guest\fidelity.json') { param($d) $d.ok = $false; $d.rows[0].pass = $false } } },
-        @{ name = 'undo not through the UI'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'npp\guest\e2e.json') { param($d) $d.steps.'ui-wait-undone'.state = $null } } },
+        @{ name = 'undo fidelity row failing'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'execapp\guest\fidelity.json') { param($d) $d.ok = $false; $d.rows[0].pass = $false } } },
+        @{ name = 'undo not through the UI'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'execapp\guest\e2e.json') { param($d) $d.steps.'ui-wait-undone'.state = $null } } },
+        # Nothing preselected (RIG.md section 17): the empty path is scored, not excused.
+        @{ name = 'nothing preselected, but the UI enabled Move (npp)'; act = { param($ev) Set-E2eEmptyPlan $ev 'npp'; Edit-E2eJson (Join-Path $ev 'npp\guest\e2e.json') { param($d) $m = $d.steps.'ui-move'; $m.ok = $false; $m.state = 'move-enabled'; $m.move_enabled = $true } } },
+        @{ name = 'empty path, but Move recorded enabled (npp)'; act = { param($ev) Set-E2eEmptyPlan $ev 'npp'; Edit-E2eJson (Join-Path $ev 'npp\guest\e2e.json') { param($d) $d.steps.'ui-move'.move_enabled = $true } } },
+        @{ name = 'empty path, but the CLI preselected items (npp)'; act = { param($ev) Set-E2eEmptyPlan $ev 'npp'; Edit-E2eJson (Join-Path $ev 'npp\guest\e2e.json') { param($d) $d.steps.'capture-post'.cli.preselected_n = 2 } } },
+        @{ name = 'empty path, but a session was made (npp)'; act = { param($ev) Set-E2eEmptyPlan $ev 'npp'; Edit-E2eJson (Join-Path $ev 'npp\guest\e2e.json') { param($d) $d.steps.'capture-exec'.sessions_new = @('20261123T000000Z-1') } } },
+        @{ name = 'empty path, but the capture was not the empty one (npp)'; act = { param($ev) Set-E2eEmptyPlan $ev 'npp'; Edit-E2eJson (Join-Path $ev 'npp\guest\e2e.json') { param($d) $d.steps.'capture-exec'.empty = $false } } },
+        @{ name = 'empty path, collateral (npp)'; act = { param($ev) Set-E2eEmptyPlan $ev 'npp'; Edit-E2eJson (Join-Path $ev 'npp\guest\execdiff.json') { param($d) $d.counts.collateral = 2 } } },
+        @{ name = 'empty path, a plan consent ran after it (npp)'; act = { param($ev) Set-E2eEmptyPlan $ev 'npp'; Edit-E2eJson (Join-Path $ev 'npp\guest\e2e.json') { param($d) $d.steps | Add-Member -NotePropertyName 'consent-approve-plan' -NotePropertyValue ([pscustomobject]@{ ok = $false }) -Force } } },
+        @{ name = 'the undo app had nothing preselected (execapp)'; act = { param($ev) Set-E2eEmptyPlan $ev 'execapp' } },
+        # Application events (finish, app-events.json): a crash of a Purge process fails; missing events fail.
+        @{ name = 'a WER APPCRASH of Purge.exe (git)'; act = { param($ev) Set-E2eAppEvent $ev 'git' 'Windows Error Reporting' 1001 "Fault bucket 1, type 4`r`nEvent Name: APPCRASH`r`nResponse: Not available`r`n`r`nProblem signature:`r`nP1: Purge.exe`r`nP2: 1.0.0.0" } },
+        @{ name = 'an Application Error 1000 of purge-broker.exe (vscode)'; act = { param($ev) Set-E2eAppEvent $ev 'vscode' 'Application Error' 1000 "Faulting application name: purge-broker.exe, version: 0.1.0.0, time stamp: 0x0`r`nFaulting module name: ntdll.dll" } },
+        @{ name = 'app-events.json missing (firefox-tb)'; act = { param($ev) Remove-Item -LiteralPath (Join-Path $ev 'firefox-tb\guest\app-events.json') } },
         @{ name = 'medium-route uninstaller ran high'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'vscode-user\guest\e2e.json') { param($d) $d.steps.'ui-wait-scan'.uninstallers[0].il = 'high' } } },
         @{ name = 'medium-route uninstaller not seen'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'vscode-user\guest\e2e.json') { param($d) $d.steps.'ui-wait-scan'.uninstallers = @() } } },
         @{ name = 'route differs'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'git\guest\e2e.json') { param($d) $d.steps.'ui-confirm'.route = 'medium' } } },
@@ -549,6 +622,28 @@ function Get-E2eDefects {
     )
 }
 
+# Turns a passing executing app into the nothing-preselected path (RIG.md section 17): CLI preselected 0, ui-move
+# skip-empty with Move present and disabled, no plan consent and no result step, the empty capture (no session,
+# executed set empty == preselected set empty), the screenshots up to 07-move-waiting.
+function Set-E2eEmptyPlan([string]$Ev, [string]$App) {
+    Edit-E2eJson (Join-Path $Ev "$App\guest\e2e.json") { param($d)
+        $s = $d.steps
+        $s.'capture-post'.cli.preselected_n = 0
+        $s.'ui-move' = [pscustomobject]@{ ok = $true; state = 'skip-empty'; move_present = $true; move_enabled = $false; cli_preselected_n = 0 }
+        foreach ($n in 'consent-approve-plan', 'ui-wait-result', 'ui-undo', 'consent-approve-undo', 'ui-wait-undone') { $s.PSObject.Properties.Remove($n) }
+        $s.'capture-exec' = [pscustomobject]@{ ok = $true; empty = $true; report_state = 'Empty'; sessions_new = @(); compare = [pscustomobject]@{ equal = $true; cli_n = 0; ui_n = 0; missing = @(); extra = @() } } }
+    Edit-E2eJson (Join-Path $Ev "$App\host.json") { param($h) $h.shots = @(@($h.shots) | Where-Object { "$($_.name)" -notin '08-consent-plan', '09-result', '10-undo-waiting', '11-consent-undo', '12-undone' }) }
+    foreach ($n in '08-consent-plan', '09-result', '10-undo-waiting', '11-consent-undo', '12-undone') { Remove-Item -LiteralPath (Join-Path $Ev "$App\$n.png") -Force -ErrorAction SilentlyContinue }
+    Remove-Item -LiteralPath (Join-Path $Ev "$App\guest\fidelity.json") -Force -ErrorAction SilentlyContinue
+}
+
+# One Application event (as finish writes it) into an app's app-events.json.
+function Set-E2eAppEvent([string]$Ev, [string]$App, [string]$Provider, [int]$Id, [string]$Message) {
+    $f = Join-Path $Ev "$App\guest\app-events.json"
+    $e = @(@(Arr (Read-J $f)) + [pscustomobject]@{ t = '2026-11-23T07:41:15-08:00'; provider = $Provider; id = $Id; level = 'Information'; message = $Message })
+    [IO.File]::WriteAllText($f, (ConvertTo-Json -InputObject $e -Depth 5), (New-Object Text.UTF8Encoding($false)))
+}
+
 # After an edit of the synthetic ambient set: its new SHA-256 into every app's host and guest records.
 function Set-E2eAmbientHash([string]$Ev) {
     $sha = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $Ev 'm3-e2e-ambient.json')).Hash.ToLowerInvariant()
@@ -585,8 +680,34 @@ function Invoke-SelfTest {
         Check 'synthetic pass passes' ($r.pass -and $r.gate)
         if (-not $r.pass) { foreach ($row in $r.rows) { if (-not $row.ok) { Write-Host "       $($row.row): $($row.detail)" } } }
         Check 'the ambient rows are scored (the set, and one per executing app)' (@($r.rows | Where-Object { $_.row -like '*ambient set*' }).Count -eq 1 + @(Arr $X.apps | Where-Object { "$($_.kind)" -in 'app', 'fixture' }).Count)
-        $sub = Invoke-Score $ev $X @('npp') -Quiet -TruthDir $ev
+        $sub = Invoke-Score $ev $X @('npp', 'execapp') -Quiet -TruthDir $ev
         Check 'a subset passes but is not a gate score' ($sub.pass -and -not $sub.gate)
+        Check 'the undo app is execapp (service + task restore), npp is not' ((@(Arr $X.undo_apps) -join ',') -ceq 'execapp')
+        # Nothing preselected (RIG.md section 17): a non-undo app on the empty path passes, its rows say so.
+        $emp = Join-Path $root 'empty-plan'
+        New-PassEvidence $X $emp; Set-E2eEmptyPlan $emp 'npp'
+        $r4 = Invoke-Score $emp $X -Quiet -TruthDir $emp
+        Check 'nothing preselected (npp: Move disabled, no session, collateral 0) passes' $r4.pass
+        if (-not $r4.pass) { foreach ($row in $r4.rows) { if (-not $row.ok) { Write-Host "       $($row.row): $($row.detail)" } } }
+        Check 'the empty path has its own rows (UI, no session) and an executed-set row of 0 == 0' (@($r4.rows | Where-Object { $_.row -eq 'npp UI: review, nothing preselected, Move disabled' -and $_.ok }).Count -eq 1 -and
+            @($r4.rows | Where-Object { $_.row -eq 'npp no session (nothing preselected)' -and $_.ok }).Count -eq 1 -and @($r4.rows | Where-Object { $_.row -eq 'npp executed set == preselected set of the rig CLI plan' -and $_.ok -and "$($_.detail)" -like 'nothing preselected: cli 0, ui 0*' }).Count -eq 1)
+        # Application events: a leak report of Purge.exe is a warning row, not a failure.
+        $lk = Join-Path $root 'leak'
+        New-PassEvidence $X $lk
+        Set-E2eAppEvent $lk 'npp' 'Windows Error Reporting' 1001 "Fault bucket 1652401505757688000, type 5`r`nEvent Name: RADAR_PRE_LEAK_64`r`nResponse: Not available`r`nCab Id: 0`r`n`r`nProblem signature:`r`nP1: Purge.exe`r`nP2: 1.0.0.0"
+        $r5 = Invoke-Score $lk $X -Quiet -TruthDir $lk
+        $lr = @($r5.rows | Where-Object { $_.row -eq 'npp app events: no crash of a Purge process' })
+        Check 'a RADAR_PRE_LEAK_64 of Purge.exe is a warning row, the run still passes' ($r5.pass -and $lr.Count -eq 1 -and $lr[0].ok -and $lr[0].warn -and "$($lr[0].detail)" -match 'RADAR_PRE_LEAK_64 Purge\.exe')
+        Check 'an app without events has a plain passing events row' (@($r5.rows | Where-Object { $_.row -eq 'git app events: no crash of a Purge process' -and $_.ok -and -not $_.warn }).Count -eq 1)
+        $cl = Get-E2eAppEventClasses @([pscustomobject]@{ provider = 'Windows Error Reporting'; id = 1001; message = "Event Name: APPCRASH`r`nP1: notepad.exe" }, [pscustomobject]@{ provider = '.NET Runtime'; id = 1026; message = "Application: Purge.exe`r`nDescription: ..." })
+        Check 'app events: a crash of another image is no Purge crash; a .NET 1026 of Purge.exe is' ($cl.crashes.Count -eq 1 -and "$($cl.crashes[0])" -like '.NET Runtime 1026*' -and $cl.warnings.Count -eq 1)
+        # The host's error reaches the evidence row (the MSI smoke, a failed boot).
+        $he = Join-Path $root 'host-error'
+        New-PassEvidence $X $he
+        Remove-Item -LiteralPath (Join-Path $he 'msi1603\guest\e2e.json')
+        Edit-E2eJson (Join-Path $he 'msi1603\host.json') { param($h) $h | Add-Member -NotePropertyName error -NotePropertyValue 'msi smoke: msiexec /i of the msi1603 fixture exited 1603' -Force; $h | Add-Member -NotePropertyName failed_step -NotePropertyValue 'msi-smoke' -Force }
+        $r6 = Invoke-Score $he $X -Quiet -TruthDir $he
+        Check 'a missing e2e.json names the host error (step msi-smoke)' (-not $r6.pass -and @($r6.rows | Where-Object { $_.row -eq 'msi1603 evidence (guest\e2e.json, host.json)' -and -not $_.ok -and "$($_.detail)" -match 'host: step msi-smoke: msi smoke: msiexec /i of the msi1603 fixture exited 1603' }).Count -eq 1)
         # The harvest row is relative: 11.9 s passes against a floor of 6 s (the old row was 3 s), and exactly twice
         # the floor is the bound.
         $rel = Join-Path $root 'relative'

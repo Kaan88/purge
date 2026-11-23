@@ -596,11 +596,14 @@ function New-M3E2ePhaseText([string]$Phase, [string]$App, [string]$Step = '', [i
 
 # Pure: the screenshot names an app's flow takes, in order (the scorer requires the same list, expectations
 # required_shots). Broker route: the uninstall consent; success flows: move, plan consent, result; undo app: undo.
-function Get-M3E2eShotNames($AppDef, [bool]$Undo) {
+# -Empty: nothing was preselected (Invoke-M3E2eWindow's skip-empty path): the disabled Move only, no consent, result
+# or undo.
+function Get-M3E2eShotNames($AppDef, [bool]$Undo, [bool]$Empty = $false) {
     $n = @('01-programs-row', '02-uninstall-clicked', '03-confirm')
     if ("$($AppDef.route)" -eq 'broker') { $n += '04-consent-run', '05-run-approved' }
     $n += '06-scan-done'
     if ("$($AppDef.kind)" -like 'fail-*') { return @($n + '07-failure') }
+    if ($Empty) { return @($n + '07-move-waiting') }
     $n += '07-move-waiting', '08-consent-plan', '09-result'
     if ($Undo) { $n += '10-undo-waiting', '11-consent-undo', '12-undone' }
     $n
@@ -617,6 +620,33 @@ function Invoke-M3E2ePhase([string]$Phase, [string]$App, [string]$Step = '', [in
     if (-not $j.done) { Write-RigLog "  !! phase $name did not finish within $TimeoutSec s"; $script:M3Fail = $true }
     elseif (-not $lines.Count) { Write-RigLog "  !! phase $name wrote no result line; log: $($j.log_file)"; $script:M3Fail = $true }
     "$(@($lines) | Select-Object -First 1)"
+}
+
+# Pure: whether the result line of a guest phase reports success (vm\RIG.md section 17, "Fail fast"): consent-wait
+# found=True, ui-wait-result state=result (a null run: declined), ui-wait-undone state=undone, every other phase
+# ok=True. No line, a line of another tool, or M3E REFUSED: not a success.
+function Test-M3E2eStepLine([string]$Phase, [string]$Line, [bool]$IsNull = $false) {
+    if (-not $Line -or $Line -cnotmatch '^M3E ' -or $Line -cmatch '^M3E REFUSED') { return $false }
+    switch ($Phase) {
+        'consent-wait' { return (Get-M3Field $Line 'found') -ceq 'True' }
+        'ui-wait-result' { return (Get-M3Field $Line 'state') -ceq $(if ($IsNull) { 'declined' } else { 'result' }) }
+        'ui-wait-undone' { return (Get-M3Field $Line 'state') -ceq 'undone' }
+        default { return (Get-M3Field $Line 'ok') -ceq 'True' }
+    }
+}
+
+# One guest phase whose failure ends the app's flow (fail fast): the phase, its screenshot (-Shot, taken either way:
+# it shows the failed state), then a throw when the line is not a success. Invoke-M3E2eApp's catch records the error
+# and the step (host.json failed_step), and its finally still runs finish and pulls the evidence; no later step that
+# depends on this one runs, so a failed step costs no more timeouts.
+function Invoke-M3E2eStep([string]$Phase, [string]$App, [string]$Step = '', [int]$WaitSec = 0, [int]$TimeoutSec = 900, [string]$AmbientSha = '', [string]$Shot = '') {
+    $l = Invoke-M3E2ePhase $Phase $App $Step $WaitSec $TimeoutSec $AmbientSha
+    if ($Shot) { Save-M3E2eShot $Shot }
+    if (-not (Test-M3E2eStepLine $Phase $l ([bool]$script:E2eNull))) {
+        $script:E2eFailedStep = "$Phase$(if ($Step) { "-$Step" })"
+        throw "step $($script:E2eFailedStep) failed: $(if ($l) { $l } else { 'no result line' })"
+    }
+    $l
 }
 
 function Save-M3E2eShot([string]$Name) {
@@ -690,23 +720,32 @@ function Get-M3E2eField([string]$Line, [string]$Key) { Get-M3Field $Line $Key }
 # executes; a null run cancels it (consent-cancel: the dialog's Cancel by the same m3sec press, then -NullWaitSec idle
 # seconds, the gate's execution time, as its null-wait step), so nothing is executed. Both then read the result page
 # and take snap B.
+#
+# Nothing preselected (the rig CLI plan ticks nothing; the guest's ui-move then checks that MoveButton is there and not
+# enabled and answers state=skip-empty): Move is never pressed, so there is no plan consent and no result page; the
+# window goes from ui-move straight to capture-exec, which checks that no session exists and runs execdiff against the
+# rig's empty journal (collateral 0 still holds). A null run never takes this path (the guest refuses it: no consent to
+# cancel). Every step fails fast (Invoke-M3E2eStep).
 function Invoke-M3E2eWindow([string]$Id, $Rec, [bool]$IsNull) {
-    $null = Invoke-M3E2ePhase 'ui-move' $Id -TimeoutSec 1200
-    Save-M3E2eShot '07-move-waiting'
+    $l = Invoke-M3E2eStep 'ui-move' $Id -TimeoutSec 1200 -Shot '07-move-waiting'
+    if ((Get-M3E2eField $l 'state') -ceq 'skip-empty') {
+        $Rec.empty_plan = $true
+        Write-RigLog "  $Id`: nothing preselected (CLI and UI); no Move, no plan consent, no result wait"
+        $null = Invoke-M3E2eStep 'capture-exec' $Id -TimeoutSec 5400
+        return
+    }
     $Rec.uac_keys.plan = @(Invoke-M3E2eUac '07u-uac' $Id 'plan')
-    $null = Invoke-M3E2ePhase 'consent-wait' $Id 'plan' -WaitSec 300 -TimeoutSec 900
-    Save-M3E2eShot '08-consent-plan'
-    if ($IsNull) { $null = Invoke-M3E2ePhase 'consent-cancel' $Id 'plan' -WaitSec (Assert-M3E2eNullWait $M3.null_wait) -TimeoutSec 900 }
-    else { $null = Invoke-M3E2ePhase 'consent-approve' $Id 'plan' -TimeoutSec 600 }
-    $null = Invoke-M3E2ePhase 'ui-wait-result' $Id -WaitSec 1800 -TimeoutSec 2400
-    Save-M3E2eShot '09-result'
-    $null = Invoke-M3E2ePhase 'capture-exec' $Id -TimeoutSec 5400
+    $null = Invoke-M3E2eStep 'consent-wait' $Id 'plan' -WaitSec 300 -TimeoutSec 900 -Shot '08-consent-plan'
+    if ($IsNull) { $null = Invoke-M3E2eStep 'consent-cancel' $Id 'plan' -WaitSec (Assert-M3E2eNullWait $M3.null_wait) -TimeoutSec 900 }
+    else { $null = Invoke-M3E2eStep 'consent-approve' $Id 'plan' -TimeoutSec 600 }
+    $null = Invoke-M3E2eStep 'ui-wait-result' $Id -WaitSec 1800 -TimeoutSec 2400 -Shot '09-result'
+    $null = Invoke-M3E2eStep 'capture-exec' $Id -TimeoutSec 5400
 }
 
 # One app: one boot of the base snapshot, the whole flow through the UI, the evidence pulled to $Dir (default
 # <evidence>\<app>\). -NullRun <name>: a null run of that name (no ambient set, the plan consent cancelled; never undo).
 # -Ambient: the host record {file, sha256} of the ambient set a gate run pushes (host.json ambient; setup gets its hash).
-function Invoke-M3E2eApp($AppDef, [bool]$Undo, [string]$Base, [string]$Dir = '', [string]$NullRun = '', $Ambient = $null) {
+function Invoke-M3E2eApp($AppDef, [bool]$Undo, [string]$Base, [string]$Dir = '', [string]$NullRun = '', $Ambient = $null, [string]$SkipReason = '') {
     $id = "$($AppDef.id)"
     $isNull = [bool]$NullRun
     if ($isNull -and $Undo) { throw 'a null run is never undone' }
@@ -719,35 +758,41 @@ function Invoke-M3E2eApp($AppDef, [bool]$Undo, [string]$Base, [string]$Dir = '',
     $script:E2eLines = New-Object System.Collections.ArrayList
     $rec = [ordered]@{ app = $id; kind = "$($AppDef.kind)"; undo = $Undo; base = $Base; started = (Get-Date).ToString('o'); ended = $null; error = $null
                        null_run = $(if ($isNull) { $NullRun }); ambient = $Ambient
-                       uac_keys = [ordered]@{}; shots = $script:E2eShots; lines = $script:E2eLines; pulled = $false }
+                       uac_keys = [ordered]@{}; shots = $script:E2eShots; lines = $script:E2eLines; pulled = $false; failed_step = $null; empty_plan = $false }
     Write-RigLog "m3-e2e app $id ($($AppDef.kind), route $($AppDef.route)$(if ($Undo) { ', undo' })$(if ($isNull) { ", null run $NullRun, idle $($M3.null_wait) s" })) from $Base"
     $booted = $false
+    $script:E2eFailedStep = $null
+    if ($SkipReason) {
+        # Not driven (the MSI smoke check failed for this fixture, Invoke-M3E2eMsiSmoke): the reason is the record.
+        $rec.error = $SkipReason; $rec.failed_step = 'msi-smoke'; $rec.ended = (Get-Date).ToString('o')
+        Write-RigLog "  !! $id not driven: $SkipReason"
+        $script:M3Fail = $true
+        [IO.File]::WriteAllText((Join-Path $script:E2eDir 'host.json'), (ConvertTo-Json $rec -Depth 8), (New-Object System.Text.UTF8Encoding($false)))
+        $script:E2eNull = $false
+        return $rec
+    }
     try {
-        Restore-Base -Snapshot $Base -No3D
+        Restore-Base -Snapshot $Base -No3D -DiagDir $script:E2eDir
         $booted = $true
         Push-M3E2eFiles $AppDef $isNull
         $l = Invoke-M3E2ePhase 'setup' $id -TimeoutSec 1200 -AmbientSha $(if ($Ambient) { "$($Ambient.sha256)" } else { '' })
-        if ($l -notmatch '^M3E SETUP OK') { throw "setup failed: $l" }
+        if ($l -notmatch '^M3E SETUP OK') { $script:E2eFailedStep = 'setup'; throw "setup failed: $l" }
         $l = Invoke-M3E2ePhase 'prepare' $id -TimeoutSec 5400
-        if ((Get-M3E2eField $l 'ok') -ne 'True') { throw "prepare failed: $l" }
-        $null = Invoke-M3E2ePhase 'ui-start' $id -TimeoutSec 900
-        Save-M3E2eShot '01-programs-row'
-        $l = Invoke-M3E2ePhase 'ui-uninstall' $id -TimeoutSec 900
-        Save-M3E2eShot '02-uninstall-clicked'
+        if ((Get-M3E2eField $l 'ok') -ne 'True') { $script:E2eFailedStep = 'prepare'; throw "prepare failed: $l" }
+        # From here every step fails fast (Invoke-M3E2eStep): a later step that needs it never runs.
+        $null = Invoke-M3E2eStep 'ui-start' $id -TimeoutSec 900 -Shot '01-programs-row'
+        $l = Invoke-M3E2eStep 'ui-uninstall' $id -TimeoutSec 900 -Shot '02-uninstall-clicked'
         if ((Get-M3E2eField $l 'state') -eq 'continue-focused') {
             # A real key on the focused Continue button, so Windows puts the UAC prompt in front (see m3-e2e.ps1).
             $null = Send-M3Keys 'space'
             $rec.uac_keys.continue = 'space'
         }
         $rec.uac_keys.run = @(Invoke-M3E2eUac '02u-uac' $id 'run')
-        $null = Invoke-M3E2ePhase 'ui-await-confirm' $id -WaitSec 300 -TimeoutSec 900
-        Save-M3E2eShot '03-confirm'
-        $l = Invoke-M3E2ePhase 'ui-confirm' $id -TimeoutSec 600
+        $null = Invoke-M3E2eStep 'ui-await-confirm' $id -WaitSec 300 -TimeoutSec 900 -Shot '03-confirm'
+        $l = Invoke-M3E2eStep 'ui-confirm' $id -TimeoutSec 600
         if ((Get-M3E2eField $l 'route') -eq 'broker') {
-            $null = Invoke-M3E2ePhase 'consent-wait' $id 'run' -WaitSec 300 -TimeoutSec 900
-            Save-M3E2eShot '04-consent-run'
-            $null = Invoke-M3E2ePhase 'consent-approve' $id 'run' -TimeoutSec 600
-            Save-M3E2eShot '05-run-approved'
+            $null = Invoke-M3E2eStep 'consent-wait' $id 'run' -WaitSec 300 -TimeoutSec 900 -Shot '04-consent-run'
+            $null = Invoke-M3E2eStep 'consent-approve' $id 'run' -TimeoutSec 600 -Shot '05-run-approved'
         }
         $l = Invoke-M3E2ePhase 'ui-wait-scan' $id -WaitSec 2400 -TimeoutSec 3300
         Save-M3E2eShot '06-scan-done'
@@ -757,24 +802,27 @@ function Invoke-M3E2eApp($AppDef, [bool]$Undo, [string]$Base, [string]$Dir = '',
             $null = Invoke-M3E2ePhase 'fail-check' $id -TimeoutSec 600
             Save-M3E2eShot '07-failure'
         } elseif ($state -in 'review', 'empty') {
-            $null = Invoke-M3E2ePhase 'capture-post' $id -TimeoutSec 5400
+            $null = Invoke-M3E2eStep 'capture-post' $id -TimeoutSec 5400
             if ($state -eq 'review') {
                 Invoke-M3E2eWindow $id $rec $isNull
-                if ($Undo) {
-                    $null = Invoke-M3E2ePhase 'ui-undo' $id -TimeoutSec 900
-                    Save-M3E2eShot '10-undo-waiting'
+                if ($Undo -and $rec.empty_plan) {
+                    # An undo app must have executed something; the scorer fails an undo app with nothing preselected.
+                    $rec.undo_skipped = 'nothing preselected: nothing to undo'
+                    Write-RigLog "  !! $id is an undo app, but nothing was preselected: no undo (the scorer fails it)"
+                    $script:M3Fail = $true
+                } elseif ($Undo) {
+                    $null = Invoke-M3E2eStep 'ui-undo' $id -TimeoutSec 900 -Shot '10-undo-waiting'
                     $rec.uac_keys.undo = @(Invoke-M3E2eUac '10u-uac' $id 'undo')
-                    $null = Invoke-M3E2ePhase 'consent-wait' $id 'undo' -WaitSec 300 -TimeoutSec 900
-                    Save-M3E2eShot '11-consent-undo'
-                    $null = Invoke-M3E2ePhase 'consent-approve' $id 'undo' -TimeoutSec 600
-                    $null = Invoke-M3E2ePhase 'ui-wait-undone' $id -WaitSec 1800 -TimeoutSec 2400
-                    Save-M3E2eShot '12-undone'
-                    $null = Invoke-M3E2ePhase 'capture-undo' $id -TimeoutSec 3600
+                    $null = Invoke-M3E2eStep 'consent-wait' $id 'undo' -WaitSec 300 -TimeoutSec 900 -Shot '11-consent-undo'
+                    $null = Invoke-M3E2eStep 'consent-approve' $id 'undo' -TimeoutSec 600
+                    $null = Invoke-M3E2eStep 'ui-wait-undone' $id -WaitSec 1800 -TimeoutSec 2400 -Shot '12-undone'
+                    $null = Invoke-M3E2eStep 'capture-undo' $id -TimeoutSec 3600
                 }
             } elseif ($isNull) { throw "a null run needs the review page (the scan ended '$state')" }
-        } else { Write-RigLog "  !! $id`: the scan ended '$state'; nothing more to drive"; $script:M3Fail = $true }
+        } else { $script:E2eFailedStep = 'ui-wait-scan'; $rec.failed_step = 'ui-wait-scan'; $rec.error = "the scan ended '$state'"; Write-RigLog "  !! $id`: the scan ended '$state'; nothing more to drive"; $script:M3Fail = $true }
     } catch {
         $rec.error = $_.Exception.Message
+        $rec.failed_step = $script:E2eFailedStep
         Write-RigLog "  !! $id`: $($rec.error)"
         $script:M3Fail = $true
     } finally {
@@ -801,6 +849,71 @@ function Invoke-M3E2eApp($AppDef, [bool]$Undo, [string]$Base, [string]$Dir = '',
     $rec
 }
 
+# Pure: the MSI fixtures a run drives (kind fail-*) and, from the smoke line `M3E MSI-SMOKE msi-smoke ok=False
+# msi1603=fail:1603 msi3010=ok:0`, the reason each one is not driven (an app the line names as ok, or every app when
+# the line says ok=True, gets none; no line, or an app the line does not name, gets a reason too: fail-closed).
+function Get-M3E2eMsiSmokeSkips($Apps, [string]$Line) {
+    $skips = [ordered]@{}
+    foreach ($a in @($Apps | Where-Object { "$($_.kind)" -like 'fail-*' })) {
+        $id = "$($a.id)"
+        $f = $(if ($Line -cmatch '^M3E MSI-SMOKE ') { Get-M3Field $Line $id } else { $null })
+        if ($f -and $f -clike 'ok:*') { continue }
+        $code = $(if ($f) { $f -replace '^fail:', '' } else { '' })
+        $skips[$id] = $(if (-not $Line -or $Line -cnotmatch '^M3E MSI-SMOKE ') { "msi smoke: no result ($(if ($Line) { $Line } else { 'no line' })); the fixture MSIs were not checked, so $id is not driven" }
+                        elseif (-not $f) { "msi smoke: the line names no result for $id ($Line); $id is not driven" }
+                        elseif (-not $code) { "msi smoke: the $id fixture could not be built or installed (msi-smoke\guest\step-msi-smoke.json); $id is not driven" }
+                        else { "msi smoke: msiexec /i of the $id fixture exited $code (the smoke wants exit 0 and the ARP entry: the package does not install; msi-smoke\guest\msi-smoke-*.log); $id is not driven" })
+    }
+    $skips
+}
+
+# The MSI smoke check (vm\RIG.md section 17, "MSI smoke"): before the chain drives msi1603 / msi3010, one boot of the
+# base snapshot builds both fixture packages in the guest and installs each with `msiexec /i` (guest phase msi-smoke).
+# Evidence: <evidence>\msi-smoke\ (jobs, guest\ with step-msi-smoke.json and the verbose MSI logs, host.json).
+# Returns {line, ok, skips: {app: reason}}; an app with a reason is recorded as not driven instead of booting.
+function Invoke-M3E2eMsiSmoke($Apps, [string]$Base) {
+    $msi = @($Apps | Where-Object { "$($_.kind)" -like 'fail-*' })
+    if (-not $msi.Count) { return $null }
+    $script:E2eDir = Join-Path $M3.evidence 'msi-smoke'
+    New-Item -ItemType Directory -Force $script:E2eDir | Out-Null
+    $script:E2eShots = New-Object System.Collections.ArrayList
+    $script:E2eLines = New-Object System.Collections.ArrayList
+    $script:E2eNull = $false
+    $rec = [ordered]@{ app = 'msi-smoke'; apps = @($msi | ForEach-Object { "$($_.id)" }); base = $Base; started = (Get-Date).ToString('o'); ended = $null; line = $null; error = $null; pulled = $false; skips = $null }
+    Write-RigLog "m3-e2e msi smoke ($($rec.apps -join ', ')) from $Base"
+    $line = ''
+    $booted = $false
+    try {
+        Restore-Base -Snapshot $Base -No3D -DiagDir $script:E2eDir
+        $booted = $true
+        $engine = $(if ($M3.engine) { $M3.engine } else { Join-Path $script:RepoRoot 'target\release\purge-engine.exe' })
+        Push-Tools -Engine $engine
+        $line = Invoke-M3E2ePhase 'msi-smoke' 'msi-smoke' -TimeoutSec 1200
+        $rec.line = $line
+    } catch { $rec.error = $_.Exception.Message; Write-RigLog "  !! msi smoke: $($rec.error)" }
+    finally {
+        if ($booted -and (Get-VmState) -eq 'running') {
+            $zip = Join-Path $script:E2eDir 'guest.zip'
+            Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
+            $c = Invoke-Guest @('copyfrom', 'C:\cr\out\m3-e2e-msi-smoke.zip', $zip)
+            if ($c.code -eq 0 -and (Test-Path -LiteralPath $zip)) {
+                $g = Join-Path $script:E2eDir 'guest'
+                if (Test-Path -LiteralPath $g) { Remove-Item -LiteralPath $g -Recurse -Force }
+                Expand-Archive -LiteralPath $zip -DestinationPath $g
+                Remove-Item -LiteralPath $zip -Force
+                $rec.pulled = $true
+            } else { Write-RigLog "  !! copyfrom of the msi smoke zip failed: $($c.out -join ' ')" }
+        }
+    }
+    $skips = Get-M3E2eMsiSmokeSkips $msi $line
+    $rec.skips = $skips
+    $rec.ok = ($skips.Count -eq 0)
+    $rec.ended = (Get-Date).ToString('o')
+    [IO.File]::WriteAllText((Join-Path $script:E2eDir 'host.json'), (ConvertTo-Json $rec -Depth 8), (New-Object System.Text.UTF8Encoding($false)))
+    if (-not $rec.ok) { $script:M3Fail = $true; foreach ($k in $skips.Keys) { Write-RigLog "  !! $k`: $($skips[$k])" } } else { Write-RigLog '  msi smoke ok: both fixture packages install' }
+    $rec
+}
+
 function Invoke-M3E2e {
     Assert-M3E2eGateRunName $M3.run
     $ui = $(if ($M3.ui) { $M3.ui } else { Join-Path $script:RepoRoot 'target\ui-publish' })
@@ -824,9 +937,13 @@ function Invoke-M3E2e {
     $apps = @(Get-M3E2eApps -Only $M3.apps)
     $undo = @(Get-M3E2eUndoApps -Override $M3.undo_apps)
     $sum = [ordered]@{ schema = 'purge.rig.m3e2e.summary/1'; run = $M3.run; vm = $M3Vm; snapshot = $base; uac_on = $M3.uac_on; started = $script:M3Started
-                       engine = $M3.engine; broker = $M3.broker; ui = $ui; binaries = $bins; ambient = $ambRec; apps_asked = @($apps | ForEach-Object { "$($_.id)" }); undo_apps = $undo; apps = @() }
+                       engine = $M3.engine; broker = $M3.broker; ui = $ui; binaries = $bins; ambient = $ambRec; apps_asked = @($apps | ForEach-Object { "$($_.id)" }); undo_apps = $undo; apps = @(); msi_smoke = $null }
+    # The MSI fixtures install? (one boot first, when the run drives one; a failing package skips its app.)
+    $smoke = Invoke-M3E2eMsiSmoke $apps $base
+    $sum.msi_smoke = $smoke
     foreach ($a in $apps) {
-        $sum.apps += Invoke-M3E2eApp $a ($undo -contains "$($a.id)") $base -Ambient $ambRec
+        $skip = $(if ($smoke -and $smoke.skips -and $smoke.skips.Contains("$($a.id)")) { "$($smoke.skips["$($a.id)"])" } else { '' })
+        $sum.apps += Invoke-M3E2eApp $a ($undo -contains "$($a.id)") $base -Ambient $ambRec -SkipReason $skip
         [IO.File]::WriteAllText((Join-Path $M3.evidence 'summary.json'), (ConvertTo-Json $sum -Depth 10), (New-Object System.Text.UTF8Encoding($false)))
     }
     $sum.ended = (Get-Date).ToString('o')
