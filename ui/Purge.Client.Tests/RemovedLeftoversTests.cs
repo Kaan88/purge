@@ -61,20 +61,17 @@ public sealed class RemovedLeftoversTests
         // stands in for it; this process stays the owner, so it can give itself access back to clean up.
         var root = Path.Combine(Path.GetTempPath(), "purge-fp-" + Guid.NewGuid().ToString("N"));
         var store = Path.Combine(root, "fp");
-        Directory.CreateDirectory(store);
         var file = Path.Combine(store, FingerprintStore.FileName(Program));
-        File.WriteAllText(file, "not read");
-        var dirInfo = new DirectoryInfo(store);
-        var fileInfo = new FileInfo(file);
-        var me = System.Security.Principal.WindowsIdentity.GetCurrent().User!;
         try
         {
+            Directory.CreateDirectory(store);
+            File.WriteAllText(file, "not read");
             var closedFile = new FileSecurity();
             closedFile.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
-            fileInfo.SetAccessControl(closedFile);
+            new FileInfo(file).SetAccessControl(closedFile);
             var closedDir = new DirectorySecurity();
             closedDir.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
-            dirInfo.SetAccessControl(closedDir);
+            new DirectoryInfo(store).SetAccessControl(closedDir);
 
             Assert.Throws<UnauthorizedAccessException>(() => File.ReadAllText(file));
             Assert.True(FingerprintStore.MayHaveRecord(Program, store));
@@ -82,14 +79,40 @@ public sealed class RemovedLeftoversTests
         }
         finally
         {
+            UnlockAndDelete(root, store, file);
+        }
+    }
+
+    /// <summary>
+    /// Gives this account full control of the locked directory and file again, then deletes the test's folder. Each
+    /// step runs whatever the one before did (a step may fail when the test stopped before locking), and the delete is
+    /// retried briefly, so a failed assertion still leaves nothing in TEMP.
+    /// </summary>
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private static void UnlockAndDelete(string root, string store, string file)
+    {
+        var me = System.Security.Principal.WindowsIdentity.GetCurrent().User!;
+        try
+        {
             var openDir = new DirectorySecurity();
+            openDir.SetAccessRuleProtection(isProtected: false, preserveInheritance: false);
             openDir.AddAccessRule(new FileSystemAccessRule(me, FileSystemRights.FullControl,
                 InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
-            dirInfo.SetAccessControl(openDir);
+            if (Directory.Exists(store)) new DirectoryInfo(store).SetAccessControl(openDir);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidOperationException) { }
+        try
+        {
             var openFile = new FileSecurity();
+            openFile.SetAccessRuleProtection(isProtected: false, preserveInheritance: false);
             openFile.AddAccessRule(new FileSystemAccessRule(me, FileSystemRights.FullControl, AccessControlType.Allow));
-            fileInfo.SetAccessControl(openFile);
-            Directory.Delete(root, recursive: true);
+            if (File.Exists(file)) new FileInfo(file).SetAccessControl(openFile);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidOperationException) { }
+        for (var attempt = 0; attempt < 5 && Directory.Exists(root); attempt++)
+        {
+            try { Directory.Delete(root, recursive: true); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { Thread.Sleep(100); }
         }
     }
 
