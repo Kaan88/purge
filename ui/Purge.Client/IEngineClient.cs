@@ -53,6 +53,13 @@ public interface IEngineClient : IAsyncDisposable
     Task<Rpc.InventoryChanges> GetInventoryChangesAsync(CancellationToken ct = default);
 
     /// <summary>
+    /// <c>inventory.forget</c>: programs Purge has dealt with (it uninstalled them, or the user checked them for
+    /// leftovers or dismissed them). The engine takes them out of its stored list and marks them, so no later
+    /// <c>inventory.changes</c> lists them as removed outside Purge. Display-only state; an empty list sends nothing.
+    /// </summary>
+    Task ForgetRemovedAsync(IReadOnlyList<string> programIds, CancellationToken ct = default);
+
+    /// <summary>
     /// <c>uninstall.route</c>: where the program's uninstaller belongs (<c>broker</c> or <c>medium</c>), and the exact
     /// interactive and quiet command lines it will run, with their signer and the processes that hold the program.
     /// The medium engine never runs a broker-route command; the broker never runs a medium-route one.

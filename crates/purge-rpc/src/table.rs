@@ -110,6 +110,9 @@ method_table! {
     ProgramsSizes => "programs.sizes", Read, Stdio, cancel: true, consent: false;
     /// `inventory.changes`: programs gone or new since the last stored list (display only).
     InventoryChanges => "inventory.changes", Read, Stdio, cancel: false, consent: false;
+    /// `inventory.forget`: programs Purge has dealt with (it uninstalled them, or the user checked or
+    /// dismissed them); `inventory.changes` no longer lists them as gone (display only).
+    InventoryForget => "inventory.forget", Read, Stdio, cancel: false, consent: false;
     /// `history.index`: session summaries and quarantine usage per volume.
     HistoryIndex => "history.index", Read, Stdio, cancel: false, consent: false;
     /// `uninstall.route`: where a program's uninstaller runs, and what it is.

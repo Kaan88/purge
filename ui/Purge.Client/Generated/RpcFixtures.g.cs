@@ -81,6 +81,8 @@ public static class RpcFixtures
         ("stdio.history.index.result", json => RpcJson.RoundTrip(json, RpcJsonContext.Default.HistoryIndex)),
         ("stdio.inventory.changes.params", json => RpcJson.RoundTrip(json, RpcJsonContext.Default.NoParams)),
         ("stdio.inventory.changes.result", json => RpcJson.RoundTrip(json, RpcJsonContext.Default.InventoryChanges)),
+        ("stdio.inventory.forget.params", json => RpcJson.RoundTrip(json, RpcJsonContext.Default.ProgramsParams)),
+        ("stdio.inventory.forget.result", json => RpcJson.RoundTrip(json, RpcJsonContext.Default.Started)),
         ("stdio.programs.get.params", json => RpcJson.RoundTrip(json, RpcJsonContext.Default.ProgramParams)),
         ("stdio.programs.get.result", json => RpcJson.RoundTrip(json, RpcJsonContext.Default.ProgramDetails)),
         ("stdio.programs.icons.params", json => RpcJson.RoundTrip(json, RpcJsonContext.Default.IconsParams)),

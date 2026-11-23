@@ -121,6 +121,9 @@ public sealed class FakeEngineClient : IEngineClient
             ],
         });
 
+    /// <summary>Sample data stores no list: nothing to forget.</summary>
+    public Task ForgetRemovedAsync(IReadOnlyList<string> programIds, CancellationToken ct = default) => Task.CompletedTask;
+
     /// <summary>Sample data has no uninstaller to route: the click is disabled before this is reached.</summary>
     public Task<Rpc.RouteInfo> GetUninstallRouteAsync(string programId, CancellationToken ct = default) => NotLive<Rpc.RouteInfo>();
 

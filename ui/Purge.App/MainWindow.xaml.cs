@@ -401,6 +401,12 @@ public sealed partial class MainWindow : Window
     {
         var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
         var scale = GetDpiForWindow(hwnd) / 96.0;
+        // Below 760 x 520 the Programs page cannot lay out its tabs, tools and a readable Name column.
+        if (AppWindow.Presenter is OverlappedPresenter presenter)
+        {
+            presenter.PreferredMinimumWidth = (int)(760 * scale);
+            presenter.PreferredMinimumHeight = (int)(520 * scale);
+        }
         var size = new SizeInt32((int)(width * scale), (int)(height * scale));
         var area = DisplayArea.GetFromWindowId(AppWindow.Id, DisplayAreaFallback.Primary).WorkArea;
         size.Width = Math.Min(size.Width, area.Width);
