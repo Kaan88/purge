@@ -9,6 +9,9 @@
 //!    and the system-object index (services, tasks, firewall rules), which a second thread reads
 //!    while steps 1 to 6 run (it depends on the machine alone and is first used in step 7; with a
 //!    source meter installed, `PURGE_TIMING`, step 7 reads it, so each phase counts its own reads);
+//!    and the walk of the reference scan of step 7 is started on threads of its own
+//!    ([`refsnap::EarlyWalk`]: it reads the same keys whatever the app is, and holds what it reads
+//!    until step 7 has the anchors to test it with; not with a source meter either);
 //! 2. the Inno Setup uninstall log, when the entry has one ([`crate::inno_map`]);
 //! 3. the identity (`purge-identity`): names, vendors, tokens, proposed main exes; then the MSI facts
 //!    ([`crate::msi`]) of an MSI entry, or the Burn facts ([`crate::burn`]) of a bundle and the MSI
@@ -70,7 +73,7 @@ use crate::coproducts::{self, CoProductPre};
 use crate::exes::{self, ExeLimits};
 use crate::inno_map::{self, UserBinding};
 use crate::msi;
-use crate::refsnap::{self, HarvestCtx};
+use crate::refsnap::{self, EarlyWalk, HarvestCtx, ReadOnce};
 use crate::roots::{self, InnoRootFacts, RejectedRoot, RootEnv, env_map};
 use crate::shared_root;
 use crate::subtree::{self, SubtreeOptions};
@@ -438,22 +441,122 @@ pub fn harvest_report_with(
     // With a source meter installed (`PURGE_TIMING`) nothing is read on a second thread: every
     // phase line then counts its own reads and no others, as in `ScanExt::build`, so the phase
     // lines of a harvest and of a scan compare.
-    if shared.sysobj_built() || purge_source::metered::installed().is_some() {
-        return harvest_report_shared(entry, inventory, sources, baseline, kb, shared, None);
+    if purge_source::metered::installed().is_some() {
+        return harvest_report_shared(entry, inventory, sources, baseline, kb, shared, None, None);
     }
-    // The system-object index (services, tasks, firewall rules) is read from the machine alone and
-    // is first needed in step 7: it is built on a second thread while steps 1 to 6 run. When the
-    // system refuses the thread, step 7 builds it.
     std::thread::scope(|scope| {
-        let warm = std::thread::Builder::new()
-            .spawn_scoped(scope, || sysobj_index::build(sources.reg, sources.sys))
-            .ok();
-        harvest_report_shared(entry, inventory, sources, baseline, kb, shared, warm)
+        // The walk of the reference scan (step 7) starts now and is given its matcher in step 7.
+        let early = EarlyWalk::start(scope, sources.reg, &walk_sids(sources.sys, entry));
+        harvest_report_threads(
+            entry, inventory, sources, baseline, kb, shared, scope, early,
+        )
     })
 }
 
+/// The users whose hives a harvest of `entry` reads, for [`EarlyWalk::start`]
+/// ([`refsnap::user_sids_of`]).
+pub fn walk_sids(sys: &dyn SystemSource, entry: &InventoryEntry) -> Vec<String> {
+    refsnap::user_sids_of(sys, entry)
+}
+
+/// [`harvest_report_with`] with the reference walk already started by the caller
+/// ([`EarlyWalk::start`] with [`walk_sids`] of `entry`, on a thread scope of its own), so that the
+/// walk also runs beside what the caller does before the harvest (the engine loads the baseline
+/// then). `None` is [`harvest_report_with`]. The report is the same either way.
+#[allow(clippy::too_many_arguments)]
+pub fn harvest_report_ahead(
+    entry: &InventoryEntry,
+    inventory: &InventoryDoc,
+    sources: Sources<'_>,
+    baseline: &BaselineView,
+    kb: &Kb,
+    opts: &HarvestOpts<'_>,
+    early: Option<EarlyWalk<'_>>,
+) -> HarvestReport {
+    let Some(early) = early else {
+        return harvest_report_with(entry, inventory, sources, baseline, kb, opts);
+    };
+    let own_shared;
+    let shared: &SharedIndexes<'_> = match opts.shared {
+        Some(shared) => shared,
+        None => {
+            own_shared = SharedIndexes::new(sources, inventory, opts.table_cache);
+            &own_shared
+        }
+    };
+    std::thread::scope(|scope| {
+        harvest_report_threads(
+            entry,
+            inventory,
+            sources,
+            baseline,
+            kb,
+            shared,
+            scope,
+            Some(early),
+        )
+    })
+}
+
+/// [`harvest_report_shared`] with the system-object index read on a thread of `scope` meanwhile.
+#[allow(clippy::too_many_arguments)]
+fn harvest_report_threads<'scope>(
+    entry: &InventoryEntry,
+    inventory: &InventoryDoc,
+    sources: Sources<'scope>,
+    baseline: &BaselineView,
+    kb: &Kb,
+    shared: &SharedIndexes<'_>,
+    scope: &'scope std::thread::Scope<'scope, '_>,
+    early: Option<EarlyWalk<'_>>,
+) -> HarvestReport {
+    // The system-object index (services, tasks, firewall rules) is read from the machine alone and
+    // is first needed in step 7: it is built on a second thread while steps 1 to 6 run. When the
+    // system refuses the thread, step 7 builds it.
+    let warm = if shared.sysobj_built() {
+        None
+    } else {
+        std::thread::Builder::new()
+            .spawn_scoped(scope, move || sysobj_index::build(sources.reg, sources.sys))
+            .ok()
+    };
+    harvest_report_shared(entry, inventory, sources, baseline, kb, shared, warm, early)
+}
+
+/// Writes a `PURGE_TIMING` phase line when a source meter is installed (the format of
+/// `purge_index::ownership`): `timing:   phase harvest.<step> <seconds>s; <source calls>`.
+struct Phase {
+    name: &'static str,
+    started: std::time::Instant,
+    before: Option<purge_source::metered::MeterSnapshot>,
+}
+
+impl Phase {
+    fn start(name: &'static str) -> Self {
+        Self {
+            name,
+            started: std::time::Instant::now(),
+            before: purge_source::metered::installed().map(|m| m.snapshot()),
+        }
+    }
+
+    fn end(self) {
+        if let (Some(meter), Some(before)) = (purge_source::metered::installed(), self.before) {
+            let calls = meter.snapshot().since(&before).summary();
+            eprintln!(
+                "timing:   phase {} {:.3}s; {}",
+                self.name,
+                self.started.elapsed().as_secs_f64(),
+                calls
+            );
+        }
+    }
+}
+
 /// [`harvest_report_with`] with the indexes of the engine call in hand; `warm` is the thread that is
-/// building the system-object index, when one was started.
+/// building the system-object index, when one was started, and `early` the reference walk started
+/// ahead of the anchors, when one was.
+#[allow(clippy::too_many_arguments)]
 fn harvest_report_shared(
     entry: &InventoryEntry,
     inventory: &InventoryDoc,
@@ -462,10 +565,12 @@ fn harvest_report_shared(
     kb: &Kb,
     shared: &SharedIndexes<'_>,
     warm: Option<std::thread::ScopedJoinHandle<'_, sysobj_index::SysObjectIndex>>,
+    early: Option<EarlyWalk<'_>>,
 ) -> HarvestReport {
     let Sources { reg, fs, sys } = sources;
     let mut warnings: Vec<String> = Vec::new();
 
+    let phase = Phase::start("harvest.facts");
     // 1. Machine facts.
     let os = sys.os_info().unwrap_or_else(|e| {
         warnings.push(format!(
@@ -519,6 +624,8 @@ fn harvest_report_shared(
     let table_cache = shared.table_cache();
     let ownership = reads_msi(entry).then(|| shared.ownership());
 
+    phase.end();
+    let phase = Phase::start("harvest.inno");
     // 2. The Inno Setup uninstall log.
     let binding = UserBinding {
         hive_sid: entry.hive_sid.clone(),
@@ -527,6 +634,8 @@ fn harvest_report_shared(
     let inno = inno_map::read(fs, entry, &binding, &env, guard);
     warnings.extend(inno.warnings.iter().cloned());
 
+    phase.end();
+    let phase = Phase::start("harvest.identity");
     // 3. Identity.
     let hints = IdentityHints {
         inno_app_name: inno.app_name.clone(),
@@ -538,6 +647,8 @@ fn harvest_report_shared(
     let identity = AppIdentity::resolve_with(entry, &inventory.entries, fs, &hints);
     warnings.extend(identity.warnings().iter().cloned());
 
+    phase.end();
+    let phase = Phase::start("harvest.msi");
     // 3b. MSI facts and Burn facts.
     let mut msi_harvests: Vec<msi::MsiHarvest> = Vec::new();
     let mut burn_harvest: Option<burn::BurnHarvest> = None;
@@ -610,6 +721,8 @@ fn harvest_report_shared(
         .map(|h| h.facts.packed_code.clone())
         .collect();
 
+    phase.end();
+    let phase = Phase::start("harvest.roots");
     // 4. Roots and the exe set.
     let inno_facts = InnoRootFacts {
         app_path: reg
@@ -671,6 +784,8 @@ fn harvest_report_shared(
         warnings
             .push("roots: the app has no validated root; nothing can be attributed by path".into());
     }
+    phase.end();
+    let phase = Phase::start("harvest.exes");
     let mut exe_set = exes::collect(
         fs,
         &root_set.roots,
@@ -691,6 +806,8 @@ fn harvest_report_shared(
     exe_set.files.sort_by_key(|f| prefix::fold(&f.path));
     let cutoff = install_cutoff(&demoted, &entry.install_time_evidence);
 
+    phase.end();
+    let phase = Phase::start("harvest.anchors");
     // 5. Anchors and tokens.
     let mut anchor_harvest = anchors::collect(AnchorInput {
         reg,
@@ -714,6 +831,8 @@ fn harvest_report_shared(
             class.id, class.reason
         ));
     }
+    phase.end();
+    let phase = Phase::start("harvest.tokens");
     // Anchors from the app's own MSI tables.
     if let (Some(ix), false) = (&ownership, msi_harvests.is_empty()) {
         let foreign: Vec<String> = anchor_harvest
@@ -754,6 +873,8 @@ fn harvest_report_shared(
         baseline: matching_baseline,
     });
 
+    phase.end();
+    let phase = Phase::start("harvest.outside");
     // 6. Files outside the roots, and the sparse packages.
     let mut outside_root_files = inno
         .log_path
@@ -834,7 +955,10 @@ fn harvest_report_shared(
 
     // 7. Everything that needs the full anchor set. The system-object index is in hand first: the
     // harvests of the co-product candidates ask the shared indexes for it.
+    phase.end();
+    let phase = Phase::start("harvest.sysobj_index");
     let sys_index = shared.sysobj_from(warm);
+    phase.end();
     let anchor_set = AnchorSet::from_fingerprint(&fp);
     let ctx = HarvestCtx {
         reg,
@@ -849,7 +973,18 @@ fn harvest_report_shared(
         cutoff,
         shared: Some(shared),
     };
+    // The steps after the snapshot ask about the same keys again and again (a subtree is captured
+    // for a key and for the keys below it, each capture reads to record and reads to judge, the
+    // older keys are the captured ones): they read each key once (`ReadOnce`). The co-product
+    // candidates are harvests of their own and read for themselves.
+    let read_once = ReadOnce::new(reg);
+    let after = HarvestCtx {
+        reg: &read_once,
+        ..ctx
+    };
     let (snapshot, subtrees, journal, co_candidates) = if anchor_set.is_empty() {
+        // Nothing to look for: the walk that was started ahead ends here.
+        drop(early);
         warnings.push(
             "harvest: the app has no anchor; the reference snapshot, the subtree baselines and the \
              association journal are empty"
@@ -865,11 +1000,32 @@ fn harvest_report_shared(
             coproducts::candidates(&ctx),
         )
     } else {
-        let snapshot = refsnap::capture_report(&ctx);
-        let keys = subtree::keys(&ctx, &snapshot.entries);
-        let subtrees = subtree::capture_with(&ctx, &keys, &SubtreeOptions::default());
-        let journal = assoc::capture_detailed(&ctx);
-        (snapshot, subtrees, journal, coproducts::candidates(&ctx))
+        let phase = Phase::start("harvest.refsnap");
+        let capturing = refsnap::capture_begin(&ctx, early);
+        // A walk started ahead has its matcher now and reads on for seconds. Meanwhile, what does
+        // not depend on the snapshot: the association journal, and a first reading of the subtrees
+        // whose keys are known without it (the keys of the installer's records and the ProgIDs).
+        // That capture is not kept; it leaves the keys read (`ReadOnce`), so the capture below,
+        // which has the snapshot's keys too, finds them in hand.
+        let journal_ahead = capturing.is_walking().then(|| {
+            let journal = assoc::capture_detailed(&after);
+            let known = subtree::keys(&after, &[]);
+            let _ = subtree::capture_with(&after, &known, &SubtreeOptions::default());
+            journal
+        });
+        let snapshot = capturing.finish(&ctx);
+        phase.end();
+        let phase = Phase::start("harvest.subtree");
+        let keys = subtree::keys(&after, &snapshot.entries);
+        let subtrees = subtree::capture_with(&after, &keys, &SubtreeOptions::default());
+        phase.end();
+        let phase = Phase::start("harvest.assoc");
+        let journal = journal_ahead.unwrap_or_else(|| assoc::capture_detailed(&after));
+        phase.end();
+        let phase = Phase::start("harvest.coproducts");
+        let co = coproducts::candidates(&ctx);
+        phase.end();
+        (snapshot, subtrees, journal, co)
     };
     warnings.extend(snapshot.warnings.iter().cloned());
     warnings.extend(subtrees.warnings.iter().cloned());
@@ -879,9 +1035,12 @@ fn harvest_report_shared(
     fp.ref_snapshot = snapshot.entries;
     fp.subtrees = subtrees.subtrees;
     fp.ext_journal = journal.records.into_iter().map(|r| r.entry).collect();
+    let phase = Phase::start("harvest.older_keys");
     let candidates = subtree::older_key_candidates(&fp.subtrees, &fp.ext_journal, &fp.inno);
-    fp.older_keys = subtree::older_keys(&ctx, candidates);
+    fp.older_keys = subtree::older_keys(&after, candidates);
 
+    phase.end();
+    let phase = Phase::start("harvest.sysobj");
     // 7b. The system objects the app registered.
     let msi_services: Vec<String> = fp
         .msi
@@ -900,6 +1059,7 @@ fn harvest_report_shared(
         baseline: matching_baseline,
         env: &sys_env,
     });
+    phase.end();
     warnings.extend(objects.warnings);
     fp.sys = objects.objects;
     fp.warnings = warnings;
@@ -1140,6 +1300,53 @@ mod tests {
             .iter()
             .find(|e| e.display_name == name)
             .unwrap_or_else(|| panic!("no entry {name:?} in {:?}", doc.entries))
+    }
+
+    /// The reference walk may be started before the harvest, as the engine starts it beside the
+    /// baseline load: the report is the one of the harvest that walks when it has its anchors. A
+    /// walk started for other users reads another scope and is not taken: the harvest walks itself,
+    /// with the same report. A walk nobody takes ends.
+    #[test]
+    fn a_walk_started_ahead_gives_the_same_report() {
+        let f = vscode_machine();
+        let doc = inventory_of(&f);
+        let entry = entry_named(&doc, "Microsoft Visual Studio Code");
+        let plain = harvest_report(
+            entry,
+            &doc,
+            Sources::of(&f),
+            BaselineView::empty(),
+            Kb::shipped(),
+        );
+        assert!(!plain.fingerprint.ref_snapshot.is_empty());
+        let users = walk_sids(&f, entry);
+        assert_eq!(users, [SID]);
+        for sids in [
+            users.clone(),
+            vec!["S-1-5-21-9-9-9-9999".to_owned()],
+            vec![],
+        ] {
+            let ahead = std::thread::scope(|threads| {
+                let early = EarlyWalk::start(threads, &f, &sids);
+                assert!(early.is_some());
+                harvest_report_ahead(
+                    entry,
+                    &doc,
+                    Sources::of(&f),
+                    BaselineView::empty(),
+                    Kb::shipped(),
+                    &HarvestOpts::default(),
+                    early,
+                )
+            });
+            assert_eq!(
+                to_json(&ahead.fingerprint),
+                to_json(&plain.fingerprint),
+                "{sids:?}"
+            );
+            assert_eq!(ahead.refsnap_complete, plain.refsnap_complete, "{sids:?}");
+        }
+        std::thread::scope(|threads| drop(EarlyWalk::start(threads, &f, &users)));
     }
 
     #[test]

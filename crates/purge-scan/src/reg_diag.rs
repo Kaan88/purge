@@ -126,6 +126,10 @@ const ROOTS: &[RootSpec] = &[
 pub struct RegDiag;
 
 impl Scanner for RegDiag {
+    fn reads_ref_walk(&self) -> bool {
+        true
+    }
+
     fn id(&self) -> &'static str {
         ID
     }

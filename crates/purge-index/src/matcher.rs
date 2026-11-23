@@ -328,7 +328,15 @@ fn is_real_dir(path: &str) -> bool {
 
 /// The folded form everything is compared in: lower case, `/` as `\`, runs of `\` as one.
 fn fold(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
+    let mut out = String::new();
+    fold_into(&mut out, s);
+    out
+}
+
+/// [`fold`] into `out`, which is emptied first and keeps its allocation.
+fn fold_into(out: &mut String, s: &str) {
+    out.clear();
+    out.reserve(s.len());
     let mut after_sep = false;
     for c in s.chars() {
         if c == '\\' || c == '/' {
@@ -339,9 +347,19 @@ fn fold(s: &str) -> String {
             continue;
         }
         after_sep = false;
-        out.extend(purge_guard::prefix::fold_char(c));
+        if c.is_ascii() {
+            // What `fold_char` gives an ASCII character.
+            out.push(c.to_ascii_lowercase());
+        } else {
+            out.extend(purge_guard::prefix::fold_char(c));
+        }
     }
-    out
+}
+
+thread_local! {
+    /// The folded string of [`RefMatcher::refers_to_nothing`], kept between calls: a reference scan
+    /// asks about more than a million strings and nearly all of them refer to nothing.
+    static FOLDED: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
 }
 
 /// A compiled [`AnchorSet`], with the environment used to expand `%NAME%` references.
@@ -422,6 +440,15 @@ impl RefMatcher {
     /// Every anchor the string refers to, strongest first (the order of [`RefMatcher::find`]); each
     /// anchor at most once, with its best match.
     pub fn find_all(&self, s: &str) -> Vec<RefMatch> {
+        if self.needles.is_empty() || s.is_empty() || self.refers_to_nothing(s) {
+            return Vec::new();
+        }
+        self.find_all_full(s)
+    }
+
+    /// [`RefMatcher::find_all`] without the shortcut for a string that refers to nothing: the whole
+    /// search, which answers the same.
+    fn find_all_full(&self, s: &str) -> Vec<RefMatch> {
         if self.needles.is_empty() || s.is_empty() {
             return Vec::new();
         }
@@ -471,6 +498,25 @@ impl RefMatcher {
             });
         }
         out
+    }
+
+    /// Whether [`RefMatcher::find_all`] finds nothing in `s`, answered without an allocation for
+    /// the common string: one that has no `%NAME%` to expand and in which no needle occurs at a
+    /// boundary. `false` says nothing: the full search decides.
+    fn refers_to_nothing(&self, s: &str) -> bool {
+        if !self.env.is_empty() && s.contains('%') {
+            return false;
+        }
+        FOLDED.with(|folded| {
+            // Never re-entered; a borrow that fails leaves the answer to the full search.
+            let Ok(mut hay) = folded.try_borrow_mut() else {
+                return false;
+            };
+            fold_into(&mut hay, s);
+            let mut hits = Vec::new();
+            self.scan(&hay, &mut hits);
+            hits.is_empty()
+        })
     }
 
     /// Tests each segment of a `REG_MULTI_SZ` (or of any pre-split list); yields (segment index, match).
@@ -794,37 +840,55 @@ pub const MIN_BINARY_RUN: usize = 4;
 /// The UTF-16LE strings inside binary data: maximal runs of at least `min_chars` code units that are
 /// printable characters, at either byte alignment. Surrogates and control characters end a run.
 pub fn utf16_runs(data: &[u8], min_chars: usize) -> Vec<String> {
+    let min_units = min_chars.max(1);
     let mut runs = Vec::new();
     for offset in 0..2.min(data.len()) {
-        let mut current = String::new();
-        let mut count = 0usize;
-        let mut flush = |current: &mut String, count: &mut usize| {
-            if *count >= min_chars.max(1) {
-                runs.push(std::mem::take(current));
-            } else {
-                current.clear();
+        let data = &data[offset..];
+        // A run is found first and spelled only when it is long enough: most binary data holds no
+        // text, and its short runs cost no string.
+        let mut spell = |start: usize, len: usize| {
+            if len >= min_units {
+                runs.push(
+                    data[2 * start..2 * (start + len)]
+                        .chunks_exact(2)
+                        .filter_map(|pair| {
+                            char::from_u32(u32::from(u16::from_le_bytes([pair[0], pair[1]])))
+                        })
+                        .collect(),
+                );
             }
-            *count = 0;
         };
-        for pair in data[offset..].chunks_exact(2) {
-            let unit = u16::from_le_bytes([pair[0], pair[1]]);
-            match char::from_u32(u32::from(unit)) {
-                // Private-use and non-characters do not occur in paths or identifiers; treating them
-                // as breaks keeps random binary from forming long runs.
-                Some(c)
-                    if !c.is_control()
-                        && !('\u{e000}'..='\u{f8ff}').contains(&c)
-                        && unit < 0xfff0 =>
-                {
-                    current.push(c);
-                    count += 1;
+        // The run being read: its first unit and its length, in units.
+        let (mut start, mut len) = (0usize, 0usize);
+        for (i, pair) in data.chunks_exact(2).enumerate() {
+            if in_run(u16::from_le_bytes([pair[0], pair[1]])) {
+                if len == 0 {
+                    start = i;
                 }
-                _ => flush(&mut current, &mut count),
+                len += 1;
+            } else {
+                spell(start, len);
+                len = 0;
             }
         }
-        flush(&mut current, &mut count);
+        spell(start, len);
     }
     runs
+}
+
+/// Whether a UTF-16 code unit is a character of a run of [`utf16_runs`]: one character by itself
+/// (no surrogate) that is neither a control character nor a private-use or non-character.
+fn in_run(unit: u16) -> bool {
+    // Printable ASCII, the common case.
+    if (0x20..0x7f).contains(&unit) {
+        return true;
+    }
+    match char::from_u32(u32::from(unit)) {
+        // Private-use and non-characters do not occur in paths or identifiers; treating them as
+        // breaks keeps random binary from forming long runs.
+        Some(c) => !c.is_control() && !('\u{e000}'..='\u{f8ff}').contains(&c) && unit < 0xfff0,
+        None => false,
+    }
 }
 
 #[cfg(test)]
@@ -1657,6 +1721,172 @@ mod tests {
             m.find("日本語 Çalışma.Belge 日本語").unwrap().how,
             MatchHow::Embedded
         );
+    }
+
+    /// The shortcut for a string that refers to nothing changes no answer: with it and without it
+    /// the matches are the same, for strings with and without `%NAME%` references, with an empty
+    /// environment and with one that knows, does not know or empties the name; and whenever the
+    /// shortcut says "nothing", the whole search finds nothing.
+    #[test]
+    fn the_shortcut_for_strings_that_refer_to_nothing_changes_no_answer() {
+        let mut set = AnchorSet::new();
+        set.add_root(GIT);
+        set.add_exe_path(&format!(r"{GIT}\bin\git.exe"));
+        set.add_exe_name("git.exe");
+        set.add_progid("VSCode.txt");
+        set.add_clsid("{11111111-2222-3333-4444-555555555555}");
+        set.add_token("{EA457B21-F73E-494C-ACAB-524FDE069978}");
+        let strings = [
+            "",
+            " ",
+            "nothing here",
+            GIT,
+            r"c:\program files\git",
+            r"C:/Program Files/Git/",
+            r"C:\\Program Files\\Git\bin\git.exe",
+            r#""C:\Program Files\Git\bin\git.exe" --version"#,
+            r"C:\Program Files\Gitx",
+            r"C:\Program Files\Git\été\x.dll",
+            "ÇA et là",
+            r"%ProgramFiles%\Git\bin\git.exe",
+            r"%programfiles%/git",
+            r"%PROGRAMFILES%\Other",
+            r"%NOPE%\Git\bin\git.exe",
+            r"%EMPTY%C:\Program Files\Git",
+            r"%EMPTY%",
+            r"%GITDIR%",
+            r"x %GITDIR%\bin y",
+            r"%ProgramFiles",
+            "100% sure",
+            "%",
+            "%%",
+            r"%%ProgramFiles%%\Git",
+            "git.exe",
+            "legit.exe",
+            r"D:\tools\git.exe,0",
+            "VSCode.txt",
+            "vscode.TXT",
+            "xVSCode.txtx",
+            "{11111111-2222-3333-4444-555555555555}",
+            "{ea457b21-f73e-494c-acab-524fde069978}_is1",
+            "EA457B21-F73E-494C-ACAB-524FDE069978",
+        ];
+        let envs: [Vec<(&str, &str)>; 3] = [
+            Vec::new(),
+            vec![("ProgramFiles", r"C:\Program Files")],
+            vec![
+                ("PROGRAMFILES", r"C:\Program Files"),
+                ("EMPTY", ""),
+                ("GitDir", GIT),
+            ],
+        ];
+        let mut matched = 0;
+        let mut skipped = 0;
+        for env in envs {
+            let m = RefMatcher::with_env(&set, env.iter().copied());
+            for s in strings {
+                let full = m.find_all_full(s);
+                assert_eq!(m.find_all(s), full, "{s:?} with {env:?}");
+                if !s.is_empty() && m.refers_to_nothing(s) {
+                    assert!(full.is_empty(), "{s:?} with {env:?}");
+                    skipped += 1;
+                }
+                matched += usize::from(!full.is_empty());
+            }
+        }
+        // Both ways are taken: strings that match, and strings the shortcut answers.
+        assert!(
+            matched >= 10 && skipped >= 10,
+            "{matched} matched, {skipped} skipped"
+        );
+        // With an environment a string with a `%` is never answered by the shortcut.
+        let with_env = RefMatcher::with_env(&set, [("X", "y")]);
+        assert!(!with_env.refers_to_nothing("100% sure"));
+        assert!(RefMatcher::new(&set).refers_to_nothing("100% sure"));
+    }
+
+    /// The runs as they were found before a run was only spelled when long enough: one character
+    /// at a time.
+    fn utf16_runs_plain(data: &[u8], min_chars: usize) -> Vec<String> {
+        let mut runs = Vec::new();
+        for offset in 0..2.min(data.len()) {
+            let mut current = String::new();
+            let mut count = 0usize;
+            let mut flush = |current: &mut String, count: &mut usize| {
+                if *count >= min_chars.max(1) {
+                    runs.push(std::mem::take(current));
+                } else {
+                    current.clear();
+                }
+                *count = 0;
+            };
+            for pair in data[offset..].chunks_exact(2) {
+                let unit = u16::from_le_bytes([pair[0], pair[1]]);
+                match char::from_u32(u32::from(unit)) {
+                    Some(c)
+                        if !c.is_control()
+                            && !('\u{e000}'..='\u{f8ff}').contains(&c)
+                            && unit < 0xfff0 =>
+                    {
+                        current.push(c);
+                        count += 1;
+                    }
+                    _ => flush(&mut current, &mut count),
+                }
+            }
+            flush(&mut current, &mut count);
+        }
+        runs
+    }
+
+    /// Every code unit is in a run or ends one exactly as before, and data of every shape gives the
+    /// runs it gave: text, binary, both alignments, odd lengths, every minimum.
+    #[test]
+    fn utf16_runs_are_the_runs_of_the_plain_reading() {
+        for unit in 0..=u16::MAX {
+            let bytes = unit.to_le_bytes();
+            assert_eq!(
+                utf16_runs(&bytes, 1),
+                utf16_runs_plain(&bytes, 1),
+                "unit {unit:#06x}"
+            );
+        }
+        // A fixed pseudo-random stream with text mixed in.
+        let mut state = 0x2545_f491_4f6c_dd1du64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        for round in 0..400 {
+            let mut data: Vec<u8> = Vec::new();
+            for _ in 0..(next() % 40) {
+                match next() % 5 {
+                    0 => data.extend((0..next() % 9).map(|_| (next() & 0xff) as u8)),
+                    1 => data.extend(
+                        "C:\\Program Files\\Demo\\demo.exe"
+                            .encode_utf16()
+                            .take((next() % 30) as usize)
+                            .flat_map(u16::to_le_bytes),
+                    ),
+                    2 => data.extend([0u8; 3].iter().take((next() % 4) as usize)),
+                    3 => data.extend(
+                        [0xd800u16, 0xe000, 0xfffe, 0x00e9, 0x4e2d, 0x7f, 0x1f, 0x20]
+                            [(next() % 8) as usize]
+                            .to_le_bytes(),
+                    ),
+                    _ => data.extend("ab".encode_utf16().flat_map(u16::to_le_bytes)),
+                }
+            }
+            for min in [0, 1, 2, 4, 9] {
+                assert_eq!(
+                    utf16_runs(&data, min),
+                    utf16_runs_plain(&data, min),
+                    "round {round}, min {min}: {data:?}"
+                );
+            }
+        }
     }
 
     #[test]

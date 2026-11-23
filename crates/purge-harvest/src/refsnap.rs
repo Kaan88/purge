@@ -32,6 +32,19 @@
 //! the same way: one entry per segment that refers to an anchor, never one for the value as a whole,
 //! because the fix for such a value is an edit and not a deletion.
 //!
+//! # The walk starts early
+//!
+//! The scan's walk over the scope is most of a harvest's time and does not depend on the app: only
+//! the test of what it reads does. [`EarlyWalk`] therefore starts the walk as soon as the users are
+//! known, on threads of its own, while the harvest works out the roots, the exes and the anchors;
+//! the walk holds what it reads until [`capture_report_ahead`] hands it the matcher
+//! (`purge_index::refscan::scan_late`). The snapshot is the one [`capture_report`] makes: the same
+//! keys are read through the same walker in the same order, every value is tested in walk order,
+//! and the hits, the statistics and the completeness are those of the scan that starts with its
+//! matcher. An early walk is only ever read-only, like the scan; it is not started when a source
+//! meter is installed (`PURGE_TIMING`: every phase counts its own reads), and it is abandoned when
+//! the app turns out to have no anchors or the scope is not the one the snapshot asks for.
+//!
 //! # Scope and completeness
 //!
 //! The scan covers the machine roots of §5.5 and the hives of the interactive user (and of the user the
@@ -40,13 +53,15 @@
 //! its silence about a key proves nothing.
 
 use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use purge_guard::prefix;
 use purge_index::baseline_view::{Absence, BaselineTrust, BaselineView};
 use purge_index::matcher::{AnchorSet, RefMatcher};
 use purge_index::queries::hash_hex;
 use purge_index::refscan::{
-    self, RefHit, RefScanOptions, RefScanStats, RefWhere, Scope, default_prune,
+    self, LateMatcher, RefHit, RefScan, RefScanOptions, RefScanStats, RefWhere, Scope,
+    default_prune,
 };
 use purge_model::{
     AnchorKind, InnoRecord, InventoryEntry, RefCarrier, RefSnapEntry, Root, RootKind, Target,
@@ -54,7 +69,7 @@ use purge_model::{
 use purge_source::filesystem::FileSystemSource;
 use purge_source::registry::RegistrySource;
 use purge_source::system::SystemSource;
-use purge_source::types::{REG_EXPAND_SZ, REG_SZ};
+use purge_source::types::{KeyInfo, REG_EXPAND_SZ, REG_SZ, RegData, RegValue, SourceResult};
 
 use crate::anchors::ComCutoff;
 use crate::harvest::SharedIndexes;
@@ -96,23 +111,109 @@ pub struct HarvestCtx<'a> {
     pub shared: Option<&'a SharedIndexes<'a>>,
 }
 
+/// A registry that reads each key once: the metadata, the values and the subkey names of a key are
+/// read from the registry the first time they are asked for and handed out again after that, with
+/// the answer they had then, an error included.
+///
+/// The steps of a harvest that follow the reference snapshot ask about the same keys many times
+/// over: a ProgID's subtree is captured for the ProgID key and again for each key below it that
+/// holds a reference, every capture reads each key once to record it and again to judge it, and the
+/// keys older than the install are the keys just captured. Through this they are read once. What
+/// is read is what the registry held at the first read; the steps take well under a second, and a
+/// harvest is not atomic anyway. Single values, the loaded hives and the control set go to the
+/// registry as before. A key is known by its path as written, so two spellings of a key are read
+/// once each. Lives for the steps of one harvest.
+pub struct ReadOnce<'a> {
+    reg: &'a dyn RegistrySource,
+    infos: Mutex<BTreeMap<String, SourceResult<KeyInfo>>>,
+    values: Mutex<BTreeMap<String, SourceResult<Vec<RegValue>>>>,
+    subkeys: Mutex<BTreeMap<String, SourceResult<Vec<String>>>>,
+}
+
+impl<'a> ReadOnce<'a> {
+    /// Nothing read yet.
+    pub fn new(reg: &'a dyn RegistrySource) -> Self {
+        Self {
+            reg,
+            infos: Mutex::new(BTreeMap::new()),
+            values: Mutex::new(BTreeMap::new()),
+            subkeys: Mutex::new(BTreeMap::new()),
+        }
+    }
+
+    /// The answer kept for `key`, or the one `read` gives now, which is kept.
+    fn once<T: Clone>(
+        kept: &Mutex<BTreeMap<String, SourceResult<T>>>,
+        key: &str,
+        read: impl FnOnce() -> SourceResult<T>,
+    ) -> SourceResult<T> {
+        let known = kept
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(key)
+            .cloned();
+        if let Some(answer) = known {
+            return answer;
+        }
+        // Not under the lock: a second reader of the same key meanwhile reads it too, and one of
+        // the two answers is kept.
+        let answer = read();
+        kept.lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .entry(key.to_owned())
+            .or_insert(answer)
+            .clone()
+    }
+}
+
+impl RegistrySource for ReadOnce<'_> {
+    fn key_info(&self, key: &str) -> SourceResult<KeyInfo> {
+        Self::once(&self.infos, key, || self.reg.key_info(key))
+    }
+
+    fn subkeys(&self, key: &str) -> SourceResult<Vec<String>> {
+        Self::once(&self.subkeys, key, || self.reg.subkeys(key))
+    }
+
+    fn values(&self, key: &str) -> SourceResult<Vec<RegValue>> {
+        Self::once(&self.values, key, || self.reg.values(key))
+    }
+
+    fn value(&self, key: &str, name: &str) -> SourceResult<RegData> {
+        self.reg.value(key, name)
+    }
+
+    fn loaded_user_sids(&self) -> SourceResult<Vec<String>> {
+        self.reg.loaded_user_sids()
+    }
+
+    fn current_control_set(&self) -> SourceResult<u32> {
+        self.reg.current_control_set()
+    }
+}
+
+/// [`HarvestCtx::user_sids`] of a harvest of `target`: the interactive user, then the user the app
+/// is installed for when that is someone else.
+pub fn user_sids_of(sys: &dyn SystemSource, target: &InventoryEntry) -> Vec<String> {
+    let mut sids: Vec<String> = Vec::new();
+    let candidates = sys
+        .user_sid()
+        .ok()
+        .into_iter()
+        .chain(target.hive_sid.clone());
+    for sid in candidates {
+        if !sid.is_empty() && !sids.iter().any(|s| s.eq_ignore_ascii_case(&sid)) {
+            sids.push(sid);
+        }
+    }
+    sids
+}
+
 impl<'a> HarvestCtx<'a> {
     /// The users whose hives the harvest reads: the interactive user, then the user the app is
     /// installed for when that is someone else.
     pub fn user_sids(&self) -> Vec<String> {
-        let mut sids: Vec<String> = Vec::new();
-        let candidates = self
-            .sys
-            .user_sid()
-            .ok()
-            .into_iter()
-            .chain(self.target.hive_sid.clone());
-        for sid in candidates {
-            if !sid.is_empty() && !sids.iter().any(|s| s.eq_ignore_ascii_case(&sid)) {
-                sids.push(sid);
-            }
-        }
-        sids
+        user_sids_of(self.sys, self.target)
     }
 
     /// The user an unbound `HKCU` path of the target's own records is bound to: the user the app is
@@ -438,45 +539,172 @@ pub fn scope_for_sids(
     }
 }
 
+/// The reference walk of a harvest, started before the app's anchors are known (see the module
+/// documentation). Dropped without [`capture_report_ahead`], it ends its walk.
+pub struct EarlyWalk<'scope> {
+    late: Arc<LateMatcher>,
+    /// What the walk reads.
+    scope: Scope,
+    walk: Option<std::thread::ScopedJoinHandle<'scope, Option<RefScan>>>,
+}
+
+impl<'scope> EarlyWalk<'scope> {
+    /// Starts the walk over [`scope_for_sids`] of `sids` ([`user_sids_of`] the harvest's target) on
+    /// a thread of `threads`. `None`, and nothing started, when a source meter is installed or the
+    /// system refuses the thread: the harvest then walks when it has its anchors, as before.
+    pub fn start<'env>(
+        threads: &'scope std::thread::Scope<'scope, 'env>,
+        reg: &'env dyn RegistrySource,
+        sids: &[String],
+    ) -> Option<Self> {
+        if purge_source::metered::installed().is_some() {
+            return None;
+        }
+        // The snapshot works the scope out again, with its warnings, and takes this walk only for
+        // that very scope.
+        let scope = scope_for_sids(reg, sids, &mut Vec::new());
+        let late = Arc::new(LateMatcher::new());
+        let (walk_late, walk_scope) = (Arc::clone(&late), scope.clone());
+        let walk = std::thread::Builder::new()
+            .spawn_scoped(threads, move || {
+                refscan::scan_late(reg, &walk_late, &walk_scope, &RefScanOptions::default())
+            })
+            .ok()?;
+        Some(Self {
+            late,
+            scope,
+            walk: Some(walk),
+        })
+    }
+
+    /// Gives the walk the matcher of the scan of `scope`; `false`, and nothing given, when the
+    /// walk reads another scope (dropped, it ends).
+    fn give(&self, scope: &Scope, matcher: &RefMatcher) -> bool {
+        if self.scope != *scope {
+            return false;
+        }
+        self.late.set(matcher.clone());
+        true
+    }
+
+    /// The scan of the walk that was given its matcher ([`EarlyWalk::give`]), when it is done.
+    fn join(mut self) -> Option<RefScan> {
+        match self.walk.take()?.join() {
+            Ok(scan) => scan,
+            Err(panic) => std::panic::resume_unwind(panic),
+        }
+    }
+}
+
+impl Drop for EarlyWalk<'_> {
+    fn drop(&mut self) {
+        if self.walk.is_some() {
+            self.late.abandon();
+        }
+    }
+}
+
 /// Runs the reference scan and reports the snapshot together with what the scan could not do.
 pub fn capture_report(ctx: &HarvestCtx<'_>) -> RefSnap {
+    capture_report_ahead(ctx, None)
+}
+
+/// [`capture_report`], taking the scan from `early` when a walk of the same scope was started ahead
+/// ([`EarlyWalk`]); the snapshot is the same either way.
+pub fn capture_report_ahead(ctx: &HarvestCtx<'_>, early: Option<EarlyWalk<'_>>) -> RefSnap {
+    capture_begin(ctx, early).finish(ctx)
+}
+
+/// A reference snapshot that is being made ([`capture_begin`]).
+pub struct Capturing<'scope> {
+    warnings: Vec<String>,
+    /// The scope and the matcher of the scan; `None` for an app without anchors.
+    scan: Option<(Scope, RefMatcher)>,
+    /// The walk started ahead, now with its matcher.
+    walking: Option<EarlyWalk<'scope>>,
+}
+
+/// The first half of [`capture_report_ahead`]: a walk started ahead for the scope of the snapshot
+/// is given its matcher and goes on reading on its own threads. Until [`Capturing::finish`] the
+/// caller can do what does not need the snapshot.
+pub fn capture_begin<'scope>(
+    ctx: &HarvestCtx<'_>,
+    early: Option<EarlyWalk<'scope>>,
+) -> Capturing<'scope> {
     let mut warnings = Vec::new();
     if ctx.anchors.is_empty() {
         warnings.push("refsnap: the app has no anchors; the reference snapshot is empty".into());
-        return RefSnap {
-            complete: true,
+        return Capturing {
             warnings,
-            ..RefSnap::default()
+            scan: None,
+            walking: None,
         };
     }
     let scope = scope(ctx, &mut warnings);
     let matcher = ctx.matcher();
-    let scan = refscan::scan(ctx.reg, &matcher, &scope, &RefScanOptions::default(), None);
-    let complete = scan.is_complete();
-    if !complete {
-        let first = scan
-            .stats
-            .unreadable
-            .first()
-            .map(|u| format!(", first: {} ({})", u.key, u.error))
-            .unwrap_or_default();
-        warnings.push(format!(
-            "refsnap: the reference scan is incomplete ({} keys unreadable{first})",
-            scan.stats.unreadable_total
-        ));
+    let walking = early.filter(|early| early.give(&scope, &matcher));
+    Capturing {
+        warnings,
+        scan: Some((scope, matcher)),
+        walking,
     }
-    let (entries, weak_hits) = entries_from_hits(ctx, &scan.hits);
-    if weak_hits > 0 {
-        warnings.push(format!(
+}
+
+impl Capturing<'_> {
+    /// Whether a walk started ahead is reading for this snapshot: [`Capturing::finish`] will wait
+    /// for it.
+    pub fn is_walking(&self) -> bool {
+        self.walking.is_some()
+    }
+
+    /// The snapshot: from the walk started ahead when there is one, else from a scan made now.
+    pub fn finish(self, ctx: &HarvestCtx<'_>) -> RefSnap {
+        let Capturing {
+            warnings,
+            scan,
+            walking,
+        } = self;
+        let Some((scope, matcher)) = scan else {
+            return RefSnap {
+                complete: true,
+                warnings,
+                ..RefSnap::default()
+            };
+        };
+        let scan = walking.and_then(EarlyWalk::join).unwrap_or_else(|| {
+            refscan::scan(ctx.reg, &matcher, &scope, &RefScanOptions::default(), None)
+        });
+        Self::report(ctx, scan, warnings)
+    }
+
+    /// The snapshot of a finished scan.
+    fn report(ctx: &HarvestCtx<'_>, scan: RefScan, mut warnings: Vec<String>) -> RefSnap {
+        let complete = scan.is_complete();
+        if !complete {
+            let first = scan
+                .stats
+                .unreadable
+                .first()
+                .map(|u| format!(", first: {} ({})", u.key, u.error))
+                .unwrap_or_default();
+            warnings.push(format!(
+                "refsnap: the reference scan is incomplete ({} keys unreadable{first})",
+                scan.stats.unreadable_total
+            ));
+        }
+        let (entries, weak_hits) = entries_from_hits(ctx, &scan.hits);
+        if weak_hits > 0 {
+            warnings.push(format!(
             "refsnap: {weak_hits} possible references were not recorded (cut data or bare exe name)"
         ));
-    }
-    RefSnap {
-        entries,
-        complete,
-        weak_hits,
-        stats: scan.stats,
-        warnings,
+        }
+        RefSnap {
+            entries,
+            complete,
+            weak_hits,
+            stats: scan.stats,
+            warnings,
+        }
     }
 }
 
@@ -489,8 +717,141 @@ pub fn capture(ctx: &HarvestCtx<'_>) -> Vec<RefSnapEntry> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use purge_source::fixture::Fixture;
+    use purge_source::types::SourceError;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     const SID: &str = "S-1-5-21-1-2-3-1001";
+
+    /// A registry that counts its reads by kind.
+    struct Counted<'f> {
+        inner: &'f Fixture,
+        infos: AtomicUsize,
+        subkeys: AtomicUsize,
+        values: AtomicUsize,
+        value: AtomicUsize,
+        other: AtomicUsize,
+    }
+
+    impl RegistrySource for Counted<'_> {
+        fn key_info(&self, key: &str) -> SourceResult<KeyInfo> {
+            self.infos.fetch_add(1, Ordering::SeqCst);
+            self.inner.key_info(key)
+        }
+        fn subkeys(&self, key: &str) -> SourceResult<Vec<String>> {
+            self.subkeys.fetch_add(1, Ordering::SeqCst);
+            self.inner.subkeys(key)
+        }
+        fn values(&self, key: &str) -> SourceResult<Vec<RegValue>> {
+            self.values.fetch_add(1, Ordering::SeqCst);
+            self.inner.values(key)
+        }
+        fn value(&self, key: &str, name: &str) -> SourceResult<RegData> {
+            self.value.fetch_add(1, Ordering::SeqCst);
+            self.inner.value(key, name)
+        }
+        fn loaded_user_sids(&self) -> SourceResult<Vec<String>> {
+            self.other.fetch_add(1, Ordering::SeqCst);
+            self.inner.loaded_user_sids()
+        }
+        fn current_control_set(&self) -> SourceResult<u32> {
+            self.other.fetch_add(1, Ordering::SeqCst);
+            self.inner.current_control_set()
+        }
+    }
+
+    /// `ReadOnce` asks the registry once per key and kind of read and hands the same answer out
+    /// after that, an error as well; the three kinds are kept apart; another spelling of a key is
+    /// another key; single values and the hive facts go to the registry every time.
+    #[test]
+    fn read_once_reads_each_key_once_per_kind_and_keeps_errors() {
+        const KEY: &str = r"HKLM\SOFTWARE\Vendor\App";
+        const LOCKED: &str = r"HKLM\SOFTWARE\Vendor\Locked";
+        const MISSING: &str = r"HKLM\SOFTWARE\Vendor\Gone";
+        let f = Fixture::builder()
+            .user_sid(SID)
+            .key(r"HKLM\SYSTEM\ControlSet001\Services")
+            .sz(KEY, "Path", r"C:\App")
+            .sz(KEY, "", "default")
+            .sz(&format!(r"{KEY}\Sub"), "a", "b")
+            .sz(&format!(r"{LOCKED}\Inner"), "a", "b")
+            .denied(LOCKED)
+            .build();
+        let counted = Counted {
+            inner: &f,
+            infos: AtomicUsize::new(0),
+            subkeys: AtomicUsize::new(0),
+            values: AtomicUsize::new(0),
+            value: AtomicUsize::new(0),
+            other: AtomicUsize::new(0),
+        };
+        let once = ReadOnce::new(&counted);
+        let counts = || {
+            (
+                counted.infos.load(Ordering::SeqCst),
+                counted.subkeys.load(Ordering::SeqCst),
+                counted.values.load(Ordering::SeqCst),
+            )
+        };
+
+        // Each kind of read of a key: once, with the registry's answer, whatever is asked first.
+        assert_eq!(once.values(KEY), f.values(KEY));
+        assert_eq!(counts(), (0, 0, 1));
+        assert_eq!(once.key_info(KEY), f.key_info(KEY));
+        assert_eq!(once.subkeys(KEY), f.subkeys(KEY));
+        assert_eq!(counts(), (1, 1, 1));
+        for _ in 0..3 {
+            assert_eq!(once.key_info(KEY), f.key_info(KEY));
+            assert_eq!(once.subkeys(KEY), f.subkeys(KEY));
+            assert_eq!(once.values(KEY), f.values(KEY));
+            assert!(once.key_exists(KEY).is_present());
+        }
+        assert_eq!(counts(), (1, 1, 1));
+        assert_eq!(once.values(KEY).unwrap().len(), 2);
+
+        // Errors are answers too: a missing key and a refused key are asked once per kind.
+        for key in [MISSING, LOCKED] {
+            let before = counts();
+            let (info, subkeys, values) = (once.key_info(key), once.subkeys(key), once.values(key));
+            assert_eq!(info, f.key_info(key), "{key}");
+            assert_eq!(subkeys, f.subkeys(key), "{key}");
+            assert_eq!(values, f.values(key), "{key}");
+            assert!(values.is_err(), "{key}");
+            for _ in 0..2 {
+                assert_eq!(once.key_info(key), info, "{key}");
+                assert_eq!(once.subkeys(key), subkeys, "{key}");
+                assert_eq!(once.values(key), values, "{key}");
+            }
+            assert_eq!(
+                counts(),
+                (before.0 + 1, before.1 + 1, before.2 + 1),
+                "{key}"
+            );
+        }
+        assert_eq!(once.key_info(MISSING), Err(SourceError::NotFound));
+        assert!(!once.key_exists(MISSING).is_present());
+
+        // A key is known by its path as written.
+        let before = counts();
+        assert_eq!(
+            once.values(&KEY.to_lowercase()),
+            f.values(&KEY.to_lowercase())
+        );
+        assert_eq!(counts(), (before.0, before.1, before.2 + 1));
+
+        // Single values and the hive facts are not kept.
+        for n in 1..=3 {
+            assert_eq!(once.value(KEY, "Path"), f.value(KEY, "Path"));
+            assert_eq!(counted.value.load(Ordering::SeqCst), n);
+        }
+        assert!(once.value(KEY, "Nope").is_err());
+        assert_eq!(counted.value.load(Ordering::SeqCst), 4);
+        assert_eq!(once.loaded_user_sids(), f.loaded_user_sids());
+        assert_eq!(once.loaded_user_sids(), f.loaded_user_sids());
+        assert_eq!(once.current_control_set(), f.current_control_set());
+        assert_eq!(counted.other.load(Ordering::SeqCst), 3);
+        assert_eq!(counts(), (before.0, before.1, before.2 + 1));
+    }
 
     #[test]
     fn source_key_rewrites_user_classes_and_binds_hkcu() {

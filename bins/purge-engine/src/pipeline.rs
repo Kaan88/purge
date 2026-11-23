@@ -59,7 +59,10 @@ use purge_guard::canon::{GuardEnv, OtherAppRoot, canon_path};
 use purge_guard::deny::DenyList;
 use purge_guard::prefix;
 use purge_harvest::coproducts;
-use purge_harvest::harvest::{HarvestOpts, HarvestReport, SharedIndexes, harvest_report_with};
+use purge_harvest::harvest::{
+    HarvestOpts, HarvestReport, SharedIndexes, harvest_report_ahead, harvest_report_with, walk_sids,
+};
+use purge_harvest::refsnap::EarlyWalk;
 use purge_harvest::refsnap::HarvestCtx;
 use purge_harvest::roots::guard_env;
 use purge_identity::kbdata::Kb;
@@ -585,22 +588,28 @@ fn harvest_in(
         entry.display_name
     ));
 
-    let loaded;
-    let baseline = match injected {
-        Some(injected) => step_injected(injected, &mut warnings, &mut step),
-        None => {
-            loaded = baseline_for(sources, settings, &mut warnings, &mut step);
-            &loaded
-        }
-    };
-    step.say("harvest: reading roots, Inno log, anchors and the reference snapshot");
     let (cache, cache_kind) = table_cache(sources, settings);
     let cache = CountingCache::new(cache.as_ref());
     let opts = HarvestOpts {
         table_cache: Some(&cache),
         shared: None,
     };
-    let mut report = harvest_report_with(entry, &inv.doc, sources, &baseline.view, kb, &opts);
+    // The walk of the reference snapshot reads the same keys whatever the baseline and the anchors
+    // turn out to be: it starts here, beside the baseline load, and the harvest gives it its
+    // matcher when it has the anchors (`purge_harvest::refsnap::EarlyWalk`).
+    let mut report = std::thread::scope(|threads| {
+        let early = EarlyWalk::start(threads, sources.reg, &walk_sids(sources.sys, entry));
+        let loaded;
+        let baseline = match injected {
+            Some(injected) => step_injected(injected, &mut warnings, &mut step),
+            None => {
+                loaded = baseline_for(sources, settings, &mut warnings, &mut step);
+                &loaded
+            }
+        };
+        step.say("harvest: reading roots, Inno log, anchors and the reference snapshot");
+        harvest_report_ahead(entry, &inv.doc, sources, &baseline.view, kb, &opts, early)
+    });
     cache.report(cache_kind, settings);
     if !sources.sys.elevated() {
         let w = not_elevated_warning("harvest");
@@ -1836,11 +1845,63 @@ fn synthetic_entry(
     })
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Set by a test: the scan of this thread runs every scanner in catalog order, as it did before
+    /// the scanners that do not read the reference walk were run ahead of the others.
+    static CATALOG_ORDER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether the scan runs its scanners in one pass in catalog order (tests only; never in a build
+/// that ships).
+fn in_catalog_order() -> bool {
+    #[cfg(test)]
+    {
+        CATALOG_ORDER.with(std::cell::Cell::get)
+    }
+    #[cfg(not(test))]
+    {
+        false
+    }
+}
+
 /// The part of [`scan`] and [`scan_path`] after the mode is settled.
 #[allow(clippy::too_many_arguments)]
 fn run_scan(
     sources: Sources<'_>,
     fp: &Fingerprint,
+    mode: ScanMode,
+    verify_gone: Option<VerifyGone>,
+    app_id: &str,
+    settings: &Settings,
+    injected: Option<&PipelineBaseline>,
+    warnings: Vec<String>,
+    progress: Progress<'_>,
+) -> Result<Scanned, PipelineError> {
+    // The threads of the reference walk, which starts before the inventory and the baseline are
+    // read (`ScanExt::walk_ahead`).
+    std::thread::scope(|threads| {
+        run_scan_threads(
+            threads,
+            sources,
+            fp,
+            mode,
+            verify_gone,
+            app_id,
+            settings,
+            injected,
+            warnings,
+            progress,
+        )
+    })
+}
+
+/// [`run_scan`] with the thread scope its reference walk runs in.
+#[allow(clippy::too_many_arguments)]
+fn run_scan_threads<'scope, 'env>(
+    threads: &'scope std::thread::Scope<'scope, 'env>,
+    sources: Sources<'env>,
+    fp: &'env Fingerprint,
     mode: ScanMode,
     verify_gone: Option<VerifyGone>,
     app_id: &str,
@@ -1860,6 +1921,10 @@ fn run_scan(
         warnings.push(format!("scan: the environment could not be read ({e})"));
         BTreeMap::new()
     });
+    // The one reference walk of the scan needs the fingerprint and the matcher only: it starts now
+    // and runs beside the inventory and the baseline load; `ScanExt::build_ahead` takes its hits.
+    let app = AppIdentityView::from_fingerprint(fp, &env);
+    let walk_ahead = ScanExt::walk_ahead(threads, sources.reg, fp, &app);
     let env_map: EnvMap = env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
     let (mut guard, guard_warnings) = guard_env(sources.reg, sources.sys);
     warnings.extend(guard_warnings.into_iter().map(|w| format!("scan: {w}")));
@@ -1908,11 +1973,10 @@ fn run_scan(
 
     // Scanners. What every scanner shares is read once, before the first (C-SCANEXT): the one
     // reference walk, the MSI ownership index and the system objects.
-    let app = AppIdentityView::from_fingerprint(fp, &env);
     step.say("scan: reading the references, the MSI ownership and the system objects");
     let (cache, cache_kind) = table_cache(sources, settings);
     let cache = CountingCache::new(cache.as_ref());
-    let ext = ScanExt::build(
+    let ext = ScanExt::build_ahead(
         sources.reg,
         sources.fs,
         sources.sys,
@@ -1922,19 +1986,9 @@ fn run_scan(
         &inv.doc.msi_only,
         Some(&cache),
         OwnershipLimits::default(),
+        walk_ahead,
     );
     cache.report(cache_kind, settings);
-    warnings.extend(ext_warnings(&ext));
-    step.done(&format!(
-        "scan: {} reference(s), {} MSI product(s), {} service(s); MSI table cache in {}",
-        ext.ref_hits.as_ref().map_or(0, Vec::len),
-        ext.ownership.stats().products,
-        ext.sysobj.services.len(),
-        match cache_kind {
-            TableCacheKind::Disk => "the data directory",
-            TableCacheKind::Memory => "memory",
-        }
-    ));
     let ctx = ScanCtx {
         reg: sources.reg,
         fs: sources.fs,
@@ -1949,16 +2003,52 @@ fn run_scan(
         limits: ScanLimits::default(),
         ext: &ext,
     };
+    // The scanners that ask nothing of the reference walk run first, while a walk started ahead is
+    // still reading; then the walk is waited for, and the scanners that read its hits run. The
+    // candidates, the faults and the warnings are put together in catalog order, as when every
+    // scanner runs in that order.
+    let scanners = all_scanners();
+    let mut found_by: Vec<Option<Vec<Candidate>>> = scanners.iter().map(|_| None).collect();
+    // One pass over the scanners that do not read the walk, one over those that do (a test may
+    // ask for a single pass in catalog order, to hold the two against each other).
+    let passes: &[Option<bool>] = if in_catalog_order() {
+        &[None]
+    } else {
+        &[Some(false), Some(true)]
+    };
+    for pass in passes {
+        if *pass != Some(false) {
+            warnings.extend(ext_warnings(&ext));
+            step.done(&format!(
+                "scan: {} reference(s), {} MSI product(s), {} service(s); MSI table cache in {}",
+                ext.ref_hit_count(),
+                ext.ownership.stats().products,
+                ext.sysobj.services.len(),
+                match cache_kind {
+                    TableCacheKind::Disk => "the data directory",
+                    TableCacheKind::Memory => "memory",
+                }
+            ));
+        }
+        for (position, scanner) in scanners.iter().enumerate() {
+            if pass.is_some_and(|reads_walk| scanner.reads_ref_walk() != reads_walk) {
+                continue;
+            }
+            ext.at_scanner(u32::try_from(position).unwrap_or(u32::MAX));
+            // `run`, not `scan`: the rule about what a value holds is applied to every candidate.
+            let found = ctx.run(scanner.as_ref(), &app);
+            step.done(&format!(
+                "scan: {} {} candidate(s)",
+                scanner.id(),
+                found.len()
+            ));
+            found_by[position] = Some(found);
+        }
+    }
     let mut candidates = Vec::new();
     let mut per_scanner = Vec::new();
-    for scanner in all_scanners() {
-        // `run`, not `scan`: the rule about what a value holds is applied to every candidate.
-        let found = ctx.run(scanner.as_ref(), &app);
-        step.done(&format!(
-            "scan: {} {} candidate(s)",
-            scanner.id(),
-            found.len()
-        ));
+    for (scanner, found) in scanners.iter().zip(found_by) {
+        let found = found.unwrap_or_default();
         per_scanner.push((scanner.id(), found.len()));
         candidates.extend(found);
     }
@@ -2544,6 +2634,129 @@ mod tests {
             )),
             "{targets:#?}"
         );
+    }
+
+    /// The scan runs the scanners that do not read the reference walk first and the others after
+    /// it; a scan that runs every scanner in catalog order, as the engine did before, gives the
+    /// same plan, sidecar, candidates, counts, residue and warnings. The machine has leftovers for
+    /// both groups: a referring value (REF-ANY, after the walk) and the install directory, an App
+    /// Paths key and a ProgID (before it).
+    #[test]
+    fn both_scanner_orders_give_the_same_plan_and_sidecar() {
+        let fixture = probe_machine()
+            .sz(REFERS, "Tool", r"C:\Program Files\Probe\probe.exe")
+            .sz(REFERS, "Other", r"C:\Tools\other.exe")
+            .sz(
+                r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\probe.exe",
+                "",
+                r"C:\Program Files\Probe\probe.exe",
+            )
+            .sz(
+                r"HKLM\SOFTWARE\Classes\Probe.Document\shell\open\command",
+                "",
+                r#""C:\Program Files\Probe\probe.exe" "%1""#,
+            )
+            .sz(
+                r"HKLM\SOFTWARE\Classes\.probe\OpenWithProgids",
+                "Probe.Document",
+                "",
+            )
+            .sz(
+                r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run",
+                "Probe",
+                r#""C:\Program Files\Probe\probe.exe" /tray"#,
+            )
+            .build();
+        let sources = Sources {
+            reg: &fixture,
+            fs: &fixture,
+            sys: &fixture,
+        };
+        let settings = Settings::default();
+        let harvested = harvest(sources, "Probe", Kb::shipped(), &settings, &mut |_| {}).unwrap();
+        let fp = harvested.report.fingerprint;
+        let run = |catalog: bool| {
+            CATALOG_ORDER.with(|order| order.set(catalog));
+            let mut lines: Vec<String> = Vec::new();
+            let scanned = scan(
+                sources,
+                &fp,
+                ScanMode::Forced,
+                None,
+                &settings,
+                &mut |line| {
+                    // The lines without their times.
+                    lines.push(
+                        line.rsplit_once(" (")
+                            .map_or(line, |(text, _)| text)
+                            .to_owned(),
+                    );
+                },
+            );
+            CATALOG_ORDER.with(|order| order.set(false));
+            (scanned.unwrap(), lines)
+        };
+        let (split, split_lines) = run(false);
+        let (catalog, catalog_lines) = run(true);
+
+        assert!(split.candidates.len() >= 3, "{:#?}", split.candidates);
+        let by = |id: &str| split.per_scanner.iter().find(|(s, _)| *s == id).unwrap().1;
+        assert!(by("REF-ANY") > 0, "{:?}", split.per_scanner);
+        assert!(
+            split
+                .per_scanner
+                .iter()
+                .any(|(s, n)| *s != "REF-ANY" && *n > 0),
+            "{:?}",
+            split.per_scanner
+        );
+        assert_eq!(
+            serde_json::to_string_pretty(&split.built.plan).unwrap(),
+            serde_json::to_string_pretty(&catalog.built.plan).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_string_pretty(&split.built.scan).unwrap(),
+            serde_json::to_string_pretty(&catalog.built.scan).unwrap()
+        );
+        assert_eq!(
+            format!("{:#?}", split.candidates),
+            format!("{:#?}", catalog.candidates)
+        );
+        assert_eq!(split.per_scanner, catalog.per_scanner);
+        assert_eq!(
+            format!("{:#?}", split.residue),
+            format!("{:#?}", catalog.residue)
+        );
+        assert_eq!(
+            format!("{:#?}", split.warnings),
+            format!("{:#?}", catalog.warnings)
+        );
+
+        // The two runs did order their scanners differently, and said the same lines.
+        let place = |lines: &[String], start: &str| {
+            lines
+                .iter()
+                .position(|line| line.starts_with(start))
+                .unwrap_or_else(|| panic!("no line {start:?} in {lines:#?}"))
+        };
+        for (lines, split) in [(&split_lines, true), (&catalog_lines, false)] {
+            let summary = lines
+                .iter()
+                .position(|line| line.contains(" reference(s), "))
+                .unwrap();
+            let ref_any = place(lines, "scan: REF-ANY");
+            let progid = place(lines, "scan: CLS-PROGID");
+            let first = place(lines, "scan: FS-INSTALLDIR");
+            assert!(ref_any > summary);
+            assert_eq!(progid < ref_any, split, "{lines:#?}");
+            assert_eq!(first < summary, split, "{lines:#?}");
+        }
+        let sorted = |lines: &[String]| {
+            let mut lines = lines.to_vec();
+            lines.sort();
+            lines
+        };
+        assert_eq!(sorted(&split_lines), sorted(&catalog_lines));
     }
 
     /// A record of an MSI product of Probe in the fingerprint (per-machine).

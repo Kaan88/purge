@@ -55,6 +55,11 @@
 //! are walked at once, and the pieces are put together in walk order, so the hits, their order and
 //! the statistics are exactly those of the one-thread walk.
 //!
+//! The walk does not depend on the matcher: only the test of what it reads does. [`scan_late`] is the
+//! same scan started before its matcher is known (a harvest knows its anchors seconds after it knows
+//! the scope): it reads at once, holds the values it reads, bounded by [`MAX_HELD_BYTES`], and tests
+//! them in walk order when the matcher comes, with the hits and statistics of [`scan`].
+//!
 //! A scan never fails as a whole. Keys that could not be read are listed in
 //! [`RefScanStats::unreadable`]; [`RefScan::is_complete`] says whether the hits cover the whole scope. A
 //! consumer that concludes "nothing references this anchor" must check it.
@@ -638,11 +643,34 @@ pub fn value_hits(
 
 /// Sorts values by case-insensitive name (then by the name as written), the order hits are reported in.
 pub(crate) fn sort_values(values: &mut [RegValue]) {
+    if values.len() < 2 {
+        return;
+    }
+    if values.iter().all(|v| v.name.is_ascii()) {
+        // The same order without a key per value: an ASCII name's lower case is its ASCII lower
+        // case, and strings compare byte by byte.
+        values.sort_by(|a, b| ascii_lower_cmp(&a.name, &b.name).then_with(|| a.name.cmp(&b.name)));
+        return;
+    }
     values.sort_by_cached_key(|v| (v.name.to_lowercase(), v.name.clone()));
+}
+
+/// Compares two ASCII strings as their lower-case forms compare.
+fn ascii_lower_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    a.bytes()
+        .map(|c| c.to_ascii_lowercase())
+        .cmp(b.bytes().map(|c| c.to_ascii_lowercase()))
 }
 
 /// Sorts key names case-insensitively (then as written).
 pub(crate) fn sort_names(names: &mut [String]) {
+    if names.len() < 2 {
+        return;
+    }
+    if names.iter().all(|n| n.is_ascii()) {
+        names.sort_by(|a, b| ascii_lower_cmp(a, b).then_with(|| a.cmp(b)));
+        return;
+    }
     names.sort_by_cached_key(|n| (n.to_lowercase(), n.clone()));
 }
 
@@ -660,6 +688,17 @@ struct Tally {
     raw_unreadable: Option<Vec<Unreadable>>,
     /// The key [`Tally::count_unreadable`] counted last.
     last_unreadable: Option<String>,
+    /// The values read before the matcher of a [`scan_late`] was there, in walk order: every one of
+    /// them was read before any value whose hits are already in `scan`.
+    held: Vec<Held>,
+}
+
+/// The values of one key, read and sorted, waiting for the matcher of a [`scan_late`].
+struct Held {
+    key: String,
+    n_values: u32,
+    n_subkeys: u32,
+    values: Vec<RegValue>,
 }
 
 impl Tally {
@@ -698,13 +737,51 @@ impl Tally {
         }
     }
 
-    /// Adds a later part of the same walk (see [`Tally`]).
+    /// Tests the (sorted) values of `key` and adds their hits and counts.
+    fn test(
+        &mut self,
+        matcher: &RefMatcher,
+        key: &str,
+        n_values: u32,
+        n_subkeys: u32,
+        values: &[RegValue],
+        options: &RefScanOptions,
+    ) {
+        for value in values {
+            self.scan.stats.values_tested += 1;
+            if !value.data.is_complete() {
+                self.scan.stats.incomplete_values += 1;
+            }
+            let hits = value_hits(matcher, key, value, n_values, n_subkeys, options);
+            self.scan.stats.cut_edge_hits += hits.iter().filter(|h| h.cut_edge).count() as u64;
+            self.scan.hits.extend(hits);
+        }
+    }
+
+    /// Tests the held values, in the order they were read. Called before anything read later is
+    /// tested, so the hits stay in walk order.
+    fn flush(&mut self, matcher: &RefMatcher, options: &RefScanOptions) {
+        for held in std::mem::take(&mut self.held) {
+            self.test(
+                matcher,
+                &held.key,
+                held.n_values,
+                held.n_subkeys,
+                &held.values,
+                options,
+            );
+        }
+    }
+
+    /// Adds a later part of the same walk (see [`Tally`]). Its held values were tested before.
     fn absorb(&mut self, part: Tally) {
         let Tally {
             scan,
             raw_unreadable,
             last_unreadable: _,
+            held,
         } = part;
+        debug_assert!(held.is_empty() && self.held.is_empty());
         let (stats, from) = (&mut self.scan.stats, scan.stats);
         self.scan.hits.extend(scan.hits);
         stats.keys_visited += from.keys_visited;
@@ -724,16 +801,152 @@ impl Tally {
     }
 }
 
-/// How one key is read: the scope, the matcher and the options of the scan. Without a matcher the
-/// values are read and counted, not tested ([`bare_walk`]).
+/// What a walk does with the values it reads.
+#[derive(Clone, Copy)]
+enum Tester<'a> {
+    /// They are counted, not tested ([`bare_walk`]).
+    Bare,
+    /// They are tested as they are read.
+    Now(&'a RefMatcher),
+    /// They are tested as they are read once the matcher is there, and held until then
+    /// ([`scan_late`]).
+    Late(&'a LateMatcher),
+}
+
+/// The matcher of a [`scan_late`]: the walk starts without it and is given it later.
+///
+/// Until [`LateMatcher::set`] the walk keeps what it reads (at most [`MAX_HELD_BYTES`] of value names
+/// and data; then it waits). [`LateMatcher::abandon`] ends the walk without a result.
+#[derive(Debug)]
+pub struct LateMatcher {
+    matcher: std::sync::OnceLock<RefMatcher>,
+    abandoned: std::sync::atomic::AtomicBool,
+    /// Bytes of value names and data held so far by the walk (never decreases: once the matcher is
+    /// there nothing more is held).
+    held_bytes: std::sync::atomic::AtomicUsize,
+    /// The most bytes the walk holds before it waits for the matcher.
+    hold_cap: usize,
+    lock: std::sync::Mutex<()>,
+    changed: std::sync::Condvar,
+}
+
+/// The most value names and data a [`scan_late`] holds in memory while it has no matcher. A walk that
+/// reaches it waits for the matcher instead of reading on.
+pub const MAX_HELD_BYTES: usize = 192 * 1024 * 1024;
+
+impl Default for LateMatcher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl LateMatcher {
+    /// No matcher yet.
+    pub fn new() -> Self {
+        Self::with_hold_cap(MAX_HELD_BYTES)
+    }
+
+    fn with_hold_cap(hold_cap: usize) -> Self {
+        Self {
+            matcher: std::sync::OnceLock::new(),
+            abandoned: std::sync::atomic::AtomicBool::new(false),
+            held_bytes: std::sync::atomic::AtomicUsize::new(0),
+            hold_cap,
+            lock: std::sync::Mutex::new(()),
+            changed: std::sync::Condvar::new(),
+        }
+    }
+
+    /// Gives the walk its matcher. The first call counts; a later one changes nothing.
+    pub fn set(&self, matcher: RefMatcher) {
+        let _ = self.matcher.set(matcher);
+        self.wake();
+    }
+
+    /// Ends the walk: it stops at the next key and [`scan_late`] returns `None`.
+    pub fn abandon(&self) {
+        self.abandoned
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        self.wake();
+    }
+
+    fn wake(&self) {
+        // Under the lock, so that a waiter that has just looked and found nothing is asleep by now.
+        let _guard = self
+            .lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.changed.notify_all();
+    }
+
+    fn get(&self) -> Option<&RefMatcher> {
+        self.matcher.get()
+    }
+
+    fn is_abandoned(&self) -> bool {
+        self.abandoned.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Waits for the matcher; `None` when the walk was abandoned instead.
+    fn wait(&self) -> Option<&RefMatcher> {
+        let mut guard = self
+            .lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        loop {
+            if self.is_abandoned() {
+                return None;
+            }
+            if let Some(matcher) = self.get() {
+                return Some(matcher);
+            }
+            guard = self
+                .changed
+                .wait(guard)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+    }
+
+    /// The matcher when it is there. Without it the `values` of `key` are to be held: what holding
+    /// them takes (the entry and its key, and for each value the value, its name and its data as
+    /// allocated) is counted against the cap, and a walk over the cap waits here for the matcher
+    /// (`None` then: abandoned).
+    fn get_or_hold(&self, key: &str, values: &[RegValue]) -> Option<&RefMatcher> {
+        if let Some(matcher) = self.get() {
+            return Some(matcher);
+        }
+        let bytes: usize = std::mem::size_of::<Held>()
+            + key.len()
+            + values
+                .iter()
+                .map(|v| {
+                    std::mem::size_of::<RegValue>() + v.name.capacity() + v.data.bytes.capacity()
+                })
+                .sum::<usize>();
+        let before = self
+            .held_bytes
+            .fetch_add(bytes, std::sync::atomic::Ordering::SeqCst);
+        if before.saturating_add(bytes) > self.hold_cap {
+            return self.wait();
+        }
+        None
+    }
+}
+
+/// How one key is read: the scope, what is done with the values and the options of the scan.
 #[derive(Clone, Copy)]
 struct Visit<'a> {
-    matcher: Option<&'a RefMatcher>,
+    tester: Tester<'a>,
     scope: &'a Scope,
     options: &'a RefScanOptions,
 }
 
 impl Visit<'_> {
+    /// Whether the walk was abandoned ([`LateMatcher::abandon`]): nothing more needs reading.
+    fn abandoned(&self) -> bool {
+        matches!(self.tester, Tester::Late(late) if late.is_abandoned())
+    }
+
     /// Opens `key`. `None` when there is nothing to read: the key is missing (a missing scope root is
     /// listed), unreadable (listed) or a link (counted).
     fn enter(
@@ -777,27 +990,35 @@ impl Visit<'_> {
         if info.n_values > 0 {
             match walker.values() {
                 Ok(mut values) => {
-                    let Some(matcher) = self.matcher else {
-                        out.scan.stats.values_tested += values.len() as u64;
-                        return self.list(walker, key, info, out, children);
-                    };
-                    sort_values(&mut values);
-                    for value in &values {
-                        out.scan.stats.values_tested += 1;
-                        if !value.data.is_complete() {
-                            out.scan.stats.incomplete_values += 1;
+                    let (n_values, n_subkeys) = (info.n_values, info.n_subkeys);
+                    match self.tester {
+                        Tester::Bare => out.scan.stats.values_tested += values.len() as u64,
+                        Tester::Now(matcher) => {
+                            sort_values(&mut values);
+                            out.test(matcher, key, n_values, n_subkeys, &values, self.options);
                         }
-                        let hits = value_hits(
-                            matcher,
-                            key,
-                            value,
-                            info.n_values,
-                            info.n_subkeys,
-                            self.options,
-                        );
-                        out.scan.stats.cut_edge_hits +=
-                            hits.iter().filter(|h| h.cut_edge).count() as u64;
-                        out.scan.hits.extend(hits);
+                        Tester::Late(late) => {
+                            sort_values(&mut values);
+                            match late.get_or_hold(key, &values) {
+                                Some(matcher) => {
+                                    out.flush(matcher, self.options);
+                                    out.test(
+                                        matcher,
+                                        key,
+                                        n_values,
+                                        n_subkeys,
+                                        &values,
+                                        self.options,
+                                    );
+                                }
+                                None => out.held.push(Held {
+                                    key: key.to_string(),
+                                    n_values,
+                                    n_subkeys,
+                                    values,
+                                }),
+                            }
+                        }
                     }
                 }
                 // The key went away under the scan: nothing below it either.
@@ -843,6 +1064,9 @@ impl Visit<'_> {
         let mut stack = vec![(key, at_root)];
         let mut children = Vec::new();
         while let Some((key, at_root)) = stack.pop() {
+            if self.abandoned() {
+                return;
+            }
             let Some(info) = self.enter(walker, &key, at_root, out) else {
                 continue;
             };
@@ -897,6 +1121,9 @@ impl Walk<'_, '_> {
         let mut children = Vec::new();
         let mut is_root = true;
         while let Some(key) = stack.pop() {
+            if visit.abandoned() {
+                return ControlFlow::Break(());
+            }
             let at_root = std::mem::replace(&mut is_root, false);
             let Some(info) = visit.enter(walker.as_mut(), &key, at_root, &mut self.out) else {
                 continue;
@@ -1063,6 +1290,9 @@ fn scan_parallel(reg: &dyn RegistrySource, visit: Visit<'_>, threads: usize) -> 
             Part::Subtree { key, at_root } => {
                 let mut t = Tally::for_part();
                 let mut children = Vec::new();
+                if visit.abandoned() {
+                    return vec![Part::Done(t)];
+                }
                 if let Some(info) = visit.enter(w.as_mut(), &key, at_root, &mut t) {
                     visit.read(w.as_mut(), &key, &info, &mut t, &mut children);
                 }
@@ -1078,7 +1308,7 @@ fn scan_parallel(reg: &dyn RegistrySource, visit: Visit<'_>, threads: usize) -> 
         .flatten()
         .collect();
     }
-    let tallies = parallel_map(parts, threads, walker, |w, part| match part {
+    let mut tallies = parallel_map(parts, threads, walker, |w, part| match part {
         Part::Done(t) => t,
         Part::Subtree { key, at_root } => {
             let mut t = Tally::for_part();
@@ -1086,6 +1316,21 @@ fn scan_parallel(reg: &dyn RegistrySource, visit: Visit<'_>, threads: usize) -> 
             t
         }
     });
+    if let Tester::Late(late) = visit.tester {
+        // What the parts read before the matcher was there is tested now, part by part.
+        let Some(matcher) = late.wait() else {
+            return RefScan::default();
+        };
+        tallies = parallel_map(
+            tallies,
+            threads,
+            || (),
+            |(), mut t| {
+                t.flush(matcher, visit.options);
+                t
+            },
+        );
+    }
     let mut total = Tally::default();
     for t in tallies {
         total.absorb(t);
@@ -1110,7 +1355,41 @@ pub fn scan(
     } else {
         1
     };
-    scan_with_threads(reg, Some(matcher), scope, options, progress, threads)
+    scan_with_threads(reg, Tester::Now(matcher), scope, options, progress, threads)
+}
+
+/// [`scan`] without progress reports, started before its matcher is known: the walk reads the scope
+/// at once, holds what it reads until `late` is given the matcher ([`LateMatcher::set`], from
+/// another thread) and tests it then. The hits, their order and the statistics are exactly those of
+/// [`scan`] with that matcher over the same registry: the same keys are read through the same
+/// walker in the same order, and every value is tested in walk order.
+///
+/// Returns when the walk is done **and** the matcher was given; `None` when the walk was abandoned
+/// ([`LateMatcher::abandon`]). A caller must do one or the other, or this never returns.
+pub fn scan_late(
+    reg: &dyn RegistrySource,
+    late: &LateMatcher,
+    scope: &Scope,
+    options: &RefScanOptions,
+) -> Option<RefScan> {
+    let threads = if options.max_keys.is_none() {
+        default_threads()
+    } else {
+        1
+    };
+    scan_late_with_threads(reg, late, scope, options, threads)
+}
+
+/// [`scan_late`] on at most `threads` threads.
+fn scan_late_with_threads(
+    reg: &dyn RegistrySource,
+    late: &LateMatcher,
+    scope: &Scope,
+    options: &RefScanOptions,
+    threads: usize,
+) -> Option<RefScan> {
+    let scan = scan_with_threads(reg, Tester::Late(late), scope, options, None, threads);
+    (!late.is_abandoned()).then_some(scan)
 }
 
 /// What [`bare_walk`] read.
@@ -1129,7 +1408,14 @@ pub struct BareWalk {
 /// the harvest's time is held against (M3_DESIGN.md 9.1, gate G12).
 pub fn bare_walk(reg: &dyn RegistrySource, scope: &Scope) -> BareWalk {
     let threads = default_threads();
-    let scan = scan_with_threads(reg, None, scope, &RefScanOptions::default(), None, threads);
+    let scan = scan_with_threads(
+        reg,
+        Tester::Bare,
+        scope,
+        &RefScanOptions::default(),
+        None,
+        threads,
+    );
     BareWalk {
         stats: scan.stats,
         threads,
@@ -1140,14 +1426,14 @@ pub fn bare_walk(reg: &dyn RegistrySource, scope: &Scope) -> BareWalk {
 /// budget need).
 fn scan_with_threads(
     reg: &dyn RegistrySource,
-    matcher: Option<&RefMatcher>,
+    tester: Tester<'_>,
     scope: &Scope,
     options: &RefScanOptions,
     progress: Option<&mut ProgressFn<'_>>,
     threads: usize,
 ) -> RefScan {
     let visit = Visit {
-        matcher,
+        tester,
         scope,
         options,
     };
@@ -1163,6 +1449,12 @@ fn scan_with_threads(
     for index in 0..scope.roots.len() {
         if walk.root(index).is_break() {
             break;
+        }
+    }
+    if let Tester::Late(late) = tester {
+        match late.wait() {
+            Some(matcher) => walk.out.flush(matcher, options),
+            None => return RefScan::default(),
         }
     }
     walk.out.scan
@@ -2219,7 +2511,7 @@ mod tests {
                     ..RefScanOptions::default()
                 },
             ] {
-                let one = scan_with_threads(&source, Some(&m), &scope, &options, None, 1);
+                let one = scan_with_threads(&source, Tester::Now(&m), &scope, &options, None, 1);
                 assert!(one.hits.len() > 100, "{}", one.hits.len());
                 assert!(one.stats.pruned > 0 && one.stats.links_skipped > 0);
                 if flaky > MAX_UNREADABLE_LISTED {
@@ -2227,13 +2519,268 @@ mod tests {
                     assert!(one.stats.unreadable_total > MAX_UNREADABLE_LISTED as u64);
                 }
                 for threads in [2, 3, 8, 32] {
-                    let many =
-                        scan_with_threads(&source, Some(&m), &scope, &options, None, threads);
+                    let many = scan_with_threads(
+                        &source,
+                        Tester::Now(&m),
+                        &scope,
+                        &options,
+                        None,
+                        threads,
+                    );
                     assert_eq!(many.hits, one.hits, "{threads} threads, {flaky} flaky");
                     assert_eq!(many.stats, one.stats, "{threads} threads, {flaky} flaky");
                 }
             }
         }
+    }
+
+    /// The sorts of the walk take a path without a key per name when every name is ASCII: it
+    /// gives the order of the sort by (lower case, name) that the other path makes, for names in
+    /// mixed case, names that differ only by case, equal names and the empty name; and a list with
+    /// one name that is not ASCII is sorted as before.
+    #[test]
+    fn ascii_sorts_are_the_sorts_by_lower_case_then_name() {
+        let ascii = [
+            "b", "B", "a", "A", "Ab", "aB", "ab", "AB", "", "Zeta", "zeta", "ZETA", "_x", "1",
+            "a1", "A1", "path", "Path", "PATH", "a b", "a-b", "a_b", "A_B", "[", "{", "ab", "~",
+        ];
+        let other = ["École", "école", "straße", "STRASSE", "a", "B", "ΣΣ"];
+        let value = |name: &str, n: usize| RegValue {
+            name: name.to_owned(),
+            data: purge_source::types::RegData::from_sz(&n.to_string()),
+        };
+        for (names, is_ascii) in [(&ascii[..], true), (&other[..], false)] {
+            assert_eq!(names.iter().all(|n| n.is_ascii()), is_ascii);
+            for shift in 0..names.len() {
+                let mut list: Vec<String> = names
+                    .iter()
+                    .cycle()
+                    .skip(shift)
+                    .take(names.len())
+                    .map(|n| (*n).to_owned())
+                    .collect();
+                if shift % 2 == 1 {
+                    list.reverse();
+                }
+                let mut expected = list.clone();
+                expected.sort_by_cached_key(|n| (n.to_lowercase(), n.clone()));
+                let mut sorted = list.clone();
+                sort_names(&mut sorted);
+                assert_eq!(sorted, expected, "names, shift {shift}");
+
+                // Values: equal names keep their order (the data tells them apart).
+                let values: Vec<RegValue> =
+                    list.iter().enumerate().map(|(i, n)| value(n, i)).collect();
+                let mut expected = values.clone();
+                expected.sort_by_cached_key(|v| (v.name.to_lowercase(), v.name.clone()));
+                let mut sorted = values.clone();
+                sort_values(&mut sorted);
+                let brief = |values: &[RegValue]| -> Vec<(String, Vec<u8>)> {
+                    values
+                        .iter()
+                        .map(|v| (v.name.clone(), v.data.bytes.clone()))
+                        .collect()
+                };
+                assert_eq!(brief(&sorted), brief(&expected), "values, shift {shift}");
+            }
+        }
+        // Names that differ only by case come lower-case form first, then as written.
+        let mut names: Vec<String> = ["path", "PATH", "Path"].map(String::from).to_vec();
+        sort_names(&mut names);
+        assert_eq!(names, ["PATH", "Path", "path"]);
+        let mut none: Vec<String> = Vec::new();
+        sort_names(&mut none);
+        sort_values(&mut []);
+        assert!(none.is_empty());
+    }
+
+    /// What a walk holds is counted with the entry, the key and the allocations of each value, so
+    /// the cap bounds the memory and not only the bytes of the data.
+    #[test]
+    fn held_values_are_counted_as_allocated() {
+        let late = LateMatcher::new();
+        let mut name = String::with_capacity(64);
+        name.push('n');
+        let mut data = purge_source::types::RegData::from_sz("abc");
+        data.bytes.reserve_exact(100);
+        let held = data.bytes.capacity();
+        assert!(held >= 100);
+        let values = vec![
+            RegValue { name, data },
+            RegValue {
+                name: String::new(),
+                data: purge_source::types::RegData::from_sz(""),
+            },
+        ];
+        let empty = values[1].data.bytes.capacity();
+        assert!(late.get_or_hold(r"HKLM\SOFTWARE\K", &values).is_none());
+        assert_eq!(
+            late.held_bytes.load(std::sync::atomic::Ordering::SeqCst),
+            std::mem::size_of::<Held>()
+                + r"HKLM\SOFTWARE\K".len()
+                + 2 * std::mem::size_of::<RegValue>()
+                + 64
+                + held
+                + empty
+        );
+        // A key without values still costs its entry.
+        assert!(late.get_or_hold("K", &[]).is_none());
+        assert!(
+            late.held_bytes.load(std::sync::atomic::Ordering::SeqCst)
+                > 2 * std::mem::size_of::<Held>()
+        );
+    }
+
+    /// A registry that gives a [`LateMatcher`] its matcher when the walk asks for its `at`-th key.
+    struct SetsAt<'f> {
+        inner: Flaky<'f>,
+        late: &'f LateMatcher,
+        matcher: RefMatcher,
+        at: usize,
+        seen: std::sync::atomic::AtomicUsize,
+    }
+
+    impl RegistrySource for SetsAt<'_> {
+        fn key_info(&self, key: &str) -> SourceResult<KeyInfo> {
+            let n = self.seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if n == self.at {
+                self.late.set(self.matcher.clone());
+            }
+            self.inner.key_info(key)
+        }
+        fn subkeys(&self, key: &str) -> SourceResult<Vec<String>> {
+            self.inner.subkeys(key)
+        }
+        fn values(&self, key: &str) -> SourceResult<Vec<RegValue>> {
+            self.inner.values(key)
+        }
+        fn value(&self, key: &str, name: &str) -> SourceResult<RegData> {
+            self.inner.value(key, name)
+        }
+        fn loaded_user_sids(&self) -> SourceResult<Vec<String>> {
+            self.inner.loaded_user_sids()
+        }
+        fn current_control_set(&self) -> SourceResult<u32> {
+            self.inner.current_control_set()
+        }
+    }
+
+    /// A scan that is given its matcher late finds exactly what the scan with the matcher finds, in
+    /// the same order with the same statistics: whenever the matcher comes (before the first key,
+    /// in the middle, after the last key), on one thread and on several, and with a cap on what is
+    /// held that makes the walk wait for the matcher.
+    #[test]
+    fn a_late_matcher_gives_the_scan_of_the_matcher() {
+        for flaky in [0, MAX_UNREADABLE_LISTED + 77] {
+            let f = big_tree(flaky);
+            let m = matcher();
+            let scope = Scope::standard(&f).unwrap();
+            let options = RefScanOptions {
+                all_anchors: true,
+                ..RefScanOptions::default()
+            };
+            let expected =
+                scan_with_threads(&Flaky(&f), Tester::Now(&m), &scope, &options, None, 1);
+            assert!(expected.hits.len() > 100);
+            let keys = usize::try_from(expected.stats.keys_visited).unwrap();
+            for threads in [1, 4, 8] {
+                for at in [0, 1, 7, keys / 3, keys - 1] {
+                    for cap in [MAX_HELD_BYTES, 4096, 0] {
+                        let late = LateMatcher::with_hold_cap(cap);
+                        let source = SetsAt {
+                            inner: Flaky(&f),
+                            late: &late,
+                            matcher: m.clone(),
+                            at,
+                            seen: std::sync::atomic::AtomicUsize::new(0),
+                        };
+                        // With a cap the walk reaches before `at`, it waits for a matcher only
+                        // another thread can give.
+                        let scan = std::thread::scope(|s| {
+                            let walk = s.spawn(|| {
+                                scan_late_with_threads(&source, &late, &scope, &options, threads)
+                            });
+                            if cap < MAX_HELD_BYTES {
+                                std::thread::sleep(std::time::Duration::from_millis(5));
+                                late.set(m.clone());
+                            }
+                            walk.join().unwrap()
+                        })
+                        .expect("not abandoned");
+                        let what = format!("{threads} threads, matcher at key {at}, cap {cap}");
+                        assert_eq!(scan.hits, expected.hits, "{what}");
+                        assert_eq!(scan.stats, expected.stats, "{what}");
+                    }
+                }
+                // The matcher comes only after the walk has read everything.
+                let late = LateMatcher::new();
+                let source = Flaky(&f);
+                let scan = std::thread::scope(|s| {
+                    let walk = s.spawn(|| {
+                        scan_late_with_threads(&source, &late, &scope, &options, threads)
+                    });
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    late.set(m.clone());
+                    walk.join().unwrap()
+                })
+                .expect("not abandoned");
+                assert_eq!(
+                    scan.hits, expected.hits,
+                    "{threads} threads, matcher after the walk"
+                );
+                assert_eq!(
+                    scan.stats, expected.stats,
+                    "{threads} threads, matcher after the walk"
+                );
+            }
+        }
+    }
+
+    /// An abandoned late scan ends without a result, whether it is still reading, waiting at its
+    /// cap or waiting for the matcher at the end; and the public entry point agrees with [`scan`].
+    #[test]
+    fn an_abandoned_late_scan_ends_without_a_result() {
+        let f = big_tree(0);
+        let m = matcher();
+        let scope = Scope::standard(&f).unwrap();
+        let options = RefScanOptions::default();
+        for threads in [1, 4] {
+            for cap in [MAX_HELD_BYTES, 0] {
+                for wait_ms in [0, 50] {
+                    let late = LateMatcher::with_hold_cap(cap);
+                    let scan = std::thread::scope(|s| {
+                        let walk = s
+                            .spawn(|| scan_late_with_threads(&f, &late, &scope, &options, threads));
+                        std::thread::sleep(std::time::Duration::from_millis(wait_ms));
+                        late.abandon();
+                        walk.join().unwrap()
+                    });
+                    assert_eq!(
+                        scan, None,
+                        "{threads} threads, cap {cap}, after {wait_ms} ms"
+                    );
+                }
+            }
+        }
+        // Abandoned before it starts: nothing is read at all.
+        let late = LateMatcher::new();
+        late.abandon();
+        let source = SetsAt {
+            inner: Flaky(&f),
+            late: &late,
+            matcher: m.clone(),
+            at: usize::MAX,
+            seen: std::sync::atomic::AtomicUsize::new(0),
+        };
+        assert_eq!(scan_late(&source, &late, &scope, &options), None);
+        assert_eq!(source.seen.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+        let late = LateMatcher::new();
+        late.set(m.clone());
+        assert_eq!(
+            scan_late(&f, &late, &scope, &options),
+            Some(scan(&f, &m, &scope, &options, None))
+        );
     }
 
     /// Roots that are pruned, missing or links, in any position, come out of a parallel scan as out
@@ -2255,15 +2802,21 @@ mod tests {
         );
         let source = Flaky(&f);
         let options = RefScanOptions::default();
-        let one = scan_with_threads(&source, Some(&matcher()), &scope, &options, None, 1);
+        let one = scan_with_threads(&source, Tester::Now(&matcher()), &scope, &options, None, 1);
         assert_eq!(
             one.stats.roots_missing,
             [r"HKLM\SOFTWARE\Missing", r"HKLM\SOFTWARE\Nothing\Here"]
         );
         assert_eq!((one.stats.pruned, one.stats.links_skipped), (1, 1));
         for threads in [2, 4, 16] {
-            let many =
-                scan_with_threads(&source, Some(&matcher()), &scope, &options, None, threads);
+            let many = scan_with_threads(
+                &source,
+                Tester::Now(&matcher()),
+                &scope,
+                &options,
+                None,
+                threads,
+            );
             assert_eq!(many.hits, one.hits);
             assert_eq!(many.stats, one.stats);
         }
@@ -2302,7 +2855,14 @@ mod tests {
             assert_eq!(bare.stats, expected, "{flaky} flaky");
             assert!(bare.stats.keys_visited > 0 && bare.stats.values_tested > 0);
             // On one thread too.
-            let one = scan_with_threads(source, None, &scope, &RefScanOptions::default(), None, 1);
+            let one = scan_with_threads(
+                source,
+                Tester::Bare,
+                &scope,
+                &RefScanOptions::default(),
+                None,
+                1,
+            );
             assert!(one.hits.is_empty());
             assert_eq!(one.stats, expected, "{flaky} flaky, one thread");
         }
@@ -2382,10 +2942,10 @@ mod tests {
         let source = Flaky(&f);
         let scope = Scope::standard(&f).unwrap();
         let options = RefScanOptions::default();
-        let one = scan_with_threads(&source, Some(&matcher()), &scope, &options, None, 1);
+        let one = scan_with_threads(&source, Tester::Now(&matcher()), &scope, &options, None, 1);
         for started in [0, 2] {
             let many = with_spawn_budget(started, || {
-                scan_with_threads(&source, Some(&matcher()), &scope, &options, None, 8)
+                scan_with_threads(&source, Tester::Now(&matcher()), &scope, &options, None, 8)
             });
             assert_eq!((&many.hits, &many.stats), (&one.hits, &one.stats));
         }
@@ -2399,7 +2959,7 @@ mod tests {
         let options = RefScanOptions::default();
         let small = big_tree(40);
         let scope = Scope::standard(&small).unwrap();
-        let few = scan_with_threads(&Flaky(&small), Some(&m), &scope, &options, None, 1);
+        let few = scan_with_threads(&Flaky(&small), Tester::Now(&m), &scope, &options, None, 1);
         assert_eq!(
             few.stats.unreadable_total,
             few.stats.unreadable.len() as u64
@@ -2411,7 +2971,14 @@ mod tests {
         let big = big_tree(flaky);
         let scope = Scope::standard(&big).unwrap();
         for threads in [1, 4] {
-            let scan = scan_with_threads(&Flaky(&big), Some(&m), &scope, &options, None, threads);
+            let scan = scan_with_threads(
+                &Flaky(&big),
+                Tester::Now(&m),
+                &scope,
+                &options,
+                None,
+                threads,
+            );
             assert_eq!(scan.stats.unreadable.len(), MAX_UNREADABLE_LISTED);
             assert_eq!(
                 scan.stats.unreadable_total,
@@ -2497,7 +3064,7 @@ mod tests {
         let m = matcher();
         let options = RefScanOptions::default();
         let reg: &dyn RegistrySource = &live.registry;
-        let old = scan_with_threads(&PathCalls(reg), Some(&m), &scope, &options, None, 1);
+        let old = scan_with_threads(&PathCalls(reg), Tester::Now(&m), &scope, &options, None, 1);
         assert!(old.hits.len() > 25, "{}", old.hits.len());
         assert!(old.stats.keys_visited > 400, "{}", old.stats.keys_visited);
         assert_eq!(
@@ -2526,8 +3093,8 @@ mod tests {
                 .any(|h| h.key == tree.canon(r"B\QueryOnly\Inner"))
         );
 
-        let walker_one = scan_with_threads(reg, Some(&m), &scope, &options, None, 1);
-        let walker_four = scan_with_threads(reg, Some(&m), &scope, &options, None, 4);
+        let walker_one = scan_with_threads(reg, Tester::Now(&m), &scope, &options, None, 1);
+        let walker_four = scan_with_threads(reg, Tester::Now(&m), &scope, &options, None, 4);
         let shipped = scan(reg, &m, &scope, &options, None);
         let mut reports = 0;
         let mut progress = |_: &RefScanProgress<'_>| {
