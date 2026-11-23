@@ -124,6 +124,26 @@ public sealed partial class MainWindow : Window
         return (LeftoversView)_views["leftovers"];
     }
 
+    /// <summary>The S3 review page (built on first use) without showing it: a held scan handed over off screen.</summary>
+    public LeftoversView ReviewPage => (LeftoversView)ViewFor("leftovers");
+
+    /// <summary>The program whose scan the Uninstall page holds for the Leftovers page; null when none waits.</summary>
+    public string? HeldScanProgram => _views.TryGetValue("queue", out var view) && view is UninstallView uninstall
+        ? uninstall.HeldProgram
+        : null;
+
+    /// <summary>The Uninstall page started or stopped holding a scan: the Leftovers page's line follows it. UI thread.</summary>
+    public void OnHeldScanChanged()
+    {
+        if (_views.TryGetValue("leftovers", out var view) && view is LeftoversView leftovers) leftovers.OnHeldScanChanged();
+    }
+
+    /// <summary>The Leftovers page's "Show the scan": the held scan replaces what that page shows.</summary>
+    public void ShowHeldScan()
+    {
+        if (_views.TryGetValue("queue", out var view) && view is UninstallView uninstall) uninstall.ShowHeld();
+    }
+
     /// <summary>True while the Leftovers page (if built) applies a change over its broker link.</summary>
     public bool LeftoversChanging => _views.TryGetValue("leftovers", out var view) && view is LeftoversView { IsChanging: true };
 
@@ -267,7 +287,8 @@ public sealed partial class MainWindow : Window
     /// <summary>The page shown, by rail key.</summary>
     public string CurrentPage { get; private set; } = "programs";
 
-    public void Navigate(string key)
+    /// <summary>The view of a rail key, built on first use (not shown).</summary>
+    private UIElement ViewFor(string key)
     {
         if (!_views.TryGetValue(key, out var view))
         {
@@ -282,6 +303,13 @@ public sealed partial class MainWindow : Window
             };
             _views[key] = view;
         }
+        return view;
+    }
+
+    public void Navigate(string key)
+    {
+        var leftLeftovers = CurrentPage == "leftovers" && key != "leftovers";
+        var view = ViewFor(key);
         ContentCard.Child = view;
         foreach (var (button, selection, pill) in _rail)
         {
@@ -292,6 +320,9 @@ public sealed partial class MainWindow : Window
         CurrentPage = key;
         if (Root.RequestedTheme != ElementTheme.Default)
             DispatcherQueue.TryEnqueue(() => PinInfoBars(view));
+        // A scan the Uninstall page held while the Leftovers page showed a change's outcome goes there now.
+        if (leftLeftovers && _views.TryGetValue("queue", out var queue) && queue is UninstallView uninstall)
+            uninstall.OnLeftoversLeft();
     }
 
     /// <summary>The theme the window shows (Settings → Appearance, else Windows).</summary>

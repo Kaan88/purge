@@ -251,7 +251,7 @@ public sealed class RemovedLeftoversTests
     {
         var controller = new RemovedLeftoversController(_ => true, _ => Task.FromResult(
             new StoredLeftoversLaunch(UninstallLaunchState.NotAdministrator, null,
-                "This needs an administrator account; this account is a standard user.")));
+                BrokerLauncher.StandardUserMessage)));
 
         await controller.CheckAsync(Program, "Git").WaitAsync(TimeSpan.FromSeconds(5));
 

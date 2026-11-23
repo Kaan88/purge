@@ -37,12 +37,20 @@ public sealed partial class UninstallView : UserControl
     private bool _rendering;
     private bool _wasBusy;
 
-    // A scan that could not go to the Leftovers page because that page was applying another change. The controller
-    // keeps its broker meanwhile; the hand-off is tried again when that change ends, and by the bar's "Show leftovers".
+    // A scan that could not go to the Leftovers page because that page was applying another change, or because that
+    // page is on screen with the change's outcome (it must not be replaced unread). The controller keeps its broker
+    // meanwhile; the hand-off is tried again when that change ends, when the user leaves the Leftovers page, and by
+    // "Show leftovers".
     private UninstallOutcome? _heldOutcome;
 
-    // The program whose held scan a new uninstall closed, for a bar that says so; null when there is none.
+    // The program whose held scan a new run closed, for a bar that says so; null when there is none. _droppedRerun:
+    // the same program's uninstall ran again (Check again, Retry, Run forced cleanup, Start over), not a new one.
     private string? _droppedHeld;
+    private bool _droppedRerun;
+
+    // A held scan handed to the Leftovers page while the user went to another page (they are not taken there): the
+    // bar says where it went. Null when there is none, or once that scan is no longer the pipeline's.
+    private UninstallOutcome? _handedQuietly;
 
     /// <summary>The tooltip of an action that waits for a removed program's leftovers check (one broker at a time).</summary>
     private const string CheckRunningHint = "A leftovers check is running on the Programs page. Try again when it has finished.";
@@ -75,11 +83,52 @@ public sealed partial class UninstallView : UserControl
     /// <summary>A removed program's leftovers check started or ended: the actions that start a broker follow it.</summary>
     public void OnCheckRunningChanged() => DispatcherQueue.TryEnqueue(Render);
 
-    /// <summary>The Leftovers page started or finished a change: a held scan goes there once it has finished.</summary>
-    public void OnLeftoversChangingChanged() => DispatcherQueue.TryEnqueue(() =>
+    /// <summary>
+    /// The Leftovers page started or finished a change. A held scan goes there once it has finished, unless that page
+    /// is on screen: then its outcome (a result, an interrupted change, refusal lines) is being read, and the scan
+    /// waits until the user leaves the page (<see cref="OnLeftoversLeft"/>) or asks for it.
+    /// </summary>
+    public void OnLeftoversChangingChanged() => DispatcherQueue.TryEnqueue(() => TryHandOffHeld(navigate: true));
+
+    /// <summary>
+    /// The user left the Leftovers page: a held scan goes there now, without taking the user back (they chose where
+    /// to go); the bar on this page says where it went.
+    /// </summary>
+    public void OnLeftoversLeft() => DispatcherQueue.TryEnqueue(() => TryHandOffHeld(navigate: false));
+
+    /// <summary>"Show the scan" on the Leftovers page: the held scan replaces what that page shows.</summary>
+    public void ShowHeld() => DispatcherQueue.TryEnqueue(ShowHeldNow);
+
+    /// <summary>The program whose scan waits for the Leftovers page, for that page's line; null when none waits.</summary>
+    public string? HeldProgram => _heldOutcome is { } held ? NameOf(held) : null;
+
+    private static string NameOf(UninstallOutcome outcome) =>
+        outcome.Target.ProgramName is { Length: > 0 } name ? name : "the last program";
+
+    private static bool LeftoversOnScreen => MainWindow.Instance.CurrentPage == "leftovers";
+
+    private void TryHandOffHeld(bool navigate)
     {
-        if (_heldOutcome is { } held && !LeftoversNavigator.IsChanging) HandOff(held);
-    });
+        // Never while the pipeline runs a step: it may be using the broker the held scan would take with it.
+        if (_heldOutcome is { } held && !_controller.IsBusy && !LeftoversNavigator.IsChanging && !LeftoversOnScreen)
+            HandOff(held, navigate);
+        else
+            Render();
+    }
+
+    private void ShowHeldNow()
+    {
+        if (_heldOutcome is { } held && !_controller.IsBusy) HandOff(held);
+        else Render();
+    }
+
+    /// <summary>Holds <paramref name="outcome"/> (or nothing) and tells the Leftovers page, which shows a line for it.</summary>
+    private void SetHeld(UninstallOutcome? outcome)
+    {
+        if (ReferenceEquals(outcome, _heldOutcome)) return;
+        _heldOutcome = outcome;
+        MainWindow.Instance.OnHeldScanChanged();
+    }
 
     /// <summary>True while a removed program's leftovers check runs: Retry, Force, Start over and the choices wait.</summary>
     private static bool CheckRunning => MainWindow.Instance.CheckRunning;
@@ -273,25 +322,57 @@ public sealed partial class UninstallView : UserControl
         BarsHost.Children.Clear();
         foreach (var notice in _controller.Notices)
             BarsHost.Children.Add(BuildBar(notice));
-        // A new uninstall (or Start over) reset the pipeline while a scan waited: that scan is gone, so say so.
+        // The disabled actions' tooltips do not show (a disabled control gets no pointer events), so say it in a line.
+        if (CheckRunning && _controller.Target is not null)
+        {
+            var bar = BuildBar(new UninstallNotice(UninstallNoticeKind.Info, "Waiting for a leftovers check.", CheckRunningHint));
+            bar.IsClosable = false;
+            BarsHost.Children.Add(bar);
+        }
+        // The pipeline ran again or started anew while a scan waited (it cleared or replaced its outcome): that scan
+        // is gone, so say so.
         if (_heldOutcome is { } held && !ReferenceEquals(held, _controller.CompletedOutcome)) DropHeld(held);
+        if (_handedQuietly is { } quiet && !ReferenceEquals(quiet, _controller.CompletedOutcome)) _handedQuietly = null;
         if (_heldOutcome is { } waiting)
         {
             // The broker ends after ten minutes without a request (bins/purge-broker/src/lifetime.rs, IDLE_LIMIT),
             // and the held scan with it.
+            var changing = LeftoversNavigator.IsChanging;
             var bar = BuildBar(new UninstallNotice(UninstallNoticeKind.Warning, "The scan is ready.",
-                "The Leftovers page is still applying another change, so this scan waits here and opens there when that "
-                + "change has finished. It is kept for about 10 minutes; after that, start the uninstall again. Nothing was moved."));
+                (changing
+                    ? "The Leftovers page is still applying another change, so this scan waits here and opens there when "
+                      + "that change has finished. "
+                    : "The Leftovers page has finished its change and shows its outcome, so this scan waits until you show "
+                      + "it there. ")
+                + "It is kept for about 10 minutes; after that, start the uninstall again. Nothing was moved."));
             var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 8, 0, 0) };
-            actions.Children.Add(ActionButton("Show leftovers", () => HandOff(waiting)));
+            var show = ActionButton("Show leftovers", ShowHeldNow);
+            show.IsEnabled = !changing && !_controller.IsBusy;
+            actions.Children.Add(show);
             bar.Content = actions;
             bar.IsClosable = false;
+            BarsHost.Children.Add(bar);
+        }
+        if (_handedQuietly is { } handed)
+        {
+            var bar = BuildBar(new UninstallNotice(UninstallNoticeKind.Info, "The scan is on the Leftovers page.",
+                $"The Leftovers page finished its change, so the scan of {NameOf(handed)} went there. Nothing was moved."));
+            var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 8, 0, 0) };
+            actions.Children.Add(ActionButton("Show leftovers", () =>
+            {
+                _handedQuietly = null;
+                MainWindow.Instance.Navigate("leftovers");
+            }));
+            bar.Content = actions;
+            bar.Closed += (_, _) => _handedQuietly = null;
             BarsHost.Children.Add(bar);
         }
         if (_droppedHeld is { } dropped)
         {
             var bar = BuildBar(new UninstallNotice(UninstallNoticeKind.Info, "The waiting scan was closed.",
-                $"A new uninstall started, so the scan of {dropped} that waited for the Leftovers page was closed. "
+                (_droppedRerun
+                    ? $"The uninstall of {dropped} ran again, so its scan that waited for the Leftovers page was closed. "
+                    : $"A new uninstall started, so the scan of {dropped} that waited for the Leftovers page was closed. ")
                 + "Nothing was moved."));
             bar.Closed += (_, _) => _droppedHeld = null;
             BarsHost.Children.Add(bar);
@@ -301,9 +382,9 @@ public sealed partial class UninstallView : UserControl
     /// <summary>Forgets a held scan the pipeline no longer has and keeps a bar that says so.</summary>
     private void DropHeld(UninstallOutcome held)
     {
-        _heldOutcome = null;
-        var name = held.Target.ProgramName;
-        _droppedHeld = name.Length > 0 ? name : "the last program";
+        SetHeld(null);
+        _droppedHeld = NameOf(held);
+        _droppedRerun = _controller.Target is { } target && target.ProgramId == held.Target.ProgramId;
     }
 
     private InfoBar BuildBar(UninstallNotice notice)
@@ -522,11 +603,13 @@ public sealed partial class UninstallView : UserControl
     private void OnCompleted(UninstallOutcome outcome) => DispatcherQueue.TryEnqueue(() => HandOff(outcome));
 
     /// <summary>
-    /// Hands the scan and the live broker to the Leftovers page. While that page applies another change its link must
-    /// not be replaced, so the scan waits here (the controller keeps the broker) behind a "Show leftovers" bar, and is
-    /// handed over by itself when that change ends (<see cref="OnLeftoversChangingChanged"/>).
+    /// Hands the scan and the live broker to the Leftovers page (and shows that page when <paramref name="navigate"/>).
+    /// While that page applies another change its link must not be replaced, so the scan waits here (the controller
+    /// keeps the broker) behind a "Show leftovers" bar; it is handed over by itself when that change ends and the page
+    /// is not on screen (<see cref="OnLeftoversChangingChanged"/>), or when the user leaves the page
+    /// (<see cref="OnLeftoversLeft"/>).
     /// </summary>
-    private void HandOff(UninstallOutcome outcome)
+    private void HandOff(UninstallOutcome outcome, bool navigate = true)
     {
         if (!ReferenceEquals(outcome, _controller.CompletedOutcome))
         {
@@ -537,19 +620,22 @@ public sealed partial class UninstallView : UserControl
         }
         // A newer scan is in: the bar about an older one that was closed has said what it had to.
         _droppedHeld = null;
+        _handedQuietly = null;
         if (LeftoversNavigator.IsChanging)
         {
-            _heldOutcome = outcome;
+            SetHeld(outcome);
             Render();
             return;
         }
-        _heldOutcome = null;
+        SetHeld(null);
         var broker = _controller.TakeBroker();
         var session = (broker as BrokerUninstallClient)?.TakeSession();
         if (broker is not null && session is null) _ = broker.DisposeAsync();
         var request = new LeftoversRequest(outcome.Target.ProgramId, outcome.Target.ProgramName, outcome.SessionId,
             outcome.ScanId, outcome.Mode, outcome.RestorePoint, outcome.Quiet, session);
-        if (!LeftoversNavigator.TryShow(request) && session is not null) _ = session.DisposeAsync().AsTask();
+        var shown = LeftoversNavigator.TryShow(request, navigate);
+        if (!shown && session is not null) _ = session.DisposeAsync().AsTask();
+        if (shown && !navigate) _handedQuietly = outcome;
         if (broker is not null) _ = broker.DisposeAsync();
         Render();
     }

@@ -160,6 +160,12 @@ public static partial class BrokerLauncher
     /// <summary>How long the broker may take to answer <c>engine.hello</c> once the pipe is open.</summary>
     public static readonly TimeSpan HelloTimeout = TimeSpan.FromSeconds(10);
 
+    /// <summary>
+    /// The message of <see cref="BrokerLaunchStatus.NotAdministrator"/>; every route's bar shows it under its own
+    /// title, and the tests use this text so they follow what the launcher really says.
+    /// </summary>
+    internal const string StandardUserMessage = "This needs an administrator account; this account is a standard user.";
+
     private const uint SeeMaskNoCloseProcess = 0x00000040;
     private const uint SeeMaskNoAsync = 0x00000100;
     // The broker has no window of its own: the show command reaches the first window it creates, the consent
@@ -193,8 +199,7 @@ public static partial class BrokerLauncher
             return BrokerLaunchResult.Failed(BrokerLaunchStatus.CannotStart, "The administrator part is a Windows program.");
 
         if (Elevation() == ElevationKind.StandardUser)
-            return BrokerLaunchResult.Failed(BrokerLaunchStatus.NotAdministrator,
-                "This needs an administrator account; this account is a standard user.");
+            return BrokerLaunchResult.Failed(BrokerLaunchStatus.NotAdministrator, StandardUserMessage);
 
         if (string.IsNullOrWhiteSpace(brokerPath) || !File.Exists(brokerPath))
             return BrokerLaunchResult.Failed(BrokerLaunchStatus.CannotStart,
@@ -309,15 +314,13 @@ public static partial class BrokerLauncher
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            await rpc.DisposeAsync().ConfigureAwait(false);
-            terminate(process);
+            await EndAsync(rpc, process, terminate).ConfigureAwait(false);
             return BrokerLaunchResult.Failed(BrokerLaunchStatus.TimedOut,
                 $"The administrator part did not answer within {helloTimeout.TotalSeconds:0} seconds.");
         }
         catch (Exception e) when (e is BrokerRpcException or BrokerLinkException or InvalidDataException)
         {
-            await rpc.DisposeAsync().ConfigureAwait(false);
-            terminate(process);
+            await EndAsync(rpc, process, terminate).ConfigureAwait(false);
             return BrokerLaunchResult.Failed(BrokerLaunchStatus.CannotStart,
                 "The administrator part did not accept Purge's connection. " + e.Message);
         }
@@ -325,9 +328,21 @@ public static partial class BrokerLauncher
         {
             // The caller's cancellation, or a failure nobody expected: no session is made, so nothing else ends
             // the broker this launch started.
-            await rpc.DisposeAsync().ConfigureAwait(false);
-            terminate(process);
+            await EndAsync(rpc, process, terminate).ConfigureAwait(false);
             throw;
+        }
+    }
+
+    /// <summary>Ends a link that made no session: the process is terminated even if closing the link throws.</summary>
+    private static async Task EndAsync(BrokerRpcClient rpc, SafeProcessHandle process, Action<SafeProcessHandle> terminate)
+    {
+        try
+        {
+            await rpc.DisposeAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            terminate(process);
         }
     }
 

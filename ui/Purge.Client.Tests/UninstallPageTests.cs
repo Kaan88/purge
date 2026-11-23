@@ -150,7 +150,7 @@ public sealed class UninstallPageTests
     public async Task A_standard_user_is_told_an_administrator_account_is_needed()
     {
         var controller = Controller(new UninstallLaunch(UninstallLaunchState.NotAdministrator, null,
-            "This needs an administrator account; this account is a standard user."), new ScriptedMedium());
+            BrokerLauncher.StandardUserMessage), new ScriptedMedium());
 
         await controller.BeginAsync(Target).WaitAsync(TimeSpan.FromSeconds(5));
 
@@ -359,6 +359,65 @@ public sealed class UninstallPageTests
         Assert.True(broker.ScanForced);
         Assert.Equal(ScanMode.Forced, outcome.Mode);
         Assert.Equal(1, broker.ObservedCalls);
+    }
+
+    // ---- a stage that runs again clears the scan from before ---------------------------------------------------
+
+    [Fact]
+    public async Task Check_again_after_a_completed_scan_leaves_no_outcome_until_the_new_scan_is_in()
+    {
+        // The Uninstall page may hold the completed scan for the Leftovers page; while the pipeline runs again it must
+        // not hand that scan over with the broker this run is using (Fable review of ui-broker-followups, must-fix 2).
+        var broker = new ScriptedBroker { PreparedProgram = PreparedFor(Route.Broker) };
+        var controller = Controller(Started(broker), new ScriptedMedium());
+        var asked = new ConfirmationQueue(controller);
+
+        var begin = controller.BeginAsync(Target);
+        await asked.NextAsync();
+        await controller.AnswerAsync(new UninstallAnswer(true, Quiet: true, RestorePoint.HighRisk));
+        await begin.WaitAsync(TimeSpan.FromSeconds(5));
+        var first = controller.CompletedOutcome;
+        Assert.NotNull(first);
+
+        var recheck = controller.RecheckAsync();
+        await asked.NextAsync();
+
+        Assert.True(controller.IsBusy);
+        Assert.Null(controller.CompletedOutcome);
+        Assert.Same(broker, controller.Broker);
+
+        await controller.AnswerAsync(new UninstallAnswer(true, Quiet: true, RestorePoint.HighRisk));
+        await recheck.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.NotNull(controller.CompletedOutcome);
+        Assert.NotSame(first, controller.CompletedOutcome);
+        Assert.Equal(2, broker.ScanCalls);
+    }
+
+    [Fact]
+    public async Task A_forced_cleanup_after_a_completed_scan_clears_the_old_outcome_before_it_scans()
+    {
+        var broker = new ScriptedBroker { PreparedProgram = PreparedFor(Route.Broker) };
+        var controller = Controller(Started(broker), new ScriptedMedium());
+        var asked = new ConfirmationQueue(controller);
+
+        var begin = controller.BeginAsync(Target);
+        await asked.NextAsync();
+        await controller.AnswerAsync(new UninstallAnswer(true, Quiet: true, RestorePoint.HighRisk));
+        await begin.WaitAsync(TimeSpan.FromSeconds(5));
+        var first = controller.CompletedOutcome;
+        Assert.NotNull(first);
+
+        var clearedWhileBusy = false;
+        controller.Changed += () =>
+        {
+            if (controller.IsBusy && controller.CompletedOutcome is null) clearedWhileBusy = true;
+        };
+        await controller.ForceAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.True(clearedWhileBusy, "the scan from before stayed while the forced scan ran");
+        Assert.NotSame(first, controller.CompletedOutcome);
+        Assert.True(controller.CompletedOutcome!.Forced);
     }
 
     // ---- still installed and restart -------------------------------------------------------------------------

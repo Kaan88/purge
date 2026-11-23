@@ -385,6 +385,7 @@ public sealed class UninstallController : IAsyncDisposable
     public Task RetryAsync() => GuardAsync(async () =>
     {
         ClearErrors();
+        StageRerun();
         switch (_retry)
         {
             case RetryStage.Run:
@@ -425,6 +426,7 @@ public sealed class UninstallController : IAsyncDisposable
         if (Target is null || _prepared is null) return;
         await GuardAsync(async () =>
         {
+            StageRerun();
             _prepared = null;
             ClearSteps();
             SetStep(UninstallStep.Record, StepState.Pending, null);
@@ -437,6 +439,7 @@ public sealed class UninstallController : IAsyncDisposable
     public Task ForceAsync() => GuardAsync(async () =>
     {
         ClearErrors();
+        StageRerun();
         _force = true;
         _retry = RetryStage.None;
         if (StateOf(UninstallStep.CheckGone) is StepState.Pending or StepState.Active)
@@ -462,6 +465,17 @@ public sealed class UninstallController : IAsyncDisposable
         Reset(target);
         if (await GatherAndConfirmAsync(ct).ConfigureAwait(false))
             await RunStageAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// A stage runs again (Retry, Check again, Run forced cleanup): the scan from before is no longer this run's, so
+    /// <see cref="CompletedOutcome"/> is cleared until the new scan is in. A page that holds the old scan for the
+    /// leftovers page must not hand it over (with the broker this run is using) meanwhile.
+    /// </summary>
+    private void StageRerun()
+    {
+        CompletedOutcome = null;
+        Raise();
     }
 
     /// <summary>Hands the live broker to the leftovers page. The controller no longer closes it.</summary>
