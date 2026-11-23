@@ -59,7 +59,10 @@ use purge_guard::canon::{GuardEnv, OtherAppRoot, canon_path};
 use purge_guard::deny::DenyList;
 use purge_guard::prefix;
 use purge_harvest::coproducts;
-use purge_harvest::harvest::{HarvestOpts, HarvestReport, SharedIndexes, harvest_report_with};
+use purge_harvest::harvest::{
+    HarvestOpts, HarvestReport, SharedIndexes, harvest_report_ahead, harvest_report_with, walk_sids,
+};
+use purge_harvest::refsnap::EarlyWalk;
 use purge_harvest::refsnap::HarvestCtx;
 use purge_harvest::roots::guard_env;
 use purge_identity::kbdata::Kb;
@@ -585,22 +588,28 @@ fn harvest_in(
         entry.display_name
     ));
 
-    let loaded;
-    let baseline = match injected {
-        Some(injected) => step_injected(injected, &mut warnings, &mut step),
-        None => {
-            loaded = baseline_for(sources, settings, &mut warnings, &mut step);
-            &loaded
-        }
-    };
-    step.say("harvest: reading roots, Inno log, anchors and the reference snapshot");
     let (cache, cache_kind) = table_cache(sources, settings);
     let cache = CountingCache::new(cache.as_ref());
     let opts = HarvestOpts {
         table_cache: Some(&cache),
         shared: None,
     };
-    let mut report = harvest_report_with(entry, &inv.doc, sources, &baseline.view, kb, &opts);
+    // The walk of the reference snapshot reads the same keys whatever the baseline and the anchors
+    // turn out to be: it starts here, beside the baseline load, and the harvest gives it its
+    // matcher when it has the anchors (`purge_harvest::refsnap::EarlyWalk`).
+    let mut report = std::thread::scope(|threads| {
+        let early = EarlyWalk::start(threads, sources.reg, &walk_sids(sources.sys, entry));
+        let loaded;
+        let baseline = match injected {
+            Some(injected) => step_injected(injected, &mut warnings, &mut step),
+            None => {
+                loaded = baseline_for(sources, settings, &mut warnings, &mut step);
+                &loaded
+            }
+        };
+        step.say("harvest: reading roots, Inno log, anchors and the reference snapshot");
+        harvest_report_ahead(entry, &inv.doc, sources, &baseline.view, kb, &opts, early)
+    });
     cache.report(cache_kind, settings);
     if !sources.sys.elevated() {
         let w = not_elevated_warning("harvest");
@@ -1846,6 +1855,38 @@ fn run_scan(
     app_id: &str,
     settings: &Settings,
     injected: Option<&PipelineBaseline>,
+    warnings: Vec<String>,
+    progress: Progress<'_>,
+) -> Result<Scanned, PipelineError> {
+    // The threads of the reference walk, which starts before the inventory and the baseline are
+    // read (`ScanExt::walk_ahead`).
+    std::thread::scope(|threads| {
+        run_scan_threads(
+            threads,
+            sources,
+            fp,
+            mode,
+            verify_gone,
+            app_id,
+            settings,
+            injected,
+            warnings,
+            progress,
+        )
+    })
+}
+
+/// [`run_scan`] with the thread scope its reference walk runs in.
+#[allow(clippy::too_many_arguments)]
+fn run_scan_threads<'scope, 'env>(
+    threads: &'scope std::thread::Scope<'scope, 'env>,
+    sources: Sources<'env>,
+    fp: &'env Fingerprint,
+    mode: ScanMode,
+    verify_gone: Option<VerifyGone>,
+    app_id: &str,
+    settings: &Settings,
+    injected: Option<&PipelineBaseline>,
     mut warnings: Vec<String>,
     mut progress: Progress<'_>,
 ) -> Result<Scanned, PipelineError> {
@@ -1860,6 +1901,10 @@ fn run_scan(
         warnings.push(format!("scan: the environment could not be read ({e})"));
         BTreeMap::new()
     });
+    // The one reference walk of the scan needs the fingerprint and the matcher only: it starts now
+    // and runs beside the inventory and the baseline load; `ScanExt::build_ahead` takes its hits.
+    let app = AppIdentityView::from_fingerprint(fp, &env);
+    let walk_ahead = ScanExt::walk_ahead(threads, sources.reg, fp, &app);
     let env_map: EnvMap = env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
     let (mut guard, guard_warnings) = guard_env(sources.reg, sources.sys);
     warnings.extend(guard_warnings.into_iter().map(|w| format!("scan: {w}")));
@@ -1908,11 +1953,10 @@ fn run_scan(
 
     // Scanners. What every scanner shares is read once, before the first (C-SCANEXT): the one
     // reference walk, the MSI ownership index and the system objects.
-    let app = AppIdentityView::from_fingerprint(fp, &env);
     step.say("scan: reading the references, the MSI ownership and the system objects");
     let (cache, cache_kind) = table_cache(sources, settings);
     let cache = CountingCache::new(cache.as_ref());
-    let ext = ScanExt::build(
+    let ext = ScanExt::build_ahead(
         sources.reg,
         sources.fs,
         sources.sys,
@@ -1922,19 +1966,9 @@ fn run_scan(
         &inv.doc.msi_only,
         Some(&cache),
         OwnershipLimits::default(),
+        walk_ahead,
     );
     cache.report(cache_kind, settings);
-    warnings.extend(ext_warnings(&ext));
-    step.done(&format!(
-        "scan: {} reference(s), {} MSI product(s), {} service(s); MSI table cache in {}",
-        ext.ref_hits.as_ref().map_or(0, Vec::len),
-        ext.ownership.stats().products,
-        ext.sysobj.services.len(),
-        match cache_kind {
-            TableCacheKind::Disk => "the data directory",
-            TableCacheKind::Memory => "memory",
-        }
-    ));
     let ctx = ScanCtx {
         reg: sources.reg,
         fs: sources.fs,
@@ -1949,16 +1983,45 @@ fn run_scan(
         limits: ScanLimits::default(),
         ext: &ext,
     };
+    // The scanners that ask nothing of the reference walk run first, while a walk started ahead is
+    // still reading; then the walk is waited for, and the scanners that read its hits run. The
+    // candidates, the faults and the warnings are put together in catalog order, as when every
+    // scanner runs in that order.
+    let scanners = all_scanners();
+    let mut found_by: Vec<Option<Vec<Candidate>>> = scanners.iter().map(|_| None).collect();
+    for reads_walk in [false, true] {
+        if reads_walk {
+            warnings.extend(ext_warnings(&ext));
+            step.done(&format!(
+                "scan: {} reference(s), {} MSI product(s), {} service(s); MSI table cache in {}",
+                ext.ref_hit_count(),
+                ext.ownership.stats().products,
+                ext.sysobj.services.len(),
+                match cache_kind {
+                    TableCacheKind::Disk => "the data directory",
+                    TableCacheKind::Memory => "memory",
+                }
+            ));
+        }
+        for (position, scanner) in scanners.iter().enumerate() {
+            if scanner.reads_ref_walk() != reads_walk {
+                continue;
+            }
+            ext.at_scanner(u32::try_from(position).unwrap_or(u32::MAX));
+            // `run`, not `scan`: the rule about what a value holds is applied to every candidate.
+            let found = ctx.run(scanner.as_ref(), &app);
+            step.done(&format!(
+                "scan: {} {} candidate(s)",
+                scanner.id(),
+                found.len()
+            ));
+            found_by[position] = Some(found);
+        }
+    }
     let mut candidates = Vec::new();
     let mut per_scanner = Vec::new();
-    for scanner in all_scanners() {
-        // `run`, not `scan`: the rule about what a value holds is applied to every candidate.
-        let found = ctx.run(scanner.as_ref(), &app);
-        step.done(&format!(
-            "scan: {} {} candidate(s)",
-            scanner.id(),
-            found.len()
-        ));
+    for (scanner, found) in scanners.iter().zip(found_by) {
+        let found = found.unwrap_or_default();
         per_scanner.push((scanner.id(), found.len()));
         candidates.extend(found);
     }

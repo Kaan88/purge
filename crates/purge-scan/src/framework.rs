@@ -178,6 +178,16 @@ pub trait Scanner: Send + Sync {
         &[]
     }
 
+    /// Whether the scanner asks for the hits of the scan's one reference walk, or for its
+    /// completeness (`ScanExt::ref_hits_for`, `ScanExt::ref_walk_complete`, the helpers built on
+    /// them). The pipeline runs the scanners that do not while the walk is still reading, and the
+    /// others when it is done; the candidates are put together in catalog order either way. The
+    /// answer only orders the work: a scanner that says `false` and asks all the same waits for
+    /// the walk and gets the same hits.
+    fn reads_ref_walk(&self) -> bool {
+        false
+    }
+
     /// Finds the app's leftovers.
     fn scan(&self, ctx: &ScanCtx<'_>, app: &AppIdentityView) -> Vec<Candidate>;
 }

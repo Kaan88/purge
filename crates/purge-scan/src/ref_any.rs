@@ -110,6 +110,10 @@ const VALUE_CONTAINERS: &[&str] = &[r"HKLM\SOFTWARE\Microsoft\MediaPlayer\ShimIn
 pub struct RefAny;
 
 impl Scanner for RefAny {
+    fn reads_ref_walk(&self) -> bool {
+        true
+    }
+
     fn id(&self) -> &'static str {
         ID
     }

@@ -358,6 +358,82 @@ fn ref_hits_under_separator_aware() {
     assert_eq!(other.ctx().ref_hits_under("HKLM").count(), 0);
 }
 
+/// The shared data built with the reference walk started ahead (`ScanExt::walk_ahead`, as the
+/// pipeline starts it before it reads the inventory and the baseline) holds what the plain build
+/// holds: the same hits for the app and none for another one, the same count and completeness.
+/// The hits are not in hand when the data is built; whoever asks first waits for the walk.
+#[test]
+fn ext_built_with_the_walk_ahead_holds_the_same_hits() {
+    let fx = {
+        let mut fx = machine();
+        let exe = format!(r"{ROOT}\7zFM.exe");
+        fx.set_value(r"HKLM\SOFTWARE\A\Sub", "Cmd", RegData::from_sz(&exe));
+        fx.set_value(r"HKLM\SOFTWARE\AB", "Cmd", RegData::from_sz(&exe));
+        fx
+    };
+    let world = World::new(fx).with_ext(&[]);
+    let app = AppIdentityView::from_fingerprint(&world.fp, &world.env);
+    let id = &world.fp.app.program_id;
+    let other = ProgramId::machine(View::K64, "Other").unwrap();
+    let plain = &world.ext;
+    assert!(!plain.ref_hits_for(id).unwrap().is_empty());
+
+    // Asked in every order: each question waits for the walk by itself.
+    for first in 0..3 {
+        let ahead = std::thread::scope(|threads| {
+            let walk = ScanExt::walk_ahead(threads, &world.fixture, &world.fp, &app)
+                .expect("an app with anchors is walked");
+            let ext = ScanExt::build_ahead(
+                &world.fixture,
+                &world.fixture,
+                &world.fixture,
+                &world.fp,
+                &app,
+                &[],
+                &[],
+                None,
+                OwnershipLimits::default(),
+                Some(walk),
+            );
+            assert!(ext.ref_hits.is_none());
+            // Another app's question is answered without the walk.
+            assert!(ext.ref_hits_for(&other).is_none());
+            match first {
+                0 => assert_eq!(ext.ref_hits_for(id), plain.ref_hits_for(id)),
+                1 => assert_eq!(ext.ref_walk_complete(), plain.ref_walk_complete()),
+                _ => assert_eq!(ext.ref_hit_count(), plain.ref_hit_count()),
+            }
+            ext
+        });
+        assert_eq!(ahead.ref_hits_for(id), plain.ref_hits_for(id));
+        assert_eq!(ahead.ref_walk_complete(), plain.ref_walk_complete());
+        assert_eq!(ahead.ref_hit_count(), plain.ref_hit_count());
+        assert_eq!(ahead.ref_hit_count(), plain.ref_hits_for(id).unwrap().len());
+        assert!(ahead.ref_hits_for(&other).is_none());
+        let ctx = ScanCtx {
+            ext: &ahead,
+            ..world.ctx()
+        };
+        let under = |ctx: &ScanCtx<'_>| -> Vec<String> {
+            ctx.ref_hits_under("HKLM").map(|h| h.key.clone()).collect()
+        };
+        assert_eq!(under(&ctx), under(&world.ctx()));
+    }
+
+    // An app without anchors is not walked, ahead or not.
+    let mut bare = World::new(machine());
+    bare.fp.roots.clear();
+    bare.fp.exes.clear();
+    bare.fp.tokens.clear();
+    bare.fp.anchors = Default::default();
+    let app = AppIdentityView::from_fingerprint(&bare.fp, &bare.env);
+    if app.anchors.is_empty() {
+        std::thread::scope(|threads| {
+            assert!(ScanExt::walk_ahead(threads, &bare.fixture, &bare.fp, &app).is_none());
+        });
+    }
+}
+
 // -------------------------------------------------------------------------------------------------------
 // Path-keyed stores
 // -------------------------------------------------------------------------------------------------------

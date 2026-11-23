@@ -65,6 +65,10 @@ const PROXY_SUBKEYS: [&str; 2] = ["ProxyStubClsid32", "ProxyStubClsid"];
 pub struct ComInterface;
 
 impl Scanner for ComInterface {
+    fn reads_ref_walk(&self) -> bool {
+        true
+    }
+
     fn id(&self) -> &'static str {
         ID
     }

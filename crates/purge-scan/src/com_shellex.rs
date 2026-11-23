@@ -185,6 +185,10 @@ const BHO_VALUES: &[&str] = &["NoExplorer"];
 pub struct ComShellex;
 
 impl Scanner for ComShellex {
+    fn reads_ref_walk(&self) -> bool {
+        true
+    }
+
     fn id(&self) -> &'static str {
         ID
     }

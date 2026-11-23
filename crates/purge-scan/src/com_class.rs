@@ -93,6 +93,10 @@ const ROOTS: &[RootSpec] = &[
 pub struct ComClass;
 
 impl Scanner for ComClass {
+    fn reads_ref_walk(&self) -> bool {
+        true
+    }
+
     fn id(&self) -> &'static str {
         ID
     }

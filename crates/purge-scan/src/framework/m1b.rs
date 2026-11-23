@@ -31,6 +31,8 @@
 use std::borrow::Cow;
 use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::mpsc::Receiver;
 use std::sync::{Mutex, OnceLock, PoisonError};
 use std::time::Instant;
 
@@ -81,11 +83,18 @@ pub struct ScanExt {
     /// Whether the walk of `ref_hits` read every key of its scope (`RefScan::is_complete`: not cut by a
     /// budget, every key readable). An incomplete walk may have missed a referrer (R3a S3).
     ref_complete: bool,
-    /// Scanner faults found while sealing, for the scan's warnings.
-    faults: Mutex<Vec<String>>,
+    /// The walk for `hits_app` when it is still running on its own threads
+    /// ([`ScanExt::build_ahead`]): `ref_hits` is `None` then, and whoever asks for the hits or
+    /// their completeness first waits for the walk.
+    late: Option<LateWalk>,
+    /// The place in the catalog order of the scanner that is running ([`ScanExt::at_scanner`]); 0
+    /// when the caller runs its scanners in catalog order and says nothing.
+    position: AtomicU32,
+    /// Scanner faults found while sealing, for the scan's warnings: (position, line).
+    faults: Mutex<Vec<(u32, String)>>,
     /// What scanners could not read (a source answering `NotCaptured` or `AccessDenied`, an object the
-    /// index could not read), for the scan's warnings ([`ScanExt::warn`]).
-    warnings: Mutex<Vec<String>>,
+    /// index could not read), for the scan's warnings ([`ScanExt::warn`]): (position, line).
+    warnings: Mutex<Vec<(u32, String)>>,
     /// The registry targets under a Classes root that got `MsiPackageUnreadable` (folded spelling), for
     /// the count in the scan's warnings.
     unknown_ownership: Mutex<BTreeSet<String>>,
@@ -139,7 +148,73 @@ impl Phase {
     }
 }
 
+/// What a reference walk gives: its hits, in walk order, and whether it read every key of its
+/// scope.
+type Walked = (Vec<RefHit>, bool);
+
+/// The reference walk of [`ScanExt::build`], started ahead of it on a thread of its own
+/// ([`ScanExt::walk_ahead`]): where its hits and its completeness arrive.
+pub struct WalkAhead(Receiver<Walked>);
+
+/// A reference walk that may still be running: its result is taken once, by the first reader, who
+/// waits for it.
+#[derive(Debug)]
+struct LateWalk {
+    arriving: Mutex<Option<Receiver<Walked>>>,
+    arrived: OnceLock<Walked>,
+}
+
+impl LateWalk {
+    /// The hits of the walk and whether it read every key, waiting for the walk to end.
+    ///
+    /// # Panics
+    ///
+    /// When the walk's thread ended without a result (it panicked; the thread scope it runs in
+    /// reports that panic).
+    fn get(&self) -> &Walked {
+        self.arrived.get_or_init(|| {
+            let arriving = self
+                .arriving
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take();
+            arriving
+                .and_then(|walk| walk.recv().ok())
+                .expect("the reference walk ended without a result")
+        })
+    }
+}
+
 impl ScanExt {
+    /// Starts the one reference walk of a scan of `fp`'s app (the walk [`ScanExt::build`] makes:
+    /// `ref_any::walk` with the app's matcher) on a thread of `threads`, for
+    /// [`ScanExt::build_ahead`]. The walk needs the fingerprint and the matcher only, so a caller
+    /// starts it before it reads the inventory and loads the baseline, and it runs beside them.
+    /// `None`, and nothing started, for an app without anchors (no walk is made), with a source
+    /// meter installed (`PURGE_TIMING`: each phase counts its own reads) and when the system
+    /// refuses the thread: [`ScanExt::build_ahead`] then walks itself.
+    pub fn walk_ahead<'scope, 'env>(
+        threads: &'scope std::thread::Scope<'scope, 'env>,
+        reg: &'env dyn RegistrySource,
+        fp: &'env Fingerprint,
+        app: &AppIdentityView,
+    ) -> Option<WalkAhead> {
+        if app.anchors.is_empty() || purge_source::metered::installed().is_some() {
+            return None;
+        }
+        let refs = app.refs.clone();
+        let (done, arriving) = std::sync::mpsc::channel();
+        std::thread::Builder::new()
+            .spawn_scoped(threads, move || {
+                let scan = crate::ref_any::walk(reg, fp, &refs);
+                let complete = scan.is_complete();
+                // Nobody waits any more when the scan ended early; the hits are dropped then.
+                let _ = done.send((scan.hits, complete));
+            })
+            .ok()
+            .map(|_| WalkAhead(arriving))
+    }
+
     /// No hits, an empty ownership index, no system objects: the M1a context.
     pub fn none() -> &'static ScanExt {
         static NONE: OnceLock<ScanExt> = OnceLock::new();
@@ -160,6 +235,8 @@ impl ScanExt {
             sysobj,
             hits_app: None,
             ref_complete: true,
+            late: None,
+            position: AtomicU32::new(0),
             faults: Mutex::new(Vec::new()),
             warnings: Mutex::new(Vec::new()),
             unknown_ownership: Mutex::new(BTreeSet::new()),
@@ -184,22 +261,59 @@ impl ScanExt {
         self.ref_hits = Some(hits);
         self.hits_app = Some(app.clone());
         self.ref_complete = complete;
+        self.late = None;
         self
+    }
+
+    /// [`ScanExt::with_ref_walk`] for a walk of `app` that is still running: its hits and its
+    /// completeness are what the readers get, when the walk is done.
+    #[must_use]
+    fn with_late_walk(mut self, app: &ProgramId, walk: WalkAhead) -> ScanExt {
+        self.ref_hits = None;
+        self.hits_app = Some(app.clone());
+        self.late = Some(LateWalk {
+            arriving: Mutex::new(Some(walk.0)),
+            arrived: OnceLock::new(),
+        });
+        self
+    }
+
+    /// Says which scanner runs next: its place in the catalog order. A caller that runs the
+    /// scanners in another order (the pipeline runs those that do not read the reference walk
+    /// while the walk is still running) says it before each run, and [`ScanExt::take_faults`] and
+    /// [`ScanExt::take_warnings`] then give the lines a run in catalog order gives.
+    pub fn at_scanner(&self, position: u32) {
+        self.position.store(position, Ordering::SeqCst);
+    }
+
+    /// How many hits the reference walk has; 0 without a walk. Waits for a walk that is still
+    /// running.
+    pub fn ref_hit_count(&self) -> usize {
+        match &self.late {
+            Some(late) => late.get().0.len(),
+            None => self.ref_hits.as_ref().map_or(0, Vec::len),
+        }
     }
 
     /// Whether the reference walk read every key of its scope (R3a S3). A scanner that concludes "no
     /// other referrer" from the walk's hits must not reach Tier A when this is false: unknown never
     /// removes a blocker. `true` when no walk is held (nothing is concluded from it then).
     pub fn ref_walk_complete(&self) -> bool {
-        self.ref_complete
+        match &self.late {
+            Some(late) => late.get().1,
+            None => self.ref_complete,
+        }
     }
 
     /// The reference hits when the walk was run for `app`; `None` otherwise (no walk, or the walk of
     /// another app: a co-removed product's pass walks with its own anchors and hives).
     pub fn ref_hits_for(&self, app: &ProgramId) -> Option<&[RefHit]> {
-        match (&self.ref_hits, &self.hits_app) {
-            (Some(hits), Some(owner)) if owner == app => Some(hits),
-            _ => None,
+        if self.hits_app.as_ref() != Some(app) {
+            return None;
+        }
+        match &self.late {
+            Some(late) => Some(&late.get().0),
+            None => self.ref_hits.as_deref(),
         }
     }
 
@@ -227,6 +341,30 @@ impl ScanExt {
         msi_only: &[MsiOnlyRow],
         cache: Option<&dyn TableCache>,
         limits: OwnershipLimits,
+    ) -> ScanExt {
+        Self::build_ahead(
+            reg, fs, sys, fp, app, inventory, msi_only, cache, limits, None,
+        )
+    }
+
+    /// [`ScanExt::build`] with the reference walk already running ([`ScanExt::walk_ahead`] for the
+    /// same registry, fingerprint and app): the indexes are built here, and the walk's hits are
+    /// taken when somebody first asks for them ([`ScanExt::ref_hits_for`],
+    /// [`ScanExt::ref_walk_complete`], [`ScanExt::ref_hit_count`]), who then waits for the walk. A
+    /// scanner that asks nothing of the walk can run while it is still reading. The same data as
+    /// [`ScanExt::build`]; `None` is [`ScanExt::build`].
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_ahead(
+        reg: &dyn RegistrySource,
+        fs: &dyn FileSystemSource,
+        sys: &dyn SystemSource,
+        fp: &Fingerprint,
+        app: &AppIdentityView,
+        inventory: &[InventoryEntry],
+        msi_only: &[MsiOnlyRow],
+        cache: Option<&dyn TableCache>,
+        limits: OwnershipLimits,
+        ahead: Option<WalkAhead>,
     ) -> ScanExt {
         let walk = || {
             let phase = Phase::start("refscan");
@@ -259,37 +397,41 @@ impl ScanExt {
             phase.end();
             (ownership, sysobj)
         };
-        let ((hits, complete), (ownership, sysobj)) =
-            if purge_source::metered::installed().is_some() {
-                let found = walk();
-                (found, indexes(0))
-            } else {
-                std::thread::scope(|scope| {
-                    let beside = || indexes(INDEX_THREADS_BESIDE_WALK);
-                    match std::thread::Builder::new().spawn_scoped(scope, beside) {
-                        Ok(worker) => {
-                            let found = walk();
-                            match worker.join() {
-                                Ok(built) => (found, built),
-                                Err(panic) => std::panic::resume_unwind(panic),
-                            }
-                        }
-                        Err(_) => {
-                            let found = walk();
-                            (found, indexes(0))
+        let ((hits, complete), (ownership, sysobj)) = if let Some(ahead) = ahead {
+            // The walk is on its threads already: the indexes are read here, beside it.
+            let (ownership, sysobj) = indexes(INDEX_THREADS_BESIDE_WALK);
+            return ScanExt::new(ownership, sysobj).with_late_walk(&fp.app.program_id, ahead);
+        } else if purge_source::metered::installed().is_some() {
+            let found = walk();
+            (found, indexes(0))
+        } else {
+            std::thread::scope(|scope| {
+                let beside = || indexes(INDEX_THREADS_BESIDE_WALK);
+                match std::thread::Builder::new().spawn_scoped(scope, beside) {
+                    Ok(worker) => {
+                        let found = walk();
+                        match worker.join() {
+                            Ok(built) => (found, built),
+                            Err(panic) => std::panic::resume_unwind(panic),
                         }
                     }
-                })
-            };
+                    Err(_) => {
+                        let found = walk();
+                        (found, indexes(0))
+                    }
+                }
+            })
+        };
         ScanExt::new(ownership, sysobj).with_ref_walk(&fp.app.program_id, hits, complete)
     }
 
     /// Records a scanner fault.
     pub(super) fn fault(&self, line: String) {
+        let position = self.position.load(Ordering::SeqCst);
         self.faults
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .push(line);
+            .push((position, line));
     }
 
     /// Starts the residue attribution of `site`'s scanner run ([`ScanCtx::run`]).
@@ -330,9 +472,18 @@ impl ScanExt {
             .collect()
     }
 
-    /// The scanner faults recorded so far (candidates the sealing dropped), emptied.
+    /// The scanner faults recorded so far (candidates the sealing dropped), emptied: in catalog
+    /// order of the scanners ([`ScanExt::at_scanner`]), each scanner's in the order it gave them.
     pub fn take_faults(&self) -> Vec<String> {
-        std::mem::take(&mut *self.faults.lock().unwrap_or_else(PoisonError::into_inner))
+        Self::in_catalog_order(std::mem::take(
+            &mut *self.faults.lock().unwrap_or_else(PoisonError::into_inner),
+        ))
+    }
+
+    /// The lines by the position of their scanner; lines of one position stay in the order given.
+    fn in_catalog_order(mut lines: Vec<(u32, String)>) -> Vec<String> {
+        lines.sort_by_key(|(position, _)| *position);
+        lines.into_iter().map(|(_, line)| line).collect()
     }
 
     /// The scan-warning channel of the scanners (S-COMMON: "when a needed source answers NotCaptured or
@@ -341,15 +492,26 @@ impl ScanExt {
     /// may call this for every object it skips. The pipeline prints them as `scan: <line>`.
     pub fn warn(&self, scanner: &str, message: impl AsRef<str>) {
         let line = format!("{scanner}: {}", message.as_ref());
+        let position = self.position.load(Ordering::SeqCst);
         let mut lines = self.warnings.lock().unwrap_or_else(PoisonError::into_inner);
-        if !lines.contains(&line) {
-            lines.push(line);
+        match lines.iter().position(|(_, known)| *known == line) {
+            None => lines.push((position, line)),
+            // The line is the earlier scanner's, as it is when the scanners run in catalog order:
+            // it is given here, now.
+            Some(at) if position < lines[at].0 => {
+                lines.remove(at);
+                lines.push((position, line));
+            }
+            Some(_) => {}
         }
     }
 
-    /// The scanner warnings recorded so far ([`ScanExt::warn`]), in the order first given, emptied.
+    /// The scanner warnings recorded so far ([`ScanExt::warn`]), emptied: in the order a run of the
+    /// scanners in catalog order first gives them ([`ScanExt::at_scanner`]).
     pub fn take_warnings(&self) -> Vec<String> {
-        std::mem::take(&mut *self.warnings.lock().unwrap_or_else(PoisonError::into_inner))
+        Self::in_catalog_order(std::mem::take(
+            &mut *self.warnings.lock().unwrap_or_else(PoisonError::into_inner),
+        ))
     }
 
     /// How many distinct registry targets under a Classes root got `MsiPackageUnreadable` so far
@@ -1631,6 +1793,61 @@ impl CandidateBuilder<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Faults and warnings come out as a run of the scanners in catalog order gives them, whatever
+    /// order the scanners ran in: by scanner position, a scanner's own lines in the order it gave
+    /// them, and a line two scanners give is the earlier scanner's, at the place where that
+    /// scanner gave it.
+    #[test]
+    fn faults_and_warnings_come_out_in_catalog_order() {
+        let run = |order: &[u32]| {
+            let ext = ScanExt::new(OwnershipIndex::default(), SysObjectIndex::default());
+            for position in order {
+                ext.at_scanner(*position);
+                match position {
+                    1 => {
+                        ext.warn("A", "first");
+                        ext.warn("X", "shared");
+                        ext.warn("A", "second");
+                        ext.warn("A", "first");
+                        ext.fault("a1".into());
+                        ext.fault("a2".into());
+                    }
+                    2 => {
+                        ext.warn("X", "shared");
+                        ext.warn("B", "only");
+                        ext.fault("b".into());
+                    }
+                    _ => {
+                        ext.warn("C", "late");
+                        ext.warn("X", "shared");
+                        ext.fault("c".into());
+                    }
+                }
+            }
+            (ext.take_warnings(), ext.take_faults())
+        };
+        let catalog = run(&[1, 2, 3]);
+        assert_eq!(
+            catalog.0,
+            ["A: first", "X: shared", "A: second", "B: only", "C: late"]
+        );
+        assert_eq!(catalog.1, ["a1", "a2", "b", "c"]);
+        for order in [[3, 1, 2], [2, 3, 1], [3, 2, 1], [1, 3, 2], [2, 1, 3]] {
+            assert_eq!(run(&order), catalog, "{order:?}");
+        }
+
+        // Nobody says a position: the order given, each warning once, as before.
+        let ext = ScanExt::new(OwnershipIndex::default(), SysObjectIndex::default());
+        ext.warn("B", "one");
+        ext.warn("A", "two");
+        ext.warn("B", "one");
+        ext.fault("z".into());
+        ext.fault("y".into());
+        assert_eq!(ext.take_warnings(), ["B: one", "A: two"]);
+        assert_eq!(ext.take_faults(), ["z", "y"]);
+        assert!(ext.take_warnings().is_empty() && ext.take_faults().is_empty());
+    }
 
     #[test]
     fn unquote_is_the_executors() {
