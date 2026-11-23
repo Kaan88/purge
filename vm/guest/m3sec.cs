@@ -1116,7 +1116,7 @@ static partial class M3Sec {
                 steps.Add(new Dictionary<string, object> { { "step", "invoke Continue" }, { "t", Now() } });
             } else steps.Add(new Dictionary<string, object> { { "step", "no Continue button" }, { "consent_up", Process.GetProcessesByName("consent").Length > 0 } });
         } else if (action == "read-bar") {
-            string want = S(spec, "text", "You cancelled the admin prompt.");
+            string want = S(spec, "text", "You cancelled the Windows prompt.");
             bool found = false;
             var texts = new List<string>();
             while (!found && DateTime.Now < end) {

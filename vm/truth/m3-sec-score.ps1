@@ -191,7 +191,7 @@ function Test-Uac([string]$Ev, $X) {
     $why = @()
     if (-not ($us -and $us.present -eq $true)) { $why += 'no real UI installed (pass -UiPublish)' }
     elseif (-not $us.consent_pid) { $why += 'the Windows prompt did not come up' }
-    if (-not ($ur -and $ur.bar_found -eq $true)) { $why += 'no "You cancelled the admin prompt." bar' }
+    if (-not ($ur -and $ur.bar_found -eq $true)) { $why += 'no "You cancelled the Windows prompt." bar' }
     if (-not ($ur -and (Has $ur 'broker_processes') -and @(Arr $ur.broker_processes).Count -eq 0)) { $why += 'a broker process ran' }
     if (-not ($ur -and $ur.data_root_changed -eq $false)) { $why += 'data root changed or not compared' }
     if (-not ($ur -and $ur.fixture_arp_present -eq $true -and $ur.uninstaller_ran -eq $false)) { $why += 'the program changed' }

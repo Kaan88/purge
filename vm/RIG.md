@@ -1931,7 +1931,7 @@ powershell -NoProfile -File vm\truth\m3-sec-score.ps1 --self-test
 - **`m3-uac`** (G5, T8, 8.1; from `m3-uac-on`, fixture `lookalike45`). (1) The real UI from `C:\Program Files\PurgeUI`
   at medium; `m3sec ui` (UI Automation from high) selects "Purge Rig App", invokes Uninstall and Continue; the host
   answers the secure desktop with Alt+N (Esc only while `consent.exe` is still up); the agent reads the bar "You
-  cancelled the admin prompt." and checks that no broker process exists, no `Purge` event was written, the data root
+  cancelled the Windows prompt." and checks that no broker process exists, no `Purge` event was written, the data root
   and the program are unchanged. (2) The rig client, No: `runas` fails with 1223, no broker. (3) The rig client, Yes
   (Alt+Y): the broker runs at high (`m3sec procinfo`); the uninstall dialog's first appearance is polled every 30 ms
   and clicked with real input (SendInput) about 300 ms later (`arm`: must do nothing; the button is enabled after 1.8
