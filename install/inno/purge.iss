@@ -108,9 +108,10 @@ SolidCompression=yes
 WizardStyle=modern
 UninstallDisplayName={#AppName}
 UninstallDisplayIcon={app}\Purge.exe
-; A running Purge.exe holds the files the setup replaces. PrepareToInstall (below) stops every process
-; that runs from {app} first, window or not; Restart Manager stays as the fallback for anything else
-; that holds a file (a silent setup lets it close those without asking).
+; A running Purge.exe holds the files the setup replaces. PrepareToInstall (below) first stops Purge's
+; own executables in {app} (Purge.exe, purge-broker.exe, purge-engine.exe, RestartAgent.exe), window or
+; not, and refuses any install folder but {autopf}\Purge; Restart Manager stays as the fallback for
+; anything else that holds a file (a silent setup lets it close those without asking).
 CloseApplications=yes
 RestartApplications=no
 VersionInfoVersion={#AppVersionNumeric}
@@ -248,23 +249,88 @@ begin
   end;
 end;
 
+{ The executables of Purge in its install folder: the UI, the broker and the engine, and
+  RestartAgent.exe, which the Windows App SDK publish puts next to Purge.exe (it runs only for
+  AppInstance.Restart, which Purge does not call). The setup stops nothing else, so a /DIR that
+  points at a folder of other programs could not make it end those (PrepareToInstall refuses such a
+  folder anyway). }
+function IsAppImage(const Name: String): Boolean;
+begin
+  Result := (CompareText(Name, 'Purge.exe') = 0) or (CompareText(Name, 'purge-broker.exe') = 0) or
+    (CompareText(Name, 'purge-engine.exe') = 0) or (CompareText(Name, 'RestartAgent.exe') = 0);
+end;
+
+{ By image name, without /T: a program's uninstaller the broker started is not Purge's and is left
+  alone. taskkill exit code 128 means "not running", which is the normal case; the exit code is
+  logged, not treated as an error. Used by the uninstaller, and by the setup only when WMI cannot
+  list the processes; never for RestartAgent.exe, which every Windows App SDK app ships. }
 procedure StopPurgeImage(const ImageName: String);
 var
   Code: Integer;
 begin
-  { taskkill exit code 128 means "not running", which is the normal case; the exit code is logged,
-    not treated as an error. }
-  if Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /T /IM "' + ImageName + '"',
+  if Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM "' + ImageName + '"',
       '', SW_HIDE, ewWaitUntilTerminated, Code) then
-    Log('taskkill ' + ImageName + ': exit code ' + IntToStr(Code))
+    Log('taskkill /F /IM ' + ImageName + ': exit code ' + IntToStr(Code))
   else
     Log('taskkill ' + ImageName + ' could not be started');
 end;
 
-{ The processes whose executable is inside AppDir (Purge.exe, purge-broker.exe, purge-engine.exe, and
-  anything else started from the install folder), found by their path through WMI, so that a
-  purge-engine.exe of a development build elsewhere is not touched. Purge.exe comes first: it hosts
-  the engine and started the broker. The setup is elevated, so it reads the elevated broker's path. }
+{ True when the file is held by a running process: an exe that runs cannot be opened for writing
+  (its image section refuses it). The setup is elevated and Administrators may write the install
+  tree, so a refusal here means "in use". Opening changes nothing in the file. }
+function ImageInUse(const Path: String): Boolean;
+var
+  Stream: TFileStream;
+begin
+  Result := False;
+  if not FileExists(Path) then
+    Exit;
+  try
+    Stream := TFileStream.Create(Path, fmOpenReadWrite or fmShareDenyNone);
+    Stream.Free;
+  except
+    Result := True;
+  end;
+end;
+
+{ The app's executables in AppDir that are in use, as a list for the log and the question. }
+function ImagesInUse(const AppDir: String; var Names: String): Boolean;
+begin
+  Names := '';
+  if ImageInUse(AppDir + '\Purge.exe') then
+    Names := Names + ', Purge.exe';
+  if ImageInUse(AppDir + '\purge-broker.exe') then
+    Names := Names + ', purge-broker.exe';
+  if ImageInUse(AppDir + '\purge-engine.exe') then
+    Names := Names + ', purge-engine.exe';
+  if ImageInUse(AppDir + '\RestartAgent.exe') then
+    Names := Names + ', RestartAgent.exe';
+  Result := Names <> '';
+  if Result then
+    Names := Copy(Names, 3, Length(Names) - 2);
+end;
+
+{ Waits up to 10 s until no executable of the app in AppDir is in use. True when none is. }
+function WaitImagesFree(const AppDir: String): Boolean;
+var
+  Names: String;
+  Waited: Integer;
+begin
+  Waited := 0;
+  while ImagesInUse(AppDir, Names) and (Waited < 10000) do
+  begin
+    Sleep(250);
+    Waited := Waited + 250;
+  end;
+  Result := not ImagesInUse(AppDir, Names);
+  if not Result then
+    Log('Still in use after ' + IntToStr(Waited) + ' ms: ' + Names);
+end;
+
+{ The processes whose executable is AppDir\<one of the app's images> (IsAppImage), found by their
+  path through WMI, so that a purge-engine.exe of a development build elsewhere is not touched.
+  Purge.exe comes first: it hosts the engine and started the broker. The setup is elevated, so it
+  reads the elevated broker's path. Raises an exception when WMI cannot be used. }
 function FindAppProcesses(const AppDir: String; var Pids: TPidList; var Names: String): Integer;
 var
   Locator, Services, Found, Item: Variant;
@@ -286,7 +352,9 @@ begin
         Continue;
       ExePath := Item.ExecutablePath;
       Name := Item.Name;
-      if CompareText(Copy(ExePath, 1, Length(Prefix)), Prefix) <> 0 then
+      if not IsAppImage(Name) then
+        Continue;
+      if CompareText(ExePath, Prefix + Name) <> 0 then
         Continue;
       if (CompareText(Name, 'Purge.exe') = 0) <> (Pass = 0) then
         Continue;
@@ -300,75 +368,127 @@ begin
     end;
 end;
 
-{ Stops every process that runs from AppDir and waits until they are gone. True when none is left.
-  taskkill /F per process id, without /T: a child the broker started (another program's uninstaller)
-  is not Purge's and is left alone. }
-function StopAppProcesses(const AppDir: String): Boolean;
+{ Stops the processes FindAppProcesses found (taskkill /F per process id, without /T: a child the
+  broker started, another program's uninstaller, is not Purge's and is left alone) and waits up to
+  10 s until they are gone, then until their files are free. True when nothing of the app is left. }
+function StopAppProcesses(const AppDir: String; const Pids: TPidList): Boolean;
 var
-  Pids: TPidList;
+  Left: TPidList;
   Names: String;
   I, Count, Code, Waited: Integer;
 begin
-  Count := FindAppProcesses(AppDir, Pids, Names);
-  Result := Count = 0;
-  if Result then
-    Exit;
-  Log('Stopping Purge before the files are replaced: ' + Names);
-  for I := 0 to Count - 1 do
+  for I := 0 to GetArrayLength(Pids) - 1 do
     if Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /PID ' + IntToStr(Pids[I]), '', SW_HIDE,
         ewWaitUntilTerminated, Code) then
       Log('taskkill /F /PID ' + IntToStr(Pids[I]) + ': exit code ' + IntToStr(Code))
     else
       Log('taskkill could not be started for process ' + IntToStr(Pids[I]));
   Waited := 0;
-  repeat
-    Sleep(250);
-    Waited := Waited + 250;
-    Count := FindAppProcesses(AppDir, Pids, Names);
-  until (Count = 0) or (Waited >= 10000);
-  Result := Count = 0;
-  if not Result then
-    Log('Still running after ' + IntToStr(Waited) + ' ms: ' + Names);
+  try
+    repeat
+      Sleep(250);
+      Waited := Waited + 250;
+      Count := FindAppProcesses(AppDir, Left, Names);
+    until (Count = 0) or (Waited >= 10000);
+    Result := Count = 0;
+    if not Result then
+      Log('Still running after ' + IntToStr(Waited) + ' ms: ' + Names);
+  except
+    { The kills went out and only the second look failed: the files tell whether they worked. }
+    Log('Listing the processes again failed (' + GetExceptionMessage + '); checking the files instead');
+    Result := True;
+  end;
+  if Result then
+    Result := WaitImagesFree(AppDir);
+end;
+
+{ Interactive runs ask before Purge is stopped; a silent run (Hub's update) does not ask. OK is the
+  default when message boxes are suppressed. }
+function MayStop(const Names: String): Boolean;
+begin
+  Result := WizardSilent or (SuppressibleMsgBox('Purge is running: ' + Names + '.' + CrLf + CrLf +
+    'Setup closes it before it replaces the files. A cleanup that is still running stops where it ' +
+    'is; Purge offers to resume or roll it back the next time it starts.' + CrLf + CrLf +
+    'Choose Cancel to close Purge yourself first.',
+    mbConfirmation, MB_OKCANCEL, IDOK) = IDOK);
 end;
 
 { Hub (COMPLIANCE.md section 4) asks Purge's window to close and never ends a process; the broker and
-  the engine have no window. So the setup stops whatever still runs from the install folder before it
-  replaces a file, in a silent run without asking. Interactive, it asks first (OK is the default when
-  message boxes are suppressed). A non-empty result stops the setup on the Preparing page; a silent
-  setup then exits with code 7 and changes nothing. }
+  the engine have no window. So the setup stops Purge itself before it replaces a file. A non-empty
+  result stops the setup on the Preparing page, before any change; a silent setup then exits with
+  code 7.
+  - The install folder is fixed (Program Files\Purge; the broker refuses a folder a non-administrator
+    could write). DisableDirPage does not stop a /DIR on the command line, so a setup run for another
+    folder is refused here, before it copies, re-protects or stops anything.
+  - Normally: the app's processes in the install folder, by path (WMI), killed by process id.
+  - Without WMI: the three Purge images whose installed file is in use, by name, then a wait until
+    the files are free.
+  Either way the result says "could not be closed" when a file of the app is still in use. }
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
-  AppDir, Names: String;
+  AppDir, Expected, Names: String;
   Pids: TPidList;
   Count: Integer;
+  Listed: Boolean;
 begin
   Result := '';
-  AppDir := ExpandConstant('{app}');
+  AppDir := RemoveBackslashUnlessRoot(ExpandConstant('{app}'));
+  Expected := ExpandConstant('{autopf}\Purge');
+  if CompareText(AppDir, Expected) <> 0 then
+  begin
+    Log('Refused the install folder ' + AppDir + ': Purge installs only to ' + Expected);
+    Result := 'Purge can only be installed to ' + Expected + '. Run Setup again without /DIR.';
+    Exit;
+  end;
   if not DirExists(AppDir) then
     Exit;
+
+  Listed := True;
+  Count := 0;
   try
     Count := FindAppProcesses(AppDir, Pids, Names);
-    if Count = 0 then
-      Exit;
-    if not WizardSilent then
-      if SuppressibleMsgBox('Purge is running: ' + Names + '.' + CrLf + CrLf +
-          'Setup closes it before it replaces the files. A cleanup that is still running stops where it ' +
-          'is; Purge offers to resume or roll it back the next time it starts.' + CrLf + CrLf +
-          'Choose Cancel to close Purge yourself first.',
-          mbConfirmation, MB_OKCANCEL, IDOK) <> IDOK then
-      begin
-        Result := 'Purge is still running. Close Purge, then run Setup again.';
-        Exit;
-      end;
-    if not StopAppProcesses(AppDir) then
-      Result := 'Purge could not be closed. Close Purge, then run Setup again.';
   except
-    { No WMI: stop the three images by name, as the uninstaller does. }
-    Log('Finding Purge''s processes failed (' + GetExceptionMessage + '); stopping them by name');
-    StopPurgeImage('Purge.exe');
-    StopPurgeImage('purge-broker.exe');
-    StopPurgeImage('purge-engine.exe');
+    Listed := False;
+    Log('Finding Purge''s processes failed (' + GetExceptionMessage + '); checking its files instead');
   end;
+
+  if Listed then
+  begin
+    if Count = 0 then
+    begin
+      { Nothing of the app in the process list; a file still in use is waited for all the same. }
+      if not WaitImagesFree(AppDir) then
+        Result := 'Purge could not be closed. Close Purge, then run Setup again.';
+      Exit;
+    end;
+    if not MayStop(Names) then
+    begin
+      Result := 'Purge is still running. Close Purge, then run Setup again.';
+      Exit;
+    end;
+    Log('Stopping Purge before the files are replaced: ' + Names);
+    if not StopAppProcesses(AppDir, Pids) then
+      Result := 'Purge could not be closed. Close Purge, then run Setup again.';
+    Exit;
+  end;
+
+  { No WMI: by image name, only for an image whose installed file is in use. }
+  if not ImagesInUse(AppDir, Names) then
+    Exit;
+  if not MayStop(Names) then
+  begin
+    Result := 'Purge is still running. Close Purge, then run Setup again.';
+    Exit;
+  end;
+  Log('Stopping Purge by image name before the files are replaced: ' + Names);
+  if ImageInUse(AppDir + '\Purge.exe') then
+    StopPurgeImage('Purge.exe');
+  if ImageInUse(AppDir + '\purge-broker.exe') then
+    StopPurgeImage('purge-broker.exe');
+  if ImageInUse(AppDir + '\purge-engine.exe') then
+    StopPurgeImage('purge-engine.exe');
+  if not WaitImagesFree(AppDir) then
+    Result := 'Purge could not be closed. Close Purge, then run Setup again.';
 end;
 
 procedure RemoveEventLogSource;

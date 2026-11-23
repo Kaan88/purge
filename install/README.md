@@ -308,7 +308,8 @@ setup log) and aborts, which rolls the install back, so nothing half-installed s
 
 **Uninstall.** From "Installed apps" (or `unins000.exe`). Before the uninstaller deletes any file,
 `CurUninstallStepChanged(usUninstall)` force-stops `Purge.exe`, `purge-broker.exe` and
-`purge-engine.exe` (`taskkill /F /T`), removes
+`purge-engine.exe` by image name (`taskkill /F /IM`, without `/T`, so a program's uninstaller the broker
+started is left alone), removes
 `HKLM\SYSTEM\CurrentControlSet\Services\EventLog\Application\Purge`, then asks whether to delete
 `%ProgramData%\Purge` too. The default is **No** (silent uninstalls keep it without asking): the quarantine holds
 files that were removed from the PC and can still be restored, so deleting the folder is an explicit
@@ -320,11 +321,22 @@ the setup elevated with `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART` and reading i
 success). A silent run shows nothing and asks nothing: the `[Run]` entry is `skipifsilent`, a failed
 post-install step only writes to the setup log, and there is no custom page. Hub asks Purge's window to
 close and never ends a process, and the broker and the engine have no window, so `PrepareToInstall`
-stops every process whose executable is in `{app}` (found by path through WMI; Purge.exe first, then
-the rest; `taskkill /F /PID`, no `/T`, so a program's uninstaller the broker started is left
-alone) and waits up to 10 s for them to be gone; if one stays, the setup stops before it changes
-anything (exit code 7). Run interactively, it asks first. `CloseApplications=yes` stays as the
-fallback for anything else holding a file. `AppId` and `DefaultDirName` never change, and the
+stops Purge itself:
+- It refuses any install folder but `{autopf}\Purge` (exit code 7, nothing changed). There is no
+  directory page, but `/DIR=` on the command line would still pick another folder, and the stop step,
+  the re-protection of the tree and `[UninstallDelete]` all act on `{app}`.
+- It stops only the app's own executables in that folder: a process whose path is exactly
+  `{app}\Purge.exe`, `purge-broker.exe`, `purge-engine.exe` or `RestartAgent.exe` (the Windows App SDK
+  helper the UI publish ships), found through WMI; Purge.exe first; `taskkill /F /PID`, no `/T`, so a
+  program's uninstaller the broker started is left alone. It waits up to 10 s until they are gone and
+  their files can be opened for writing.
+- Without WMI it opens the four files instead: for each of the three Purge images whose installed file
+  is in use it runs `taskkill /F /IM` (no `/T`; never for `RestartAgent.exe`, which every Windows App
+  SDK app has), then waits up to 10 s for the files to be free.
+- If a file of the app is still in use after that, the setup stops before it changes anything (exit
+  code 7, "Purge could not be closed"). Run interactively, it asks before it stops anything.
+
+`CloseApplications=yes` stays as the fallback for anything else holding a file. `AppId` and `DefaultDirName` never change, and the
 `DisplayVersion` Inno writes is `AppVersion`.
 
 **Version.** The one version is `[workspace.package] version` in the root `Cargo.toml`.

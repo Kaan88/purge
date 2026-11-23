@@ -8,7 +8,16 @@
 #
 # workflow_dispatch with publish=false (the default) builds and checks everything and publishes
 # nothing: the files are kept as a workflow artifact. With publish=true it creates the tag v<version>
-# at the commit it ran on.
+# at the commit it ran on, and only from the default branch (main); a tag run needs the tagged commit
+# to be on main. So a release is always a commit that is on main.
+#
+# Hardening: the version input reaches the scripts only through the environment and is checked
+# against a pattern before use; no cache action (a release builds from a clean runner, and no
+# third-party action runs in this job, which holds contents: write and builds an elevated setup); Inno
+# Setup is pinned (6.7.1, the newest Chocolatey has; the script compiles with 6.7.x). No test step:
+# the suite assumes an unelevated runner (owner and privilege tests fail elevated, and a GitHub runner
+# is elevated), so the tests run on the owner's machine before main moves, and a release can only be
+# cut from main.
 #
 # Not run yet (the owner releases). v0.1.0 was published by hand on 2026-11-23, so the first release
 # this workflow cuts needs a version bump in Cargo.toml (and Cargo.lock). Hub reads only public releases.
@@ -46,12 +55,32 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7
+        with:
+          # The whole history, so the publish check below can tell whether the commit is on main.
+          fetch-depth: 0
+
+      - name: Release source (the default branch)
+        if: ${{ github.event_name == 'push' || inputs.publish }}
+        shell: pwsh
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          if (-not $env:DEFAULT_BRANCH) { throw 'the default branch is unknown' }
+          if ($env:GITHUB_REF_TYPE -ne 'tag' -and $env:GITHUB_REF -ne "refs/heads/$env:DEFAULT_BRANCH") {
+            throw "publish=true runs only on $env:DEFAULT_BRANCH, not $env:GITHUB_REF"
+          }
+          git fetch --no-tags origin "+refs/heads/${env:DEFAULT_BRANCH}:refs/remotes/origin/${env:DEFAULT_BRANCH}"
+          if ($LASTEXITCODE) { throw "fetching $env:DEFAULT_BRANCH failed" }
+          git merge-base --is-ancestor HEAD "refs/remotes/origin/$env:DEFAULT_BRANCH"
+          if ($LASTEXITCODE) { throw "$env:GITHUB_SHA is not on $env:DEFAULT_BRANCH: a release is cut only from $env:DEFAULT_BRANCH" }
 
       - name: Version (tag = Cargo.toml = Cargo.lock)
         id: v
         shell: pwsh
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
-          if ($env:GITHUB_REF_TYPE -eq 'tag') { $v = $env:GITHUB_REF_NAME -replace '^v', '' } else { $v = '${{ inputs.version }}' }
+          if ($env:GITHUB_REF_TYPE -eq 'tag') { $v = $env:GITHUB_REF_NAME -replace '^v', '' } else { $v = "$env:INPUT_VERSION" }
           if ($v -eq '') { $v = (& ./install/inno/check-version.ps1) }
           if ($v -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$') { throw "bad version '$v'" }
           # Fails when Cargo.toml says another version or Cargo.lock was not updated after a bump.
@@ -59,6 +88,8 @@ jobs:
           & ./install/inno/check-version.ps1 -Expect $v
           if ($LASTEXITCODE) { throw "Cargo.toml / Cargo.lock do not say $v" }
           "version=$v" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
+          # The later steps read the checked version from the environment, never pasted into a script.
+          "PURGE_VERSION=$v" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
 
       - name: Rust toolchain (rust-toolchain.toml)
         shell: pwsh
@@ -67,9 +98,6 @@ jobs:
           rustup toolchain install $channel --profile minimal --component rustfmt --component clippy --target x86_64-pc-windows-msvc
           if ($LASTEXITCODE) { throw "rustup toolchain install $channel failed" }
           rustc -V
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: release
 
       - uses: actions/setup-dotnet@v5
         with:
@@ -78,7 +106,12 @@ jobs:
       - name: Inno Setup
         shell: pwsh
         run: |
-          choco install innosetup -y --no-progress
+          # Pinned: upgrade with --version and --allow-downgrade installs exactly this one, whatever
+          # the runner image has.
+          choco upgrade innosetup --version 6.7.1 --allow-downgrade -y --no-progress
+          if ($LASTEXITCODE) { throw "choco innosetup 6.7.1 failed: $LASTEXITCODE" }
+          $have = choco list innosetup --exact --limit-output
+          if ($have -notcontains 'innosetup|6.7.1') { throw "Inno Setup is '$have', not 6.7.1" }
           $iscc = Get-ChildItem -Path "${env:ProgramFiles(x86)}\Inno Setup *\ISCC.exe", "$env:ProgramFiles\Inno Setup *\ISCC.exe", "$env:LOCALAPPDATA\Programs\Inno Setup *\ISCC.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
           if (-not $iscc) { throw 'ISCC.exe not found after the install' }
           "ISCC=$($iscc.FullName)" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
@@ -97,7 +130,7 @@ jobs:
       - name: Version resources
         shell: pwsh
         run: |
-          $v = '${{ steps.v.outputs.version }}'
+          $v = $env:PURGE_VERSION
           $exes = @("$env:CARGO_TARGET_DIR\release\purge-engine.exe", "$env:CARGO_TARGET_DIR\release\purge-broker.exe", 'target\ui-publish\Purge.exe')
           foreach ($e in $exes) { (Get-Item $e).VersionInfo | Format-List FileName, FileVersion, ProductVersion }
           $global:LASTEXITCODE = 0
@@ -107,7 +140,7 @@ jobs:
       - name: Assemble the release files and hub.txt
         shell: pwsh
         run: |
-          $v = '${{ steps.v.outputs.version }}'
+          $v = $env:PURGE_VERSION
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item "target/installer/Purge-Setup-$v.exe" dist/
           # The release notes: docs/release-notes/<version>.md when the owner wrote one.
@@ -137,14 +170,14 @@ jobs:
           # In-process (&), not a child pwsh: the file list is hashtables, which a child would get as text.
           & ./tools/write-hub-txt.ps1 -App purge -Repo purge -Version $v -Notes $oneLine -NotesFile $notesName `
             -Kind setup -Exe Purge.exe -Uninstall '{7C1B9E64-2D58-4F1A-9B03-6E4C5A8D7F21}_is1' `
-            -Wait 'Purge.exe,purge-engine.exe,purge-broker.exe' -Files $files -Out dist/hub.txt
+            -Wait 'Purge.exe,purge-engine.exe,purge-broker.exe,RestartAgent.exe' -Files $files -Out dist/hub.txt
           if ($LASTEXITCODE) { throw 'write-hub-txt failed' }
           Get-Content dist/hub.txt
 
       - name: Check hub.txt against the files
         shell: pwsh
         run: |
-          $v = '${{ steps.v.outputs.version }}'
+          $v = $env:PURGE_VERSION
           $setup = "dist/Purge-Setup-$v.exe"
           $sha = (Get-FileHash -Algorithm SHA256 $setup).Hash.ToLowerInvariant()
           $size = (Get-Item $setup).Length
@@ -153,7 +186,7 @@ jobs:
             "hub: 1", "app: purge", "version: $v", "notes.file: release-notes-$v.md",
             "windows-x86_64.kind: setup", "windows-x86_64.exe: Purge.exe",
             "windows-x86_64.uninstall: {7C1B9E64-2D58-4F1A-9B03-6E4C5A8D7F21}_is1",
-            "windows-x86_64.wait: Purge.exe, purge-engine.exe, purge-broker.exe",
+            "windows-x86_64.wait: Purge.exe, purge-engine.exe, purge-broker.exe, RestartAgent.exe",
             "windows-x86_64.setup: Purge-Setup-$v.exe",
             "windows-x86_64.setup.url: https://github.com/Kaan88/purge/releases/download/v$v/Purge-Setup-$v.exe",
             "windows-x86_64.setup.sha256: $sha", "windows-x86_64.setup.size: $size",
@@ -174,7 +207,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $v = '${{ steps.v.outputs.version }}'
+          $v = $env:PURGE_VERSION
           # Never --draft and never --prerelease: Hub's releases/latest skips both (COMPLIANCE.md 2).
           $ghArgs = @('release', 'create', "v$v", '--title', "Purge $v", '--notes-file', "dist/release-notes-$v.md", '--latest')
           if ($env:GITHUB_REF_TYPE -eq 'tag') { $ghArgs += '--verify-tag' } else { $ghArgs += @('--target', $env:GITHUB_SHA) }
@@ -188,7 +221,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $v = '${{ steps.v.outputs.version }}'
+          $v = $env:PURGE_VERSION
           $r = gh release view "v$v" --json isDraft,isPrerelease,assets | ConvertFrom-Json
           if ($r.isDraft -or $r.isPrerelease) { throw "v$v is a draft or a pre-release: Hub would not see it" }
           foreach ($name in @("Purge-Setup-$v.exe", "release-notes-$v.md", 'hub.txt')) {
