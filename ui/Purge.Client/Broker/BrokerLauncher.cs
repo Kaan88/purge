@@ -16,7 +16,7 @@ public enum BrokerLaunchStatus
     /// <summary>The user said No at the Windows prompt (error 1223). Show the cancelled bar; nothing changed.</summary>
     Cancelled,
 
-    /// <summary>The account cannot elevate (a standard user): show "Purge needs an administrator account".</summary>
+    /// <summary>The account cannot elevate (a standard user): the bar says an administrator account is needed.</summary>
     NotAdministrator,
 
     /// <summary>The broker could not be started, or exited before its pipe existed (<see cref="BrokerLaunchResult.ExitCode"/>).</summary>
@@ -160,6 +160,12 @@ public static partial class BrokerLauncher
     /// <summary>How long the broker may take to answer <c>engine.hello</c> once the pipe is open.</summary>
     public static readonly TimeSpan HelloTimeout = TimeSpan.FromSeconds(10);
 
+    /// <summary>
+    /// The message of <see cref="BrokerLaunchStatus.NotAdministrator"/>; every route's bar shows it under its own
+    /// title, and the tests use this text so they follow what the launcher really says.
+    /// </summary>
+    internal const string StandardUserMessage = "This needs an administrator account; this account is a standard user.";
+
     private const uint SeeMaskNoCloseProcess = 0x00000040;
     private const uint SeeMaskNoAsync = 0x00000100;
     // The broker has no window of its own: the show command reaches the first window it creates, the consent
@@ -193,8 +199,7 @@ public static partial class BrokerLauncher
             return BrokerLaunchResult.Failed(BrokerLaunchStatus.CannotStart, "The administrator part is a Windows program.");
 
         if (Elevation() == ElevationKind.StandardUser)
-            return BrokerLaunchResult.Failed(BrokerLaunchStatus.NotAdministrator,
-                "Purge needs an administrator account to remove programs for all users.");
+            return BrokerLaunchResult.Failed(BrokerLaunchStatus.NotAdministrator, StandardUserMessage);
 
         if (string.IsNullOrWhiteSpace(brokerPath) || !File.Exists(brokerPath))
             return BrokerLaunchResult.Failed(BrokerLaunchStatus.CannotStart,
@@ -261,7 +266,7 @@ public static partial class BrokerLauncher
                 if (open.Stream is not null)
                 {
                     var rpc = BrokerRpcClient.Over(open.TakeStream(), ownsStream: true);
-                    return await HandshakeAsync(rpc, process, (int)pid, brokerPath, ct).ConfigureAwait(false);
+                    return await HandshakeAsync(rpc, process, (int)pid, brokerPath, HelloTimeout, ct).ConfigureAwait(false);
                 }
                 var error = open.Win32Error;
                 if (error != ErrorPipeBusy && error != ErrorFileNotFound && error != ErrorSemTimeout)
@@ -291,14 +296,17 @@ public static partial class BrokerLauncher
 
     /// <summary>
     /// <c>engine.hello</c> on the checked link (<see cref="BrokerSession.OpenAsync"/>): the session is returned only once
-    /// the broker answered it. A refusal, a closed link or no answer within <see cref="HelloTimeout"/> ends the link
-    /// and fails the launch; the caller's cancellation is rethrown (the caller terminates the process).
+    /// the broker answered it. A refusal or a closed link is <see cref="BrokerLaunchStatus.CannotStart"/>, no answer
+    /// within <paramref name="helloTimeout"/> is <see cref="BrokerLaunchStatus.TimedOut"/>; each ends the link and the
+    /// process. The caller's cancellation and any other failure end them too and are rethrown. The tests pass a short
+    /// <paramref name="helloTimeout"/> and watch <paramref name="terminate"/> (the launch's is <see cref="Terminate"/>).
     /// </summary>
-    private static async Task<BrokerLaunchResult> HandshakeAsync(BrokerRpcClient rpc, SafeProcessHandle process, int pid,
-        string brokerPath, CancellationToken ct)
+    internal static async Task<BrokerLaunchResult> HandshakeAsync(BrokerRpcClient rpc, SafeProcessHandle process, int pid,
+        string brokerPath, TimeSpan helloTimeout, CancellationToken ct, Action<SafeProcessHandle>? terminate = null)
     {
+        terminate ??= Terminate;
         using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        limit.CancelAfter(HelloTimeout);
+        limit.CancelAfter(helloTimeout);
         try
         {
             var session = await BrokerSession.OpenAsync(rpc, process, pid, brokerPath, limit.Token).ConfigureAwait(false);
@@ -306,22 +314,35 @@ public static partial class BrokerLauncher
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            await rpc.DisposeAsync().ConfigureAwait(false);
-            Terminate(process);
+            await EndAsync(rpc, process, terminate).ConfigureAwait(false);
             return BrokerLaunchResult.Failed(BrokerLaunchStatus.TimedOut,
-                $"The administrator part did not answer within {HelloTimeout.TotalSeconds:0} seconds.");
+                $"The administrator part did not answer within {helloTimeout.TotalSeconds:0} seconds.");
         }
         catch (Exception e) when (e is BrokerRpcException or BrokerLinkException or InvalidDataException)
         {
-            await rpc.DisposeAsync().ConfigureAwait(false);
-            Terminate(process);
+            await EndAsync(rpc, process, terminate).ConfigureAwait(false);
             return BrokerLaunchResult.Failed(BrokerLaunchStatus.CannotStart,
                 "The administrator part did not accept Purge's connection. " + e.Message);
         }
         catch
         {
-            await rpc.DisposeAsync().ConfigureAwait(false);
+            // The caller's cancellation, or a failure nobody expected: no session is made, so nothing else ends
+            // the broker this launch started.
+            await EndAsync(rpc, process, terminate).ConfigureAwait(false);
             throw;
+        }
+    }
+
+    /// <summary>Ends a link that made no session: the process is terminated even if closing the link throws.</summary>
+    private static async Task EndAsync(BrokerRpcClient rpc, SafeProcessHandle process, Action<SafeProcessHandle> terminate)
+    {
+        try
+        {
+            await rpc.DisposeAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            terminate(process);
         }
     }
 

@@ -199,8 +199,23 @@ public sealed class VaultPageTests
         await vm.ReviewExpiredAsync();
 
         Assert.True(vm.PromptCancelled);
+        Assert.False(vm.PromptDeclined);
         Assert.Null(vm.ActionError);
         Assert.False(vm.Busy);
+    }
+
+    [Fact]
+    public async Task NotNowAtTheExplanationIsADeclinedPrompt()
+    {
+        var vm = new VaultViewModel(_ => Task.FromResult(GitIndex()),
+            _ => Task.FromResult(new VaultBrokerLaunch(null, true, "", DeclinedExplanation: true)));
+        await vm.LoadAsync();
+
+        await vm.ReviewExpiredAsync();
+
+        Assert.True(vm.PromptCancelled);
+        Assert.True(vm.PromptDeclined);
+        Assert.Null(vm.ActionError);
     }
 
     [Fact]

@@ -145,7 +145,8 @@ only in a `rig-exec` build or when not elevated (package M3-HARDEN).
 - The broker refuses a client of another account (step 4): error `other_account`. This is the standard-user case,
   where UAC asks for another account's credentials (answer 3).
 - The UI checks first. When its token is neither elevated nor the limited half of an administrator token
-  (`TokenElevationType`), the Uninstall click shows "Purge needs an administrator account" and starts nothing.
+  (`TokenElevationType`), a click that needs the broker shows "Administrator permission is not available. This needs
+  an administrator account; this account is a standard user." and starts nothing.
 - The UI found elevated (started "as administrator", or UAC off): the "Administrator" chip shows. The broker
   starts through the same `runas` call, which then shows no prompt.
 - The medium engine runs a medium-route uninstaller only when its own token has the same user and the same

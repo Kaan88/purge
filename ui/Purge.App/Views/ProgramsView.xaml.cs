@@ -42,11 +42,13 @@ public sealed partial class RemovedRow(Purge.Client.Rpc.ProgramRef program) : Sy
     public string? CheckHint { get; private set; }
 
     /// <summary>
-    /// Draws the row from the controller's state of it. <paramref name="otherBusy"/>: another row's check or the
-    /// Uninstall pipeline is running, so this row's button waits (one broker at a time).
+    /// Draws the row from the controller's state of it. <paramref name="waitHint"/>: another row's check, the Uninstall
+    /// pipeline or a change on the Leftovers page is running, so this row's button waits (one broker at a time) and
+    /// the tooltip says for what; null when nothing else runs.
     /// </summary>
-    public void Show(RemovedCheckState state, bool otherBusy, string? progress, bool canChangePc, string disabledHint)
+    public void Show(RemovedCheckState state, string? waitHint, string? progress, bool canChangePc, string disabledHint)
     {
+        var otherBusy = waitHint is not null;
         Detail = state switch
         {
             RemovedCheckState.NoRecord => "Removed outside Purge. Purge did not record what this program installed, so it cannot tell which leftovers are its own.",
@@ -63,9 +65,7 @@ public sealed partial class RemovedRow(Purge.Client.Rpc.ProgramRef program) : Sy
             ? "Stops the check; nothing is changed"
             : !canChangePc
                 ? disabledHint
-                : otherBusy
-                    ? "Waits until the running check or uninstall has finished"
-                    : "Asks for administrator permission, then looks for what it left on the PC";
+                : waitHint ?? "Asks for administrator permission, then looks for what it left on the PC";
         foreach (var name in new[] { nameof(Detail), nameof(ButtonText), nameof(ButtonVisibility), nameof(CanCheck), nameof(CheckHint) })
             PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
     }
@@ -435,7 +435,8 @@ public sealed partial class ProgramsView : UserControl
     {
         var controller = new RemovedLeftoversController(id => FingerprintStore.MayHaveRecord(id), LaunchStoredAsync);
         controller.Changed += () => DispatcherQueue.TryEnqueue(RenderRemoved);
-        controller.AdminPromptCancelled += () => DispatcherQueue.TryEnqueue(() => MainWindow.Instance.ShowAdminPromptCancelled());
+        controller.AdminPromptCancelled += declined =>
+            DispatcherQueue.TryEnqueue(() => MainWindow.Instance.ShowAdminPromptCancelled(declined));
         controller.Completed += outcome => DispatcherQueue.TryEnqueue(() => OpenStoredScan(outcome));
         return controller;
     }
@@ -446,7 +447,7 @@ public sealed partial class ProgramsView : UserControl
         try
         {
             if (!await MainWindow.Instance.ConfirmFirstElevationAsync())
-                return new StoredLeftoversLaunch(UninstallLaunchState.Cancelled, null, "");
+                return new StoredLeftoversLaunch(UninstallLaunchState.Cancelled, null, "", DeclinedExplanation: true);
             var result = await BrokerLauncher.LaunchAsync(BrokerLauncher.PathBesideApp(), ct);
             var exitCode = result.ExitCode is { } code ? (uint)code : (uint?)null;
             return result.Status switch
@@ -486,22 +487,38 @@ public sealed partial class ProgramsView : UserControl
                    + "were not opened. Nothing was changed; check again when it has finished.");
     }
 
-    /// <summary>The Uninstall pipeline started or finished a step: the removed rows' buttons follow it.</summary>
-    public void OnUninstallBusyChanged() => RenderRemoved();
+    /// <summary>
+    /// The Uninstall pipeline started or finished a step, or the Leftovers page started or finished a change: the
+    /// removed rows' buttons follow it.
+    /// </summary>
+    public void OnBrokerUsersChanged() => RenderRemoved();
+
+    private bool _checkWasRunning;
 
     private void RenderRemoved()
     {
         UpdateCommandState();
         if (_removed is not { } removed) return;
         var busy = removed.IsBusy;
+        if (busy != _checkWasRunning)
+        {
+            _checkWasRunning = busy;
+            MainWindow.Instance.OnCheckRunningChanged();
+        }
         var active = removed.ActiveProgram;
         var engine = Program.Engine;
-        // One broker at a time: while the Uninstall pipeline runs a step, no check starts.
-        var uninstallBusy = MainWindow.Instance.UninstallBusy;
+        // One broker at a time: while the Uninstall pipeline runs a step or the Leftovers page applies a change
+        // over its link, no check starts.
+        var elsewhere = MainWindow.Instance.UninstallBusy
+            ? "Waits until the running uninstall has finished"
+            : LeftoversNavigator.IsChanging
+                ? "Waits until the Leftovers page has finished its change"
+                : null;
         foreach (var row in _removedRows)
         {
             var mine = active == row.ProgramId;
-            row.Show(removed.StateOf(row.ProgramId), (busy && !mine) || uninstallBusy, mine ? removed.ProgressText : null,
+            var waitHint = busy && !mine ? "Waits until the running check has finished" : elsewhere;
+            row.Show(removed.StateOf(row.ProgramId), waitHint, mine ? removed.ProgressText : null,
                 engine.CanChangePc, UninstallHint(engine));
         }
         if (removed.Notice is { } notice && !ReferenceEquals(notice, _removedNoticeShown))
@@ -528,6 +545,11 @@ public sealed partial class ProgramsView : UserControl
         if (MainWindow.Instance.UninstallBusy)
         {
             ShowNotice("An uninstall is running. Check for leftovers when it has finished.");
+            return;
+        }
+        if (LeftoversNavigator.IsChanging)
+        {
+            ShowNotice("The Leftovers page is applying a change. Check for leftovers when it has finished.");
             return;
         }
         var name = _removedRows.FirstOrDefault(r => r.ProgramId == id)?.Name ?? "";
@@ -780,8 +802,8 @@ public sealed partial class ProgramsView : UserControl
         }
     }
 
-    /// <summary>True while a removed program's leftovers check runs.</summary>
-    private bool CheckRunning => _removed?.IsBusy == true;
+    /// <summary>True while a removed program's leftovers check runs (the Uninstall page's actions wait meanwhile).</summary>
+    public bool CheckRunning => _removed?.IsBusy == true;
 
     private string CommandHint(IEngineClient engine) => engine.CanChangePc && CheckRunning
         ? "A leftovers check is running. Uninstall when it has finished."

@@ -1,6 +1,7 @@
 using System.IO.Pipes;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Win32.SafeHandles;
 using Purge.Client.Broker;
 using Purge.Client.Pipeline;
 using Purge.Client.Rpc;
@@ -107,6 +108,76 @@ public sealed class BrokerHelloTests
         }
     }
 
+    /// <summary>The launcher's handshake (<c>BrokerLauncher.HandshakeAsync</c>) against the scripted broker.</summary>
+    private static async Task<(BrokerLaunchResult Result, int Terminated)> HandshakeAsync(HelloFirstPeer peer,
+        TimeSpan helloTimeout, CancellationToken ct = default)
+    {
+        var terminated = 0;
+        var rpc = BrokerRpcClient.Over(peer.Client, ownsStream: true);
+        var result = await BrokerLauncher.HandshakeAsync(rpc, new SafeProcessHandle(0, ownsHandle: false),
+            Environment.ProcessId, "", helloTimeout, ct, _ => Interlocked.Increment(ref terminated)).WaitAsync(Limit);
+        return (result, terminated);
+    }
+
+    [Fact]
+    public async Task The_handshake_makes_a_session_once_hello_is_answered()
+    {
+        await using var peer = await HelloFirstPeer.StartAsync();
+        var (result, terminated) = await HandshakeAsync(peer, Limit);
+
+        Assert.Equal(BrokerLaunchStatus.Started, result.Status);
+        Assert.NotNull(result.Session);
+        Assert.Equal(0, terminated);
+        await result.Session!.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task A_refused_or_dropped_hello_is_cannot_start_and_ends_the_process()
+    {
+        await using (var refusing = await HelloFirstPeer.StartAsync(refuseHello: true))
+        {
+            var (result, terminated) = await HandshakeAsync(refusing, Limit);
+            Assert.Equal(BrokerLaunchStatus.CannotStart, result.Status);
+            Assert.Null(result.Session);
+            Assert.Contains("did not accept", result.Message, StringComparison.Ordinal);
+            Assert.Equal(1, terminated);
+        }
+        await using (var dropping = await HelloFirstPeer.StartAsync(dropAtHello: true))
+        {
+            var (result, terminated) = await HandshakeAsync(dropping, Limit);
+            Assert.Equal(BrokerLaunchStatus.CannotStart, result.Status);
+            Assert.Null(result.Session);
+            Assert.Equal(1, terminated);
+        }
+    }
+
+    [Fact]
+    public async Task A_hello_never_answered_is_timed_out_and_ends_the_process()
+    {
+        await using var peer = await HelloFirstPeer.StartAsync(silentAtHello: true);
+        var (result, terminated) = await HandshakeAsync(peer, TimeSpan.FromMilliseconds(200));
+
+        Assert.Equal(BrokerLaunchStatus.TimedOut, result.Status);
+        Assert.Null(result.Session);
+        Assert.Contains("did not answer", result.Message, StringComparison.Ordinal);
+        Assert.Equal(1, terminated);
+        Assert.Equal(["engine.hello"], peer.Methods);
+    }
+
+    [Fact]
+    public async Task The_callers_cancellation_is_rethrown_and_ends_the_process()
+    {
+        await using var peer = await HelloFirstPeer.StartAsync(silentAtHello: true);
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
+        var terminated = 0;
+        var rpc = BrokerRpcClient.Over(peer.Client, ownsStream: true);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => BrokerLauncher.HandshakeAsync(rpc,
+            new SafeProcessHandle(0, ownsHandle: false), Environment.ProcessId, "", Limit, cts.Token,
+            _ => Interlocked.Increment(ref terminated)).WaitAsync(Limit));
+        Assert.Equal(1, terminated);
+    }
+
     /// <summary>
     /// A broker played over a real pipe that, like <c>serve.rs</c>, drops a client whose first line is not
     /// <c>engine.hello</c>; after the hello it answers each method with its recorded pipe fixture.
@@ -119,17 +190,22 @@ public sealed class BrokerHelloTests
         private readonly List<string> _methods = [];
         private readonly bool _refuseHello;
         private readonly bool _dropAtHello;
+        private readonly bool _silentAtHello;
         private readonly Task _loop;
         private volatile bool _refused;
 
-        private HelloFirstPeer(NamedPipeServerStream server, NamedPipeClientStream client, bool refuseHello, bool dropAtHello)
+        private HelloFirstPeer(NamedPipeServerStream server, NamedPipeClientStream client, bool refuseHello, bool dropAtHello,
+            bool silentAtHello)
         {
             _server = server;
             _client = client;
             _refuseHello = refuseHello;
             _dropAtHello = dropAtHello;
+            _silentAtHello = silentAtHello;
             _writer = new StreamWriter(server, new UTF8Encoding(false)) { AutoFlush = true };
-            _loop = Task.Run(Loop);
+            // Its own thread: the loop blocks in ReadLine, and the pool is shared with every test running at once
+            // (the timeout tests count on the client's timer, not on a free pool thread).
+            _loop = Task.Factory.StartNew(Loop, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
         }
 
         public NamedPipeClientStream Client => _client;
@@ -142,7 +218,9 @@ public sealed class BrokerHelloTests
             get { lock (_methods) return [.. _methods]; }
         }
 
-        public static async Task<HelloFirstPeer> StartAsync(bool refuseHello = false, bool dropAtHello = false)
+        /// <param name="silentAtHello">Reads the hello and never answers it (the link stays open).</param>
+        public static async Task<HelloFirstPeer> StartAsync(bool refuseHello = false, bool dropAtHello = false,
+            bool silentAtHello = false)
         {
             var name = "purge-hello-" + Guid.NewGuid().ToString("N");
             var server = new NamedPipeServerStream(name, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
@@ -150,7 +228,7 @@ public sealed class BrokerHelloTests
             var connected = server.WaitForConnectionAsync();
             await client.ConnectAsync(5000);
             await connected;
-            return new HelloFirstPeer(server, client, refuseHello, dropAtHello);
+            return new HelloFirstPeer(server, client, refuseHello, dropAtHello, silentAtHello);
         }
 
         private void Loop()
@@ -181,6 +259,7 @@ public sealed class BrokerHelloTests
                             _server.Disconnect();
                             return;
                         }
+                        if (_silentAtHello) continue;
                         if (_refuseHello)
                         {
                             Send($"{{\"jsonrpc\":\"2.0\",\"id\":{id},\"error\":{{\"code\":-32000,\"message\":\"refused\",\"data\":{{\"kind\":\"runtime\",\"message\":\"refused\"}}}}}}");

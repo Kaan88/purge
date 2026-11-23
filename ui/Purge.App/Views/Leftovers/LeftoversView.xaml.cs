@@ -68,9 +68,9 @@ public sealed partial class LeftoversView : UserControl, ILeftoversPage
     /// </summary>
     public void Show(LeftoversRequest request)
     {
-        if (IsChanging && !ReferenceEquals(request.Broker, _ownedBroker))
+        if (IsChanging)
         {
-            if (request.Broker is { } refused) _ = refused.DisposeAsync().AsTask();
+            if (request.Broker is { } refused && !ReferenceEquals(refused, _ownedBroker)) _ = refused.DisposeAsync().AsTask();
             return;
         }
         var previous = _ownedBroker;
@@ -101,8 +101,17 @@ public sealed partial class LeftoversView : UserControl, ILeftoversPage
 
     private void OnViewModelChanged() => DispatcherQueue.TryEnqueue(Refresh);
 
+    private bool _wasChanging;
+
     private void Refresh()
     {
+        // One broker at a time: the Programs page's checks and a scan the Uninstall page holds wait for a change to
+        // end, so they hear when it starts and ends.
+        if (IsChanging != _wasChanging)
+        {
+            _wasChanging = IsChanging;
+            MainWindow.Instance.OnLeftoversChangingChanged();
+        }
         if (_vm is not { } vm) return;
         var name = vm.ProgramName.Length > 0 ? vm.ProgramName : _request?.ProgramName ?? "";
         TitleText.Text = name.Length > 0 ? $"Leftovers of {name}" : "Leftovers";
@@ -220,6 +229,45 @@ public sealed partial class LeftoversView : UserControl, ILeftoversPage
         }
         if (vm.RescanMessage is { Length: > 0 } rescan)
             AddInfoBar(InfoBarSeverity.Success, "Scanned again.", rescan);
+        ShowHeldBar();
+    }
+
+    private InfoBar? _heldBar;
+
+    /// <summary>The Uninstall page started or stopped holding a scan for this page: its line follows it.</summary>
+    public void OnHeldScanChanged() => DispatcherQueue.TryEnqueue(ShowHeldBar);
+
+    /// <summary>
+    /// The line for a scan the Uninstall page holds for this page: it does not replace a change's outcome on screen,
+    /// so it says when it comes (when the user goes to another page) and offers it now once no change runs.
+    /// </summary>
+    private void ShowHeldBar()
+    {
+        if (_heldBar is not null) InfoBarHost.Children.Remove(_heldBar);
+        _heldBar = null;
+        if (_vm is null || MainWindow.Instance.HeldScanProgram is not { } name) return;
+        var changing = IsChanging;
+        var bar = new InfoBar
+        {
+            Severity = InfoBarSeverity.Informational,
+            Title = $"A scan of {name} is waiting for this page.",
+            Message = changing
+                ? "It opens here when this change has finished, but not over its outcome: while you are on this page it "
+                  + "waits until you go to another page or choose Show the scan."
+                : "It takes this page's place when you go to another page, or now with Show the scan, so you can read "
+                  + "this page first.",
+            IsOpen = true,
+            IsClosable = false,
+            RequestedTheme = MainWindow.Instance.ActualTheme,
+        };
+        if (!changing)
+        {
+            var show = new Button { Content = "Show the scan" };
+            show.Click += (_, _) => MainWindow.Instance.ShowHeldScan();
+            bar.ActionButton = show;
+        }
+        InfoBarHost.Children.Insert(0, bar);
+        _heldBar = bar;
     }
 
     private InfoBar AddInfoBar(InfoBarSeverity severity, string title, string message)

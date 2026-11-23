@@ -427,8 +427,8 @@ switch ($Phase) {
                 if (Find-E2eDialogButton $win 'Uninstall') { return 'confirm' }
                 $t = Get-E2eTexts $win
                 if ($t -contains "Uninstall $name?") { return 'confirm' }
-                if ($t -contains 'You cancelled the admin prompt.') { return 'cancelled' }
-                foreach ($x in 'The administrator part could not start.', 'Purge needs an administrator account.', 'Something went wrong.') { if ($t -contains $x) { return 'error' } }
+                foreach ($x in 'You cancelled the Windows prompt.', 'Not started.') { if ($t -contains $x) { return 'cancelled' } }
+                foreach ($x in 'The administrator part could not start.', 'Administrator permission is not available.', 'Something went wrong.') { if ($t -contains $x) { return 'error' } }
                 $null
             } 240 -Each {
                 if (-not $script:continued) {

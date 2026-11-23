@@ -11,14 +11,16 @@ public static class LeftoversNavigator
     public static bool IsChanging => MainWindow.Instance.LeftoversChanging;
 
     /// <summary>
-    /// Shows <paramref name="request"/> on the leftovers page, which owns the broker link from then on. False, with
+    /// Shows <paramref name="request"/> on the leftovers page, which owns the broker link from then on; the page comes
+    /// on screen unless <paramref name="navigate"/> is false (the user has just gone to another page). False, with
     /// nothing shown and the link not taken, while the page applies a change (<see cref="IsChanging"/>): the caller
     /// keeps or ends the link and says why.
     /// </summary>
-    public static bool TryShow(LeftoversRequest request)
+    public static bool TryShow(LeftoversRequest request, bool navigate = true)
     {
         if (IsChanging) return false;
-        MainWindow.Instance.OpenReview().Show(request);
+        var page = navigate ? MainWindow.Instance.OpenReview() : MainWindow.Instance.ReviewPage;
+        page.Show(request);
         return true;
     }
 }

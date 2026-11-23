@@ -92,7 +92,7 @@ public sealed partial class HistoryView : UserControl
         try
         {
             if (!await MainWindow.Instance.ConfirmFirstElevationAsync())
-                return new HistoryBrokerLaunch(null, true, "");
+                return new HistoryBrokerLaunch(null, true, "", DeclinedExplanation: true);
             var result = await BrokerLauncher.LaunchAsync(BrokerLauncher.PathBesideApp(), ct);
             return result.Status switch
             {
@@ -232,7 +232,7 @@ public sealed partial class HistoryView : UserControl
             ShowInfo(InfoBarSeverity.Error, "Couldn't finish that.", error);
         // The shell's cancelled bar, once per cancelled prompt.
         if (_vm.PromptCancelled && !_cancelShown)
-            MainWindow.Instance.ShowAdminPromptCancelled();
+            MainWindow.Instance.ShowAdminPromptCancelled(_vm.PromptDeclined);
         _cancelShown = _vm.PromptCancelled;
     }
 

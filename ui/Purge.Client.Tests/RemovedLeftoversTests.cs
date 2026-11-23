@@ -217,17 +217,49 @@ public sealed class RemovedLeftoversTests
         var controller = new RemovedLeftoversController(_ => true, _ => Task.FromResult(
             new StoredLeftoversLaunch(UninstallLaunchState.Cancelled, null, "You cancelled the Windows prompt. Nothing was changed.")));
         var cancelled = 0;
-        controller.AdminPromptCancelled += () => cancelled++;
+        bool? declined = null;
+        controller.AdminPromptCancelled += d => { cancelled++; declined = d; };
         var completed = false;
         controller.Completed += _ => completed = true;
 
         await controller.CheckAsync(Program, "Git").WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.Equal(1, cancelled);
+        Assert.False(declined);
         Assert.False(completed);
         Assert.Equal(RemovedCheckState.Record, controller.StateOf(Program));
         Assert.False(controller.IsBusy);
         Assert.Null(controller.Notice); // the shell's bar says it; no second bar
+    }
+
+    [Fact]
+    public async Task Not_now_at_the_explanation_reaches_the_bar_as_declined()
+    {
+        var controller = new RemovedLeftoversController(_ => true, _ => Task.FromResult(
+            new StoredLeftoversLaunch(UninstallLaunchState.Cancelled, null, "", DeclinedExplanation: true)));
+        bool? declined = null;
+        controller.AdminPromptCancelled += d => declined = d;
+
+        await controller.CheckAsync(Program, "Git").WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.True(declined);
+        Assert.Null(controller.Notice);
+    }
+
+    [Fact]
+    public async Task A_standard_user_gets_one_sentence_about_the_account()
+    {
+        var controller = new RemovedLeftoversController(_ => true, _ => Task.FromResult(
+            new StoredLeftoversLaunch(UninstallLaunchState.NotAdministrator, null,
+                BrokerLauncher.StandardUserMessage)));
+
+        await controller.CheckAsync(Program, "Git").WaitAsync(TimeSpan.FromSeconds(5));
+
+        var notice = controller.Notice!;
+        Assert.Equal(UninstallNoticeKind.Error, notice.Kind);
+        Assert.Contains("administrator account", notice.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("administrator account", notice.Title, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(RemovedCheckState.Record, controller.StateOf(Program));
     }
 
     [Fact]

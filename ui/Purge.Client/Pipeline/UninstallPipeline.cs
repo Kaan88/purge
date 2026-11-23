@@ -82,7 +82,12 @@ public enum UninstallLaunchState
 }
 
 /// <summary>The start of the broker as the pipeline sees it: a live link, or why there is none.</summary>
-public sealed record UninstallLaunch(UninstallLaunchState State, IUninstallBroker? Broker, string Message, uint? ExitCode = null);
+/// <param name="DeclinedExplanation">
+/// With <see cref="UninstallLaunchState.Cancelled"/>: the user chose "Not now" at Purge's explanation, so the Windows
+/// prompt was never shown (the shell's bar must not say it was cancelled).
+/// </param>
+public sealed record UninstallLaunch(UninstallLaunchState State, IUninstallBroker? Broker, string Message, uint? ExitCode = null,
+    bool DeclinedExplanation = false);
 
 /// <summary>The broker side of the Uninstall pipeline: the four requests of design 3.2 and 6.3.</summary>
 public interface IUninstallBroker : IAsyncDisposable
@@ -283,8 +288,11 @@ public sealed class UninstallController : IAsyncDisposable
     /// <summary>Raised when the scan is in. The page then shows the leftovers page with <see cref="Completed"/>.</summary>
     public event Action<UninstallOutcome>? Completed;
 
-    /// <summary>Raised when the user said No at the Windows prompt (the page shows the cancelled bar).</summary>
-    public event Action? AdminPromptCancelled;
+    /// <summary>
+    /// Raised when the user said No at the Windows prompt, or "Not now" at Purge's explanation (the argument is true
+    /// then); the page shows the cancelled bar.
+    /// </summary>
+    public event Action<bool>? AdminPromptCancelled;
 
     public UninstallTarget? Target { get; private set; }
 
@@ -377,6 +385,7 @@ public sealed class UninstallController : IAsyncDisposable
     public Task RetryAsync() => GuardAsync(async () =>
     {
         ClearErrors();
+        StageRerun();
         switch (_retry)
         {
             case RetryStage.Run:
@@ -417,6 +426,7 @@ public sealed class UninstallController : IAsyncDisposable
         if (Target is null || _prepared is null) return;
         await GuardAsync(async () =>
         {
+            StageRerun();
             _prepared = null;
             ClearSteps();
             SetStep(UninstallStep.Record, StepState.Pending, null);
@@ -429,6 +439,7 @@ public sealed class UninstallController : IAsyncDisposable
     public Task ForceAsync() => GuardAsync(async () =>
     {
         ClearErrors();
+        StageRerun();
         _force = true;
         _retry = RetryStage.None;
         if (StateOf(UninstallStep.CheckGone) is StepState.Pending or StepState.Active)
@@ -454,6 +465,17 @@ public sealed class UninstallController : IAsyncDisposable
         Reset(target);
         if (await GatherAndConfirmAsync(ct).ConfigureAwait(false))
             await RunStageAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// A stage runs again (Retry, Check again, Run forced cleanup): the scan from before is no longer this run's, so
+    /// <see cref="CompletedOutcome"/> is cleared until the new scan is in. A page that holds the old scan for the
+    /// leftovers page must not hand it over (with the broker this run is using) meanwhile.
+    /// </summary>
+    private void StageRerun()
+    {
+        CompletedOutcome = null;
+        Raise();
     }
 
     /// <summary>Hands the live broker to the leftovers page. The controller no longer closes it.</summary>
@@ -514,11 +536,11 @@ public sealed class UninstallController : IAsyncDisposable
                 SetStep(UninstallStep.Record, StepState.Failed, "Administrator permission was not given");
                 AddNotice(new UninstallNotice(UninstallNoticeKind.Info, "Administrator permission was not given.",
                     "Nothing was changed. Uninstalling needs administrator permission."));
-                AdminPromptCancelled?.Invoke();
+                AdminPromptCancelled?.Invoke(launch.DeclinedExplanation);
                 return false;
             case UninstallLaunchState.NotAdministrator:
                 SetStep(UninstallStep.Record, StepState.Failed, "An administrator account is needed");
-                AddNotice(new UninstallNotice(UninstallNoticeKind.Error, "Purge needs an administrator account.",
+                AddNotice(new UninstallNotice(UninstallNoticeKind.Error, "Administrator permission is not available.",
                     launch.Message));
                 return false;
             default:

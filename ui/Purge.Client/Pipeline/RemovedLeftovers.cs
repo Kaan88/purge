@@ -32,8 +32,12 @@ public sealed record RemovedNotice(UninstallNoticeKind Kind, string Title, strin
 public sealed record StoredScanOutcome(string ProgramId, string ProgramName, ScanResult Scan, BrokerSession? Session);
 
 /// <summary>The start of the broker as this check sees it: a live link, or why there is none.</summary>
+/// <param name="DeclinedExplanation">
+/// With <see cref="UninstallLaunchState.Cancelled"/>: the user chose "Not now" at Purge's explanation, so the Windows
+/// prompt was never shown.
+/// </param>
 public sealed record StoredLeftoversLaunch(UninstallLaunchState State, IStoredLeftoversBroker? Broker, string Message,
-    uint? ExitCode = null);
+    uint? ExitCode = null, bool DeclinedExplanation = false);
 
 /// <summary>
 /// "Check for leftovers" on the Programs page's "removed outside Purge" group (M3 design 7a delta 5, section 10 S1).
@@ -70,8 +74,11 @@ public sealed class RemovedLeftoversController
     /// <summary>Raised after any visible state changed, on the thread that changed it.</summary>
     public event Action? Changed;
 
-    /// <summary>Raised when the user said No at the Windows prompt (the page shows the cancelled bar).</summary>
-    public event Action? AdminPromptCancelled;
+    /// <summary>
+    /// Raised when the user said No at the Windows prompt, or "Not now" at Purge's explanation (the argument is true
+    /// then); the page shows the cancelled bar.
+    /// </summary>
+    public event Action<bool>? AdminPromptCancelled;
 
     /// <summary>Raised when the scan is in; the page shows it on the Leftovers page, which takes the broker link.</summary>
     public event Action<StoredScanOutcome>? Completed;
@@ -250,10 +257,11 @@ public sealed class RemovedLeftoversController
         {
             case UninstallLaunchState.Cancelled:
                 // The shell's cancelled bar says it (error 1223); the program keeps its button for another try.
-                AdminPromptCancelled?.Invoke();
+                AdminPromptCancelled?.Invoke(launch.DeclinedExplanation);
                 break;
             case UninstallLaunchState.NotAdministrator:
-                Notice = new RemovedNotice(UninstallNoticeKind.Error, "Purge needs an administrator account.", launch.Message);
+                Notice = new RemovedNotice(UninstallNoticeKind.Error, "Administrator permission is not available.",
+                    launch.Message);
                 break;
             default:
                 var code = launch.ExitCode is { } c
