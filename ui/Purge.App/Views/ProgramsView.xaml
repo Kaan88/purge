@@ -207,10 +207,11 @@
                                             <TextBlock Text="{x:Bind Initial}" Foreground="White" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center" />
                                         </Border>
                                         <TextBlock Grid.Column="1" VerticalAlignment="Center" TextTrimming="CharacterEllipsis">
-                                            <Run Text="{x:Bind Name}" /><LineBreak /><Run Text="{x:Bind Detail}" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                            <Run Text="{x:Bind Name}" /><LineBreak /><Run Text="{x:Bind Detail, Mode=OneWay}" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                                         </TextBlock>
-                                        <Button Grid.Column="2" Content="Check for leftovers" IsEnabled="{x:Bind CanCheck}" Click="OnCheckRemoved" Tag="{x:Bind ProgramId}"
-                                                ToolTipService.ToolTip="{x:Bind CheckHint}" />
+                                        <Button Grid.Column="2" Content="{x:Bind ButtonText, Mode=OneWay}" IsEnabled="{x:Bind CanCheck, Mode=OneWay}"
+                                                Visibility="{x:Bind ButtonVisibility, Mode=OneWay}" Click="OnCheckRemoved" Tag="{x:Bind ProgramId}"
+                                                ToolTipService.ToolTip="{x:Bind CheckHint, Mode=OneWay}" />
                                     </Grid>
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
