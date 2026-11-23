@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using Microsoft.UI.Text;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media.Animation;
 using Purge.App.Shell;
@@ -100,7 +101,10 @@ public sealed partial class ProgramsView : UserControl
     private CancellationTokenSource? _enrich;
     private IconAtlas? _atlas;
     private ProgramRow? _current;
-    private readonly (Button Button, Border Selection, TextBlock Label, TextBlock Count, ProgramTab Tab)[] _tabs;
+    // The ticked programs by id. A filter, a tab, a search or a re-list hides rows but does not untick them; the list's
+    // own selection is redrawn from this set (Show).
+    private readonly HashSet<string> _ticked = new(StringComparer.Ordinal);
+    private readonly (RadioButton Button, Border Selection, TextBlock Label, TextBlock Count, ProgramTab Tab)[] _tabs;
 
     public ProgramsView()
     {
@@ -246,6 +250,7 @@ public sealed partial class ProgramsView : UserControl
             r.Extras = _firstTickDone;
         }
         _current = currentId is not null && _byId.TryGetValue(currentId, out var again) ? again : null;
+        _ticked.RemoveWhere(id => !_byId.ContainsKey(id));
         if (_firstTickDone) UpdateTabCounts();
         UpdateSummary();
         MainWindow.Instance.SetProgramsCount(_all.Count);
@@ -277,6 +282,7 @@ public sealed partial class ProgramsView : UserControl
         UpdateTabCounts();
         FindName(nameof(Commands));
         PlainCommands.Visibility = Visibility.Collapsed;
+        UpdateCommandState();
         FindName(nameof(SearchBox));
         var find = new Microsoft.UI.Xaml.Input.KeyboardAccelerator { Key = Windows.System.VirtualKey.F, Modifiers = Windows.System.VirtualKeyModifiers.Control };
         find.Invoked += (_, args) =>
@@ -727,6 +733,8 @@ public sealed partial class ProgramsView : UserControl
         _query = "";
         if (_firstTickDone) UpdateTabCounts();
         Refresh();
+        _ticked.Clear();
+        _ticked.Add(row.Entry.ProgramId);
         ProgramList.SelectedItems.Clear();
         ProgramList.SelectedItem = row;
         ProgramList.ScrollIntoView(row);
@@ -736,14 +744,17 @@ public sealed partial class ProgramsView : UserControl
 
     private void Refresh() => Show(Arrange(_all, _tab, _query, _onlyLeftovers, _onlyPerUser, _only32, _sortKey, _sortDescending));
 
+    /// <summary>Whether <paramref name="r"/> passes the Filter menu's choices.</summary>
+    private static bool Passes(ProgramRow r, bool onlyLeftovers, bool onlyPerUser, bool only32) =>
+        (!onlyLeftovers || r.Verdict is ForecastVerdict.Some or ForecastVerdict.Large)
+        && (!onlyPerUser || r.Entry.Scope == InstallScope.User)
+        && (!only32 || r.Entry.View == RegistryView.K32);
+
     /// <summary>The rows the list shows for a tab, search, filters and sort (the UI thread and <see cref="Prepare"/>).</summary>
     private static List<ProgramRow> Arrange(IEnumerable<ProgramRow> all, ProgramTab tab, string query, bool onlyLeftovers, bool onlyPerUser,
                                             bool only32, string sortKey, bool descending)
     {
-        var rows = all.Where(r => r.InTab(tab) && r.Matches(query)
-                                  && (!onlyLeftovers || r.Verdict is ForecastVerdict.Some or ForecastVerdict.Large)
-                                  && (!onlyPerUser || r.Entry.Scope == InstallScope.User)
-                                  && (!only32 || r.Entry.View == RegistryView.K32));
+        var rows = all.Where(r => r.InTab(tab) && r.Matches(query) && Passes(r, onlyLeftovers, onlyPerUser, only32));
         return (sortKey switch
         {
             "publisher" => Order(rows, r => r.Publisher, descending),
@@ -762,7 +773,7 @@ public sealed partial class ProgramsView : UserControl
     /// </summary>
     private void Show(List<ProgramRow> list)
     {
-        var ticked = ProgramList.SelectedItems.OfType<ProgramRow>().Select(r => r.Entry.ProgramId).ToHashSet();
+        var ticked = new HashSet<string>(_ticked, StringComparer.Ordinal);
         if (_current is not null) ticked.Add(_current.Entry.ProgramId);
         _refreshing = true;
         ProgramList.ItemsSource = list;
@@ -774,7 +785,7 @@ public sealed partial class ProgramsView : UserControl
 
         _current = keep;
         ShowDetails(keep);
-        ShowNoMatch(list.Count == 0 && _query.Length > 0);
+        ShowNoMatch(list.Count == 0 && (_query.Length > 0 || FilterCount > 0));
         UpdateSelectedCount();
         if (_firstTickDone) UpdateSummary();
     }
@@ -785,19 +796,63 @@ public sealed partial class ProgramsView : UserControl
 
     private static string KeyName(string keyPath) => ProgramRules.KeyName(keyPath);
 
-    /// <summary>"No programs match" over the empty list while a search finds nothing in this tab.</summary>
+    private int FilterCount => (_onlyLeftovers ? 1 : 0) + (_onlyPerUser ? 1 : 0) + (_only32 ? 1 : 0);
+
+    /// <summary>The list got wider or narrower: the optional columns that no longer fit go (Name always stays).</summary>
+    private void OnListSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        var columns = ProgramColumns.Shared;
+        if (!columns.Apply(e.NewSize.Width)) return;
+        ListHeader.ColumnDefinitions[2].Width = columns.SizeWidth;
+        ListHeader.ColumnDefinitions[3].Width = columns.LeftoversWidth;
+        ListHeader.ColumnDefinitions[4].Width = columns.InstalledWidth;
+        SortSize.Visibility = columns.Fit.Size ? Visibility.Visible : Visibility.Collapsed;
+        SortJunk.Visibility = columns.Fit.Leftovers ? Visibility.Visible : Visibility.Collapsed;
+        SortDate.Visibility = columns.Fit.Installed ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    /// <summary>
+    /// A narrow page: search, filter and sort move under the tabs, the details pane gets narrower and, below 640 px,
+    /// goes (the toolbar's Uninstall still works on the ticked programs).
+    /// </summary>
+    private void OnPageSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        var width = e.NewSize.Width;
+        var stack = width < 900;
+        Grid.SetRow(ToolsPanel, stack ? 1 : 0);
+        Grid.SetColumn(ToolsPanel, stack ? 0 : 1);
+        Grid.SetColumnSpan(ToolsPanel, stack ? 2 : 1);
+        ToolsPanel.HorizontalAlignment = stack ? HorizontalAlignment.Left : HorizontalAlignment.Right;
+        var details = width >= 640;
+        DetailsColumn.Width = new GridLength(!details ? 0 : width < 1000 ? 280 : 330);
+        DetailsCard.Visibility = details ? Visibility.Visible : Visibility.Collapsed;
+        Body.ColumnSpacing = details ? 16 : 0;
+    }
+
+    /// <summary>"No programs match" over the empty list while a search or a filter finds nothing in this tab.</summary>
     private void ShowNoMatch(bool show)
     {
         if (show && NoMatch is null) FindName(nameof(NoMatch));
         if (NoMatch is null) return;
         NoMatch.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
-        if (show) NoMatchText.Text = $"No programs match \u201C{_query}\u201D in {TabLabel(_tab)}.";
+        if (!show) return;
+        var filters = FilterCount > 0;
+        NoMatchText.Text = _query.Length == 0
+            ? $"No programs in {TabLabel(_tab)} match the filters."
+            : $"No programs match \u201C{_query}\u201D{(filters ? " and the filters" : "")} in {TabLabel(_tab)}.";
+        NoMatchHint.Text = _query.Length == 0
+            ? "Turn a filter off, or try another tab."
+            : filters
+                ? "Try fewer letters, turn a filter off, or press Esc to clear the search."
+                : "Try fewer letters, another tab, or press Esc to clear the search.";
     }
 
-    /// <summary>Each tab's count; while a search is on, how many of its programs match.</summary>
+    /// <summary>Each tab's count; with a search or a filter on, how many of its programs it would show.</summary>
     private void UpdateTabCounts()
     {
-        var matching = _query.Length == 0 ? _all : _all.Where(r => r.Matches(_query)).ToList();
+        var matching = _query.Length == 0 && FilterCount == 0
+            ? _all
+            : _all.Where(r => r.Matches(_query) && Passes(r, _onlyLeftovers, _onlyPerUser, _only32)).ToList();
         TabAppsCount.Text = matching.Count(r => r.IsApp).ToString(CultureInfo.CurrentCulture);
         TabComponentsCount.Text = matching.Count(r => r.IsComponent).ToString(CultureInfo.CurrentCulture);
         TabUnnamedCount.Text = matching.Count(r => r.IsUnnamed).ToString(CultureInfo.CurrentCulture);
@@ -806,7 +861,7 @@ public sealed partial class ProgramsView : UserControl
 
     private void OnTab(object sender, RoutedEventArgs e)
     {
-        if (sender is not Button { Tag: string tag } || !Enum.TryParse<ProgramTab>(tag, out var tab)) return;
+        if (sender is not RadioButton { Tag: string tag } || !Enum.TryParse<ProgramTab>(tag, out var tab)) return;
         SelectTab(tab);
         Refresh();
     }
@@ -817,6 +872,7 @@ public sealed partial class ProgramsView : UserControl
         foreach (var t in _tabs)
         {
             var on = t.Tab == tab;
+            t.Button.IsChecked = on;
             t.Selection.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
             t.Label.FontWeight = on ? FontWeights.SemiBold : FontWeights.Normal;
         }
@@ -877,8 +933,9 @@ public sealed partial class ProgramsView : UserControl
         item.Click += (_, _) =>
         {
             set(item.IsChecked);
-            var n = (_onlyLeftovers ? 1 : 0) + (_onlyPerUser ? 1 : 0) + (_only32 ? 1 : 0);
+            var n = FilterCount;
             FilterText.Text = n == 0 ? "Filter" : $"Filter ({n})";
+            if (_firstTickDone) UpdateTabCounts();
             Refresh();
         };
         return item;
@@ -887,6 +944,8 @@ public sealed partial class ProgramsView : UserControl
     private void OnSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_refreshing) return;
+        foreach (var row in e.AddedItems.OfType<ProgramRow>()) _ticked.Add(row.Entry.ProgramId);
+        foreach (var row in e.RemovedItems.OfType<ProgramRow>()) _ticked.Remove(row.Entry.ProgramId);
         // The details card follows the row most recently ticked; unticking it falls back to another ticked row.
         if (e.AddedItems.Count > 0 && e.AddedItems[^1] is ProgramRow added)
             _current = added;
@@ -898,10 +957,21 @@ public sealed partial class ProgramsView : UserControl
 
     private void UpdateSelectedCount()
     {
-        var n = ProgramList.SelectedItems.Count;
-        SelectedCount.Text = n == 0 ? "" : $"{n} selected";
+        var n = _ticked.Count;
+        var hidden = n - ProgramList.SelectedItems.Count;
+        SelectedCount.Text = n == 0 ? "" : $"{n} selected" + (hidden > 0 ? $" ({hidden} not shown)" : "");
         UninstallLabel.Text = n > 1 ? $"Uninstall {n}" : "Uninstall";
+        AutomationProperties.SetName(UninstallButton, n > 1 ? $"Uninstall {n} programs" : _current is { } row ? "Uninstall " + row.Name : "Uninstall");
         UpdateCommandState();
+    }
+
+    /// <summary>The programs "Uninstall" acts on: every ticked one (visible ones in list order first), else the details pane's.</summary>
+    private List<UninstallTarget> UninstallTargets()
+    {
+        var shown = ProgramList.ItemsSource as List<ProgramRow> ?? [];
+        var rows = shown.Concat(_all).Where(r => _ticked.Contains(r.Entry.ProgramId)).DistinctBy(r => r.Entry.ProgramId).ToList();
+        if (rows.Count == 0 && _current is not null) rows.Add(_current);
+        return rows.Select(r => new UninstallTarget(r.Entry.ProgramId, r.Name)).ToList();
     }
 
     /// <summary>
@@ -915,9 +985,15 @@ public sealed partial class ProgramsView : UserControl
         var can = engine.CanChangePc && !CheckRunning;
         var hint = can ? null : CommandHint(engine);
         // The toolbar button needs a program; the details pane's button only shows with one.
-        var picked = _current is not null;
+        var picked = _current is not null || _ticked.Count > 0;
         UninstallButton.IsEnabled = can && picked;
         ToolTipService.SetToolTip(UninstallButton, hint ?? (picked ? null : "Select a program to uninstall."));
+        // The folder and web commands act on the details pane's program.
+        if (OpenFolderCommand is not null)
+        {
+            OpenFolderCommand.IsEnabled = _current?.Entry.InstallLocation is not null;
+            WebCommand.IsEnabled = _current is not null;
+        }
         if (DUninstallButton is not null)
         {
             DUninstallButton.IsEnabled = can;
@@ -998,7 +1074,8 @@ public sealed partial class ProgramsView : UserControl
             : e.UninstallString is null
                 ? "None registered"
                 : row.KindText + (e.QuietUninstallString is not null || e.InstallerKind == InstallerKind.Msi ? " · quiet mode available" : "");
-        DLocation.Content = reading ? "Reading…" : e.InstallLocation ?? "Not recorded";
+        DLocationText.Text = reading ? "Reading…" : e.InstallLocation ?? "Not recorded";
+        ToolTipService.SetToolTip(DLocation, e.InstallLocation);
         DLocation.IsEnabled = e.InstallLocation is not null;
         DInstalled.Text = Join(" · ", row.InstalledText, "for " + row.ScopeText);
         ShowDetailsSize(row);
@@ -1065,6 +1142,10 @@ public sealed partial class ProgramsView : UserControl
             case "open-folder" when _current?.Entry.InstallLocation is { } dir && Directory.Exists(dir):
                 Process.Start(new ProcessStartInfo("explorer.exe", $"\"{dir}\"") { UseShellExecute = false });
                 return;
+            case "open-folder" when _current is null:
+            case "web" when _current is null:
+                ShowNotice("Select a program first.", InfoBarSeverity.Informational);
+                return;
             case "open-folder":
                 ShowNotice("The install folder is not recorded for this program, or is not on this PC any more.");
                 return;
@@ -1077,11 +1158,15 @@ public sealed partial class ProgramsView : UserControl
             case "refresh" when Program.Engine.IsLive:
                 _ = ReloadAsync();
                 return;
+            case "refresh":
+                ShowNotice("Sample data: there is no engine to read the list from.", InfoBarSeverity.Informational);
+                return;
             case "uninstall" when Program.Engine.CanChangePc && CheckRunning:
                 ShowNotice(CommandHint(Program.Engine));
                 return;
-            case "uninstall" when Program.Engine.CanChangePc && _current is { } row:
-                MainWindow.Instance.OpenUninstall().Begin(new UninstallTarget(row.Entry.ProgramId, row.Name));
+            case "uninstall" when Program.Engine.CanChangePc && UninstallTargets() is { Count: > 0 } targets:
+                // Several ticked: the Uninstall page runs them one after another, each with its own steps.
+                MainWindow.Instance.OpenUninstall().Begin(targets);
                 return;
             case "uninstall" when Program.Engine.CanChangePc:
                 ShowNotice("Select a program to uninstall first.", InfoBarSeverity.Informational);

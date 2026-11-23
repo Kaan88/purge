@@ -33,6 +33,7 @@ public sealed partial class UninstallView : UserControl
     ];
 
     private readonly UninstallController _controller;
+    private readonly UninstallQueue _queue = new();
     private readonly Dictionary<UninstallStep, StepRow> _rows = [];
     private bool _rendering;
     private bool _wasBusy;
@@ -76,6 +77,7 @@ public sealed partial class UninstallView : UserControl
 
         BuildStepper();
         BuildChoices();
+        Built = this;
         Render();
     }
 
@@ -136,10 +138,77 @@ public sealed partial class UninstallView : UserControl
     private static bool CheckRunning => MainWindow.Instance.CheckRunning;
 
     /// <summary>Starts the pipeline for a program chosen on the Programs page.</summary>
-    public void Begin(UninstallTarget target)
+    public void Begin(UninstallTarget target) => Begin([target]);
+
+    /// <summary>
+    /// Starts the pipeline for the programs ticked on the Programs page, one after another: the first now, each next
+    /// one when the user asks for it on this page ("Uninstall next" or "Skip"). Ignored while a step runs.
+    /// </summary>
+    public void Begin(IReadOnlyList<UninstallTarget> targets)
+    {
+        if (_controller.IsBusy) return;
+        if (_queue.Start(targets) is not { } first) return;
+        StartQueued(first);
+    }
+
+    /// <summary>The page once it is built (the window builds it on first use), for the Leftovers page's queue line.</summary>
+    public static UninstallView? Built { get; private set; }
+
+    /// <summary>The program the queue names after the current one, for the Leftovers page's line; null when none.</summary>
+    public string? QueuedNext => _queue.Next is { } next && !_controller.IsBusy
+        ? $"{(next.ProgramName.Length > 0 ? next.ProgramName : "The next program")} ({_queue.Position + 1} of {_queue.Count})"
+        : null;
+
+    private void StartQueued(UninstallTarget target)
     {
         ProgramTile.Background = ProgramRow.TileFor(target.ProgramName);
         _ = _controller.BeginAsync(target);
+        MainWindow.Instance.OnHeldScanChanged();
+        Render();
+    }
+
+    private void OnUninstallNext(object sender, RoutedEventArgs e)
+    {
+        if (!CanStartNext(out _)) return;
+        if (_queue.Advance() is { } next) StartQueued(next);
+    }
+
+    private void OnSkipNext(object sender, RoutedEventArgs e)
+    {
+        _queue.SkipNext();
+        MainWindow.Instance.OnHeldScanChanged();
+        Render();
+    }
+
+    /// <summary>The next queued program may start: no step runs, and no other broker user or held scan is in the way.</summary>
+    private bool CanStartNext(out string? why)
+    {
+        why = _controller.IsBusy ? "Waits until this program's step has finished."
+            : CheckRunning ? CheckRunningHint
+            : LeftoversNavigator.IsChanging ? "Waits until the Leftovers page has finished its change."
+            : _heldOutcome is not null ? "Waits until this program's scan has gone to the Leftovers page."
+            : null;
+        return why is null;
+    }
+
+    private void RenderQueue()
+    {
+        if (_queue.Next is not { } next || _controller.IsBusy)
+        {
+            NextCard.Visibility = Visibility.Collapsed;
+            return;
+        }
+        var name = next.ProgramName.Length > 0 ? next.ProgramName : "the next program";
+        NextCard.Visibility = Visibility.Visible;
+        NextText.Text = $"Next: {name} ({_queue.Position + 1} of {_queue.Count}).";
+        NextDetail.Text = "It gets its own confirmation, prompts and leftover scan. Review this program's leftovers first "
+                          + "if you like; the next one starts only when you choose.";
+        NextButton.Content = "Uninstall " + name;
+        AutomationProperties.SetName(NextButton, "Uninstall " + name);
+        var can = CanStartNext(out var why);
+        NextButton.IsEnabled = can;
+        ToolTipService.SetToolTip(NextButton, why);
+        AutomationProperties.SetName(SkipButton, "Skip " + name);
     }
 
     private async Task<UninstallLaunch> LaunchAsync(CancellationToken ct)
@@ -222,7 +291,8 @@ public sealed partial class UninstallView : UserControl
         {
             var controller = _controller;
             var name = controller.Target?.ProgramName;
-            SubtitleText.Text = name is { Length: > 0 } ? name : "Nothing is running";
+            SubtitleText.Text = (name is { Length: > 0 } ? name : "Nothing is running")
+                                + (controller.Target is not null && _queue.PositionText is { } position ? " · " + position : "");
             ProgramNameText.Text = name is { Length: > 0 } ? name : "No program selected";
             ProgramInitial.Text = name is { Length: > 0 } ? name[..1].ToUpperInvariant() : "?";
             if (name is { Length: > 0 }) ProgramTile.Background = ProgramRow.TileFor(name);
@@ -248,9 +318,11 @@ public sealed partial class UninstallView : UserControl
             RenderRunning();
             RenderChoices();
             RenderBars();
+            RenderQueue();
             if (controller.IsBusy != _wasBusy)
             {
                 _wasBusy = controller.IsBusy;
+                MainWindow.Instance.OnHeldScanChanged();
                 MainWindow.Instance.Programs.OnBrokerUsersChanged();
             }
             FooterText.Text = controller.Target is null
