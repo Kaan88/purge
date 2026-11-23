@@ -37,6 +37,19 @@ cargo xtask ci          # fmt check, clippy -D warnings, tests, purge-mcp alone,
 file, given by the `PURGE_UT_STRINGS` environment variable. That file is never committed or copied into
 the repo. Without the variable the check is skipped.
 
+## Hub
+
+This app is installed and updated by Hub (`Kaan88/mdhub`). What a release, the installer and the exe
+must do for that is in https://github.com/Kaan88/mdhub/blob/main/docs/COMPLIANCE.md. Before changing
+the release workflow, the installer, the exe's version resource or `tools/write-hub-txt.ps1`, read it.
+
+In this repository: the one version is `[workspace.package] version` in `Cargo.toml` (the exes'
+version resources, the UI assemblies and the setup take it from there; `install/inno/check-version.ps1`
+fails the build on a difference), the setup is `install/inno/purge.iss`, the release is
+`.github/workflows/release.yml` (tag `v<version>`), and `tools/write-hub-txt.ps1` is a copy of Hub's
+script: re-sync it, do not edit it. Purge has no updater of its own, so COMPLIANCE section 6 does not
+apply.
+
 ## Licence
 
 Purge is licensed under the MIT License (`LICENSE`). Code ported from Bulk Crap Uninstaller stays under

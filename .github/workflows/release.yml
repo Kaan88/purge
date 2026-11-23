@@ -1,0 +1,198 @@
+# Purge's release, for Hub (Kaan88/mdhub, docs/COMPLIANCE.md). A release is cut by pushing the tag
+# v<version>, where <version> is [workspace.package] version of Cargo.toml (the one version of Purge;
+# the run fails when the tag says another). It builds the release engine and broker (cargo --locked),
+# the Native AOT UI and the Inno setup with install\inno\build-installer.ps1, checks that every exe and
+# the setup carry the version, writes hub.txt from the files it uploads (tools\write-hub-txt.ps1, a
+# copy of Hub's), checks every hash, and creates the GitHub release: never a draft and never a
+# pre-release, because Hub reads only releases/latest, which skips both.
+#
+# workflow_dispatch with publish=false (the default) builds and checks everything and publishes
+# nothing: the files are kept as a workflow artifact. With publish=true it creates the tag v<version>
+# at the commit it ran on.
+#
+# Not run yet: nothing is tagged (the owner releases). Hub reads only PUBLIC releases; while this
+# repository is private, Hub sees none of them.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Create the GitHub release (false = build and check only)'
+        type: boolean
+        default: false
+      version:
+        description: 'Version to build when run by hand (X.Y.Z); empty = the one in Cargo.toml. A tag run takes it from the tag'
+        type: string
+        default: ''
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  # The setup's payload paths (build-installer.ps1 reads it).
+  CARGO_TARGET_DIR: ${{ github.workspace }}\target
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Version (tag = Cargo.toml = Cargo.lock)
+        id: v
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF_TYPE -eq 'tag') { $v = $env:GITHUB_REF_NAME -replace '^v', '' } else { $v = '${{ inputs.version }}' }
+          if ($v -eq '') { $v = (& ./install/inno/check-version.ps1) }
+          if ($v -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$') { throw "bad version '$v'" }
+          # Fails when Cargo.toml says another version or Cargo.lock was not updated after a bump.
+          $global:LASTEXITCODE = 0
+          & ./install/inno/check-version.ps1 -Expect $v
+          if ($LASTEXITCODE) { throw "Cargo.toml / Cargo.lock do not say $v" }
+          "version=$v" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
+
+      - name: Rust toolchain (rust-toolchain.toml)
+        shell: pwsh
+        run: |
+          $channel = (Select-String -Path rust-toolchain.toml -Pattern '^channel = "(.+)"').Matches[0].Groups[1].Value
+          rustup toolchain install $channel --profile minimal --component rustfmt --component clippy --target x86_64-pc-windows-msvc
+          if ($LASTEXITCODE) { throw "rustup toolchain install $channel failed" }
+          rustc -V
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Inno Setup
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          $iscc = Get-ChildItem -Path "${env:ProgramFiles(x86)}\Inno Setup *\ISCC.exe", "$env:ProgramFiles\Inno Setup *\ISCC.exe", "$env:LOCALAPPDATA\Programs\Inno Setup *\ISCC.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $iscc) { throw 'ISCC.exe not found after the install' }
+          "ISCC=$($iscc.FullName)" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          & $iscc.FullName /? | Select-Object -First 2
+
+      # cargo build --release --locked -p purge-engine, then -p purge-broker (two builds, never one),
+      # cargo xtask check-deps, dotnet publish of ui\Purge.App (Native AOT), check-version.ps1 on the
+      # three exes, ISCC with /DAppVersion from Cargo.toml, check-version.ps1 on the setup.
+      - name: Build (engine, broker, UI, setup)
+        shell: powershell
+        run: |
+          Remove-Item Env:RUSTFLAGS -ErrorAction SilentlyContinue
+          & .\install\inno\build-installer.ps1 -InnoCompiler $env:ISCC
+          if (-not $?) { throw 'build-installer.ps1 failed' }
+
+      - name: Version resources
+        shell: pwsh
+        run: |
+          $v = '${{ steps.v.outputs.version }}'
+          $exes = @("$env:CARGO_TARGET_DIR\release\purge-engine.exe", "$env:CARGO_TARGET_DIR\release\purge-broker.exe", 'target\ui-publish\Purge.exe')
+          foreach ($e in $exes) { (Get-Item $e).VersionInfo | Format-List FileName, FileVersion, ProductVersion }
+          $global:LASTEXITCODE = 0
+          & ./install/inno/check-version.ps1 -Expect $v -Exe $exes -Setup "target\installer\Purge-Setup-$v.exe"
+          if ($LASTEXITCODE) { throw 'a version resource does not say the release version' }
+
+      - name: Assemble the release files and hub.txt
+        shell: pwsh
+        run: |
+          $v = '${{ steps.v.outputs.version }}'
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item "target/installer/Purge-Setup-$v.exe" dist/
+          # The release notes: docs/release-notes/<version>.md when the owner wrote one.
+          $notesSrc = "docs/release-notes/$v.md"
+          $notesName = "release-notes-$v.md"
+          if (Test-Path $notesSrc) {
+            Copy-Item $notesSrc "dist/$notesName"
+          } else {
+            Write-Warning "$notesSrc does not exist; the release gets a one-line text"
+            [IO.File]::WriteAllText("$PWD/dist/$notesName", "# Purge $v`n`nPurge $v.`n", (New-Object System.Text.UTF8Encoding($false)))
+          }
+          # Hub's one-line notes: the first line of the notes that is not a heading.
+          $oneLine = (Get-Content "dist/$notesName" -Encoding UTF8 | Where-Object { $_.Trim() -ne '' -and -not $_.TrimStart().StartsWith('#') } | Select-Object -First 1)
+          if (-not $oneLine) { $oneLine = "Purge $v." }
+          $oneLine = $oneLine.Trim() -replace '^[-*]\s+', ''
+          $files = @(
+            @{ Name = "Purge-Setup-$v.exe"; Path = "dist/Purge-Setup-$v.exe"; Role = 'setup'; Silent = '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART'; Scope = 'machine' }
+          )
+          $global:LASTEXITCODE = 0
+          # In-process (&), not a child pwsh: the file list is hashtables, which a child would get as text.
+          & ./tools/write-hub-txt.ps1 -App purge -Repo purge -Version $v -Notes $oneLine -NotesFile $notesName `
+            -Kind setup -Exe Purge.exe -Uninstall '{7C1B9E64-2D58-4F1A-9B03-6E4C5A8D7F21}_is1' `
+            -Wait 'Purge.exe,purge-engine.exe,purge-broker.exe' -Files $files -Out dist/hub.txt
+          if ($LASTEXITCODE) { throw 'write-hub-txt failed' }
+          Get-Content dist/hub.txt
+
+      - name: Check hub.txt against the files
+        shell: pwsh
+        run: |
+          $v = '${{ steps.v.outputs.version }}'
+          $setup = "dist/Purge-Setup-$v.exe"
+          $sha = (Get-FileHash -Algorithm SHA256 $setup).Hash.ToLowerInvariant()
+          $size = (Get-Item $setup).Length
+          $hub = Get-Content dist/hub.txt -Raw -Encoding UTF8
+          $want = @(
+            "hub: 1", "app: purge", "version: $v", "notes.file: release-notes-$v.md",
+            "windows-x86_64.kind: setup", "windows-x86_64.exe: Purge.exe",
+            "windows-x86_64.uninstall: {7C1B9E64-2D58-4F1A-9B03-6E4C5A8D7F21}_is1",
+            "windows-x86_64.wait: Purge.exe, purge-engine.exe, purge-broker.exe",
+            "windows-x86_64.setup: Purge-Setup-$v.exe",
+            "windows-x86_64.setup.url: https://github.com/Kaan88/purge/releases/download/v$v/Purge-Setup-$v.exe",
+            "windows-x86_64.setup.sha256: $sha", "windows-x86_64.setup.size: $size",
+            "windows-x86_64.setup.silent: /VERYSILENT /SUPPRESSMSGBOXES /NORESTART",
+            "windows-x86_64.setup.scope: machine")
+          $lines = $hub -split "`n"
+          foreach ($w in $want) { if ($lines -notcontains $w) { throw "hub.txt lacks the line '$w'" } }
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: purge-release-files
+          path: dist/*
+          retention-days: 14
+
+      - name: Create the release
+        if: ${{ github.event_name == 'push' || inputs.publish }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $v = '${{ steps.v.outputs.version }}'
+          # Never --draft and never --prerelease: Hub's releases/latest skips both (COMPLIANCE.md 2).
+          $ghArgs = @('release', 'create', "v$v", '--title', "Purge $v", '--notes-file', "dist/release-notes-$v.md", '--latest')
+          if ($env:GITHUB_REF_TYPE -eq 'tag') { $ghArgs += '--verify-tag' } else { $ghArgs += @('--target', $env:GITHUB_SHA) }
+          $ghArgs += @("dist/Purge-Setup-$v.exe", "dist/release-notes-$v.md", 'dist/hub.txt')
+          gh @ghArgs
+          if ($LASTEXITCODE) { throw 'gh release create failed' }
+
+      - name: Check the published release
+        if: ${{ github.event_name == 'push' || inputs.publish }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $v = '${{ steps.v.outputs.version }}'
+          $r = gh release view "v$v" --json isDraft,isPrerelease,assets | ConvertFrom-Json
+          if ($r.isDraft -or $r.isPrerelease) { throw "v$v is a draft or a pre-release: Hub would not see it" }
+          foreach ($name in @("Purge-Setup-$v.exe", "release-notes-$v.md", 'hub.txt')) {
+            $a = $r.assets | Where-Object { $_.name -eq $name }
+            if (-not $a) { throw "the release has no asset $name" }
+            if ($a.size -ne (Get-Item "dist/$name").Length) { throw "${name}: uploaded $($a.size) bytes, built $((Get-Item "dist/$name").Length)" }
+          }
+          # The uploaded setup is the file hub.txt describes.
+          New-Item -ItemType Directory -Force check | Out-Null
+          gh release download "v$v" --pattern "Purge-Setup-$v.exe" --dir check
+          if ($LASTEXITCODE) { throw 'download of the uploaded setup failed' }
+          $sha = (Get-FileHash -Algorithm SHA256 "check/Purge-Setup-$v.exe").Hash.ToLowerInvariant()
+          if ((Get-Content dist/hub.txt) -notcontains "windows-x86_64.setup.sha256: $sha") { throw 'the uploaded setup does not match hub.txt' }
+          Write-Host "v$v published: not a draft, not a pre-release, hub.txt matches the uploaded setup"
