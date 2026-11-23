@@ -1256,8 +1256,16 @@ function Invoke-M3E2eBuildAmbient {
         $a = Get-M3E2eAmbientArgs $dirs $tmp
         $tool = Get-M3E2eHostRigTool
         Write-RigLog "$tool $($a -join ' ')"
-        & $tool @a
-        if ($LASTEXITCODE -ne 0) { throw "rigtool ambient --m2 --added exited $LASTEXITCODE; no ambient set written" }
+        # rigtool writes its progress to stderr; under ErrorActionPreference Stop, Windows PowerShell 5.1 turns the
+        # first stderr line into a terminating error (chain null-final3 ended "exit 1" on "ambient --m2: en1...: 102
+        # records"). Run it with Continue, log its lines, and judge it by the exit code alone.
+        $eap = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = 'Continue'
+            & $tool @a 2>&1 | ForEach-Object { Write-RigLog "  $_" }
+            $code = $LASTEXITCODE
+        } finally { $ErrorActionPreference = $eap }
+        if ($code -ne 0) { throw "rigtool ambient --m2 --added exited $code; no ambient set written" }
         $set = Read-M3Json $tmp
         if (-not $set -or "$($set.schema)" -cne 'purge.rig.m2ambient/1') { throw "the built set has schema '$(if ($set) { $set.schema })'; no ambient set written" }
         $storeBad = @(Get-M3E2eStoreRefusals $set)
