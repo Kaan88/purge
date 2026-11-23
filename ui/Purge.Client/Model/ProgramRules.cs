@@ -53,6 +53,28 @@ public static class ProgramRules
         || (entry.Version?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false)
         || (entry.InstallLocation?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false);
 
+    /// <summary>The program list's optional columns: which of them fit beside a readable Name column.</summary>
+    public readonly record struct ListColumns(bool Size, bool Leftovers, bool Installed);
+
+    /// <summary>Narrowest Name column the list keeps; the optional columns go before it gets narrower.</summary>
+    public const double MinNameWidth = 180;
+
+    /// <summary>Width of the list that is not columns: tile, column spacing and row padding.</summary>
+    public const double ListChrome = 28 + 4 * 10 + 40;
+
+    /// <summary>
+    /// The optional columns that fit in a list <paramref name="width"/> px wide: Installed goes first, then Expected
+    /// leftovers, then Size; Name is always shown.
+    /// </summary>
+    public static ListColumns FitColumns(double width)
+    {
+        var room = width - ListChrome - MinNameWidth;
+        var size = room >= 100;
+        var leftovers = size && room >= 100 + 150;
+        var installed = leftovers && room >= 100 + 150 + 92;
+        return new ListColumns(size, leftovers, installed);
+    }
+
     /// <summary>The last segment of an entry's key path: the name a child's <c>ParentKey</c> refers to.</summary>
     public static string KeyName(string keyPath) => keyPath[(keyPath.LastIndexOf('\\') + 1)..];
 

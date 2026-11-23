@@ -257,6 +257,7 @@ public sealed partial class LeftoversView : UserControl, ILeftoversPage
     /// </summary>
     private void ShowHeldBar()
     {
+        ShowQueueBar();
         if (_heldBar is not null) InfoBarHost.Children.Remove(_heldBar);
         _heldBar = null;
         if (_vm is null || MainWindow.Instance.HeldScanProgram is not { } name) return;
@@ -282,6 +283,35 @@ public sealed partial class LeftoversView : UserControl, ILeftoversPage
         }
         InfoBarHost.Children.Insert(0, bar);
         _heldBar = bar;
+    }
+
+    private InfoBar? _queueBar;
+
+    /// <summary>
+    /// "Uninstall N" queued more programs: a line says which comes next and takes the user back to the Uninstall page,
+    /// where it starts.
+    /// </summary>
+    private void ShowQueueBar()
+    {
+        if (_queueBar is not null) InfoBarHost.Children.Remove(_queueBar);
+        _queueBar = null;
+        if (_vm is null || MainWindow.Instance.HeldScanProgram is not null) return;
+        if (UninstallView.Built?.QueuedNext is not { } next) return;
+        var bar = new InfoBar
+        {
+            Severity = InfoBarSeverity.Informational,
+            Title = "Next to uninstall: " + next + ".",
+            Message = "Finish here first if you like. It starts from the Uninstall page when you choose.",
+            IsOpen = true,
+            IsClosable = true,
+            RequestedTheme = MainWindow.Instance.ActualTheme,
+        };
+        var go = new Button { Content = "Go to Uninstall" };
+        go.Click += (_, _) => MainWindow.Instance.OpenUninstall();
+        bar.ActionButton = go;
+        bar.Closed += (s, _) => InfoBarHost.Children.Remove(s);
+        InfoBarHost.Children.Insert(0, bar);
+        _queueBar = bar;
     }
 
     private InfoBar AddInfoBar(InfoBarSeverity severity, string title, string message)

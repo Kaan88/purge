@@ -18,6 +18,39 @@
             <Setter Property="CornerRadius" Value="4" />
             <Setter Property="Visibility" Value="Collapsed" />
         </Style>
+        <!-- A tab: a RadioButton (screen readers hear which tab is selected) drawn like the subtle buttons. -->
+        <Style x:Key="TabButton" TargetType="RadioButton">
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="MinWidth" Value="0" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="UseSystemFocusVisuals" Value="True" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RadioButton">
+                        <Grid x:Name="Root" Background="{TemplateBinding Background}" CornerRadius="4">
+                            <VisualStateManager.VisualStateGroups>
+                                <VisualStateGroup x:Name="CommonStates">
+                                    <VisualState x:Name="Normal" />
+                                    <VisualState x:Name="PointerOver">
+                                        <VisualState.Setters>
+                                            <Setter Target="Root.Background" Value="{ThemeResource SubtleFillColorSecondaryBrush}" />
+                                        </VisualState.Setters>
+                                    </VisualState>
+                                    <VisualState x:Name="Pressed">
+                                        <VisualState.Setters>
+                                            <Setter Target="Root.Background" Value="{ThemeResource SubtleFillColorTertiaryBrush}" />
+                                        </VisualState.Setters>
+                                    </VisualState>
+                                    <VisualState x:Name="Disabled" />
+                                </VisualStateGroup>
+                            </VisualStateManager.VisualStateGroups>
+                            <ContentPresenter Content="{TemplateBinding Content}" ContentTemplate="{TemplateBinding ContentTemplate}"
+                                              Padding="{TemplateBinding Padding}" />
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
         <Style x:Key="ColumnHeader" TargetType="Button" BasedOn="{StaticResource SubtleButton}">
             <Setter Property="Padding" Value="4,0" />
             <Setter Property="MinHeight" Value="24" />
@@ -51,7 +84,7 @@
         </Style>
     </UserControl.Resources>
 
-    <Grid>
+    <Grid SizeChanged="OnPageSizeChanged">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
@@ -71,7 +104,8 @@
                     <TextBlock Text="Programs" Style="{StaticResource TitleTextBlockStyle}" />
                     <TextBlock x:Name="Summary" VerticalAlignment="Bottom" Margin="0,0,0,5" Style="{StaticResource SecondaryText}" />
                 </StackPanel>
-                <Button x:Name="UninstallButton" Grid.Column="1" Style="{StaticResource AccentButtonStyle}" Click="OnCommand" Tag="uninstall" VerticalAlignment="Center">
+                <Button x:Name="UninstallButton" Grid.Column="1" Style="{StaticResource AccentButtonStyle}" Click="OnCommand" Tag="uninstall" VerticalAlignment="Center"
+                        AutomationProperties.Name="Uninstall">
                     <StackPanel Orientation="Horizontal" Spacing="8">
                         <FontIcon Glyph="&#xE74D;" FontSize="14" />
                         <TextBlock x:Name="UninstallLabel" Text="Uninstall" />
@@ -85,10 +119,10 @@
                 <CommandBar x:Name="Commands" x:Load="False" Grid.Column="2" VerticalAlignment="Center"
                             DefaultLabelPosition="Right" IsDynamicOverflowEnabled="False" Background="Transparent">
                     <CommandBar.SecondaryCommands>
-                        <AppBarButton Label="Open install folder" Click="OnCommand" Tag="open-folder">
+                        <AppBarButton x:Name="OpenFolderCommand" Label="Open install folder" Click="OnCommand" Tag="open-folder" IsEnabled="False">
                             <AppBarButton.Icon><FontIcon Glyph="&#xE838;" /></AppBarButton.Icon>
                         </AppBarButton>
-                        <AppBarButton Label="Search the web for this program" Click="OnCommand" Tag="web">
+                        <AppBarButton x:Name="WebCommand" Label="Search the web for this program" Click="OnCommand" Tag="web" IsEnabled="False">
                             <AppBarButton.Icon><FontIcon Glyph="&#xE774;" /></AppBarButton.Icon>
                         </AppBarButton>
                         <AppBarSeparator />
@@ -101,10 +135,18 @@
 
             <StackPanel x:Name="InfoBarHost" Spacing="6" />
 
-            <!-- Tabs, then filter and sort on the right. -->
-            <Grid>
+            <!-- Tabs, then search, filter and sort on the right (below the tabs when the page is narrow). -->
+            <Grid x:Name="TabsRow" ColumnSpacing="8" RowSpacing="8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
                 <StackPanel Orientation="Horizontal" Spacing="4">
-                    <Button x:Name="TabApps" Style="{StaticResource SubtleButton}" Padding="0" Tag="Apps" Click="OnTab" AutomationProperties.Name="Apps">
+                    <RadioButton x:Name="TabApps" Style="{StaticResource TabButton}" GroupName="ProgramTabs" Tag="Apps" Click="OnTab" AutomationProperties.Name="Apps" IsChecked="True">
                         <Grid>
                             <Border x:Name="TabAppsSel" Style="{StaticResource TabSelection}" Visibility="Visible" />
                             <StackPanel Orientation="Horizontal" Spacing="6" Padding="12,6">
@@ -112,8 +154,8 @@
                                 <TextBlock x:Name="TabAppsCount" FontSize="12" VerticalAlignment="Center" Style="{StaticResource SecondaryText}" />
                             </StackPanel>
                         </Grid>
-                    </Button>
-                    <Button x:Name="TabComponents" Style="{StaticResource SubtleButton}" Padding="0" Tag="Components" Click="OnTab" AutomationProperties.Name="Components">
+                    </RadioButton>
+                    <RadioButton x:Name="TabComponents" Style="{StaticResource TabButton}" GroupName="ProgramTabs" Tag="Components" Click="OnTab" AutomationProperties.Name="Components">
                         <Grid>
                             <Border x:Name="TabComponentsSel" Style="{StaticResource TabSelection}" />
                             <StackPanel Orientation="Horizontal" Spacing="6" Padding="12,6">
@@ -121,8 +163,8 @@
                                 <TextBlock x:Name="TabComponentsCount" FontSize="12" VerticalAlignment="Center" Style="{StaticResource SecondaryText}" />
                             </StackPanel>
                         </Grid>
-                    </Button>
-                    <Button x:Name="TabUnnamed" Style="{StaticResource SubtleButton}" Padding="0" Tag="Unnamed" Click="OnTab" AutomationProperties.Name="Unnamed">
+                    </RadioButton>
+                    <RadioButton x:Name="TabUnnamed" Style="{StaticResource TabButton}" GroupName="ProgramTabs" Tag="Unnamed" Click="OnTab" AutomationProperties.Name="Unnamed">
                         <Grid>
                             <Border x:Name="TabUnnamedSel" Style="{StaticResource TabSelection}" />
                             <StackPanel Orientation="Horizontal" Spacing="6" Padding="12,6">
@@ -130,8 +172,8 @@
                                 <TextBlock x:Name="TabUnnamedCount" FontSize="12" VerticalAlignment="Center" Style="{StaticResource SecondaryText}" />
                             </StackPanel>
                         </Grid>
-                    </Button>
-                    <Button x:Name="TabRecent" Style="{StaticResource SubtleButton}" Padding="0" Tag="Recent" Click="OnTab" AutomationProperties.Name="Recent">
+                    </RadioButton>
+                    <RadioButton x:Name="TabRecent" Style="{StaticResource TabButton}" GroupName="ProgramTabs" Tag="Recent" Click="OnTab" AutomationProperties.Name="Recent">
                         <Grid>
                             <Border x:Name="TabRecentSel" Style="{StaticResource TabSelection}" />
                             <StackPanel Orientation="Horizontal" Spacing="6" Padding="12,6">
@@ -139,9 +181,14 @@
                                 <TextBlock x:Name="TabRecentCount" FontSize="12" VerticalAlignment="Center" Style="{StaticResource SecondaryText}" />
                             </StackPanel>
                         </Grid>
-                    </Button>
+                    </RadioButton>
                 </StackPanel>
-                <StackPanel Orientation="Horizontal" Spacing="4" HorizontalAlignment="Right">
+                <StackPanel x:Name="ToolsPanel" Grid.Column="1" Orientation="Horizontal" Spacing="4" HorizontalAlignment="Right">
+                    <!-- Search by name, publisher, version or folder as you type; Ctrl+F focuses it, Esc clears it.
+                         Loaded on the first tick, like the CommandBar. -->
+                    <TextBox x:Name="SearchBox" x:Load="False" Width="240" Margin="0,0,8,0" VerticalAlignment="Center"
+                             PlaceholderText="Search programs (Ctrl+F)" AutomationProperties.Name="Search programs"
+                             TextChanged="OnSearchChanged" KeyDown="OnSearchKeyDown" />
                     <TextBlock x:Name="SelectedCount" FontSize="12" Margin="0,0,8,0" VerticalAlignment="Center" Style="{StaticResource SecondaryText}" />
                     <Button x:Name="FilterButton" Style="{StaticResource SubtleButton}" Click="OnFilter" AutomationProperties.Name="Filter">
                         <StackPanel Orientation="Horizontal" Spacing="6">
@@ -164,10 +211,10 @@
             </Grid>
         </StackPanel>
 
-        <Grid Grid.Row="1" Padding="28,0,28,12" ColumnSpacing="16">
+        <Grid x:Name="Body" Grid.Row="1" Padding="28,0,28,12" ColumnSpacing="16">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="330" />
+                <ColumnDefinition x:Name="DetailsColumn" Width="330" />
             </Grid.ColumnDefinitions>
 
             <!-- Program list card. -->
@@ -209,9 +256,14 @@
                                         <TextBlock Grid.Column="1" VerticalAlignment="Center" TextTrimming="CharacterEllipsis">
                                             <Run Text="{x:Bind Name}" /><LineBreak /><Run Text="{x:Bind Detail, Mode=OneWay}" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                                         </TextBlock>
-                                        <Button Grid.Column="2" Content="{x:Bind ButtonText, Mode=OneWay}" IsEnabled="{x:Bind CanCheck, Mode=OneWay}"
-                                                Visibility="{x:Bind ButtonVisibility, Mode=OneWay}" Click="OnCheckRemoved" Tag="{x:Bind ProgramId}"
-                                                ToolTipService.ToolTip="{x:Bind CheckHint, Mode=OneWay}" />
+                                        <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                                            <Button Content="{x:Bind ButtonText, Mode=OneWay}" IsEnabled="{x:Bind CanCheck, Mode=OneWay}"
+                                                    Visibility="{x:Bind ButtonVisibility, Mode=OneWay}" Click="OnCheckRemoved" Tag="{x:Bind ProgramId}"
+                                                    ToolTipService.ToolTip="{x:Bind CheckHint, Mode=OneWay}" />
+                                            <Button Content="Dismiss" Style="{StaticResource SubtleButton}" IsEnabled="{x:Bind CanDismiss, Mode=OneWay}"
+                                                    Click="OnDismissRemoved" Tag="{x:Bind ProgramId}"
+                                                    ToolTipService.ToolTip="Takes it off this list. Purge will not mention it again." />
+                                        </StackPanel>
                                     </Grid>
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
@@ -221,7 +273,7 @@
                     </StackPanel>
 
                     <ListView x:Name="ProgramList" Grid.Row="2" SelectionMode="Multiple"
-                              SelectionChanged="OnSelectionChanged">
+                              SelectionChanged="OnSelectionChanged" SizeChanged="OnListSizeChanged">
                         <!-- No container transitions for the first frame (M3 launch perf): the rows are drawn in place
                              instead of starting an entrance animation each. OnFirstTick puts the ListView defaults back. -->
                         <ListView.ItemContainerTransitions>
@@ -241,15 +293,16 @@
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="28" />
                                         <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="100" />
-                                        <ColumnDefinition Width="150" />
-                                        <ColumnDefinition Width="92" />
+                                        <ColumnDefinition Width="{x:Bind Columns.SizeWidth, Mode=OneWay}" />
+                                        <ColumnDefinition Width="{x:Bind Columns.LeftoversWidth, Mode=OneWay}" />
+                                        <ColumnDefinition Width="{x:Bind Columns.InstalledWidth, Mode=OneWay}" />
                                     </Grid.ColumnDefinitions>
                                     <Border Width="26" Height="26" CornerRadius="6" Background="{x:Bind TileBrush}">
                                         <TextBlock Text="{x:Bind Initial}" Foreground="White" FontSize="12" FontWeight="SemiBold"
                                                    HorizontalAlignment="Center" VerticalAlignment="Center" />
                                     </Border>
-                                    <TextBlock Grid.Column="1" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" MaxLines="2" LineStackingStrategy="BlockLineHeight">
+                                    <TextBlock Grid.Column="1" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" MaxLines="2" LineStackingStrategy="BlockLineHeight"
+                                               ToolTipService.ToolTip="{x:Bind FullText}">
                                         <Run Text="{x:Bind Name}" FontSize="14" /><Run Text="{x:Bind NewTag}" FontSize="11" FontWeight="SemiBold"
                                              Foreground="{ThemeResource SystemFillColorSuccessBrush}" /><LineBreak /><Run Text="{x:Bind SubLine}" FontSize="12"
                                              Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
@@ -279,11 +332,18 @@
                             </DataTemplate>
                         </ListView.ItemTemplate>
                     </ListView>
+
+                    <!-- A search or filter that finds nothing in this tab. Loaded the first time it is needed. -->
+                    <StackPanel x:Name="NoMatch" x:Load="False" Grid.Row="2" Padding="16,24" Spacing="4" HorizontalAlignment="Center" IsHitTestVisible="False">
+                        <TextBlock x:Name="NoMatchText" TextWrapping="Wrap" HorizontalAlignment="Center" />
+                        <TextBlock x:Name="NoMatchHint" FontSize="12" TextWrapping="Wrap"
+                                   HorizontalAlignment="Center" Style="{StaticResource SecondaryText}" />
+                    </StackPanel>
                 </Grid>
             </Border>
 
-            <!-- Details card. -->
-            <Border Grid.Column="1" Style="{StaticResource Card}" VerticalAlignment="Top">
+            <!-- Details card (hidden on a narrow page; the toolbar's Uninstall still acts on the ticked programs). -->
+            <Border x:Name="DetailsCard" Grid.Column="1" Style="{StaticResource Card}" VerticalAlignment="Top">
                 <ScrollViewer x:Name="Details" x:Load="False" Padding="18" Visibility="Collapsed">
                     <StackPanel Spacing="12">
                         <Grid ColumnSpacing="12">
@@ -345,7 +405,9 @@
                             <TextBlock x:Name="DUninstaller" Grid.Column="1" Style="{StaticResource DetailValue}" />
                             <TextBlock Grid.Row="1" Text="Location" Style="{StaticResource DetailLabel}" />
                             <HyperlinkButton x:Name="DLocation" Grid.Row="1" Grid.Column="1" Style="{StaticResource LinkButton}"
-                                             Click="OnCommand" Tag="open-folder" />
+                                             Click="OnCommand" Tag="open-folder" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left">
+                                <TextBlock x:Name="DLocationText" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
+                            </HyperlinkButton>
                             <TextBlock Grid.Row="2" Text="Installed" Style="{StaticResource DetailLabel}" />
                             <TextBlock x:Name="DInstalled" Grid.Row="2" Grid.Column="1" Style="{StaticResource DetailValue}" />
                             <TextBlock Grid.Row="3" Text="Size" Style="{StaticResource DetailLabel}" />

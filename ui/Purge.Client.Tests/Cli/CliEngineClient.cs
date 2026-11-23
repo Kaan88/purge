@@ -86,6 +86,8 @@ public sealed class CliEngineClient : IEngineClient
 
     public Task<Rpc.InventoryChanges> GetInventoryChangesAsync(CancellationToken ct = default) => Task.FromResult(new Rpc.InventoryChanges());
 
+    public Task ForgetRemovedAsync(IReadOnlyList<string> programIds, CancellationToken ct = default) => Task.CompletedTask;
+
     /// <summary>The CLI test helper lists only; the pipeline is tested with the scripted clients.</summary>
     public Task<Rpc.RouteInfo> GetUninstallRouteAsync(string programId, CancellationToken ct = default) =>
         throw new NotSupportedException("the CLI test helper does not route uninstallers");

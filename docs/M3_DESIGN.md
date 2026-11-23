@@ -285,7 +285,8 @@ Medium engine over `--stdio`:
 | `programs.get` | Read | `{program_id}`, result: details-pane data |
 | `programs.icons` ⇢ `icon.batch` | Read | `{program_ids[], px}`; each icon is base64 BGRA, at most 32 per line |
 | `programs.sizes` ⇢ `size.ready` | Read | `{program_ids[]}` |
-| `inventory.changes` | Read | result `{disappeared[], appeared[]}` against the last list stored in `%LOCALAPPDATA%\Purge` (display only) |
+| `inventory.changes` | Read | result `{disappeared[], appeared[]}` against the last list stored in `%LOCALAPPDATA%\Purge` (display only); programs named by `inventory.forget` are never `disappeared` |
+| `inventory.forget` | Read | `{program_ids[]}`: programs Purge dealt with (uninstalled, checked or dismissed) leave the stored list and are marked handled (display only) |
 | `history.index` | Read | result: session summaries from `sessions\index.json`, and usage and cap per volume |
 | `uninstall.route` | Read | `{program_id}`, result `{route, command, quiet_command, signer, running[]}` |
 | `uninstall.run_user` ⇢ `uninstall.progress` | UserRun | `{program_id, quiet}`, result `{exit_code, outcome}`; refused for a broker-route program and by the level rule of 3.5 |

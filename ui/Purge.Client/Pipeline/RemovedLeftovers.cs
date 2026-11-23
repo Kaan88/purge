@@ -22,6 +22,69 @@ public enum RemovedCheckState
     Scanning,
 }
 
+/// <summary>
+/// The programs of the "removed outside Purge" group: what <c>inventory.changes</c> listed, less the ones the user has
+/// dealt with in this session. A program leaves the group when its "Check for leftovers" finished and reached the
+/// Leftovers page, when the user dismisses it, or when Purge itself uninstalled it; the engine is told
+/// (<c>inventory.forget</c>), so it does not come back in a later session. A cancelled or failed check keeps it.
+/// </summary>
+public sealed class RemovedGroup
+{
+    /// <summary>How many rows the group shows at most; the header counts them all.</summary>
+    public const int MaxShown = 5;
+
+    private readonly List<ProgramRef> _programs;
+    private readonly Func<IReadOnlyList<string>, Task> _forget;
+
+    /// <param name="disappeared">The <c>inventory.changes</c> answer's <c>disappeared</c> list.</param>
+    /// <param name="forget">The engine's <c>inventory.forget</c>; a failure is ignored (display-only state).</param>
+    public RemovedGroup(IEnumerable<ProgramRef> disappeared, Func<IReadOnlyList<string>, Task> forget)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        _programs = disappeared.Where(p => seen.Add(p.ProgramId)).ToList();
+        _forget = forget;
+    }
+
+    /// <summary>How many programs the group still has.</summary>
+    public int Count => _programs.Count;
+
+    /// <summary>True when nothing is left: the page hides the group.</summary>
+    public bool IsEmpty => _programs.Count == 0;
+
+    /// <summary>The rows to show: the first <see cref="MaxShown"/> still in the group.</summary>
+    public IReadOnlyList<ProgramRef> Shown => _programs.Take(MaxShown).ToList();
+
+    /// <summary>Whether <paramref name="programId"/> is still in the group.</summary>
+    public bool Contains(string programId) => _programs.Exists(p => p.ProgramId == programId);
+
+    /// <summary>The group's header: the count, and how many are shown when not all are.</summary>
+    public string Header(bool live)
+    {
+        var more = _programs.Count > MaxShown ? $" (showing {MaxShown})" : "";
+        return "REMOVED OUTSIDE PURGE · " + _programs.Count.ToString(System.Globalization.CultureInfo.CurrentCulture) + more
+               + (live ? "" : "   SAMPLE DATA");
+    }
+
+    /// <summary>
+    /// Takes <paramref name="programId"/> out of the group and asks the engine to forget it; false (and no engine call)
+    /// when it is not in the group.
+    /// </summary>
+    public bool Acknowledge(string programId)
+    {
+        var index = _programs.FindIndex(p => p.ProgramId == programId);
+        if (index < 0) return false;
+        _programs.RemoveAt(index);
+        _ = ForgetQuietlyAsync(programId);
+        return true;
+    }
+
+    private async Task ForgetQuietlyAsync(string programId)
+    {
+        try { await _forget([programId]).ConfigureAwait(false); }
+        catch (Exception e) when (e is not OutOfMemoryException) { }
+    }
+}
+
 /// <summary>A bar the Programs page shows for the last check.</summary>
 public sealed record RemovedNotice(UninstallNoticeKind Kind, string Title, string Message);
 
@@ -108,6 +171,12 @@ public sealed class RemovedLeftoversController
     public bool IsBusy
     {
         get { lock (_gate) return _busy; }
+    }
+
+    /// <summary>Whether the user may dismiss <paramref name="programId"/>: not while its own check runs.</summary>
+    public bool CanDismiss(string programId)
+    {
+        lock (_gate) return !(_busy && ActiveProgram == programId);
     }
 
     /// <summary>Probes each id once (file system only; call off the UI thread).</summary>
