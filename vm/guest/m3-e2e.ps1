@@ -546,6 +546,8 @@ switch ($Phase) {
         # The null run's place of consent-approve -Step plan (RIG.md section 17.1): the same m3sec press from high, on
         # the dialog's Cancel (IDCANCEL, the TaskDialog's common button), no tick; then the gate's execution time idle.
         if (-not $NullRun -or $Step -ne 'plan') { "M3E REFUSED $App consent-cancel is for the plan consent of a null run"; return }
+        # The host's -NullWaitSec, unchanged (1..600; no default here: a missing wait is a host fault).
+        if ($WaitSec -lt 1 -or $WaitSec -gt 600) { "M3E REFUSED $App consent-cancel -WaitSec $WaitSec is not 1..600"; return }
         $rec = New-E2eStep "consent-cancel-$Step"
         $bp = Get-BrokerPid
         $rec.broker_pid = $bp
@@ -559,7 +561,7 @@ switch ($Phase) {
         Set-StateValue $st "t_cancelled_$Step" (NowIso)
         Save-State $st; Save-Step $rec "consent-cancel-$Step"
         $nw = New-E2eStep 'null-wait'
-        $nw.seconds = $(if ($WaitSec) { $WaitSec } else { 10 })
+        $nw.seconds = $WaitSec
         $nw.start = NowIso
         Start-Sleep -Seconds $nw.seconds
         $nw.end = NowIso
@@ -645,7 +647,9 @@ switch ($Phase) {
             $safeDefault = @(Get-M2DefaultSelection $plan)
             $items = @(@($sc.items) | ForEach-Object { $_ } | Where-Object { $_ -and $ids -contains "$($_.id)" })
             $keys = @($items | ForEach-Object { Get-E2eTargetKey $_.target })
-            $rec.cli = [ordered]@{ plan = 'run\plan-purge.json'; items = $si.Count; preselected_n = $ids.Count; preselected_keys = $keys; safe_default_n = $safeDefault.Count }
+            # Every plan item's key, preselected or not (a null run's ambient set must name none of them, RIG.md 17.1).
+            $planKeys = @($si | ForEach-Object { Get-E2eTargetKey $_.target })
+            $rec.cli = [ordered]@{ plan = 'run\plan-purge.json'; items = $si.Count; preselected_n = $ids.Count; preselected_keys = $keys; plan_keys = $planKeys; safe_default_n = $safeDefault.Count }
             Set-StateValue $st 'cli' $rec.cli
             Write-JsonFile (New-E2eDeepScope @($items | ForEach-Object { $_.target })) (Join-Path $W 'deepscope.json') 12
             $rec.settle = Wait-M2BootSettle -MaxSec 300 -MinUptimeSec 180

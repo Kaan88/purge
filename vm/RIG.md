@@ -2357,9 +2357,19 @@ the e2e gets an ambient set from null runs of its own flow:
   goes to `E:\purge-build\gate-evidence\m3-e2e-null\<-RunName>\<run>\<app>\`; the host then moves the window's snapshot
   pair to `vm\runs\<run>\snap-<run>-a|b.tsv.gz` beside a copy of the guest's `e2e.json` and its own `run.json`
   (`purge.rig.m3e2e.null/1`). Run names `<prefix><k>-m3-e2e-<app>` (`-RunPrefix`, default `en`); `-NullWaitSec` (default
-  10 s, 0..600: the VS Code run's approve-to-result time was about 8 s of execution plus the job overhead) is the idle
-  time in place of the execution. No ambient set is pushed to a null run (the guest's setup fails if it finds one), it
+  10 s, 1..600, refused otherwise on the host and passed to the guest unchanged, which refuses another value and has no
+  default: the VS Code run's approve-to-result time was about 8 s of execution plus the job overhead) is the idle
+  time in place of the execution. A fixed idle and null runs of `vscode` only are fail-closed for anything else: a
+  gate execution that runs longer than the idle, or another app's window, can show Windows records the null runs never
+  saw, and those stay collateral (rerun the null campaign with a longer `-NullWaitSec` or `-Apps` rather than widen
+  the set). No ambient set is pushed to a null run (the guest's setup fails if it finds one), it
   is never undone, and a guest phase whose null flag differs from its prepare's is refused (`M3E REFUSED`).
+- **Provenance** (Fable review 2026-11-23): each null run's `run.json` records `provenance` = the campaign id
+  (`-RunName`), the VM, the snapshot, the SHA-256 of `purge-engine.exe`, `purge-broker.exe` and the UI's `Purge.exe`
+  (`Get-M3E2eBinaryHashes`), and the null wait. The build requires every field (`Test-M3E2eProvenance`), the same
+  values in every run dir (a mixed campaign, VM, snapshot, binaries or wait refuses the set) and the VM of the target
+  file (`Get-M3E2eAmbientVm`), and copies them into the set's `provenance`. The gate records its own binaries' hashes in
+  summary.json `binaries` (and logs a warning when the set's provenance differs); the scorer fails on a mismatch.
 - **One window for both** (host `Invoke-M3E2eWindow`, as M1b's `Invoke-ExWindow`): everything between snap A / deep A
   (end of `capture-post`) and snap B / deep B (start of `capture-exec`), in the same order with the same screenshots:
   `ui-move` (`07-move-waiting`), the UAC check, `consent-wait plan` (`08-consent-plan`), then the gate's
@@ -2369,6 +2379,14 @@ the e2e gets an ambient set from null runs of its own flow:
   `09-result`), `capture-exec`. A null `capture-exec` takes snap B and deep B, fails if a new session exists, and keeps
   the pair for the host; no session copy, no execdiff. The guest agent jobs of these phases (PowerShell starts, CIM
   reads, `tasklist`, `cmd`) and the broker's own consent dialog run in both, so their churn lands in the null runs.
+  **The broker's lifetime is not the same in both**: a completed execute ends purge-broker inside the gate's window
+  (`ExitReason::CompletedChange`, `bins\purge-broker\src\lifetime.rs`), a declined consent does not, so the records
+  Windows writes when the broker exits never reach a null run. execdiff authorises exactly those as `broker-exit`
+  (`is_broker_exit`, beside the engine rules): a value under `HKLM\SYSTEM\<control set>\Services\bam\State\UserSettings\<sid>`
+  whose name ends `\Program Files\Purge\purge-broker.exe`, and the value named `C:\Program Files\Purge\purge-broker.exe`
+  under `HKU\<sid>\Software\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Compatibility Assistant\Store`, each added
+  or changed only (the keys' LastWriteTime / value count then pass by the parent rule). A removal, or the value of any
+  other image (cmd.exe, Purge.exe, purge-engine.exe), stays collateral (Rust unit tests in `execdiff.rs`).
 - **The build** (`Invoke-M3E2eBuildAmbient`, the same refusals as `Invoke-XBuildAmbient`): each run dir must hold its
   snapshot pair and pass `Test-M3E2eNullRunDoc` (host run.json: schema, run, app, `null_run.null`, finished, no host
   error, pulled, the null name shape; guest e2e.json: `state.null_run`, steps `capture-post`, `ui-move`,
@@ -2376,15 +2394,18 @@ the e2e gets an ambient set from null runs of its own flow:
   `consent-approve-plan` / undo step, no new session, no execdiff, no ambient set in the guest); at least 6 runs; the set
   (`rigtool ambient --m2 --added`: removed, changed and added records, exact or token-generalised, never a subtree) is
   built into a temporary file and refused if a record or pattern names a fixture (`PurgeExec*`, `PurgeE2eMsi`,
-  `C:\ProgramData\Purge`) or one of the null runs' own preselected objects (`capture-post` `cli.preselected_keys`: a
-  record on or under a Path / RegKey target, that RegValue, a Service's key, a Task's file; a pattern holding the
-  path). Any refusal writes no file and leaves an older one as it was. One exception, decided after the first null
-  run (`tn1-m3-e2e-vscode`, 2026-11-23): the broker writes Purge's own store in a cancelled plan's window too
-  (`+F C:\ProgramData\Purge\sessions\writer.lock`, `~D C:\ProgramData\Purge\sessions`), so every set would be refused.
-  Entries under `C:\ProgramData\Purge` are dropped from the built set (`Remove-M3E2eStoreEntries`, noted in the set's
-  `note`), not refused: in a gate run execdiff judges every record under the store by its own store rule (authorised
-  as `store`), never by the ambient set, and dropping entries only makes the set stricter. `PurgeExec*` and
-  `PurgeE2eMsi` still refuse it, and the scorer still fails a committed set that names the store. **One file per VM** (`Get-M3E2eAmbientFile`):
+  `C:\ProgramData\Purge`, an `X:\.purge-q`) or one of the null runs' own plan objects (`capture-post` `cli.plan_keys`:
+  every plan item's key, preselected or not, which the run check requires, one per plan item; a record on or under a
+  Path / RegKey target, that RegValue, a Service's key, a Task's file; a pattern holding the path). Any refusal writes
+  no file and leaves an older one as it was. One exception, decided after the first null run (`tn1-m3-e2e-vscode`,
+  2026-11-23): the broker writes Purge's own store in a cancelled plan's window too, so every set would be refused.
+  Exactly the known null-window records (`$M3E2eStoreAllowed`: `+F C:\ProgramData\Purge\sessions\writer.lock`,
+  `~D C:\ProgramData\Purge\sessions`, `~D C:\ProgramData\Purge`; whole records, any case) are dropped from the built set
+  (`Remove-M3E2eStoreEntries`, noted in the set's `note`): in a gate run execdiff judges every record under the store
+  by its own store rule (authorised as `store`), never by the ambient set, and dropping entries only makes the set
+  stricter. Any other record or pattern under `C:\ProgramData\Purge` or on an `X:\.purge-q` (another file, a removal,
+  a changed `writer.lock`, a token pattern) refuses the set (`Get-M3E2eStoreRefusals`), as `PurgeExec*` and
+  `PurgeE2eMsi` do, and the scorer fails a committed set that names the store. **One file per VM** (`Get-M3E2eAmbientFile`):
   Inbound `truth\m3-e2e-ambient.json`, Purge-CleanPro `truth\m3-e2e-ambient-cleanpro.json`; `-AmbientFile` names
   another. Regenerate it when rig-base, the UI's flow or the window changes.
 - **The gate** (`-Mode m3-e2e`) refuses to start without the file (no fallback to the M2 set) and a `-RunName` of the
@@ -2393,21 +2414,34 @@ the e2e gets an ambient set from null runs of its own flow:
   `{file, sha256}` in summary.json and each app's host.json `ambient`; setup gets the hash (`-AmbientSha`), records it
   beside the guest copy's own hash (setup.json, e2e.json `ambient`: `declared.sha256`, `guest_sha256`) and fails when
   they differ.
-- **The scorer** (`m3-e2e-score.ps1`, `-AmbientFile`, default the committed set of summary.json's VM): a row for the set
-  (schema `purge.rig.m2ambient/1`, at least `$E2eMinNullRuns` = 6 distinct run ids, each `<prefix><k>-m3-e2e-<executing
-  app>`, no fixture name in any record or pattern, same expression as the host) and per executing app a row
-  `host.json ambient.sha256 == e2e.json ambient.declared.sha256 == guest_sha256 ==` the set's SHA-256. Self-test: 15
-  more defects (the run's records: not recorded, another hash, guest copy differs or missing, declared missing; the set:
-  missing, 5 runs, a run twice, a gate run id, a failing uninstaller's run, a fixture record, a store pattern, another
-  schema).
+- **The scorer** (`m3-e2e-score.ps1`; the committed set of summary.json's VM): a row for the set (schema
+  `purge.rig.m2ambient/1`, at least `$E2eMinNullRuns` = 6 distinct run ids, each `<prefix><k>-m3-e2e-<executing
+  app>`, no fixture name in any record or pattern, same expression as the host), a provenance row (the set's `vm` and
+  `snapshot` == summary.json's, and the engine / broker / UI SHA-256 == summary.json `binaries` when recorded; a set
+  without provenance fails) and per executing app a row `host.json ambient.sha256 == e2e.json ambient.declared.sha256 ==
+  guest_sha256 ==` the set's SHA-256 and a row that execdiff.json `inputs.ambient` is set. `-AmbientFile` naming another
+  file than the committed set scores against it but is "not a gate score" (exit 3, as `-Apps`); score-m3-e2e.json
+  records `ambient` {file, sha256, committed}. Self-test: 27 more defects (the run's records: not recorded, another
+  hash, guest copy differs or missing, declared missing, execdiff without `inputs.ambient` or without `inputs`; the
+  set: missing, 5 runs, a run twice, a gate run id, a failing uninstaller's run, a fixture record, a store pattern, a
+  `.purge-q` record, another schema; provenance: none, another VM, snapshot, engine, broker or UI, the run's snapshot
+  changed or missing), and checks that `-AmbientFile` of the committed file is a gate score, of a copy is not, and a
+  summary without `binaries` compares VM and snapshot only.
 - Rig self-test (`vm\guest\tests\rig-selftest.ps1`, "m3-e2e null / ambient / window / gate / guest"): run names and
   shape, the gate's name refusal, one file per VM, the rigtool arguments, the `-NullRun` / `-AmbientSha` job text, the
   window (one call right after `capture-post`; `capture-exec`, the plan approval and the cancel only inside it; gate
-  and null traces equal but for approve vs cancel + wait), the guest's cancel, null guard and null `capture-exec`, the
-  null-run check with 15 bad-run controls, the fixture and plan-object refusals, the build against a stub rigtool
-  (6 runs build; a gate run among them, a missing pair, a non-null run.json, 5 runs, a fixture record, a plan-object
-  record each refused with no file written), `Save-M3E2eNullRun`, the gate's refusal without the file, and the push
-  (a gate needs the set, a null run pushes none).
+  and null traces equal but for approve vs cancel + wait), the guest's cancel (wait 1..600, no default), null guard,
+  `plan_keys` and null `capture-exec`, the null-run check with 24 bad-run controls (provenance and `plan_keys` among
+  them), the fixture and plan-object refusals, the build against a stub rigtool (6 runs build with the provenance
+  copied; a gate run among them, a missing pair, a non-null run.json, 5 runs, a fixture record, a preselected and a
+  non-preselected plan object, another store record, a changed `writer.lock`, a `.purge-q` record, a store or
+  `.purge-q` pattern, a mixed campaign, a mixed VM, runs of another VM than the file's, another snapshot, engine or
+  null wait, a run without provenance: each refused with no file written), the exact store drop,
+  `Save-M3E2eNullRun` with its provenance, `-NullWaitSec` 1..600, the binaries' hashes, the gate's refusal without the
+  file, the push (a gate needs the set, a null run pushes none), and, when `vm\rigtool\target\release\rigtool.exe` is
+  built, the real rigtool: 6 null runs of tiny snapshots -> `rigtool ambient` -> the PowerShell rewrite -> `rigtool
+  execdiff --ambient` on a gate window loads the set (churn ambient, the broker's exit records `broker-exit`, the store
+  `store`, collateral 0) and keeps a change the null runs never saw as collateral.
 
 ## 18. M3 gate G1, elevated half: `m3-elevated-ci` (`rig-m3-ci.ps1`; M3_FINISH_PLAN B2)
 

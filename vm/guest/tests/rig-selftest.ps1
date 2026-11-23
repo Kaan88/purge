@@ -1,4 +1,4 @@
-﻿# Host self-test for the rig v2 scripts. Needs no VM: VBoxManage, the guest and Task Scheduler are
+# Host self-test for the rig v2 scripts. Needs no VM: VBoxManage, the guest and Task Scheduler are
 # replaced by fakes (VBoxManage by a .cmd that only reports whether the password file exists). Nothing is
 # registered and nothing outside a temporary directory is written. Windows PowerShell 5.1:
 #   powershell.exe -NoProfile -ExecutionPolicy Bypass -File vm\guest\tests\rig-selftest.ps1
@@ -2054,10 +2054,13 @@ function Invoke-M2Script([string]$Script, [string]$Arguments = '', [int]$Timeout
     # Test-M3E2eNullRunDoc and the build (ambient_build_takes_only_null_runs, ambient_build_refuses_fixture_names).
     $newE2e = {
         '{"schema":"purge.rig.m3e2e.app/1","app":"vscode","null_run":true,"ambient":{"declared":null,"guest":"C:\\cr\\bin\\m2-ambient.json","guest_sha256":null},' +
-        '"files":{"execdiff":false},"state":{"null_run":true,"cli":{"preselected_keys":["Path|c:\\program files\\microsoft vs code||","RegValue|hku\\s-1-5-21-1\\environment|path|x"]}},' +
+        '"files":{"execdiff":false},"state":{"null_run":true,"cli":{"items":3,"preselected_keys":["Path|c:\\program files\\microsoft vs code||","RegValue|hku\\s-1-5-21-1\\environment|path|x"],' +
+        '"plan_keys":["Path|c:\\program files\\microsoft vs code||","RegValue|hku\\s-1-5-21-1\\environment|path|x","Path|c:\\users\\tester\\appdata\\roaming\\code||"]}},' +
         '"steps":{"capture-post":{"ok":true},"ui-move":{"ok":true,"state":"prompt"},"consent-wait-plan":{"ok":true},"consent-cancel-plan":{"ok":true},"null-wait":{"ok":true,"seconds":10},' +
         '"ui-wait-result":{"ok":true,"state":"declined"},"capture-exec":{"ok":true,"null":true,"sessions_new":[]}}}' | ConvertFrom-Json }
-    $newDoc = { param($run) [pscustomobject]@{ schema = 'purge.rig.m3e2e.null/1'; run = $run; mode = 'm3-e2e'; app = 'vscode'; null_run = [pscustomobject]@{ null = $true; wait_sec = 10 }; finished = 'x'; error = $null; pulled = $true } }
+    $newProv = { [pscustomobject]@{ campaign = 'null-selftest'; vm = 'Inbound-Win11-Test'; snapshot = 'rig-base'; engine_sha256 = ('e' * 64); broker_sha256 = ('b' * 64); ui_sha256 = ('d' * 64); null_wait = 10 } }
+    $newDoc = { param($run) [pscustomobject]@{ schema = 'purge.rig.m3e2e.null/1'; run = $run; mode = 'm3-e2e'; app = 'vscode'; null_run = [pscustomobject]@{ null = $true; wait_sec = 10 }
+                                                provenance = (& $newProv); finished = 'x'; error = $null; pulled = $true } }
     $why = @(Test-M3E2eNullRunDoc (& $newDoc 'en1-m3-e2e-vscode') (& $newE2e) 'en1-m3-e2e-vscode' 'vscode')
     Check 'm3-e2e null doc: a finished null run passes' ($why.Count -eq 0) ($why -join '; ')
     $muts = [ordered]@{
@@ -2076,6 +2079,15 @@ function Invoke-M2Script([string]$Script, [string]$Arguments = '', [int]$Timeout
         'a host error' = { param($d, $e) $d.error = 'setup failed' }
         'not pulled' = { param($d, $e) $d.pulled = $false }
         'another schema' = { param($d, $e) $d.schema = 'purge.rig.m2/1' }
+        'no provenance' = { param($d, $e) $d.PSObject.Properties.Remove('provenance') }
+        'provenance without the campaign' = { param($d, $e) $d.provenance.campaign = '' }
+        'provenance without the snapshot' = { param($d, $e) $d.provenance.PSObject.Properties.Remove('snapshot') }
+        'provenance with a bad engine hash' = { param($d, $e) $d.provenance.engine_sha256 = 'abc' }
+        'provenance without the UI hash' = { param($d, $e) $d.provenance.ui_sha256 = $null }
+        'provenance null wait 0' = { param($d, $e) $d.provenance.null_wait = 0; $d.null_run.wait_sec = 0 }
+        'provenance null wait not the run''s' = { param($d, $e) $d.provenance.null_wait = 20 }
+        'no plan_keys' = { param($d, $e) $e.state.cli.PSObject.Properties.Remove('plan_keys') }
+        'plan_keys fewer than the plan items' = { param($d, $e) $e.state.cli.plan_keys = @($e.state.cli.plan_keys | Select-Object -First 2) }
     }
     $missed = @()
     foreach ($k in $muts.Keys) { $d = & $newDoc 'en1-m3-e2e-vscode'; $e = & $newE2e; & $muts[$k] $d $e; if (-not @(Test-M3E2eNullRunDoc $d $e 'en1-m3-e2e-vscode' 'vscode').Count) { $missed += $k } }
@@ -2102,8 +2114,10 @@ $o = $args[[array]::IndexOf($args, '-o') + 1]
 $dirs = @(); for ($i = [array]::IndexOf($args, '--null') + 1; $args[$i] -ne '-o'; $i++) { $dirs += $args[$i] }
 [IO.File]::WriteAllText((Join-Path (Split-Path -Parent $o) 'stub-args.txt'), ($args -join ' '))
 $recs = @([IO.File]::ReadAllLines((Join-Path (Split-Path -Parent $o) 'stub-records.txt')) | Where-Object { $_ })
-$runs = @($dirs | ForEach-Object { [ordered]@{ id = (Split-Path -Leaf $_); dir = $_; records = $recs; patterns = @() } })
-[IO.File]::WriteAllText($o, (ConvertTo-Json ([ordered]@{ schema = 'purge.rig.m2ambient/1'; runs = $runs; records = $recs; patterns = @() }) -Depth 5))
+$pf = Join-Path (Split-Path -Parent $o) 'stub-patterns.txt'
+$pats = @(if (Test-Path -LiteralPath $pf) { [IO.File]::ReadAllLines($pf) | Where-Object { $_ } })
+$runs = @($dirs | ForEach-Object { [ordered]@{ id = (Split-Path -Leaf $_); dir = $_; records = $recs; patterns = $pats } })
+[IO.File]::WriteAllText($o, (ConvertTo-Json ([ordered]@{ schema = 'purge.rig.m2ambient/1'; runs = $runs; records = $recs; patterns = $pats }) -Depth 5))
 exit 0
 '@)
     $env:RIG_RIGTOOL = $stub
@@ -2123,6 +2137,9 @@ exit 0
     $built = Read-M3Json $out
     Check 'm3-e2e ambient build: 6 null runs -> the set (added records kept, --added passed)' ($dirs.Count -eq 6 -and $built -and @($built.runs).Count -eq 6 -and @($built.records) -contains '+F:C:\Users\tester\AppData\Local\Comms\Unistore\data\AggregateCache.uca' -and
         ([IO.File]::ReadAllText((Join-Path $Work 'stub-args.txt'))) -match '^ambient --m2 --added --null ') "dirs $($dirs.Count), runs $(@($built.runs).Count), records $(@($built.records) -join ' | '), args $([IO.File]::ReadAllText((Join-Path $Work 'stub-args.txt')))"
+    $pv = $built.provenance
+    Check 'm3-e2e ambient build: the runs'' provenance is copied into the set' ($pv -and "$($pv.campaign)" -ceq 'null-selftest' -and "$($pv.vm)" -ceq 'Inbound-Win11-Test' -and "$($pv.snapshot)" -ceq 'rig-base' -and
+        "$($pv.engine_sha256)" -ceq ('e' * 64) -and "$($pv.broker_sha256)" -ceq ('b' * 64) -and "$($pv.ui_sha256)" -ceq ('d' * 64) -and [int]$pv.null_wait -eq 10) "$(ConvertTo-Json $pv -Compress)"
     $before = [IO.File]::ReadAllText($out)
     $refused = { param($name, [scriptblock]$setup, [scriptblock]$undo)
         & $setup
@@ -2135,6 +2152,24 @@ exit 0
     & $refused 'fewer than 6 null runs' { $M3.count = 5 } { $M3.count = 6 }
     & $refused 'a set naming a fixture' { [IO.File]::AppendAllText((Join-Path $Work 'stub-records.txt'), "`r`n-K:HKLM\SOFTWARE\PurgeE2eMsi\1603") } { [IO.File]::WriteAllText((Join-Path $Work 'stub-records.txt'), "~F:C:\WINDOWS\Prefetch\TASKLIST.EXE-2448BC7D.pf") }
     & $refused 'a set naming a null run''s own preselected object' { [IO.File]::AppendAllText((Join-Path $Work 'stub-records.txt'), "`r`n~F:C:\Program Files\Microsoft VS Code\Code.exe") } { [IO.File]::WriteAllText((Join-Path $Work 'stub-records.txt'), "~F:C:\WINDOWS\Prefetch\TASKLIST.EXE-2448BC7D.pf") }
+    # Plan objects that were not preselected (capture-post plan_keys) refuse it too.
+    & $refused 'a set naming a plan object that was not preselected' { [IO.File]::AppendAllText((Join-Path $Work 'stub-records.txt'), "`r`n+F:C:\Users\tester\AppData\Roaming\Code\User\settings.json") } { [IO.File]::WriteAllText((Join-Path $Work 'stub-records.txt'), "~F:C:\WINDOWS\Prefetch\TASKLIST.EXE-2448BC7D.pf") }
+    # Purge's store: only the known null-window records are dropped; any other record or pattern there, or on a
+    # .purge-q, refuses the set.
+    $resetRecs = { [IO.File]::WriteAllText((Join-Path $Work 'stub-records.txt'), "~F:C:\WINDOWS\Prefetch\TASKLIST.EXE-2448BC7D.pf"); Remove-Item -LiteralPath (Join-Path $Work 'stub-patterns.txt') -ErrorAction SilentlyContinue }
+    & $refused 'another record in the store (a session journal), beside the allowed ones' { [IO.File]::AppendAllText((Join-Path $Work 'stub-records.txt'), "`r`n+F:C:\ProgramData\Purge\sessions\writer.lock`r`n+F:C:\ProgramData\Purge\sessions\20261123T070000Z-1\journal.jsonl") } $resetRecs
+    & $refused 'a changed writer.lock (not the known +F)' { [IO.File]::AppendAllText((Join-Path $Work 'stub-records.txt'), "`r`n~F:C:\ProgramData\Purge\sessions\writer.lock") } $resetRecs
+    & $refused 'a record on a .purge-q' { [IO.File]::AppendAllText((Join-Path $Work 'stub-records.txt'), "`r`n~D:D:\.purge-q") } $resetRecs
+    & $refused 'a pattern in the store' { [IO.File]::WriteAllText((Join-Path $Work 'stub-patterns.txt'), '^\+F:C:\\ProgramData\\Purge\\sessions\\[0-9a-f]{16}\.tmp$') } $resetRecs
+    & $refused 'a pattern on a .purge-q' { [IO.File]::WriteAllText((Join-Path $Work 'stub-patterns.txt'), '^\+D:C:\\\.purge\-q\\[0-9a-f]{16}$') } $resetRecs
+    # Provenance: one campaign, one VM (the file's), one snapshot, one set of binaries, one null wait.
+    & $refused 'a mixed campaign (one run of another campaign)' { & $mkRun 2 { param($d, $e) $d.provenance.campaign = 'null-other' } } { & $mkRun 2 }
+    & $refused 'a mixed VM (one run on Purge-CleanPro)' { & $mkRun 6 { param($d, $e) $d.provenance.vm = 'Purge-CleanPro' } } { & $mkRun 6 }
+    & $refused 'runs of another VM than the file''s' { foreach ($k in 1..6) { & $mkRun $k { param($d, $e) $d.provenance.vm = 'Purge-CleanPro' } } } { foreach ($k in 1..6) { & $mkRun $k } }
+    & $refused 'a run on another snapshot' { & $mkRun 1 { param($d, $e) $d.provenance.snapshot = 'm3-uac-on' } } { & $mkRun 1 }
+    & $refused 'a run with another engine' { & $mkRun 3 { param($d, $e) $d.provenance.engine_sha256 = ('f' * 64) } } { & $mkRun 3 }
+    & $refused 'a run with another null wait' { & $mkRun 4 { param($d, $e) $d.provenance.null_wait = 20; $d.null_run.wait_sec = 20 } } { & $mkRun 4 }
+    & $refused 'a run without provenance' { & $mkRun 5 { param($d, $e) $d.PSObject.Properties.Remove('provenance') } } { & $mkRun 5 }
     # Purge's own store (the broker's writer.lock and sessions dir, also in a cancelled plan's window): dropped, not refused.
     [IO.File]::WriteAllText((Join-Path $Work 'stub-records.txt'), "~F:C:\WINDOWS\Prefetch\TASKLIST.EXE-2448BC7D.pf`r`n+F:C:\ProgramData\Purge\sessions\writer.lock`r`n~D:C:\ProgramData\Purge\sessions`r`n~D:C:\ProgramData\Microsoft\Windows\WER")
     $dirs = @(Invoke-M3E2eBuildAmbient)
@@ -2143,24 +2178,128 @@ exit 0
     Check 'm3-e2e ambient build: store entries are dropped (set, every run), the rest kept, the drop noted' ($dirs.Count -eq 6 -and -not @($allEntries | Where-Object { "$_" -match '(?i)programdata\\purge\\|programdata\\purge$' }).Count -and
         @($built.records) -contains '~D:C:\ProgramData\Microsoft\Windows\WER' -and @($built.records) -contains '~F:C:\WINDOWS\Prefetch\TASKLIST.EXE-2448BC7D.pf' -and "$($built.note)" -match '2 store entries dropped' -and
         @(Get-M3E2eAmbientFixtureHits $built @()).Count -eq 0) "records $(@($built.records) -join ' | '); note $($built.note)"
-    $s2 = [pscustomobject]@{ schema = 'purge.rig.m2ambient/1'; note = ''; records = @('-K:HKLM\SOFTWARE\PurgeExecApp', '+F:C:\ProgramData\Purge\x'); patterns = @('^\~F:C:\\ProgramData\\Purge\\[0-9a-f]{16}$'); runs = @() }
+    $s2 = [pscustomobject]@{ schema = 'purge.rig.m2ambient/1'; note = ''; records = @('-K:HKLM\SOFTWARE\PurgeExecApp', '+F:C:\ProgramData\Purge\sessions\writer.lock', '~d:c:\programdata\purge', '+F:C:\ProgramData\Purge\x')
+                             patterns = @('^\~F:C:\\ProgramData\\Purge\\[0-9a-f]{16}$'); runs = @([pscustomobject]@{ id = 'en1-m3-e2e-vscode'; records = @('~D:C:\ProgramData\Purge\sessions', '-D:C:\ProgramData\Purge\sessions'); patterns = @() }) }
+    $r2 = @(Get-M3E2eStoreRefusals $s2)
     $d2 = @(Remove-M3E2eStoreEntries $s2)
-    Check 'm3-e2e ambient: the store drop keeps every other fixture (PurgeExec still refuses)' ($d2.Count -eq 2 -and @($s2.records) -ceq '-K:HKLM\SOFTWARE\PurgeExecApp' -and @($s2.patterns).Count -eq 0 -and @(Get-M3E2eAmbientFixtureHits $s2 @()).Count -eq 1)
+    Check 'm3-e2e ambient: the store drop takes exactly the allowed records (any case), nothing else' ($d2.Count -eq 3 -and (@($s2.records) -join '|') -ceq '-K:HKLM\SOFTWARE\PurgeExecApp|+F:C:\ProgramData\Purge\x' -and
+        @($s2.patterns).Count -eq 1 -and (@($s2.runs[0].records) -join '|') -ceq '-D:C:\ProgramData\Purge\sessions') "dropped $($d2 -join ' | '); left $(@($s2.records) -join ' | ')"
+    Check 'm3-e2e ambient: every other store record or pattern (a removal too) is a refusal, PurgeExec is the fixture check''s' ($r2.Count -eq 3 -and $r2 -contains '+F:C:\ProgramData\Purge\x' -and
+        $r2 -contains '-D:C:\ProgramData\Purge\sessions' -and $r2 -contains '^\~F:C:\\ProgramData\\Purge\\[0-9a-f]{16}$' -and @(Get-M3E2eAmbientFixtureHits $s2 @()).Count -eq 4) "refusals $($r2 -join ' | ')"
+
+    # The real rigtool (vm\rigtool\target\release\rigtool.exe, or $env:RIG_REAL_RIGTOOL): 6 null runs of tiny snapshots
+    # -> rigtool ambient -> the PowerShell rewrite (store drop, provenance) -> rigtool execdiff --ambient on a gate window
+    # loads that set: Windows churn ambient, the broker's exit records broker-exit, the store store; an extra change
+    # stays collateral.
+    $real = $(if ($env:RIG_REAL_RIGTOOL) { $env:RIG_REAL_RIGTOOL } else { Join-Path $Vm 'rigtool\target\release\rigtool.exe' })
+    if (Test-Path -LiteralPath $real -PathType Leaf) {
+        $rr = Join-Path $Work 'm3e2e-real'; $rrRuns = Join-Path $rr 'runs'; New-Item -ItemType Directory -Force $rrRuns | Out-Null
+        $esc = { param($s) "$s".Replace('\', '\\') }
+        $snapText = { param([string[]]$Recs)
+            $roots = @('C:\Windows\Prefetch', 'C:\ProgramData\Purge', 'HKLM\SOFTWARE\ChurnSelftest', 'HKLM\SYSTEM\CurrentControlSet\Services\bam', 'HKU\S-1-5-21-1\Software') | ForEach-Object { & $esc $_ }
+            "#purge-snap 1`t2026-11-23T07:00:00Z`tSELFTEST`tPro`t26100`n#roots`t$($roots -join "`t")`n" + (@($Recs | ForEach-Object { $_ }) -join "`n") + "`n" }
+        $mkD = { param($p, $m) "D`t$(& $esc $p)`t10`t$m`t0" }
+        $mkF = { param($p, $s, $m) "F`t$(& $esc $p)`t$s`t20`t$m`t0" }
+        $mkK = { param($p, $l, $nv) "K`t$(& $esc $p)`t$l`t$nv`t0" }
+        $mkV = { param($p, $n, $h) "V`t$(& $esc $p)`t$(& $esc $n)`t4`t4`t$('{0:x16}' -f $h)`tx" }
+        $bam = 'HKLM\SYSTEM\CurrentControlSet\Services\bam\State\UserSettings\S-1-5-21-1'
+        $pca = 'HKU\S-1-5-21-1\Software\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Compatibility Assistant\Store'
+        $snapBase = @((& $mkD 'C:\Windows\Prefetch' 1), (& $mkF 'C:\Windows\Prefetch\TASKLIST.EXE-2448BC7D.pf' 100 1), (& $mkF 'C:\Windows\Prefetch\OTHER.EXE-11111111.pf' 100 1),
+                  (& $mkD 'C:\ProgramData\Purge' 1), (& $mkD 'C:\ProgramData\Purge\sessions' 1), (& $mkK 'HKLM\SOFTWARE\ChurnSelftest' 1 1), (& $mkV 'HKLM\SOFTWARE\ChurnSelftest' 'Counter' 1))
+        # The null window: Windows churn, the broker's writer.lock and the store dirs' mtimes.
+        $churnFor = { param($om) @((& $mkD 'C:\Windows\Prefetch' 1), (& $mkF 'C:\Windows\Prefetch\TASKLIST.EXE-2448BC7D.pf' 200 2), (& $mkF 'C:\Windows\Prefetch\OTHER.EXE-11111111.pf' 100 $om),
+                   (& $mkK 'HKLM\SOFTWARE\ChurnSelftest' 2 1), (& $mkV 'HKLM\SOFTWARE\ChurnSelftest' 'Counter' 2)) }
+        $churn = & $churnFor 1
+        $nullAfter = $churn + @((& $mkD 'C:\ProgramData\Purge' 2), (& $mkD 'C:\ProgramData\Purge\sessions' 2), (& $mkF 'C:\ProgramData\Purge\sessions\writer.lock' 0 2))
+        $script:RunsDir = $rrRuns
+        foreach ($k in 1..6) {
+            $r = Get-M3E2eNullRunName $k 'vscode'; $d = Join-Path $rrRuns $r; New-Item -ItemType Directory -Force $d | Out-Null
+            [IO.File]::WriteAllText((Join-Path $d "snap-$r-a.tsv.gz"), (& $snapText $snapBase)); [IO.File]::WriteAllText((Join-Path $d "snap-$r-b.tsv.gz"), (& $snapText $nullAfter))
+            [IO.File]::WriteAllText((Join-Path $d 'e2e.json'), (ConvertTo-Json (& $newE2e) -Depth 8)); [IO.File]::WriteAllText((Join-Path $d 'run.json'), (ConvertTo-Json (& $newDoc $r) -Depth 8))
+        }
+        $env:RIG_RIGTOOL = $real
+        $realSet = Join-Path $rr 'm3-e2e-ambient.json'
+        $M3.ambient = $realSet; $M3.count = 6; $M3.apps = @(); $M3.prefix = ''
+        $msg = $null; try { $null = Invoke-M3E2eBuildAmbient } catch { $msg = $_.Exception.Message }
+        $rs = Read-M3Json $realSet
+        Check 'm3-e2e ambient (real rigtool): 6 null runs build; the store records dropped, the provenance written' (-not $msg -and $rs -and @($rs.records).Count -eq 3 -and
+            -not @(@($rs.records) | Where-Object { "$_" -match '(?i)programdata\\purge' }).Count -and "$($rs.provenance.campaign)" -ceq 'null-selftest' -and "$($rs.note)" -match '3 store entries dropped') "$msg; records $(@($rs.records) -join ' | ')"
+        # A gate window: the same churn, the broker's exit records, a session in the store; journal and report of an
+        # empty committed session.
+        $gateBase = $snapBase + @((& $mkK $bam 1 1), (& $mkV $bam '\Device\HarddiskVolume3\Program Files\Purge\purge-broker.exe' 1), (& $mkK $pca 1 0))
+        $gateAfter = $churn + @((& $mkD 'C:\ProgramData\Purge' 2), (& $mkD 'C:\ProgramData\Purge\sessions' 2), (& $mkF 'C:\ProgramData\Purge\sessions\writer.lock' 0 2),
+                                (& $mkD 'C:\ProgramData\Purge\sessions\20261123T070000Z-1' 2), (& $mkK $bam 2 1), (& $mkV $bam '\Device\HarddiskVolume3\Program Files\Purge\purge-broker.exe' 2),
+                                (& $mkK $pca 2 1), (& $mkV $pca 'C:\Program Files\Purge\purge-broker.exe' 3))
+        $sess = '20261123T070000Z-9f3a6c1d2b7e4a50'; $ha = 'a' * 64; $hb = 'b' * 64
+        $jl = Join-Path $rr 'journal.jsonl'; $rp = Join-Path $rr 'report.json'
+        [IO.File]::WriteAllText($jl, ((ConvertTo-Json -Compress ([ordered]@{ rec = 'header'; schema = 'purge.journal/1'; session = $sess; created = 1; engine_version = '0.1.0'; app = 'vscode'; plan_hash = $ha
+                                         selection_hash = $hb; policy_version = 'm1a.6'; mode = 'post'; items = 0; allow_irreversible = $false
+                                         volumes = @([ordered]@{ root = 'C:\'; serial = 1; file_system = 'NTFS'; quarantine = "C:\ProgramData\Purge\Quarantine\$sess" }) })) + "`n" +
+                                    (ConvertTo-Json -Compress ([ordered]@{ rec = 'commit'; at = 2; counts = [ordered]@{ done = 0; vanished = 0; skipped = 0; held_retry = 0; pending_reboot = 0; failed = 0 }; backup_bytes = 0 })) + "`n"))
+        [IO.File]::WriteAllText($rp, (ConvertTo-Json -Depth 5 ([ordered]@{ schema = 'purge.exec/1'; session = $sess; app = 'vscode'; plan_hash = $ha; selection_hash = $hb; state = 'Committed'; started = 1; finished = 2
+                                                                         items = @(); counts = [ordered]@{ done = 0; vanished = 0; skipped = 0; held_retry = 0; pending_reboot = 0; failed = 0 }
+                                                                         backup_bytes = 0; pending_reboot = $false; restore_point = [ordered]@{ kind = 'NotRequested' }; warnings = @() })))
+        $runExec = { param($After, $Name)
+            $a = Join-Path $rr "gate-a-$Name.tsv"; $b = Join-Path $rr "gate-b-$Name.tsv"; $o = Join-Path $rr "execdiff-$Name.json"
+            [IO.File]::WriteAllText($a, (& $snapText $gateBase)); [IO.File]::WriteAllText($b, (& $snapText $After))
+            $ErrorActionPreference = 'Continue'
+            $null = & $real execdiff --before $a --after $b --journal $jl --report $rp --ambient $realSet --sid 'S-1-5-21-1' -o $o 2>&1
+            [pscustomobject]@{ exit = $LASTEXITCODE; doc = (Read-M3Json $o) } }
+        $g1 = & $runExec $gateAfter 'clean'
+        $c1 = $(if ($g1.doc) { $g1.doc.counts })
+        Check 'm3-e2e ambient (real rigtool): execdiff loads the rewritten set: churn ambient, broker exit authorised, collateral 0' ($g1.exit -eq 0 -and $c1 -and [int]$c1.collateral -eq 0 -and [int]$c1.unexplained -eq 0 -and
+            [int]$c1.authorised.ambient -eq 3 -and [int]$c1.authorised.'broker-exit' -eq 2 -and [int]$c1.authorised.store -ge 2 -and "$($g1.doc.inputs.ambient)" -eq $realSet) "exit $($g1.exit); $(if ($c1) { ConvertTo-Json $c1 -Compress -Depth 4 }); collateral $(if ($g1.doc) { ConvertTo-Json @($g1.doc.collateral) -Compress -Depth 4 })"
+        $g2 = & $runExec (@(& $churnFor 3) + @($gateAfter | Select-Object -Skip @($churn).Count)) 'extra'
+        Check 'm3-e2e ambient (real rigtool): a change the null runs never saw stays collateral' ($g2.exit -ne 0 -and $g2.doc -and [int]$g2.doc.counts.collateral -eq 1 -and "$(@($g2.doc.collateral)[0].path)" -match 'OTHER\.EXE') "exit $($g2.exit)"
+        $script:RunsDir = $rd; $M3.ambient = $out
+    } else { Write-Host "skip m3-e2e ambient real-rigtool checks (no $real; cargo build --release in vm\rigtool)" }
     Remove-Item Env:\RIG_RIGTOOL
 
     # Save-M3E2eNullRun: the pulled pair renamed into vm\runs\<run>, run.json written, and it passes the check.
     $ev = Join-Path $Work 'm3e2e-ev\en7-m3-e2e-vscode\vscode'; New-Item -ItemType Directory -Force (Join-Path $ev 'guest') | Out-Null
     foreach ($s in 'a', 'b') { [IO.File]::WriteAllText((Join-Path $ev "guest\snap-$s.tsv.gz"), 'x') }
     [IO.File]::WriteAllText((Join-Path $ev 'guest\e2e.json'), (ConvertTo-Json (& $newE2e) -Depth 8))
-    $why = @(Save-M3E2eNullRun 'en7-m3-e2e-vscode' ([pscustomobject]@{ id = 'vscode' }) ([ordered]@{ base = 'rig-base'; started = 's'; ended = 'e'; error = $null; pulled = $true }) $ev)
-    Check 'm3-e2e null: Save-M3E2eNullRun moves the pair to vm\runs\<run> as snap-<run>-a / -b and passes' ($why.Count -eq 0 -and (Test-Path -LiteralPath (Join-Path $rd 'en7-m3-e2e-vscode\snap-en7-m3-e2e-vscode-b.tsv.gz')) -and
-        -not (Test-Path -LiteralPath (Join-Path $ev 'guest\snap-a.tsv.gz'))) ($why -join '; ')
-    $why = @(Save-M3E2eNullRun 'en8-m3-e2e-vscode' ([pscustomobject]@{ id = 'vscode' }) ([ordered]@{ base = 'rig-base'; started = 's'; ended = 'e'; error = 'prepare failed'; pulled = $true }) (Join-Path $Work 'm3e2e-ev\none'))
+    $M3.null_wait = 10
+    $why = @(Save-M3E2eNullRun 'en7-m3-e2e-vscode' ([pscustomobject]@{ id = 'vscode' }) ([ordered]@{ base = 'rig-base'; started = 's'; ended = 'e'; error = $null; pulled = $true }) $ev (& $newProv))
+    $saved = Read-M3Json (Join-Path $rd 'en7-m3-e2e-vscode\run.json')
+    Check 'm3-e2e null: Save-M3E2eNullRun moves the pair to vm\runs\<run> as snap-<run>-a / -b, writes the provenance and passes' ($why.Count -eq 0 -and (Test-Path -LiteralPath (Join-Path $rd 'en7-m3-e2e-vscode\snap-en7-m3-e2e-vscode-b.tsv.gz')) -and
+        -not (Test-Path -LiteralPath (Join-Path $ev 'guest\snap-a.tsv.gz')) -and "$($saved.provenance.campaign)" -ceq 'null-selftest' -and "$($saved.provenance.ui_sha256)" -ceq ('d' * 64)) ($why -join '; ')
+    $why = @(Save-M3E2eNullRun 'en8-m3-e2e-vscode' ([pscustomobject]@{ id = 'vscode' }) ([ordered]@{ base = 'rig-base'; started = 's'; ended = 'e'; error = 'prepare failed'; pulled = $true }) (Join-Path $Work 'm3e2e-ev\none') (& $newProv))
     Check 'm3-e2e null: a failed null run (no pair, host error) is not saved as one' ($why.Count -ge 3) ($why -join '; ')
+    $script:M3E2eProv = $null
+    $why = @(Save-M3E2eNullRun 'en9-m3-e2e-vscode' ([pscustomobject]@{ id = 'vscode' }) ([ordered]@{ base = 'rig-base'; started = 's'; ended = 'e'; error = $null; pulled = $true }) $ev)
+    Check 'm3-e2e null: a null run saved without the campaign''s provenance fails the check' (@($why | Where-Object { $_ -match 'no provenance' }).Count -eq 1) ($why -join '; ')
+
+    # -NullWaitSec: 1..600 on the host, passed to the guest unchanged; the guest refuses another value, no default.
+    $okW = (Assert-M3E2eNullWait 1) -eq 1 -and (Assert-M3E2eNullWait 600) -eq 600 -and (Assert-M3E2eNullWait 10) -eq 10
+    $threw = 0; foreach ($w in 0, -1, 601, $null, 'x') { try { $null = Assert-M3E2eNullWait $w } catch { $threw++ } }
+    Check 'm3-e2e null: -NullWaitSec 1..600 accepted, 0 / -1 / 601 / none / text refused' ($okW -and $threw -eq 5) "$threw of 5"
+    $M3.null_wait = 0; $M3.count = 6; $M3.undo_apps = @()
+    $msg = $null; try { Invoke-M3E2eNullCampaign } catch { $msg = $_.Exception.Message }
+    Check 'm3-e2e null: a campaign with -NullWaitSec 0 is refused before any VM step' ($msg -match '-NullWaitSec must be 1\.\.600') "$msg"
+    $M3.null_wait = 10
+    Check 'm3-e2e null: the null wait reaches the guest job text unchanged' ((New-M3E2ePhaseText 'consent-cancel' 'vscode' 'plan' 37 -NullRun) -match ' -WaitSec 37 -NullRun$')
+    $cancel2 = [regex]::Match([IO.File]::ReadAllText((Join-Path $Guest 'm3-e2e.ps1')), "(?s)\n    'consent-cancel' \{.*?\n    \}")
+    Check 'm3-e2e guest: consent-cancel refuses a wait outside 1..600 and waits exactly -WaitSec' ($cancel2.Value -match 'if \(\$WaitSec -lt 1 -or \$WaitSec -gt 600\) \{ "M3E REFUSED' -and $cancel2.Value -match '\$nw\.seconds = \$WaitSec\r?\n' -and $cancel2.Value -notmatch 'else \{ 10 \}')
+    $post = [regex]::Match([IO.File]::ReadAllText((Join-Path $Guest 'm3-e2e.ps1')), "(?s)\n    'capture-post' \{.*?\n    \}")
+    Check 'm3-e2e guest: capture-post records every plan item''s key (plan_keys), not only the preselected ones' ($post.Value -match '\$planKeys = @\(\$si \| ForEach-Object \{ Get-E2eTargetKey \$_\.target \}\)' -and $post.Value -match 'plan_keys = \$planKeys')
 
     # The gate refuses to start without its set (no fallback to the M2 set) and pushes exactly that file.
     $ui = Join-Path $Work 'm3e2e-ui'; New-Item -ItemType Directory -Force $ui | Out-Null; [IO.File]::WriteAllText((Join-Path $ui 'Purge.exe'), 'x')
     $M3.ui = $ui; $M3.base = 'rig-base'; $M3.run = 'e2e-selftest'; $M3.apps = @('npp'); $M3.undo_apps = @()
+    $bd = Join-Path $Work 'm3e2e-bin'; New-Item -ItemType Directory -Force $bd | Out-Null
+    $M3.engine = Join-Path $bd 'purge-engine.exe'; $M3.broker = Join-Path $bd 'purge-broker.exe'
+    [IO.File]::WriteAllText($M3.engine, 'engine'); [IO.File]::WriteAllText($M3.broker, 'broker')
+    $bh = Get-M3E2eBinaryHashes
+    Check 'm3-e2e: the binaries'' SHA-256 (engine, broker, the UI''s Purge.exe)' ($bh.engine_sha256 -ceq (Get-FileHash -Algorithm SHA256 -LiteralPath $M3.engine).Hash.ToLowerInvariant() -and
+        $bh.ui_sha256 -ceq (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $ui 'Purge.exe')).Hash.ToLowerInvariant() -and $bh.broker_sha256 -cne $bh.engine_sha256)
+    $p = Get-M3E2eProvenance 'rig-base'
+    Check 'm3-e2e null: the campaign provenance (campaign, VM, snapshot, hashes, null wait) is complete' ($p.campaign -ceq 'e2e-selftest' -and $p.vm -ceq 'Inbound-Win11-Test' -and $p.snapshot -ceq 'rig-base' -and $p.null_wait -eq 10 -and
+        @(Test-M3E2eProvenance ([pscustomobject]$p)).Count -eq 0)
+    $M3.broker = Join-Path $bd 'missing-broker.exe'
+    $threw = $false; try { $null = Get-M3E2eBinaryHashes } catch { $threw = ($_.Exception.Message -match 'missing broker') }
+    Check 'm3-e2e: a missing binary is refused (no provenance without it)' $threw
+    $M3.broker = Join-Path $bd 'purge-broker.exe'
     $script:M3PushAmbient = $null
     function Invoke-M3E2eApp { param($AppDef, [bool]$Undo, [string]$Base, [string]$Dir = '', [string]$NullRun = '', $Ambient = $null) $script:appAmbient = $Ambient; throw 'reached the app' }
     $M3.ambient = Join-Path $Work 'no-such-ambient.json'

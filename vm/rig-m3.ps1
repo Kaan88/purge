@@ -696,7 +696,7 @@ function Invoke-M3E2eWindow([string]$Id, $Rec, [bool]$IsNull) {
     $Rec.uac_keys.plan = @(Invoke-M3E2eUac '07u-uac' $Id 'plan')
     $null = Invoke-M3E2ePhase 'consent-wait' $Id 'plan' -WaitSec 300 -TimeoutSec 900
     Save-M3E2eShot '08-consent-plan'
-    if ($IsNull) { $null = Invoke-M3E2ePhase 'consent-cancel' $Id 'plan' -WaitSec $M3.null_wait -TimeoutSec 900 }
+    if ($IsNull) { $null = Invoke-M3E2ePhase 'consent-cancel' $Id 'plan' -WaitSec (Assert-M3E2eNullWait $M3.null_wait) -TimeoutSec 900 }
     else { $null = Invoke-M3E2ePhase 'consent-approve' $Id 'plan' -TimeoutSec 600 }
     $null = Invoke-M3E2ePhase 'ui-wait-result' $Id -WaitSec 1800 -TimeoutSec 2400
     Save-M3E2eShot '09-result'
@@ -813,10 +813,18 @@ function Invoke-M3E2e {
     $script:M3PushAmbient = $amb
     $ambRec = [ordered]@{ file = $amb; sha256 = (Get-M3Sha256File $amb) }
     Write-RigLog "  ambient set $amb (sha256 $($ambRec.sha256))"
+    # The binaries under test (the scorer compares them with the set's provenance, RIG.md section 17.1).
+    $bins = Get-M3E2eBinaryHashes
+    $setProv = $(try { (Read-M3Json $amb).provenance } catch { $null })
+    if (-not $setProv) { Write-RigLog '  !! the ambient set records no provenance (the scorer will fail it)' }
+    else {
+        $diff = @(Compare-M3E2eProvenance $setProv ([ordered]@{ vm = $M3Vm; snapshot = $base; engine_sha256 = $bins.engine_sha256; broker_sha256 = $bins.broker_sha256; ui_sha256 = $bins.ui_sha256 }))
+        if ($diff.Count) { Write-RigLog "  !! the ambient set was built from other runs ($($diff -join '; ')); the scorer will fail it" }
+    }
     $apps = @(Get-M3E2eApps -Only $M3.apps)
     $undo = @(Get-M3E2eUndoApps -Override $M3.undo_apps)
     $sum = [ordered]@{ schema = 'purge.rig.m3e2e.summary/1'; run = $M3.run; vm = $M3Vm; snapshot = $base; uac_on = $M3.uac_on; started = $script:M3Started
-                       engine = $M3.engine; broker = $M3.broker; ui = $ui; ambient = $ambRec; apps_asked = @($apps | ForEach-Object { "$($_.id)" }); undo_apps = $undo; apps = @() }
+                       engine = $M3.engine; broker = $M3.broker; ui = $ui; binaries = $bins; ambient = $ambRec; apps_asked = @($apps | ForEach-Object { "$($_.id)" }); undo_apps = $undo; apps = @() }
     foreach ($a in $apps) {
         $sum.apps += Invoke-M3E2eApp $a ($undo -contains "$($a.id)") $base -Ambient $ambRec
         [IO.File]::WriteAllText((Join-Path $M3.evidence 'summary.json'), (ConvertTo-Json $sum -Depth 10), (New-Object System.Text.UTF8Encoding($false)))
@@ -830,10 +838,11 @@ function Invoke-M3E2e {
 # --------------------------------------------------------------- m3-e2e ambient set (RIG.md section 17.1)
 
 # Fixture names an m3-e2e ambient set must never hold: the rig's PurgeExec* objects (execapp), the MSI fixtures'
-# PurgeE2eMsi key and the engine's store C:\ProgramData\Purge (rig-m1b-exec.ps1 $XFixtureRx plus PurgeE2eMsi). An entry
-# on one of them would excuse a change Purge made to that very object. Case-insensitive; '\\+' also covers a pattern's
-# escaped backslashes. The scorer checks the committed file with the same expression (m3-e2e-score.ps1 $E2eFixtureRx).
-$M3E2eFixtureRx = '(?i)purgeexec|programdata\\+purge|purgee2emsi'
+# PurgeE2eMsi key, the engine's store C:\ProgramData\Purge (rig-m1b-exec.ps1 $XFixtureRx plus PurgeE2eMsi) and the
+# per-volume quarantine X:\.purge-q. An entry on one of them would excuse a change Purge made to that very object.
+# Case-insensitive; '\\+' (and '(\\)?' before a pattern's escaped '-') also covers a pattern's escapes. The scorer checks
+# the committed file with the same expression (m3-e2e-score.ps1 $E2eFixtureRx).
+$M3E2eFixtureRx = '(?i)purgeexec|programdata\\+purge|purgee2emsi|\.purge(\\)?-q'
 # Distinct null runs a set must come from (m3-e2e-score.ps1 $E2eMinNullRuns is the same number).
 $M3E2eMinNullRuns = 6
 
@@ -851,10 +860,65 @@ function Get-M3E2eAmbientFile([string]$Vm) {
     Join-Path $script:RigDir "truth\$leaf"
 }
 function Resolve-M3E2eAmbient { if ($M3.ambient) { $M3.ambient } else { Get-M3E2eAmbientFile $M3Vm } }
+# The VM an ambient file is for: the VM whose file it is (Get-M3E2eAmbientFile's leaf), else this script's VM.
+function Get-M3E2eAmbientVm([string]$Out) {
+    switch -CaseSensitive (Split-Path -Leaf $Out) { 'm3-e2e-ambient.json' { 'Inbound-Win11-Test' } 'm3-e2e-ambient-cleanpro.json' { 'Purge-CleanPro' } default { $M3Vm } }
+}
+
+# The idle seconds of a null run's window: 1..600 (0 would be no window at all; the gate's execution took about 8 s),
+# passed to the guest unchanged.
+function Assert-M3E2eNullWait($Sec) {
+    if ($null -eq $Sec -or "$Sec" -notmatch '^\d+$' -or [int]$Sec -lt 1 -or [int]$Sec -gt 600) { throw "-NullWaitSec must be 1..600 (got '$Sec')" }
+    [int]$Sec
+}
+
+# The binaries under test: purge-engine.exe, purge-broker.exe (-Engine / -Broker, else target\release) and the UI's
+# Purge.exe (-UiPublish, else target\ui-publish), with their SHA-256. Throws when one is missing.
+function Get-M3E2eBinaryHashes {
+    $p = [ordered]@{
+        engine = $(if ($M3.engine) { $M3.engine } else { Join-Path $script:RepoRoot 'target\release\purge-engine.exe' })
+        broker = $(if ($M3.broker) { $M3.broker } else { Join-Path $script:RepoRoot 'target\release\purge-broker.exe' })
+        ui     = Join-Path $(if ($M3.ui) { $M3.ui } else { Join-Path $script:RepoRoot 'target\ui-publish' }) 'Purge.exe'
+    }
+    $h = [ordered]@{}
+    foreach ($k in $p.Keys) {
+        if (-not (Test-Path -LiteralPath $p[$k] -PathType Leaf)) { throw "missing $k binary $($p[$k])" }
+        $h["$($k)_sha256"] = Get-M3Sha256File $p[$k]
+    }
+    $h
+}
+
+# A null campaign's provenance (each null run's run.json, then the set): campaign id (-RunName), VM, snapshot, the
+# binaries' SHA-256 and the null wait.
+function Get-M3E2eProvenance([string]$Base) {
+    $b = Get-M3E2eBinaryHashes
+    [ordered]@{ campaign = $M3.run; vm = $M3Vm; snapshot = $Base; engine_sha256 = $b.engine_sha256; broker_sha256 = $b.broker_sha256
+                ui_sha256 = $b.ui_sha256; null_wait = (Assert-M3E2eNullWait $M3.null_wait) }
+}
+$M3E2eProvenanceFields = @('campaign', 'vm', 'snapshot', 'engine_sha256', 'broker_sha256', 'ui_sha256', 'null_wait')
+
+# Why provenance $P (parsed) is incomplete; none: every field is there and well-formed.
+function Test-M3E2eProvenance($P) {
+    if (-not $P) { return @('no provenance') }
+    $why = @()
+    foreach ($f in $M3E2eProvenanceFields) { if (-not $P.PSObject.Properties[$f] -or "$($P.$f)" -eq '') { $why += "provenance.$f missing" } }
+    foreach ($f in 'engine_sha256', 'broker_sha256', 'ui_sha256') { if ($P.PSObject.Properties[$f] -and "$($P.$f)" -and "$($P.$f)" -cnotmatch '\A[0-9a-f]{64}\z') { $why += "provenance.$f is not a SHA-256" } }
+    if ($P.PSObject.Properties['null_wait'] -and "$($P.null_wait)" -ne '' -and $(try { $null = Assert-M3E2eNullWait $P.null_wait; $false } catch { $true })) { $why += "provenance.null_wait '$($P.null_wait)' not 1..600" }
+    $why
+}
+
+# The fields of $Want (a dictionary) whose value differs in provenance $P (case-sensitive).
+function Compare-M3E2eProvenance($P, $Want) {
+    foreach ($k in @($Want.Keys)) {
+        $have = $(if ($P -and $P.PSObject.Properties[$k]) { "$($P.$k)" } else { '' })
+        if ($have -cne "$($Want[$k])") { "$k '$have', want '$($Want[$k])'" }
+    }
+}
 
 # Push-M2Ambient (rig.ps1) pushes what Get-M2AmbientFile names: for this script the m3-e2e set a gate run resolved
 # (Invoke-M3E2e), never rig.ps1's M2 set; a null run pushes with -None and never reads it.
 $script:M3PushAmbient = $null
+$script:M3E2eProv = $null
 function Get-M2AmbientFile([string]$Name = '') { $script:M3PushAmbient }
 
 # The run name of null round $K of app $App: <prefix><k>-m3-e2e-<app> (default prefix en: en1-m3-e2e-vscode).
@@ -901,7 +965,15 @@ function Test-M3E2eNullRunDoc($Doc, $E2e, [string]$Run, [string]$App) {
     if ("$($Doc.error)") { $why += "host error: $($Doc.error)" }
     if ($Doc.pulled -ne $true) { $why += 'guest outputs not pulled' }
     if (-not (Test-M3E2eNullRunShape $Run)) { $why += "run name '$Run' is not of the null shape" }
+    # Provenance (RIG.md section 17.1): campaign, VM, snapshot, the binaries' hashes and the null wait it ran with.
+    $prov = $(if ($Doc.PSObject.Properties['provenance']) { $Doc.provenance } else { $null })
+    $why += @(Test-M3E2eProvenance $prov)
+    if ($prov -and $Doc.null_run -and "$($prov.null_wait)" -ne "$($Doc.null_run.wait_sec)") { $why += "provenance.null_wait $($prov.null_wait) is not null_run.wait_sec $($Doc.null_run.wait_sec)" }
     if (-not $E2e) { return @($why + 'no readable e2e.json') }
+    # Every plan item's key (capture-post cli.plan_keys, not only the preselected ones): the build refuses entries on them.
+    $cli = $(if ($E2e.state -and $E2e.state.PSObject.Properties['cli']) { $E2e.state.cli } else { $null })
+    if (-not ($cli -and $cli.PSObject.Properties['plan_keys'] -and $cli.PSObject.Properties['items'])) { $why += 'capture-post recorded no plan_keys' }
+    elseif (@(@($cli.plan_keys) | Where-Object { $_ }).Count -ne [int]$cli.items) { $why += "plan_keys $(@(@($cli.plan_keys) | Where-Object { $_ }).Count), plan items $($cli.items)" }
     if ("$($E2e.schema)" -cne 'purge.rig.m3e2e.app/1') { $why += "e2e.json schema '$($E2e.schema)'" }
     if ("$($E2e.app)" -cne $App) { $why += "e2e.json names app '$($E2e.app)'" }
     if (-not ($E2e.state -and $E2e.state.PSObject.Properties['null_run'] -and $E2e.state.null_run -eq $true)) { $why += 'the guest did not run it as a null run (state.null_run)' }
@@ -966,23 +1038,34 @@ function Get-M3E2eAmbientFixtureHits($Set, $Roots = @()) {
 }
 
 # Purge's own store C:\ProgramData\Purge: the broker writes there in both windows, a null run's cancelled plan too
-# (+F sessions\writer.lock, ~D sessions; first null run 2026-11-23). Such entries are dropped from the built set, not
-# refused: in a gate run execdiff judges every record under the store by its own store rule (authorised as 'store'),
-# never by the ambient set, and dropping entries can only make the set stricter. Every other fixture name (PurgeExec*,
-# PurgeE2eMsi) still refuses the set, and the scorer still refuses a committed set naming the store.
-$M3E2eStoreRx = '(?i)programdata\\+purge(\\|\$|$)'
-# Removes the store entries from $Set (records, patterns, per run, in place); returns them.
+# (first null run tn1-m3-e2e-vscode, 2026-11-23). Exactly these known null-window records are dropped from the built set
+# (records only, compared whole, case-insensitive): in a gate run execdiff judges every record under the store by its
+# own store rule (authorised as 'store'), never by the ambient set, and dropping entries can only make the set stricter.
+# Any other record or pattern under C:\ProgramData\Purge or on an X:\.purge-q refuses the set (Get-M3E2eStoreRefusals:
+# a cancelled plan has no business there), as do the other fixture names; the scorer refuses a committed set naming the
+# store at all.
+$M3E2eStoreAllowed = @('+F:C:\ProgramData\Purge\sessions\writer.lock', '~D:C:\ProgramData\Purge\sessions', '~D:C:\ProgramData\Purge')
+$M3E2eStoreRx = '(?i)programdata\\+purge(\\|\$|$)|\.purge(\\)?-q'
+function Test-M3E2eStoreAllowed([string]$Entry) { @($M3E2eStoreAllowed | Where-Object { $_ -ieq $Entry }).Count -gt 0 }
+
+# Removes the allowed store records ($M3E2eStoreAllowed) from $Set (union and per run, in place); returns them.
 function Remove-M3E2eStoreEntries($Set) {
-    $isStore = { param($s) "$s" -match $M3E2eStoreRx -and "$s" -notmatch '(?i)purgeexec|purgee2emsi' }
-    $out = @(@(@($Set.records) + @($Set.patterns)) | Where-Object { $null -ne $_ -and (& $isStore $_) } | ForEach-Object { "$_" })
-    $Set.records = @(@($Set.records) | Where-Object { $null -ne $_ -and -not (& $isStore $_) })
-    $Set.patterns = @(@($Set.patterns) | Where-Object { $null -ne $_ -and -not (& $isStore $_) })
+    $out = @(@($Set.records) | Where-Object { $null -ne $_ -and (Test-M3E2eStoreAllowed "$_") } | ForEach-Object { "$_" })
+    $Set.records = @(@($Set.records) | Where-Object { $null -ne $_ -and -not (Test-M3E2eStoreAllowed "$_") })
     foreach ($r in @($Set.runs | Where-Object { $_ })) {
-        $out += @(@(@($r.records) + @($r.patterns)) | Where-Object { $null -ne $_ -and (& $isStore $_) } | ForEach-Object { "$_" })
-        $r.records = @(@($r.records) | Where-Object { $null -ne $_ -and -not (& $isStore $_) })
-        $r.patterns = @(@($r.patterns) | Where-Object { $null -ne $_ -and -not (& $isStore $_) })
+        $out += @(@($r.records) | Where-Object { $null -ne $_ -and (Test-M3E2eStoreAllowed "$_") } | ForEach-Object { "$_" })
+        $r.records = @(@($r.records) | Where-Object { $null -ne $_ -and -not (Test-M3E2eStoreAllowed "$_") })
     }
     @($out | Select-Object -Unique)
+}
+
+# Every record or pattern of $Set (union and per run) under the store or on an X:\.purge-q that is not an allowed
+# record: each one refuses the set.
+function Get-M3E2eStoreRefusals($Set) {
+    $all = @(@($Set.records) + @($Set.patterns))
+    foreach ($r in @($Set.runs | Where-Object { $_ })) { $all += @($r.records) + @($r.patterns) }
+    # (A pattern starts with '^', so it never equals an allowed record.)
+    @($all | Where-Object { $null -ne $_ -and "$_" -match $M3E2eStoreRx -and -not (Test-M3E2eStoreAllowed "$_") } | ForEach-Object { "$_" } | Select-Object -Unique)
 }
 
 # The host rigtool (ambient builds): $env:RIG_RIGTOOL, else vm\rigtool\target\release\rigtool.exe.
@@ -995,7 +1078,7 @@ function Get-M3E2eHostRigTool {
 # After a null run: vm\runs\<run>\ gets the window's snapshot pair (snap-<run>-a / -b.tsv.gz, moved out of the pulled
 # guest outputs), the guest's e2e.json and the host's run.json (purge.rig.m3e2e.null/1). An older dir of that name goes
 # to vm\runs\_old\ first. Returns why it is not a null run (Test-M3E2eNullRunDoc); none: it is.
-function Save-M3E2eNullRun([string]$Run, $AppDef, $Rec, [string]$Dir) {
+function Save-M3E2eNullRun([string]$Run, $AppDef, $Rec, [string]$Dir, $Provenance = $script:M3E2eProv) {
     $d = Join-Path $script:RunsDir $Run
     if (Test-Path -LiteralPath $d) {
         $old = Join-Path $script:RunsDir '_old'
@@ -1010,7 +1093,7 @@ function Save-M3E2eNullRun([string]$Run, $AppDef, $Rec, [string]$Dir) {
     }
     if (Test-Path -LiteralPath (Join-Path $g 'e2e.json')) { Copy-Item -LiteralPath (Join-Path $g 'e2e.json') -Destination (Join-Path $d 'e2e.json') }
     $doc = [ordered]@{ schema = 'purge.rig.m3e2e.null/1'; run = $Run; mode = 'm3-e2e'; app = "$($AppDef.id)"; vm = $M3Vm; snapshot = $Rec.base
-                       null_run = [ordered]@{ null = $true; wait_sec = $M3.null_wait }; evidence = $Dir; started = $Rec.started; finished = $Rec.ended
+                       null_run = [ordered]@{ null = $true; wait_sec = $M3.null_wait }; provenance = $Provenance; evidence = $Dir; started = $Rec.started; finished = $Rec.ended
                        error = $Rec.error; pulled = $Rec.pulled }
     [IO.File]::WriteAllText((Join-Path $d 'run.json'), (ConvertTo-Json $doc -Depth 6), (New-Object System.Text.UTF8Encoding($false)))
     $why = @(Test-M3E2eNullRunDoc (Read-M3Json (Join-Path $d 'run.json')) (Read-M3Json (Join-Path $d 'e2e.json')) $Run "$($AppDef.id)")
@@ -1025,21 +1108,32 @@ function Save-M3E2eNullRun([string]$Run, $AppDef, $Rec, [string]$Dir) {
 # no file (an older file stays as it was). Returns the dirs used.
 function Invoke-M3E2eBuildAmbient {
     $out = Resolve-M3E2eAmbient
-    $dirs = @(); $bad = @(); $roots = @()
+    $dirs = @(); $bad = @(); $roots = @(); $provs = [ordered]@{}
     foreach ($a in @(Get-M3E2eNullApps -Only $M3.apps)) {
         foreach ($k in 1..([Math]::Max(1, $M3.count))) {
             $r = Get-M3E2eNullRunName $k "$($a.id)" $M3.prefix
             $d = Join-Path $script:RunsDir $r
             if (-not (Test-Path -LiteralPath (Join-Path $d "snap-$r-a.tsv.gz")) -or -not (Test-Path -LiteralPath (Join-Path $d "snap-$r-b.tsv.gz"))) { $bad += "$r`: no snapshot pair in $d"; continue }
             $e2e = Read-M3Json (Join-Path $d 'e2e.json')
-            $why = @(Test-M3E2eNullRunDoc (Read-M3Json (Join-Path $d 'run.json')) $e2e $r "$($a.id)")
+            $doc = Read-M3Json (Join-Path $d 'run.json')
+            $why = @(Test-M3E2eNullRunDoc $doc $e2e $r "$($a.id)")
             if ($why.Count) { $bad += "$r`: $($why -join '; ')"; continue }
-            $roots += @(Get-M3E2eTargetRoots @($e2e.state.cli.preselected_keys))
+            # Every plan item of the run (preselected or not) is a plan object the set must not name.
+            $roots += @(Get-M3E2eTargetRoots @(@($e2e.state.cli.plan_keys) + @($e2e.state.cli.preselected_keys)))
+            $provs[$r] = $doc.provenance
             $dirs += $d
         }
     }
     if ($bad.Count) { throw "not null runs, no ambient set written:`n  $($bad -join "`n  ")" }
     if ($dirs.Count -lt $M3E2eMinNullRuns) { throw "$($dirs.Count) null run(s); the set needs at least $M3E2eMinNullRuns (-Count); no ambient set written" }
+    # One campaign, one VM (the file's), one snapshot, one set of binaries, one null wait for every run.
+    $first = @($provs.Values)[0]
+    $want = [ordered]@{}; foreach ($f in $M3E2eProvenanceFields) { $want[$f] = "$($first.$f)" }
+    $mixed = @(foreach ($r in $provs.Keys) { $diff = @(Compare-M3E2eProvenance $provs[$r] $want); if ($diff.Count) { "$r`: $($diff -join ', ')" } })
+    if ($mixed.Count) { throw "the null runs differ in provenance (first: $(@($provs.Keys)[0])), no ambient set written:`n  $($mixed -join "`n  ")" }
+    $vm = Get-M3E2eAmbientVm $out
+    if ($want.vm -cne $vm) { throw "the null runs ran on VM '$($want.vm)', the set $out is for '$vm'; no ambient set written" }
+    $provenance = [ordered]@{}; foreach ($f in $M3E2eProvenanceFields) { $provenance[$f] = $first.$f }
     $tmp = "$out.tmp-" + [guid]::NewGuid().ToString('N').Substring(0, 8)
     try {
         $a = Get-M3E2eAmbientArgs $dirs $tmp
@@ -1049,13 +1143,16 @@ function Invoke-M3E2eBuildAmbient {
         if ($LASTEXITCODE -ne 0) { throw "rigtool ambient --m2 --added exited $LASTEXITCODE; no ambient set written" }
         $set = Read-M3Json $tmp
         if (-not $set -or "$($set.schema)" -cne 'purge.rig.m2ambient/1') { throw "the built set has schema '$(if ($set) { $set.schema })'; no ambient set written" }
+        $storeBad = @(Get-M3E2eStoreRefusals $set)
+        if ($storeBad.Count) { throw "the built set names Purge's store or a .purge-q beyond the known null-window records ($($storeBad.Count)), no ambient set written: $(@($storeBad | Select-Object -First 10) -join ' | ')" }
         $dropped = @(Remove-M3E2eStoreEntries $set)
         if ($dropped.Count) {
             Write-RigLog "  dropped $($dropped.Count) entr$(if ($dropped.Count -eq 1) { 'y' } else { 'ies' }) of Purge's own store (execdiff's store rule judges them in a gate run): $($dropped -join ' | ')"
             $set | Add-Member -Force -NotePropertyName note -NotePropertyValue "$($set.note)$(if ($set.note) { ' ' })m3-e2e: $($dropped.Count) store entries dropped (C:\ProgramData\Purge; the broker's writer.lock and the sessions dir of the cancelled plan)."
-            [IO.File]::WriteAllText($tmp, (ConvertTo-Json $set -Depth 10), (New-Object System.Text.UTF8Encoding($false)))
-            $set = Read-M3Json $tmp
         }
+        $set | Add-Member -Force -NotePropertyName provenance -NotePropertyValue $provenance
+        [IO.File]::WriteAllText($tmp, (ConvertTo-Json $set -Depth 10), (New-Object System.Text.UTF8Encoding($false)))
+        $set = Read-M3Json $tmp
         $hits = @(Get-M3E2eAmbientFixtureHits $set $roots)
         if ($hits.Count) { throw "the built set names fixture or plan objects ($($hits.Count)), no ambient set written; rerun the null rounds: $(@($hits | Select-Object -First 10) -join ' | ')" }
         Move-Item -LiteralPath $tmp -Destination $out -Force
@@ -1068,7 +1165,7 @@ function Invoke-M3E2eBuildAmbient {
 # (Invoke-M3E2eBuildAmbient). Any failed null run: no ambient file is written (throws).
 function Invoke-M3E2eNullCampaign {
     if ($M3.count -lt 1) { throw '-Count must be at least 1' }
-    if ($M3.null_wait -lt 0 -or $M3.null_wait -gt 600) { throw '-NullWaitSec must be 0..600' }
+    $null = Assert-M3E2eNullWait $M3.null_wait
     if ($M3.undo_apps.Count) { throw 'a null run is never undone (-UndoApps)' }
     $null = Get-M3E2eHostRigTool
     $out = Resolve-M3E2eAmbient                                       # the output file must be known before the rounds
@@ -1077,8 +1174,12 @@ function Invoke-M3E2eNullCampaign {
     $base = $(if ($M3.base) { $M3.base } elseif ($M3.uac_on) { 'm3-uac-on' } else { 'rig-base' })
     if ($base -eq 'm3-uac-on' -and -not (Test-M3Snapshot)) { throw "snapshot $M3Snap missing (rig-m3.ps1 -Mode snapshot)" }
     $apps = @(Get-M3E2eNullApps -Only $M3.apps)
+    # The campaign's provenance, written into every null run's run.json (the build requires one for all, RIG.md 17.1).
+    $script:M3E2eProv = Get-M3E2eProvenance $base
+    $vm = Get-M3E2eAmbientVm $out
+    if ($vm -cne $M3Vm) { throw "the null runs run on $M3Vm, but $out is the set of $vm" }
     $sum = [ordered]@{ schema = 'purge.rig.m3e2e.null-summary/1'; run = $M3.run; vm = $M3Vm; snapshot = $base; uac_on = $M3.uac_on; started = $script:M3Started
-                       engine = $M3.engine; broker = $M3.broker; ui = $ui; null_wait = $M3.null_wait; out = $out; runs = @() }
+                       engine = $M3.engine; broker = $M3.broker; ui = $ui; null_wait = $M3.null_wait; provenance = $script:M3E2eProv; out = $out; runs = @() }
     $bad = @()
     foreach ($a in $apps) {
         foreach ($k in 1..$M3.count) {
