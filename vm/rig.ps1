@@ -1797,9 +1797,16 @@ if ($MyInvocation.InvocationName -ne '.' -and $m1bModes -ccontains $Mode) {
     $null = Invoke-M1bMode @m1bArgs
     return
 }
+# M3 gate G1, elevated half (RIG.md section 18): vm\rig-m3-ci.ps1 on Inbound-Win11-Test, run name <prefix>m3-elevated-ci.
+if ($MyInvocation.InvocationName -ne '.' -and $Mode -ceq 'm3-elevated-ci') {
+    $ciArgs = @{ Run = "$RunPrefix" + 'm3-elevated-ci' }
+    if ($PSBoundParameters.ContainsKey('Snapshot')) { $ciArgs.Snapshot = $Snapshot }
+    & (Join-Path $PSScriptRoot 'rig-m3-ci.ps1') @ciArgs
+    exit $LASTEXITCODE
+}
 if ($MyInvocation.InvocationName -ne '.' -and $Mode -ne 'campaign') {
     $m2Modes = @('m2-traps', 'm2-fidelity', 'm2-crash', 'm2-reboot', 'm2-install', 'm2-elevated')
-    if ($m2Modes -cnotcontains $Mode) { throw "-Mode must be campaign, one of $($m1bModes -join ', ') or one of $($m2Modes -join ', ') (got '$Mode')" }
+    if ($m2Modes -cnotcontains $Mode) { throw "-Mode must be campaign, m3-elevated-ci, one of $($m1bModes -join ', ') or one of $($m2Modes -join ', ') (got '$Mode')" }
     $m2Snap = $(if ($PSBoundParameters.ContainsKey('Snapshot')) { $Snapshot } else { 'm2-base' })
     if ($Mode -eq 'm2-elevated') { $null = Invoke-M2ElevatedTests -Snapshot $m2Snap -RunPrefix $RunPrefix; return }
     $null = Invoke-M2Mode -Mode $Mode -Snapshot $m2Snap -Engine $Engine -RunPrefix $RunPrefix -HardPowerOff:$M2HardPowerOff -FaultPoints $M2FaultPoints `
