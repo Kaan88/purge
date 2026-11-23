@@ -302,21 +302,65 @@ it that fails the broker's per-object rule. The same run creates `%ProgramData%\
 protected descriptors and `sessions\index.json`, and registers the `Purge` event-log source, all through
 the script's native layer: the .iss adds no `Permissions:` entry and no SDDL of its own. The second run
 is the script's own `-Check` (both trees, every deployed file, the shortcut, the event-log source). If
-either run fails, the setup shows the end of the script's log and aborts, which rolls the install back,
-so nothing half-installed stays in "Installed apps". The setup's own log is the usual
-`%TEMP%\Setup Log*.txt`.
+either run fails, the setup shows the end of the script's log (a silent setup only writes it to the
+setup log) and exits with code 9 instead of 0 (`GetCustomSetupExitCode`), so Hub records a failed
+update. There is no rollback: Inno has already copied the files and written the uninstall entry with
+the new `DisplayVersion` when `ssPostInstall` runs, and it cannot undo them from there (an `Abort` at
+that point is swallowed and the setup still exits 0). An interactive run says so on the Finished page
+and does not offer to launch Purge; running the setup again repeats the step. Hub does not offer it again (the new `Purge.exe` already carries the new version), so after an exit 9 the owner runs the setup by hand. `SetupLogging=yes`, so
+the setup's own log is always `%TEMP%\Setup Log <date> #<n>.txt`, also for Hub's run, which passes
+no `/LOG`.
 
 **Uninstall.** From "Installed apps" (or `unins000.exe`). Before the uninstaller deletes any file,
 `CurUninstallStepChanged(usUninstall)` force-stops `Purge.exe`, `purge-broker.exe` and
-`purge-engine.exe` (`taskkill /F /T`), removes
+`purge-engine.exe` by image name (`taskkill /F /IM`, without `/T`, so a program's uninstaller the broker
+started is left alone), removes
 `HKLM\SYSTEM\CurrentControlSet\Services\EventLog\Application\Purge`, then asks whether to delete
-`%ProgramData%\Purge` too. The default is **No** (silent uninstalls keep it): the quarantine holds
+`%ProgramData%\Purge` too. The default is **No** (silent uninstalls keep it without asking): the quarantine holds
 files that were removed from the PC and can still be restored, so deleting the folder is an explicit
 choice. The answer is only about the data root; the programs, `kb\`, `setup\`, the shortcuts and the
 registry source are always removed, and `[UninstallDelete]` clears `{app}` after that.
 
+**Upgrade, and Hub.** Hub (`Kaan88/mdhub`, `docs/COMPLIANCE.md`) installs and updates Purge by running
+the setup elevated with `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART` and reading its exit code (0 is
+success). A silent run shows nothing and asks nothing: the `[Run]` entry is `skipifsilent`, a failed
+post-install step only writes to the setup log and exits with code 9, and there is no custom page. Hub asks Purge's window to
+close and never ends a process, and the broker and the engine have no window, so `PrepareToInstall`
+stops Purge itself:
+- It refuses any install folder but `{autopf}\Purge` (exit code 7, nothing changed). There is no
+  directory page, but `/DIR=` on the command line would still pick another folder, and the stop step,
+  the re-protection of the tree and `[UninstallDelete]` all act on `{app}`.
+- It stops only the app's own executables in that folder: a process whose path is exactly
+  `{app}\Purge.exe`, `purge-broker.exe`, `purge-engine.exe` or `RestartAgent.exe` (the Windows App SDK
+  helper the UI publish ships), found through WMI; Purge.exe first; `taskkill /F /PID`, no `/T`, so a
+  program's uninstaller the broker started is left alone. It waits up to 10 s until they are gone and
+  their files can be opened for writing.
+- Without WMI it opens the four files instead: for each of the three Purge images whose installed file
+  is in use it runs `taskkill /F /IM` (no `/T`; never for `RestartAgent.exe`, which every Windows App
+  SDK app has), then waits up to 10 s for the files to be free.
+- If a file of the app is still in use after that, the setup stops before it changes anything (exit
+  code 7, "Purge could not be closed"). Run interactively, it asks before it stops anything. A
+  `/VERYSILENT` run without `/SUPPRESSMSGBOXES` shows Inno's error box first; Hub passes both.
+
+`CloseApplications=yes` stays as the fallback for anything else holding a file. `AppId` and `DefaultDirName` never change, and the
+`DisplayVersion` Inno writes is `AppVersion`.
+
+**Version.** The one version is `[workspace.package] version` in the root `Cargo.toml`.
+`build-installer.ps1` passes it as `/DAppVersion` (`purge.iss` has no default), the engine's and the
+broker's `VERSIONINFO` come from it (`bins/versioninfo.rs`, included by both `build.rs`), and
+`ui/Directory.Build.props` reads it from `Cargo.toml` for `Purge.exe` (`Version`, `FileVersion`,
+`InformationalVersion`). `install/inno/check-version.ps1` checks `Cargo.lock`, the three exes
+(`ProductVersion` = the version, fixed `FILEVERSION` = `X.Y.Z.0`) and the setup; the preprocessor of
+`purge.iss` refuses the same mismatches. `.github/workflows/release.yml` builds, checks and publishes
+a release for the tag `v<version>`, with the `hub.txt` Hub reads.
+
 The setup must be tested on the target machine, elevated: it writes Program Files, ProgramData and
-HKLM, which is exactly what cannot be verified by compiling it.
+HKLM, which is exactly what cannot be verified by compiling it. Its first VM run checks, each with
+`/VERYSILENT /SUPPRESSMSGBOXES /NORESTART` and the exit code: exit 0 on a fresh install and on an idle
+upgrade over an existing data root (`-ProtectOnly -DataRootOnly` and `-Check` pass); the kill of a
+running elevated broker and the journal recovery after it; exit 7 when a process survives; exit 7 for
+`/DIR=` another folder, nothing changed; exit 9 when the post-install step fails (for example a
+`-Check` made to fail), with the reason in the setup log.
 
 ## For purge-exec (M2-X-STORE)
 

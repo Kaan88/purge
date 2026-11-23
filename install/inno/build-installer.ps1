@@ -6,7 +6,10 @@
 #   ... -SkipBuild                  pack the artifacts that already exist (no cargo, no dotnet)
 #   ... -InnoCompiler <ISCC.exe>    when Inno Setup is somewhere unusual
 #
-# The version comes from the workspace Cargo.toml ([workspace.package] version).
+# The version comes from the workspace Cargo.toml ([workspace.package] version), the one version of
+# Purge: check-version.ps1 reads it, checks Cargo.lock, and checks that purge-engine.exe,
+# purge-broker.exe and Purge.exe carry it before ISCC runs and the setup after; purge.iss refuses a
+# payload of another version too. Honours CARGO_TARGET_DIR (target\release otherwise).
 
 [CmdletBinding()]
 param(
@@ -25,23 +28,20 @@ $repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $target = Join-Path $repo 'target'
 $uiPublish = Join-Path $target 'ui-publish'
 $outDir = Join-Path $target 'installer'
-$engineExe = Join-Path $target 'release\purge-engine.exe'
-$brokerExe = Join-Path $target 'release\purge-broker.exe'
+$cargoTarget = if ($env:CARGO_TARGET_DIR) { [IO.Path]::GetFullPath($env:CARGO_TARGET_DIR) } else { $target }
+$engineExe = Join-Path $cargoTarget 'release\purge-engine.exe'
+$brokerExe = Join-Path $cargoTarget 'release\purge-broker.exe'
+$checkVersion = Join-Path $PSScriptRoot 'check-version.ps1'
 $kbDir = Join-Path $repo 'kb'
 $installPs1 = Join-Path $repo 'install\install.ps1'
 $iss = Join-Path $PSScriptRoot 'purge.iss'
 
 if (-not (Test-Path -LiteralPath $iss -PathType Leaf)) { throw "the Inno script is missing: $iss" }
 
-# The version: [workspace.package] of the root Cargo.toml (0.1.0 today; Inno takes up to four numeric
-# parts).
-$cargoToml = Get-Content -LiteralPath (Join-Path $repo 'Cargo.toml') -Raw
-$section = [regex]::Match($cargoToml, '(?ms)^\[workspace\.package\](.*?)(?=^\[|\z)')
-if (-not $section.Success) { throw 'Cargo.toml has no [workspace.package] section' }
-$found = [regex]::Match($section.Groups[1].Value, '(?m)^\s*version\s*=\s*"([^"]+)"')
-if (-not $found.Success) { throw 'Cargo.toml [workspace.package] has no version' }
-$version = $found.Groups[1].Value
-if ($version -notmatch '^\d+(\.\d+){1,3}$') { throw "Cargo.toml version '$version' is not a numeric version Inno Setup accepts" }
+# The version: [workspace.package] of the root Cargo.toml, Cargo.lock checked against it.
+$version = & $checkVersion
+if ($LASTEXITCODE -ne 0 -or -not $version) { throw 'check-version.ps1 failed: Cargo.toml and Cargo.lock disagree, or the version is not X.Y.Z[-pre]' }
+$version = [string]$version
 
 function Resolve-Iscc([string]$Given) {
     if ($Given) {
@@ -68,11 +68,17 @@ if (-not $SkipBuild) {
     $env:CARGO_INCREMENTAL = '0'
     $cargo = Get-Command cargo -ErrorAction SilentlyContinue
     if (-not $cargo) { throw 'cargo was not found on PATH' }
-    foreach ($cargoArgs in @(@('build', '--release', '-p', 'purge-engine'), @('build', '--release', '-p', 'purge-broker'), @('xtask', 'check-deps'))) {
-        $line = 'cargo ' + ($cargoArgs -join ' ')
-        Write-Step $line
-        & $cargo.Source @cargoArgs
-        if ($LASTEXITCODE -ne 0) { throw "$line failed with exit code $LASTEXITCODE" }
+    # cargo builds the workspace of the current folder: run it in this script's repository, never the caller's.
+    Push-Location -LiteralPath $repo
+    try {
+        foreach ($cargoArgs in @(@('build', '--release', '--locked', '-p', 'purge-engine'), @('build', '--release', '--locked', '-p', 'purge-broker'), @('xtask', 'check-deps'))) {
+            $line = 'cargo ' + ($cargoArgs -join ' ')
+            Write-Step $line
+            & $cargo.Source @cargoArgs
+            if ($LASTEXITCODE -ne 0) { throw "$line failed with exit code $LASTEXITCODE" }
+        }
+    } finally {
+        Pop-Location
     }
     $dotnet = Get-Command dotnet -ErrorAction SilentlyContinue
     $dotnetPath = if ($dotnet) { $dotnet.Source } else { Join-Path $env:ProgramFiles 'dotnet\dotnet.exe' }
@@ -89,6 +95,10 @@ foreach ($file in @($engineExe, $brokerExe, (Join-Path $uiPublish 'Purge.exe'), 
 }
 if (-not (Test-Path -LiteralPath $kbDir -PathType Container)) { throw "the kb folder is missing: $kbDir" }
 
+# Every shipped exe carries the version (its VERSIONINFO: bins\versioninfo.rs, ui\Directory.Build.props).
+& $checkVersion -Exe $engineExe, $brokerExe, (Join-Path $uiPublish 'Purge.exe') | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "an exe does not carry version $version (check-version.ps1 above)" }
+
 $iscc = Resolve-Iscc $InnoCompiler
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 Write-Step "ISCC ($iscc), version $version"
@@ -97,6 +107,8 @@ if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
 
 $setup = Join-Path $outDir "Purge-Setup-$version.exe"
 if (-not (Test-Path -LiteralPath $setup -PathType Leaf)) { throw "ISCC reported success but $setup does not exist" }
+& $checkVersion -Setup $setup | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "the setup does not carry version $version (check-version.ps1 above)" }
 $size = (Get-Item -LiteralPath $setup).Length
 Write-Step ('setup: {0} ({1:N1} MB)' -f $setup, ($size / 1MB))
 $setup

@@ -1,7 +1,14 @@
-//! Embeds `purge-broker.manifest` (common controls v6 for the consent TaskDialog) in the MSVC binary.
+//! Embeds `purge-broker.manifest` (common controls v6 for the consent TaskDialog) in the MSVC binary,
+//! and a VERSIONINFO resource (the workspace version) through `../versioninfo.rs`. The manifest is
+//! linked by the linker (`/MANIFEST:EMBED`), the version block as a compiled `.res`: separate
+//! resource types, so neither replaces the other.
+
+include!("../versioninfo.rs");
 
 fn main() {
+    println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=purge-broker.manifest");
+    embed_version_resource("purge-broker.exe", "Purge elevated broker");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
         && std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc")
     {

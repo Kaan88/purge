@@ -37,6 +37,29 @@ cargo xtask ci          # fmt check, clippy -D warnings, tests, purge-mcp alone,
 file, given by the `PURGE_UT_STRINGS` environment variable. That file is never committed or copied into
 the repo. Without the variable the check is skipped.
 
+## Hub
+
+This app is installed and updated by Hub (`Kaan88/mdhub`). What a release, the installer and the exe
+must do for that is in https://github.com/Kaan88/mdhub/blob/main/docs/COMPLIANCE.md. Before changing
+the release workflow, the installer, the exe's version resource or `tools/write-hub-txt.ps1`, read it.
+
+In this repository: the one version is `[workspace.package] version` in `Cargo.toml` (the exes'
+version resources, the UI assemblies and the setup take it from there; `install/inno/check-version.ps1`
+fails the build on a difference), the setup is `install/inno/purge.iss`, the release is
+`.github/workflows/release.yml` (tag `v<version>`), and `tools/write-hub-txt.ps1` is a copy of Hub's
+script: re-sync it, do not edit it. Purge has no updater of its own, so COMPLIANCE section 6 does not
+apply.
+
+**v0.1.0 and Hub.** The published v0.1.0 was built before this, from d1393e7, whose `Purge.exe` has no
+version of Purge in it: the .NET default, `FILEVERSION` 1.0.0.0 (inferred from the UI build of that
+time; the released setup was not unpacked). Hub takes the version from that exe before the uninstall
+entry's `DisplayVersion`, so on a PC with v0.1.0 installed it reports 1.0.0, takes that for newer
+than any 0.x release and offers no update. A PC that has it needs the next release installed by hand
+once (Hub reads the right version after that). To keep new PCs from getting it, the owner can replace
+the v0.1.0 release with this workflow's build: delete the release and its tag on GitHub (the workflow
+never overwrites a release), then tag `v0.1.0` on main. Otherwise the next release (a version bump) is
+the first Hub can update to.
+
 ## Licence
 
 Purge is licensed under the MIT License (`LICENSE`). Code ported from Bulk Crap Uninstaller stays under

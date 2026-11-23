@@ -1,0 +1,259 @@
+# Purge's release, for Hub (Kaan88/mdhub, docs/COMPLIANCE.md). A release is cut by pushing the tag
+# v<version>, where <version> is [workspace.package] version of Cargo.toml (the one version of Purge;
+# the run fails when the tag says another). It builds the release engine and broker (cargo --locked),
+# the Native AOT UI and the Inno setup with install\inno\build-installer.ps1, checks that every exe and
+# the setup carry the version, writes hub.txt from the files it uploads (tools\write-hub-txt.ps1, a
+# copy of Hub's), checks every hash, and creates the GitHub release: never a draft and never a
+# pre-release, because Hub reads only releases/latest, which skips both.
+#
+# workflow_dispatch with publish=false (the default) builds and checks everything and publishes
+# nothing: the files are kept as a workflow artifact. With publish=true it creates the tag v<version>
+# at the commit it ran on, and only from the default branch (main), and fails when that tag already
+# exists; a tag run needs the tagged commit to be on main. So a release is always a commit that is on
+# main. Only X.Y.Z is published: a version X.Y.Z-pre is built and checked, never released.
+#
+# Hardening: the version input reaches the scripts only through the environment and is checked
+# against a pattern before use; no cache action (a release builds from a clean runner, and no
+# third-party action runs in this job, which holds contents: write and builds an elevated setup); Inno
+# Setup is pinned (6.7.1, the newest Chocolatey has; the script compiles with 6.7.x). No test step:
+# the suite assumes an unelevated runner (owner and privilege tests fail elevated, and a GitHub runner
+# is elevated), so the tests run on the owner's machine before main moves, and a release can only be
+# cut from main.
+#
+# Not run yet (the owner releases). v0.1.0 was published by hand on 2026-11-23, so the first release
+# this workflow cuts needs a version bump in Cargo.toml (and Cargo.lock). Hub reads only public releases.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Create the GitHub release (false = build and check only)'
+        type: boolean
+        default: false
+      version:
+        description: 'Version to build when run by hand (X.Y.Z); empty = the one in Cargo.toml. A tag run takes it from the tag'
+        type: string
+        default: ''
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  # The setup's payload paths (build-installer.ps1 reads it).
+  CARGO_TARGET_DIR: ${{ github.workspace }}\target
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The whole history, so the publish check below can tell whether the commit is on main.
+          fetch-depth: 0
+
+      - name: Release source (the default branch)
+        if: ${{ github.event_name == 'push' || inputs.publish }}
+        shell: pwsh
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          if (-not $env:DEFAULT_BRANCH) { throw 'the default branch is unknown' }
+          if ($env:GITHUB_REF_TYPE -ne 'tag' -and $env:GITHUB_REF -ne "refs/heads/$env:DEFAULT_BRANCH") {
+            throw "publish=true runs only on $env:DEFAULT_BRANCH, not $env:GITHUB_REF"
+          }
+          git fetch --no-tags origin "+refs/heads/${env:DEFAULT_BRANCH}:refs/remotes/origin/${env:DEFAULT_BRANCH}"
+          if ($LASTEXITCODE) { throw "fetching $env:DEFAULT_BRANCH failed" }
+          git merge-base --is-ancestor HEAD "refs/remotes/origin/$env:DEFAULT_BRANCH"
+          if ($LASTEXITCODE) { throw "$env:GITHUB_SHA is not on ${env:DEFAULT_BRANCH}: a release is cut only from $env:DEFAULT_BRANCH" }
+
+      - name: Version (tag = Cargo.toml = Cargo.lock)
+        id: v
+        shell: pwsh
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          PUBLISHING: ${{ github.event_name == 'push' || inputs.publish }}
+        run: |
+          if ($env:GITHUB_REF_TYPE -eq 'tag') { $v = $env:GITHUB_REF_NAME -replace '^v', '' } else { $v = "$env:INPUT_VERSION" }
+          if ($v -eq '') { $v = (& ./install/inno/check-version.ps1) }
+          if ($v -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$') { throw "bad version '$v'" }
+          # A published release is always the latest one Hub offers to everyone (never --prerelease,
+          # which Hub skips), so X.Y.Z-pre is built and checked but never published.
+          if ($env:PUBLISHING -eq 'true' -and $v.Contains('-')) { throw "v$v is a pre-release version: Purge publishes only X.Y.Z (Hub would offer it to everyone as the latest)" }
+          # Fails when Cargo.toml says another version or Cargo.lock was not updated after a bump.
+          $global:LASTEXITCODE = 0
+          & ./install/inno/check-version.ps1 -Expect $v
+          if ($LASTEXITCODE) { throw "Cargo.toml / Cargo.lock do not say $v" }
+          "version=$v" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
+          # The later steps read the checked version from the environment, never pasted into a script.
+          "PURGE_VERSION=$v" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      # A manual publish creates the tag at this commit (gh release create --target). An existing tag
+      # v<version> (say, left behind when its release was deleted) would be used as it is, whatever
+      # commit it points at, so it fails here, before the build, and again right before the release.
+      - name: Tag is new (manual publish)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish && github.ref_type != 'tag' }}
+        shell: pwsh
+        run: |
+          $t = git ls-remote --tags origin "refs/tags/v$env:PURGE_VERSION"
+          if ($LASTEXITCODE) { throw 'git ls-remote failed' }
+          if ($t) { throw "the tag v$env:PURGE_VERSION already exists ($t): delete it, or push the tag to release that commit" }
+
+      - name: Rust toolchain (rust-toolchain.toml)
+        shell: pwsh
+        run: |
+          $channel = (Select-String -Path rust-toolchain.toml -Pattern '^channel = "(.+)"').Matches[0].Groups[1].Value
+          rustup toolchain install $channel --profile minimal --component rustfmt --component clippy --target x86_64-pc-windows-msvc
+          if ($LASTEXITCODE) { throw "rustup toolchain install $channel failed" }
+          rustc -V
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Inno Setup
+        shell: pwsh
+        run: |
+          # Pinned: upgrade with --version and --allow-downgrade installs exactly this one, whatever
+          # the runner image has.
+          choco upgrade innosetup --version 6.7.1 --allow-downgrade -y --no-progress
+          if ($LASTEXITCODE) { throw "choco innosetup 6.7.1 failed: $LASTEXITCODE" }
+          $have = choco list innosetup --exact --limit-output
+          if ($have -notcontains 'innosetup|6.7.1') { throw "Inno Setup is '$have', not 6.7.1" }
+          $iscc = Get-ChildItem -Path "${env:ProgramFiles(x86)}\Inno Setup *\ISCC.exe", "$env:ProgramFiles\Inno Setup *\ISCC.exe", "$env:LOCALAPPDATA\Programs\Inno Setup *\ISCC.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $iscc) { throw 'ISCC.exe not found after the install' }
+          "ISCC=$($iscc.FullName)" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          & $iscc.FullName /? | Select-Object -First 2
+
+      # cargo build --release --locked -p purge-engine, then -p purge-broker (two builds, never one),
+      # cargo xtask check-deps, dotnet publish of ui\Purge.App (Native AOT), check-version.ps1 on the
+      # three exes, ISCC with /DAppVersion from Cargo.toml, check-version.ps1 on the setup.
+      - name: Build (engine, broker, UI, setup)
+        shell: powershell
+        run: |
+          Remove-Item Env:RUSTFLAGS -ErrorAction SilentlyContinue
+          & .\install\inno\build-installer.ps1 -InnoCompiler $env:ISCC
+          if (-not $?) { throw 'build-installer.ps1 failed' }
+
+      - name: Version resources
+        shell: pwsh
+        run: |
+          $v = $env:PURGE_VERSION
+          $exes = @("$env:CARGO_TARGET_DIR\release\purge-engine.exe", "$env:CARGO_TARGET_DIR\release\purge-broker.exe", 'target\ui-publish\Purge.exe')
+          foreach ($e in $exes) { (Get-Item $e).VersionInfo | Format-List FileName, FileVersion, ProductVersion }
+          $global:LASTEXITCODE = 0
+          & ./install/inno/check-version.ps1 -Expect $v -Exe $exes -Setup "target\installer\Purge-Setup-$v.exe"
+          if ($LASTEXITCODE) { throw 'a version resource does not say the release version' }
+
+      - name: Assemble the release files and hub.txt
+        shell: pwsh
+        run: |
+          $v = $env:PURGE_VERSION
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item "target/installer/Purge-Setup-$v.exe" dist/
+          # The release notes: docs/release-notes/<version>.md when the owner wrote one.
+          $notesSrc = "docs/release-notes/$v.md"
+          $notesName = "release-notes-$v.md"
+          if (Test-Path $notesSrc) {
+            Copy-Item $notesSrc "dist/$notesName"
+          } else {
+            Write-Warning "$notesSrc does not exist; the release gets a one-line text"
+            [IO.File]::WriteAllText("$PWD/dist/$notesName", "# Purge $v`n`nPurge $v.`n", (New-Object System.Text.UTF8Encoding($false)))
+          }
+          # Hub's one-line notes: the first paragraph of the notes after the headings, its wrapped
+          # lines joined (a list item counts as a paragraph). write-hub-txt cuts it at 1024 bytes.
+          $para = New-Object System.Collections.Generic.List[string]
+          foreach ($l in (Get-Content "dist/$notesName" -Encoding UTF8)) {
+            $s = $l.Trim()
+            if ($s -eq '' -or $s.StartsWith('#')) { if ($para.Count -gt 0) { break } else { continue } }
+            if ($s -match '^[-*]\s+' -and $para.Count -gt 0) { break }
+            $para.Add(($s -replace '^[-*]\s+', ''))
+          }
+          $oneLine = ($para -join ' ').Trim()
+          if (-not $oneLine) { $oneLine = "Purge $v." }
+          $files = @(
+            @{ Name = "Purge-Setup-$v.exe"; Path = "dist/Purge-Setup-$v.exe"; Role = 'setup'; Silent = '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART'; Scope = 'machine' }
+          )
+          $global:LASTEXITCODE = 0
+          # In-process (&), not a child pwsh: the file list is hashtables, which a child would get as text.
+          & ./tools/write-hub-txt.ps1 -App purge -Repo purge -Version $v -Notes $oneLine -NotesFile $notesName `
+            -Kind setup -Exe Purge.exe -Uninstall '{7C1B9E64-2D58-4F1A-9B03-6E4C5A8D7F21}_is1' `
+            -Wait 'Purge.exe,purge-engine.exe,purge-broker.exe,RestartAgent.exe' -Files $files -Out dist/hub.txt
+          if ($LASTEXITCODE) { throw 'write-hub-txt failed' }
+          Get-Content dist/hub.txt
+
+      - name: Check hub.txt against the files
+        shell: pwsh
+        run: |
+          $v = $env:PURGE_VERSION
+          $setup = "dist/Purge-Setup-$v.exe"
+          $sha = (Get-FileHash -Algorithm SHA256 $setup).Hash.ToLowerInvariant()
+          $size = (Get-Item $setup).Length
+          $hub = Get-Content dist/hub.txt -Raw -Encoding UTF8
+          $want = @(
+            "hub: 1", "app: purge", "version: $v", "notes.file: release-notes-$v.md",
+            "windows-x86_64.kind: setup", "windows-x86_64.exe: Purge.exe",
+            "windows-x86_64.uninstall: {7C1B9E64-2D58-4F1A-9B03-6E4C5A8D7F21}_is1",
+            "windows-x86_64.wait: Purge.exe, purge-engine.exe, purge-broker.exe, RestartAgent.exe",
+            "windows-x86_64.setup: Purge-Setup-$v.exe",
+            "windows-x86_64.setup.url: https://github.com/Kaan88/purge/releases/download/v$v/Purge-Setup-$v.exe",
+            "windows-x86_64.setup.sha256: $sha", "windows-x86_64.setup.size: $size",
+            "windows-x86_64.setup.silent: /VERYSILENT /SUPPRESSMSGBOXES /NORESTART",
+            "windows-x86_64.setup.scope: machine")
+          $lines = $hub -split "`n"
+          foreach ($w in $want) { if ($lines -notcontains $w) { throw "hub.txt lacks the line '$w'" } }
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: purge-release-files
+          path: dist/*
+          retention-days: 14
+
+      - name: Create the release
+        if: ${{ github.event_name == 'push' || inputs.publish }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $v = $env:PURGE_VERSION
+          if ($env:GITHUB_REF_TYPE -ne 'tag') {
+            $t = git ls-remote --tags origin "refs/tags/v$v"
+            if ($LASTEXITCODE) { throw 'git ls-remote failed' }
+            if ($t) { throw "the tag v$v already exists ($t): gh would release that commit, not $env:GITHUB_SHA" }
+          }
+          # Never --draft and never --prerelease: Hub's releases/latest skips both (COMPLIANCE.md 2).
+          $ghArgs = @('release', 'create', "v$v", '--title', "Purge $v", '--notes-file', "dist/release-notes-$v.md", '--latest')
+          if ($env:GITHUB_REF_TYPE -eq 'tag') { $ghArgs += '--verify-tag' } else { $ghArgs += @('--target', $env:GITHUB_SHA) }
+          $ghArgs += @("dist/Purge-Setup-$v.exe", "dist/release-notes-$v.md", 'dist/hub.txt')
+          gh @ghArgs
+          if ($LASTEXITCODE) { throw 'gh release create failed' }
+
+      - name: Check the published release
+        if: ${{ github.event_name == 'push' || inputs.publish }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $v = $env:PURGE_VERSION
+          $r = gh release view "v$v" --json isDraft,isPrerelease,assets | ConvertFrom-Json
+          if ($r.isDraft -or $r.isPrerelease) { throw "v$v is a draft or a pre-release: Hub would not see it" }
+          foreach ($name in @("Purge-Setup-$v.exe", "release-notes-$v.md", 'hub.txt')) {
+            $a = $r.assets | Where-Object { $_.name -eq $name }
+            if (-not $a) { throw "the release has no asset $name" }
+            if ($a.size -ne (Get-Item "dist/$name").Length) { throw "${name}: uploaded $($a.size) bytes, built $((Get-Item "dist/$name").Length)" }
+          }
+          # The uploaded setup is the file hub.txt describes.
+          New-Item -ItemType Directory -Force check | Out-Null
+          gh release download "v$v" --pattern "Purge-Setup-$v.exe" --dir check
+          if ($LASTEXITCODE) { throw 'download of the uploaded setup failed' }
+          $sha = (Get-FileHash -Algorithm SHA256 "check/Purge-Setup-$v.exe").Hash.ToLowerInvariant()
+          if ((Get-Content dist/hub.txt) -notcontains "windows-x86_64.setup.sha256: $sha") { throw 'the uploaded setup does not match hub.txt' }
+          Write-Host "v$v published: not a draft, not a pre-release, hub.txt matches the uploaded setup"
