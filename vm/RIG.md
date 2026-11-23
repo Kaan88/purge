@@ -2333,3 +2333,131 @@ writes in the exec window (Application log, `%LOCALAPPDATA%\Purge`) show up as e
 set (taken without a UI) does not cover; whether Windows Installer returns 3010 for the fixture with
 `REBOOT=ReallySuppress` (it should, as `/norestart` does). Snap A and B stay in the guest (only their execdiff leaves).
 G7's second half (wrong-route refusals) is not a UI flow and is not scored here.
+
+## 18. M3 gate G1, elevated half: `m3-elevated-ci` (`rig-m3-ci.ps1`; M3_FINISH_PLAN B2)
+
+docs/M3_DESIGN.md 12 G1: "`xtask ci --require-ui` passes, elevated and unelevated". The unelevated half is the host's own
+`cargo xtask ci --require-ui`. The elevated half runs in the Inbound VM, not on the host (coordinator ruling in
+M3_FINISH_PLAN). Host driver `vm\rig-m3-ci.ps1` (dot-sources rig.ps1 with `-VmName Inbound-Win11-Test`). Guest runner
+`vm\guest\m3-ci.ps1`. Self-test `vm\guest\tests\rig-m3-ci.tests.ps1`.
+
+```powershell
+$env:VMPWFILE = 'C:\path\to\pw.txt'
+.\vm\rig-m3-ci.ps1                     # or .\vm\rig.ps1 -Mode m3-elevated-ci [-RunPrefix x-] [-Snapshot rig-base]
+#   -AllowDirty  -SkipUi  -Threads <n>  -TimeoutBinSec 1800  -TimeoutUiSec 1800  -KeepBundle
+.\vm\rig-m3-ci.ps1 -BuildOnly          # host side only (build, collect, bundle, manifest), no VM
+.\vm\rig-m3-ci.ps1 -HostRun -Threads 2 # dry run: the same guest runner on this host, with this shell's token
+powershell -NoProfile -ExecutionPolicy Bypass -File vm\guest\tests\rig-m3-ci.tests.ps1
+```
+
+**What runs where.** `xtask ci` has test steps, whose result can depend on the token, and static steps, whose result
+cannot. The test steps run in the guest through the elevated rig agent, in xtask's order:
+
+| step | command (built on the host with `--no-run --message-format=json`) |
+|---|---|
+| `workspace` | `cargo test --workspace` |
+| `engine-rig` | `cargo test -p purge-engine --features purge-engine/rig-exec,purge-exec/test-support --lib --test exec_cli --test engine` |
+| `exec-features` | `cargo test -p purge-exec --features purge-exec/fault-inject,purge-exec/test-support` |
+| `ui` | `dotnet test <Purge.Client.Tests.dll>`, the assembly that `dotnet build ui\Purge.slnx` built on the host |
+
+The profile (dev) and features are the same as xtask ci's. The executables come from cargo's `compiler-artifact`
+messages. These are the libtest harnesses (`profile.test`) and the binaries and examples the step built, which tests
+start through `env!("CARGO_BIN_EXE_*")`. Each step is archived right after its build. Steps build `purge-engine.exe`
+with and without rig-exec, and the guest unpacks each step's own copy just before running that step, as the host's
+cargo did. Every test executable runs as cargo runs it: no arguments (`--test-threads` only with `-Threads`), working
+directory the package directory, and `CARGO_MANIFEST_DIR`, `CARGO_PKG_NAME` and `CARGO_PKG_VERSION` set. One binary at
+a time, with a per-binary timeout (`-TimeoutBinSec`). On timeout the process tree is ended. `#[ignore]`d tests do
+not run, as in xtask ci (the elevated ignored tests are m2-elevated's, section 11.9).
+
+Host-only steps, with the reason in the report (`Get-M3CiHostOnly`). fmt, the three clippy runs and `dotnet build` are
+compilation or text checks. check-deps, no-new-walks, baseline-sites, ui-strings, scanner-coverage and
+`gen-dto --check` read sources, metadata or compiled-in tables. The doctests of `cargo test --workspace` are compiled
+by rustdoc at test time, and the guest has no toolchain. They are `compile_fail` type checks and one example of a pure
+function, and none calls Windows. The driver reads `tools\xtask\src\main.rs` before it builds. It refuses when ci has a
+step that is neither run nor listed host-only, or when a step it runs is gone from ci (`Get-M3CiUncovered`).
+
+**Paths.** Tests read the repository through `env!("CARGO_MANIFEST_DIR")`, which bakes in the host's absolute path.
+`exec_cli`, `planted_env` and the broker's `start` start binaries by their baked target paths. The precedent,
+m2-elevated, needed no data: its two tests read none. So, as win-unit does (section 10), the guest gets everything at
+the host's own paths:
+- the checkout's tracked files (`git ls-files`, working tree) at the checkout path;
+- the two untracked rig files that tests read when present (`vm/runs/npp/lists-npp-2.json`,
+  `vm/runs/dirty-base/snap-dirty-base-0.tsv.gz`; `Get-M3CiRepoExtras`), so the guest checks what the host checks;
+- each step's executables under the target directory, plus `<target>\tmp` (`CARGO_TARGET_TMPDIR`);
+- the UI test output directory.
+
+The checkout and the target directory must be on C: (refused otherwise; build from the main checkout, not from an
+`E:\purge-build` path). Archives are tar.gz (`System32\tar.exe` on both sides).
+
+**UI tests in the guest.** The guest has no .NET SDK of its own, and `dotnet test` needs one (vstest), not just a runtime.
+The rig pushes a portable copy of the host's SDK: `dotnet.exe`, `host\fxr`, `shared\Microsoft.NETCore.App`,
+`sdk\<version>`, `sdk-manifests`. It is cached on the host as `%TEMP%\m3ci-dotnet-<version>.tgz`. The runner sets
+`DOTNET_ROOT`, `DOTNET_MULTILEVEL_LOOKUP=0` and `DOTNET_CLI_HOME` to it. Whatever .NET the guest has is recorded
+(`guest.guest_dotnet`). `BrokerPipeTests` runs `cargo build -q -p purge-broker --example pipe_harness` before it starts
+the real pipe server. The host runs that command as step `ui-harness` (no tests), and the guest has a stand-in
+`cargo.exe` first on PATH. It is built on the host with the .NET Framework `csc.exe`, exits 0 for exactly that command
+line, and exits 101 for anything else. `CARGO_TARGET_DIR` is set to the host's target directory, so the test finds the
+harness. TRX goes to `guest\ui\ui.trx`.
+
+**Exclusions** (`Get-M3CiExclusions`). These are tests that cannot run in the guest for a reason unrelated to elevation:
+step, binary label regex, exact test name and reason. They are passed as `--skip <name> --exact` (UI:
+`--filter FullyQualifiedName!=<name>`) and listed per binary (`skipped_by_rig`) and in `exclusions`. The list is
+empty. Static reading found no test that needs anything the bundle does not bring. If the first VM run shows one,
+it is added here with its reason; elevation-caused failures are findings, never exclusions.
+
+**Flow.** Refusals (exit 2): no `VMPWFILE`, VM missing, any VM running, lock `vm\runs\.lock-Inbound-Win11-Test` held, or
+a dirty checkout (`-AllowDirty` records it in `dirty`). Then:
+1. host build and bundle in `%TEMP%\m3ci-<run>`;
+2. restore the snapshot (default `rig-base`) and wait for the agent;
+3. check the guest's free space on C: (archives + unpacked + 2 GB);
+4. push the bundle to `C:\cr\m3ci`;
+5. agent jobs `unpack`, `step` × 3, `ui`, `pack`;
+6. pull `out.tgz` to `vm\runs\<run>\guest\`;
+7. power off and restore the snapshot (left off).
+
+Job timeouts: unpack 3600 s; a step gets (binaries × (TimeoutBin + 30)) + 900 s, an upper bound that the per-binary
+timeout keeps; ui gets TimeoutUi + 900 s; pack 1800 s.
+
+**Output** `vm\runs\<run>\` (default `m3-elevated-ci`, `-RunPrefix` through rig.ps1; an existing one goes to `_old\`):
+- `m3-elevated-ci.json`, schema `purge.rig.m3elevatedci/1`: commit, dirty, rustc, dotnet_sdk, admin, integrity,
+  guest (OS, token, free space, the guest's .NET), host_only, exclusions, steps[].binaries[] and ui;
+- `manifest.json`, `rig.log`, `build\*.log`, `jobs\*.log`;
+- `guest\<step>\<n>.txt`, the libtest output with stderr appended.
+
+Each binary row has the label, exe, SHA-256 on the host and in the guest (`sha_match`), exit, timed_out, seconds,
+passed, failed, ignored, filtered_out and failing (from `test X ... FAILED`). The ui object has the dll and its
+SHA-256 on both sides, exit, the TRX counters and the failing names.
+
+`pass` requires all of these, and `why` lists every reason it is not:
+- `admin` true for every phase;
+- every binary: exit 0, a libtest summary, 0 failed, the SHA-256 the same on both sides;
+- UI: run, exit 0, TRX present, at least 1 test, 0 failed, the same SHA-256.
+
+Exit 0 on pass, 1 otherwise.
+
+**Size and time.** Measured on the host on 2026-11-23, at fa3ba36 plus this tooling:
+
+| item | measurement |
+|---|---|
+| test executables | 80 (workspace 67, engine-rig 3, exec-features 10) |
+| UI tests | 136 |
+| archives | 382 MB: workspace 120, engine-rig 27, exec-features 22.5, repo 21.5 (1,459 files), ui 3, portable SDK 188 |
+| unpacked | 1.1 GB |
+| build with a warm target | about 2 min |
+| `-HostRun -Threads 2` (unelevated) | 24 min, 4,006 passed, 0 failed, 78 ignored; UI 136 passed |
+
+The host run split as: workspace 15 min, engine-rig 3 min, exec-features 4 min, UI 3 s (`pass=false` only for admin).
+
+The guest's free-space check therefore asks for about 3.5 GB on C:. Expect 35 to 50 min for a VM run:
+- restore and boot: about 5 min;
+- push: a few minutes;
+- unpack: a few minutes;
+- the tests at libtest's default thread count: 20 to 30 min.
+
+**Not verified without the VM**:
+- the push time through guestcontrol and the guest's free space on rig-base;
+- that the portable SDK's `dotnet test` runs on a guest without any .NET install (the host run used the unpacked copy
+  through `DOTNET_ROOT`, but the host also has the SDK installed);
+- the paths under `C:\Users\<host user>\...` in the guest, which is not a profile there (a test that classifies paths by
+  the profile list would see a difference; none is known);
+- the elevated results themselves.
