@@ -422,6 +422,72 @@ public sealed class UninstallPageTests
 
     // ---- still installed and restart -------------------------------------------------------------------------
 
+    // ---- the Programs page learns what the run did -----------------------------------------------------------
+
+    public static TheoryData<string, bool> RunEndings => new()
+    {
+        { "broker-gone", true },
+        { "broker-still-installed", false },
+        { "medium-gone", true },
+        { "medium-failed", false },
+    };
+
+    [Theory]
+    [MemberData(nameof(RunEndings))]
+    public async Task The_run_tells_the_page_once_whether_Purge_removed_the_program(string how, bool removed)
+    {
+        var medium = how.StartsWith("medium", StringComparison.Ordinal);
+        var broker = how == "broker-still-installed"
+            ? new ScriptedBroker
+            {
+                PreparedProgram = PreparedFor(Route.Broker),
+                Run = new RunResult
+                {
+                    ExitCode = 0,
+                    Outcome = RunOutcome.Success,
+                    VerifyGone = new VerifyGone { ArpGone = false, MainExesGone = false, MsiUnknownAllCtx = true, Passed = false },
+                },
+            }
+            : new ScriptedBroker { PreparedProgram = PreparedFor(medium ? Route.Medium : Route.Broker) };
+        var engine = how == "medium-failed"
+            ? new ScriptedMedium { Route = RouteOf(Route.Medium), Run = new RunUserResult { ExitCode = 1603, Outcome = RunOutcome.Failed } }
+            : new ScriptedMedium { Route = RouteOf(medium ? Route.Medium : Route.Broker) };
+        var controller = Controller(Started(broker), engine);
+        var asked = new ConfirmationQueue(controller);
+        var ended = new List<(UninstallTarget Target, bool Removed)>();
+        controller.RunEnded += (target, gone) => ended.Add((target, gone));
+
+        var begin = controller.BeginAsync(Target);
+        await asked.NextAsync();
+        await controller.AnswerAsync(new UninstallAnswer(true, Quiet: true, RestorePoint.HighRisk));
+        await begin.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var one = Assert.Single(ended);
+        Assert.Equal(Target, one.Target);
+        Assert.Equal(removed, one.Removed);
+    }
+
+    [Fact]
+    public async Task A_declined_prompt_runs_nothing_and_tells_the_page_nothing()
+    {
+        var broker = new ScriptedBroker
+        {
+            PreparedProgram = PreparedFor(Route.Broker),
+            RunThrows = new BrokerRpcException(-32000, "consent_declined", "consent_declined"),
+        };
+        var controller = Controller(Started(broker), new ScriptedMedium());
+        var asked = new ConfirmationQueue(controller);
+        var ended = 0;
+        controller.RunEnded += (_, _) => ended++;
+
+        var begin = controller.BeginAsync(Target);
+        await asked.NextAsync();
+        await controller.AnswerAsync(new UninstallAnswer(true, Quiet: true, RestorePoint.HighRisk));
+        await begin.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(0, ended);
+    }
+
     [Fact]
     public async Task A_still_installed_program_scans_forced_and_says_so()
     {

@@ -40,6 +40,7 @@ public sealed partial class RemovedRow(Purge.Client.Rpc.ProgramRef program) : Sy
     public Visibility ButtonVisibility { get; private set; } = Visibility.Collapsed;
     public bool CanCheck { get; private set; }
     public string? CheckHint { get; private set; }
+    public bool CanDismiss { get; private set; } = true;
 
     /// <summary>
     /// Draws the row from the controller's state of it. <paramref name="waitHint"/>: another row's check, the Uninstall
@@ -58,6 +59,7 @@ public sealed partial class RemovedRow(Purge.Client.Rpc.ProgramRef program) : Sy
             _ => "Removed outside Purge. Purge recorded it before, so it can look for what it left.",
         };
         var running = state is RemovedCheckState.Checking or RemovedCheckState.Scanning;
+        CanDismiss = state is not (RemovedCheckState.Starting or RemovedCheckState.Checking or RemovedCheckState.Scanning);
         ButtonVisibility = state == RemovedCheckState.NoRecord ? Visibility.Collapsed : Visibility.Visible;
         ButtonText = running ? "Stop" : "Check for leftovers";
         CanCheck = running || (state == RemovedCheckState.Record && canChangePc && !otherBusy);
@@ -66,7 +68,7 @@ public sealed partial class RemovedRow(Purge.Client.Rpc.ProgramRef program) : Sy
             : !canChangePc
                 ? disabledHint
                 : waitHint ?? "Asks for administrator permission, then looks for what it left on the PC";
-        foreach (var name in new[] { nameof(Detail), nameof(ButtonText), nameof(ButtonVisibility), nameof(CanCheck), nameof(CheckHint) })
+        foreach (var name in new[] { nameof(Detail), nameof(ButtonText), nameof(ButtonVisibility), nameof(CanCheck), nameof(CheckHint), nameof(CanDismiss) })
             PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
     }
 }
@@ -75,7 +77,6 @@ public sealed partial class ProgramsView : UserControl
 {
     private const int ForecastBatch = 8;
     private const int SizeChunk = 16;
-    private const int MaxRemovedShown = 5;
 
     private List<ProgramRow> _all = [];
     private readonly Dictionary<string, ProgramRow> _byId = new(StringComparer.Ordinal);
@@ -254,7 +255,7 @@ public sealed partial class ProgramsView : UserControl
 
     private void UpdateBars()
     {
-        _maxSize = Math.Max(1, _all.Max(r => r.SizeBytes ?? 0));
+        _maxSize = Math.Max(1, _all.Select(r => r.SizeBytes ?? 0).DefaultIfEmpty(0).Max());
         foreach (var r in _all)
             r.BarWidth = r.SizeBytes is { } b and > 0 ? Math.Max(2, 96.0 * b / _maxSize) : 0;
     }
@@ -276,6 +277,15 @@ public sealed partial class ProgramsView : UserControl
         UpdateTabCounts();
         FindName(nameof(Commands));
         PlainCommands.Visibility = Visibility.Collapsed;
+        FindName(nameof(SearchBox));
+        var find = new Microsoft.UI.Xaml.Input.KeyboardAccelerator { Key = Windows.System.VirtualKey.F, Modifiers = Windows.System.VirtualKeyModifiers.Control };
+        find.Invoked += (_, args) =>
+        {
+            args.Handled = true;
+            FocusSearch();
+        };
+        KeyboardAccelerators.Add(find);
+        KeyboardAcceleratorPlacementMode = Microsoft.UI.Xaml.Input.KeyboardAcceleratorPlacementMode.Hidden;
         foreach (var r in _all) r.Extras = true;
         // The details pane is created here, not for the first frame (A9.2 step 3).
         ShowDetails(_current);
@@ -412,21 +422,81 @@ public sealed partial class ProgramsView : UserControl
         _changesShown = true;
         var changes = await asked;
         if (changes is null || changes.Disappeared.Count == 0) return;
-        var shown = changes.Disappeared.Take(MaxRemovedShown).ToList();
+        var engine = Program.Engine;
+        var group = new RemovedGroup(changes.Disappeared, ids => engine.ForgetRemovedAsync(ids));
+        // A program Purge uninstalled while the answer was on its way is not one that went outside Purge.
+        foreach (var id in _uninstalledHere) group.Acknowledge(id);
+        if (group.IsEmpty) return;
         var removed = _removed ??= NewRemovedController();
         // Which of them Purge may have a fingerprint for: a file-system lookup by name, no prompt (FingerprintStore).
-        await Task.Run(() => removed.Classify(shown.Select(p => p.ProgramId)));
+        // Rows that move up when others leave the group are probed when they are first drawn (StateOf).
+        await Task.Run(() => removed.Classify(group.Shown.Select(p => p.ProgramId)));
+        _group = group;
         FindName(nameof(Attention));
-        var live = Program.Engine.IsLive;
-        var more = changes.Disappeared.Count - MaxRemovedShown;
-        AttentionHeader.Text = "\uE7BA  REMOVED OUTSIDE PURGE · " + changes.Disappeared.Count.ToString(CultureInfo.CurrentCulture)
-                               + (more > 0 ? $" (showing {MaxRemovedShown})" : "") + (live ? "" : "   SAMPLE DATA");
-        _removedRows = shown.Select(p => new RemovedRow(p)).ToList();
+        ShowRemovedRows();
+    }
+
+    /// <summary>
+    /// Draws the group from <see cref="_group"/>: the header count, the rows still in it (a row keeps its object, so a
+    /// running check's row is not redrawn from scratch), and nothing at all once it is empty.
+    /// </summary>
+    private void ShowRemovedRows()
+    {
+        if (_group is not { } group || Attention is null) return;
+        if (group.IsEmpty)
+        {
+            Attention.Visibility = Visibility.Collapsed;
+            _removedRows = [];
+            AttentionList.ItemsSource = null;
+            UpdateSummary();
+            return;
+        }
+        AttentionHeader.Text = "\uE7BA  " + group.Header(Program.Engine.IsLive);
+        var old = _removedRows.ToDictionary(r => r.ProgramId, StringComparer.Ordinal);
+        _removedRows = group.Shown.Select(p => old.TryGetValue(p.ProgramId, out var kept) ? kept : new RemovedRow(p)).ToList();
         AttentionList.ItemsSource = _removedRows;
         RenderRemoved();
         UpdateSummary();
     }
 
+    /// <summary>The user has dealt with a removed program (checked or dismissed it, or Purge uninstalled it): it leaves the group.</summary>
+    private void AcknowledgeRemoved(string programId)
+    {
+        if (_group?.Acknowledge(programId) == true) ShowRemovedRows();
+    }
+
+    private void OnDismissRemoved(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { Tag: string id }) return;
+        if (_removed is { } removed && !removed.CanDismiss(id)) return;
+        AcknowledgeRemoved(id);
+    }
+
+    /// <summary>
+    /// The Uninstall page's uninstaller ran and the broker checked the program. When Purge removed it
+    /// (<paramref name="removedByPurge"/>), the engine forgets it, so no later session lists it as removed outside Purge.
+    /// The list is then read again, so the program leaves it now and the stored list agrees; a program still in the
+    /// registry stays.
+    /// </summary>
+    public async Task OnUninstallRunEndedAsync(string programId, bool removedByPurge)
+    {
+        var engine = Program.Engine;
+        if (!engine.IsLive) return;
+        if (removedByPurge)
+        {
+            _uninstalledHere.Add(programId);
+            if (_group?.Contains(programId) == true) AcknowledgeRemoved(programId);
+            else
+            {
+                try { await engine.ForgetRemovedAsync([programId]); }
+                catch (Exception e) when (e is not OutOfMemoryException) { }
+            }
+        }
+        await ReloadAsync();
+    }
+
+    private RemovedGroup? _group;
+    private readonly HashSet<string> _uninstalledHere = new(StringComparer.Ordinal);
     private RemovedLeftoversController? _removed;
     private List<RemovedRow> _removedRows = [];
     private RemovedNotice? _removedNoticeShown;
@@ -481,7 +551,13 @@ public sealed partial class ProgramsView : UserControl
         if (outcome.Session is not { } session) return;
         var request = new LeftoversRequest(outcome.ProgramId, outcome.ProgramName, SessionId: "",
             outcome.Scan.ScanId, outcome.Scan.Mode, Purge.Client.Rpc.RestorePoint.HighRisk, Quiet: false, session);
-        if (LeftoversNavigator.TryShow(request)) return;
+        if (LeftoversNavigator.TryShow(request))
+        {
+            // The check finished and its scan is on the Leftovers page: whatever it found, the program has been
+            // looked at, so it leaves the group and does not come back in a later session.
+            AcknowledgeRemoved(outcome.ProgramId);
+            return;
+        }
         _ = session.DisposeAsync().AsTask();
         ShowNotice($"The Leftovers page is still applying another change, so the leftovers of {outcome.ProgramName} "
                    + "were not opened. Nothing was changed; check again when it has finished.");
@@ -617,15 +693,39 @@ public sealed partial class ProgramsView : UserControl
 
     public void SetSearch(string query)
     {
-        _query = query.Trim();
+        var trimmed = query.Trim();
+        if (trimmed == _query) return;
+        _query = trimmed;
+        if (_firstTickDone) UpdateTabCounts();
         Refresh();
+    }
+
+    /// <summary>Ctrl+F: puts the keyboard in the search box, with its text selected.</summary>
+    private void FocusSearch()
+    {
+        if (SearchBox is null) FindName(nameof(SearchBox));
+        SearchBox!.Focus(FocusState.Keyboard);
+        SearchBox.SelectAll();
+    }
+
+    private void OnSearchChanged(object sender, TextChangedEventArgs e) => SetSearch(SearchBox.Text);
+
+    /// <summary>Esc clears the search; with nothing to clear it hands the keyboard to the list.</summary>
+    private void OnSearchKeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
+    {
+        if (e.Key != Windows.System.VirtualKey.Escape) return;
+        e.Handled = true;
+        if (SearchBox.Text.Length > 0) SearchBox.Text = "";
+        else ProgramList.Focus(FocusState.Keyboard);
     }
 
     /// <summary>Selects one program (from the command box) and shows it.</summary>
     public void Reveal(ProgramRow row)
     {
         if (!row.InTab(_tab)) SelectTab(row.IsApp ? ProgramTab.Apps : row.IsComponent ? ProgramTab.Components : ProgramTab.Unnamed);
+        if (SearchBox is not null) SearchBox.Text = "";
         _query = "";
+        if (_firstTickDone) UpdateTabCounts();
         Refresh();
         ProgramList.SelectedItems.Clear();
         ProgramList.SelectedItem = row;
@@ -674,6 +774,7 @@ public sealed partial class ProgramsView : UserControl
 
         _current = keep;
         ShowDetails(keep);
+        ShowNoMatch(list.Count == 0 && _query.Length > 0);
         UpdateSelectedCount();
         if (_firstTickDone) UpdateSummary();
     }
@@ -684,12 +785,23 @@ public sealed partial class ProgramsView : UserControl
 
     private static string KeyName(string keyPath) => ProgramRules.KeyName(keyPath);
 
+    /// <summary>"No programs match" over the empty list while a search finds nothing in this tab.</summary>
+    private void ShowNoMatch(bool show)
+    {
+        if (show && NoMatch is null) FindName(nameof(NoMatch));
+        if (NoMatch is null) return;
+        NoMatch.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+        if (show) NoMatchText.Text = $"No programs match \u201C{_query}\u201D in {TabLabel(_tab)}.";
+    }
+
+    /// <summary>Each tab's count; while a search is on, how many of its programs match.</summary>
     private void UpdateTabCounts()
     {
-        TabAppsCount.Text = _all.Count(r => r.IsApp).ToString(CultureInfo.CurrentCulture);
-        TabComponentsCount.Text = _all.Count(r => r.IsComponent).ToString(CultureInfo.CurrentCulture);
-        TabUnnamedCount.Text = _all.Count(r => r.IsUnnamed).ToString(CultureInfo.CurrentCulture);
-        TabRecentCount.Text = _all.Count(r => r.IsRecent).ToString(CultureInfo.CurrentCulture);
+        var matching = _query.Length == 0 ? _all : _all.Where(r => r.Matches(_query)).ToList();
+        TabAppsCount.Text = matching.Count(r => r.IsApp).ToString(CultureInfo.CurrentCulture);
+        TabComponentsCount.Text = matching.Count(r => r.IsComponent).ToString(CultureInfo.CurrentCulture);
+        TabUnnamedCount.Text = matching.Count(r => r.IsUnnamed).ToString(CultureInfo.CurrentCulture);
+        TabRecentCount.Text = matching.Count(r => r.IsRecent).ToString(CultureInfo.CurrentCulture);
     }
 
     private void OnTab(object sender, RoutedEventArgs e)

@@ -69,6 +69,8 @@ public sealed partial class UninstallView : UserControl
         _controller.Changed += () => DispatcherQueue.TryEnqueue(Render);
         _controller.ConfirmationRequested += OnConfirmationRequested;
         _controller.Completed += OnCompleted;
+        _controller.RunEnded += (target, removed) => DispatcherQueue.TryEnqueue(
+            () => _ = MainWindow.Instance.Programs.OnUninstallRunEndedAsync(target.ProgramId, removed));
         _controller.AdminPromptCancelled += declined => DispatcherQueue.TryEnqueue(
             () => MainWindow.Instance.ShowAdminPromptCancelled(declined));
 

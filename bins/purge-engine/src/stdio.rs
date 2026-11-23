@@ -3,7 +3,7 @@
 //! The server answers the Read and UserRun methods of the method table over newline-delimited
 //! JSON-RPC on stdin/stdout. It starts no scan and no harvest and writes nothing outside
 //! `%LOCALAPPDATA%\Purge`; the only file it writes there is the stored program list that
-//! `inventory.changes` compares against.
+//! `inventory.changes` compares against (with the programs `inventory.forget` named).
 //!
 //! # Cancellation
 //!
@@ -84,6 +84,65 @@ struct StoredList {
     schema: String,
     /// The programs as the last `programs.list` sent them.
     programs: Vec<ProgramRef>,
+    /// Programs Purge has dealt with (`inventory.forget`): it uninstalled them, or the user checked or
+    /// dismissed them. `inventory.changes` never lists them as gone. An id leaves the set when the
+    /// program is installed again or the stored list no longer has it (see [`compare`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    handled: Vec<ProgramId>,
+}
+
+impl StoredList {
+    fn empty() -> Self {
+        Self {
+            schema: STORED_LIST_SCHEMA.to_owned(),
+            programs: Vec::new(),
+            handled: Vec::new(),
+        }
+    }
+}
+
+/// `inventory.changes` of `current` against `stored`, and the handled ids still worth keeping: those
+/// the stored list still has and the inventory does not (a list stored later from rows read before the
+/// uninstall ended still masks them; once a list without them is stored, or the program is back, the
+/// id goes).
+fn compare(
+    stored: Option<&StoredList>,
+    current: &[ProgramRef],
+) -> (InventoryChanges, Vec<ProgramId>) {
+    let Some(list) = stored else {
+        return (
+            InventoryChanges {
+                disappeared: Vec::new(),
+                appeared: Vec::new(),
+            },
+            Vec::new(),
+        );
+    };
+    let present = |id: &ProgramId| current.iter().any(|c| &c.program_id == id);
+    let disappeared = list
+        .programs
+        .iter()
+        .filter(|p| !present(&p.program_id) && !list.handled.contains(&p.program_id))
+        .cloned()
+        .collect();
+    let appeared = current
+        .iter()
+        .filter(|p| !list.programs.iter().any(|s| s.program_id == p.program_id))
+        .cloned()
+        .collect();
+    let kept = list
+        .handled
+        .iter()
+        .filter(|id| !present(id) && list.programs.iter().any(|p| &p.program_id == *id))
+        .cloned()
+        .collect();
+    (
+        InventoryChanges {
+            disappeared,
+            appeared,
+        },
+        kept,
+    )
 }
 
 /// The state of one request's cancellation.
@@ -187,6 +246,9 @@ pub struct Server<'a> {
     warming: Option<Receiver<InventoryDoc>>,
     /// A `programs.list` reply sent without its patches yet.
     pending_list: Option<PendingList>,
+    /// Whether a `programs.list` ran: a later one reads the registry again (after an uninstall, or
+    /// Refresh list), so the list and the stored file follow the machine.
+    listed: bool,
     /// The Job-object host of `uninstall.run_user` (M3-RUNNER).
     host: Box<dyn ProcessHost + Send>,
     /// How long `uninstall.run_user` waits for its command.
@@ -206,6 +268,7 @@ impl<'a> Server<'a> {
             inventory: None,
             warming: None,
             pending_list: None,
+            listed: false,
             host: Box::new(LiveHost::new()),
             run_options: RunOptions::default(),
             extensions: Vec::new(),
@@ -259,6 +322,9 @@ impl<'a> Server<'a> {
     }
 
     fn list(&mut self, id: RequestId, notify: &mut dyn Notify) -> Result<Value, ErrorObject> {
+        if std::mem::replace(&mut self.listed, true) {
+            self.inventory = None;
+        }
         let rows: Vec<ProgramRow> = self.inventory().entries.iter().map(row_of).collect();
 
         let mut sent = 0u32;
@@ -380,28 +446,35 @@ impl<'a> Server<'a> {
             })
             .collect();
         let stored = self.read_stored()?;
-        let disappeared = stored
-            .as_ref()
-            .map(|list| {
-                list.programs
-                    .iter()
-                    .filter(|p| !current.iter().any(|c| c.program_id == p.program_id))
-                    .cloned()
-                    .collect()
-            })
-            .unwrap_or_default();
-        let appeared = stored
-            .map(|list| {
-                current
-                    .iter()
-                    .filter(|p| !list.programs.iter().any(|s| s.program_id == p.program_id))
-                    .cloned()
-                    .collect()
-            })
-            .unwrap_or_default();
-        serde_json::to_value(InventoryChanges {
-            disappeared,
-            appeared,
+        let (changes, kept) = compare(stored.as_ref(), &current);
+        if let Some(mut list) = stored {
+            if list.handled != kept {
+                list.handled = kept;
+                let _ = self.write_stored(&list);
+            }
+        }
+        serde_json::to_value(changes).map_err(|e| ErrorObject::runtime(e.to_string()))
+    }
+
+    /// `inventory.forget`: the UI has dealt with these programs (Purge uninstalled them, or the user
+    /// checked them for leftovers or dismissed them). They leave the stored list and join its handled
+    /// set, so no later `inventory.changes` reports them as removed outside Purge, even when a list
+    /// stored afterwards still has them. A stored file that cannot be read is started again.
+    fn forget(&mut self, params: &ProgramsParams) -> Result<Value, ErrorObject> {
+        let mut list = self
+            .read_stored()
+            .ok()
+            .flatten()
+            .unwrap_or_else(StoredList::empty);
+        for id in params.program_ids.as_slice() {
+            list.programs.retain(|p| &p.program_id != id);
+            if !list.handled.contains(id) {
+                list.handled.push(id.clone());
+            }
+        }
+        self.write_stored(&list)?;
+        serde_json::to_value(Started {
+            count: u32::try_from(params.program_ids.as_slice().len()).unwrap_or(u32::MAX),
         })
         .map_err(|e| ErrorObject::runtime(e.to_string()))
     }
@@ -573,18 +646,15 @@ impl<'a> Server<'a> {
         Ok(Some(list))
     }
 
-    /// Writes the list for the next `inventory.changes`. A failure is not a list failure: the file is
-    /// display-only state.
+    /// Writes the list for the next `inventory.changes`, keeping the handled set. A failure is not a
+    /// list failure: the file is display-only state.
     fn store_list(&self, rows: &[ProgramRow]) {
-        let Some(path) = self.stored_list_path() else {
-            return;
-        };
-        let Some(dir) = path.parent() else {
-            return;
-        };
-        if std::fs::create_dir_all(dir).is_err() {
-            return;
-        }
+        let handled = self
+            .read_stored()
+            .ok()
+            .flatten()
+            .map(|list| list.handled)
+            .unwrap_or_default();
         let list = StoredList {
             schema: STORED_LIST_SCHEMA.to_owned(),
             programs: rows
@@ -594,11 +664,24 @@ impl<'a> Server<'a> {
                     name: row.name.clone(),
                 })
                 .collect(),
+            handled,
         };
-        let Ok(text) = serde_json::to_string(&list) else {
-            return;
+        let _ = self.write_stored(&list);
+    }
+
+    /// Writes `list` to the stored-list file; without a local data directory there is nothing to do.
+    fn write_stored(&self, list: &StoredList) -> Result<(), ErrorObject> {
+        let Some(path) = self.stored_list_path() else {
+            return Ok(());
         };
-        let _ = crate::cli::output::write_atomic(&path, &text);
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| {
+                ErrorObject::runtime(format!("cannot create {}: {e}", dir.display()))
+            })?;
+        }
+        let text = serde_json::to_string(list).map_err(|e| ErrorObject::runtime(e.to_string()))?;
+        crate::cli::output::write_atomic(&path, &text)
+            .map_err(|e| ErrorObject::runtime(format!("cannot write {}: {e}", path.display())))
     }
 
     fn hello(&self) -> Result<Value, ErrorObject> {
@@ -668,6 +751,7 @@ impl Dispatcher for Server<'_> {
             StdioCall::ProgramsGet(params) => self.get(params),
             StdioCall::ProgramsSizes(params) => self.sizes(id, params, notify),
             StdioCall::InventoryChanges(_) => self.changes(),
+            StdioCall::InventoryForget(params) => self.forget(&params),
             StdioCall::HistoryIndex(_) => self.history(),
             StdioCall::ProgramsIcons(params) => self.icons(id, &params, notify),
             StdioCall::UninstallRoute(params) => self.route(&params),
@@ -1004,5 +1088,90 @@ mod tests {
         assert!(cancel.cancelled());
         cancel.end(RequestId(3));
         assert!(!cancel.cancelled());
+    }
+
+    fn id(key: &str) -> ProgramId {
+        ProgramId::machine(purge_model::View::K64, key).unwrap()
+    }
+
+    fn program(key: &str) -> ProgramRef {
+        ProgramRef {
+            program_id: id(key),
+            name: key.to_owned(),
+        }
+    }
+
+    fn stored(programs: &[&str], handled: &[&str]) -> StoredList {
+        StoredList {
+            schema: STORED_LIST_SCHEMA.to_owned(),
+            programs: programs.iter().map(|k| program(k)).collect(),
+            handled: handled.iter().map(|k| id(k)).collect(),
+        }
+    }
+
+    fn gone(changes: &InventoryChanges) -> Vec<String> {
+        changes
+            .disappeared
+            .iter()
+            .map(|p| p.program_id.to_string())
+            .collect()
+    }
+
+    #[test]
+    fn a_program_removed_outside_purge_is_listed() {
+        let list = stored(&["Kept", "Outside"], &[]);
+        let (changes, kept) = compare(Some(&list), &[program("Kept")]);
+        assert_eq!(gone(&changes), [id("Outside").to_string()]);
+        assert!(changes.appeared.is_empty());
+        assert!(kept.is_empty());
+    }
+
+    #[test]
+    fn a_program_purge_uninstalled_is_not_listed_even_when_a_stale_list_still_has_it() {
+        // Purge uninstalled "Mine"; a list stored afterwards from rows read before the uninstall still
+        // names it. "Outside" went without Purge and is still reported.
+        let list = stored(&["Kept", "Mine", "Outside"], &["Mine"]);
+        let (changes, kept) = compare(Some(&list), &[program("Kept")]);
+        assert_eq!(gone(&changes), [id("Outside").to_string()]);
+        // The mark stays while the stored list still has the program.
+        assert_eq!(kept, [id("Mine")]);
+    }
+
+    #[test]
+    fn an_acknowledged_program_is_gone_and_its_mark_ends_with_the_stored_entry() {
+        // forget() took "Checked" out of the stored list and marked it handled.
+        let list = stored(&["Kept"], &["Checked"]);
+        let (changes, kept) = compare(Some(&list), &[program("Kept")]);
+        assert!(gone(&changes).is_empty());
+        assert!(kept.is_empty(), "nothing left to mask: the mark is dropped");
+    }
+
+    #[test]
+    fn a_program_installed_again_loses_its_mark() {
+        let list = stored(&["Back"], &["Back"]);
+        let (changes, kept) = compare(Some(&list), &[program("Back")]);
+        assert!(gone(&changes).is_empty());
+        assert!(kept.is_empty());
+        // A later removal outside Purge is reported again.
+        let list = stored(&["Back"], &kept.iter().map(|_| "Back").collect::<Vec<_>>());
+        let (changes, _) = compare(Some(&list), &[]);
+        assert_eq!(gone(&changes), [id("Back").to_string()]);
+    }
+
+    #[test]
+    fn no_stored_list_means_no_changes() {
+        let (changes, kept) = compare(None, &[program("A")]);
+        assert!(changes.disappeared.is_empty() && changes.appeared.is_empty());
+        assert!(kept.is_empty());
+    }
+
+    #[test]
+    fn an_older_stored_list_without_a_handled_set_still_reads() {
+        let text = format!(
+            r#"{{"schema":"{STORED_LIST_SCHEMA}","programs":[{{"program_id":"HKLM|64|A","name":"A"}}]}}"#
+        );
+        let list: StoredList = serde_json::from_str(&text).unwrap();
+        assert!(list.handled.is_empty());
+        assert!(!serde_json::to_string(&list).unwrap().contains("handled"));
     }
 }

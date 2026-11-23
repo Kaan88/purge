@@ -146,6 +146,17 @@ public sealed class StdioEngineClient : IEngineClient
         return result.Deserialize(Rpc.RpcJsonContext.Default.InventoryChanges) ?? throw new InvalidDataException("empty inventory.changes result");
     }
 
+    public Task ForgetRemovedAsync(IReadOnlyList<string> programIds, CancellationToken ct = default)
+    {
+        if (programIds.Count == 0) return Task.CompletedTask;
+        return CallAsync("inventory.forget", w =>
+        {
+            w.WriteStartArray("program_ids");
+            foreach (var id in programIds) w.WriteStringValue(id);
+            w.WriteEndArray();
+        }, null, ct);
+    }
+
     public async Task<Rpc.RouteInfo> GetUninstallRouteAsync(string programId, CancellationToken ct = default)
     {
         var result = await CallAsync("uninstall.route", w => w.WriteString("program_id", programId), null, ct).ConfigureAwait(false);
