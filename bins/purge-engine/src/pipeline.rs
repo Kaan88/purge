@@ -779,7 +779,7 @@ pub fn uninstall_commands(
         .filter(|s| !s.is_empty())
         .and_then(|s| purge_win::cmdline::split(s).ok())
         .map(|split| QuietCommand {
-            exe: split.exe,
+            exe: system_host_path(&split.exe).unwrap_or(split.exe),
             args: split.args,
             generated: false,
             kind: entry.installer_kind,
@@ -787,6 +787,28 @@ pub fn uninstall_commands(
         .map(expanded);
     let quiet = quiet_command(entry).ok().map(expanded);
     UninstallCommands { command, quiet }
+}
+
+/// The System32 path of a host executable named without a folder (`MsiExec.exe /I{GUID}`, the form
+/// Windows Installer writes for every MSI, or `rundll32`, `regsvr32`, `cmd`), unexpanded like
+/// [`purge_inventory::quiet::MSIEXEC`]. `None` for anything else, which keeps its name as written.
+///
+/// A bare name is never run as it is: `CreateProcessW` would look in the starting program's folder and
+/// the current directory before System32, and the run rule cannot prove a relative name admin-only, so
+/// a per-machine MSI went down the medium route, where its quiet removal cannot elevate and exits 1603
+/// (M3 e2e chain e2e-20261123-173417, 7-Zip). Only the four [`HOST_EXECUTABLES`] are mapped, with or
+/// without `.exe`: they live in System32 on every Windows, and the route still judges what they load.
+fn system_host_path(exe: &str) -> Option<String> {
+    if exe.is_empty() || exe.contains(['\\', '/', ':']) {
+        return None;
+    }
+    let mut name = exe.to_ascii_lowercase();
+    if !name.contains('.') {
+        name.push_str(".exe");
+    }
+    HOST_EXECUTABLES
+        .contains(&name.as_str())
+        .then(|| format!(r"%SystemRoot%\System32\{name}"))
 }
 
 /// Where the uninstaller of `entry` runs (M3 design 3.2, ENGINE_PLAN §4.4): the broker for a
@@ -3238,6 +3260,103 @@ mod tests {
             ),
             purge_rpc::methods::Route::Broker,
             "msiexec with a ProductCode is unchanged"
+        );
+    }
+
+    fn msi_entry(uninstall: &str) -> InventoryEntry {
+        let mut entry = route_entry(uninstall);
+        entry.installer_kind = InstallerKind::Msi;
+        entry.product_code = Some("{23170F69-40C1-2702-2408-000001000000}".to_owned());
+        entry
+    }
+
+    #[test]
+    fn a_per_machine_msi_with_a_bare_msiexec_is_broker_route() {
+        // Windows Installer writes `MsiExec.exe /I{GUID}` (no folder) for every MSI; the bare name
+        // made a per-machine MSI medium-route, where its quiet removal exits 1603 (7-Zip, M3 e2e).
+        let fs = route_fixture();
+        let machine = env(&[
+            ("SystemRoot", r"C:\Windows"),
+            ("PROGRAMDATA", r"C:\ProgramData"),
+        ]);
+        for uninstall in [
+            "MsiExec.exe /I{23170F69-40C1-2702-2408-000001000000}",
+            "MsiExec.exe /X{23170F69-40C1-2702-2408-000001000000}",
+            "msiexec /x {23170F69-40C1-2702-2408-000001000000}",
+            r#""MsiExec.exe" /I{23170F69-40C1-2702-2408-000001000000}"#,
+        ] {
+            let entry = msi_entry(uninstall);
+            assert_eq!(
+                route(&entry, &fs, &machine, &machine),
+                purge_rpc::methods::Route::Broker,
+                "{uninstall}"
+            );
+            let commands = uninstall_commands(&entry, &machine);
+            assert_eq!(
+                commands.command.as_ref().map(|c| c.exe.as_str()),
+                Some(r"C:\Windows\System32\msiexec.exe"),
+                "the command shown and run names System32, never a bare name: {uninstall}"
+            );
+        }
+        // Still medium: a per-user entry, and a user environment that moves SystemRoot.
+        let mut per_user = msi_entry("MsiExec.exe /I{23170F69-40C1-2702-2408-000001000000}");
+        per_user.hive_sid = Some("S-1-5-21-1-2-3-1001".to_owned());
+        assert_eq!(
+            route(&per_user, &fs, &machine, &machine),
+            purge_rpc::methods::Route::Medium
+        );
+        let planted = env(&[
+            ("SystemRoot", r"C:\Users\tester\planted"),
+            ("PROGRAMDATA", r"C:\ProgramData"),
+        ]);
+        assert_eq!(
+            route(
+                &msi_entry("MsiExec.exe /I{23170F69-40C1-2702-2408-000001000000}"),
+                &fs,
+                &planted,
+                &machine
+            ),
+            purge_rpc::methods::Route::Medium,
+            "a SystemRoot from the user's environment is a different command"
+        );
+    }
+
+    #[test]
+    fn only_the_system32_hosts_are_resolved_from_a_bare_name() {
+        assert_eq!(
+            system_host_path("MsiExec.exe").as_deref(),
+            Some(r"%SystemRoot%\System32\msiexec.exe")
+        );
+        assert_eq!(
+            system_host_path("RUNDLL32").as_deref(),
+            Some(r"%SystemRoot%\System32\rundll32.exe")
+        );
+        assert_eq!(
+            system_host_path("regsvr32.exe").as_deref(),
+            Some(r"%SystemRoot%\System32\regsvr32.exe")
+        );
+        assert_eq!(
+            system_host_path("cmd").as_deref(),
+            Some(r"%SystemRoot%\System32\cmd.exe")
+        );
+        for other in [
+            "unins000.exe",
+            "uninstall",
+            "powershell.exe",
+            "msiexec.com",
+            r".\msiexec.exe",
+            r"C:\Temp\msiexec.exe",
+            "C:msiexec.exe",
+            "",
+        ] {
+            assert_eq!(system_host_path(other), None, "{other}");
+        }
+        // A bare name that is not a System32 host stays bare and is never provably admin-only.
+        let fs = route_fixture();
+        let machine = env(&[("SystemRoot", r"C:\Windows")]);
+        assert_eq!(
+            route(&route_entry("unins000.exe /S"), &fs, &machine, &machine),
+            purge_rpc::methods::Route::Medium
         );
     }
 
