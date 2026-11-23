@@ -420,6 +420,34 @@ fn ext_built_with_the_walk_ahead_holds_the_same_hits() {
         assert_eq!(under(&ctx), under(&world.ctx()));
     }
 
+    // A walk nobody takes the hits of is ended when its handle, or the data that holds it, goes
+    // away: the thread scope does not wait for a walk of the whole scope.
+    let app = AppIdentityView::from_fingerprint(&world.fp, &world.env);
+    std::thread::scope(|threads| {
+        drop(ScanExt::walk_ahead(
+            threads,
+            &world.fixture,
+            &world.fp,
+            &app,
+        ));
+        let walk = ScanExt::walk_ahead(threads, &world.fixture, &world.fp, &app);
+        assert!(walk.is_some());
+        let ext = ScanExt::build_ahead(
+            &world.fixture,
+            &world.fixture,
+            &world.fixture,
+            &world.fp,
+            &app,
+            &[],
+            &[],
+            None,
+            OwnershipLimits::default(),
+            walk,
+        );
+        assert!(ext.ref_hits.is_none());
+        drop(ext);
+    });
+
     // An app without anchors is not walked, ahead or not.
     let mut bare = World::new(machine());
     bare.fp.roots.clear();

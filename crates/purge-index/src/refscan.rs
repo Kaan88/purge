@@ -907,16 +907,22 @@ impl LateMatcher {
         }
     }
 
-    /// The matcher when it is there. Without it `values` are to be held: they are counted against
-    /// the cap, and a walk over the cap waits here for the matcher (`None` then: abandoned).
-    fn get_or_hold(&self, values: &[RegValue]) -> Option<&RefMatcher> {
+    /// The matcher when it is there. Without it the `values` of `key` are to be held: what holding
+    /// them takes (the entry and its key, and for each value the value, its name and its data as
+    /// allocated) is counted against the cap, and a walk over the cap waits here for the matcher
+    /// (`None` then: abandoned).
+    fn get_or_hold(&self, key: &str, values: &[RegValue]) -> Option<&RefMatcher> {
         if let Some(matcher) = self.get() {
             return Some(matcher);
         }
-        let bytes: usize = values
-            .iter()
-            .map(|v| v.name.len() + v.data.bytes.len() + std::mem::size_of::<RegValue>())
-            .sum();
+        let bytes: usize = std::mem::size_of::<Held>()
+            + key.len()
+            + values
+                .iter()
+                .map(|v| {
+                    std::mem::size_of::<RegValue>() + v.name.capacity() + v.data.bytes.capacity()
+                })
+                .sum::<usize>();
         let before = self
             .held_bytes
             .fetch_add(bytes, std::sync::atomic::Ordering::SeqCst);
@@ -993,7 +999,7 @@ impl Visit<'_> {
                         }
                         Tester::Late(late) => {
                             sort_values(&mut values);
-                            match late.get_or_hold(&values) {
+                            match late.get_or_hold(key, &values) {
                                 Some(matcher) => {
                                     out.flush(matcher, self.options);
                                     out.test(
@@ -2526,6 +2532,103 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The sorts of the walk take a path without a key per name when every name is ASCII: it
+    /// gives the order of the sort by (lower case, name) that the other path makes, for names in
+    /// mixed case, names that differ only by case, equal names and the empty name; and a list with
+    /// one name that is not ASCII is sorted as before.
+    #[test]
+    fn ascii_sorts_are_the_sorts_by_lower_case_then_name() {
+        let ascii = [
+            "b", "B", "a", "A", "Ab", "aB", "ab", "AB", "", "Zeta", "zeta", "ZETA", "_x", "1",
+            "a1", "A1", "path", "Path", "PATH", "a b", "a-b", "a_b", "A_B", "[", "{", "ab", "~",
+        ];
+        let other = ["École", "école", "straße", "STRASSE", "a", "B", "ΣΣ"];
+        let value = |name: &str, n: usize| RegValue {
+            name: name.to_owned(),
+            data: purge_source::types::RegData::from_sz(&n.to_string()),
+        };
+        for (names, is_ascii) in [(&ascii[..], true), (&other[..], false)] {
+            assert_eq!(names.iter().all(|n| n.is_ascii()), is_ascii);
+            for shift in 0..names.len() {
+                let mut list: Vec<String> = names
+                    .iter()
+                    .cycle()
+                    .skip(shift)
+                    .take(names.len())
+                    .map(|n| (*n).to_owned())
+                    .collect();
+                if shift % 2 == 1 {
+                    list.reverse();
+                }
+                let mut expected = list.clone();
+                expected.sort_by_cached_key(|n| (n.to_lowercase(), n.clone()));
+                let mut sorted = list.clone();
+                sort_names(&mut sorted);
+                assert_eq!(sorted, expected, "names, shift {shift}");
+
+                // Values: equal names keep their order (the data tells them apart).
+                let values: Vec<RegValue> =
+                    list.iter().enumerate().map(|(i, n)| value(n, i)).collect();
+                let mut expected = values.clone();
+                expected.sort_by_cached_key(|v| (v.name.to_lowercase(), v.name.clone()));
+                let mut sorted = values.clone();
+                sort_values(&mut sorted);
+                let brief = |values: &[RegValue]| -> Vec<(String, Vec<u8>)> {
+                    values
+                        .iter()
+                        .map(|v| (v.name.clone(), v.data.bytes.clone()))
+                        .collect()
+                };
+                assert_eq!(brief(&sorted), brief(&expected), "values, shift {shift}");
+            }
+        }
+        // Names that differ only by case come lower-case form first, then as written.
+        let mut names: Vec<String> = ["path", "PATH", "Path"].map(String::from).to_vec();
+        sort_names(&mut names);
+        assert_eq!(names, ["PATH", "Path", "path"]);
+        let mut none: Vec<String> = Vec::new();
+        sort_names(&mut none);
+        sort_values(&mut []);
+        assert!(none.is_empty());
+    }
+
+    /// What a walk holds is counted with the entry, the key and the allocations of each value, so
+    /// the cap bounds the memory and not only the bytes of the data.
+    #[test]
+    fn held_values_are_counted_as_allocated() {
+        let late = LateMatcher::new();
+        let mut name = String::with_capacity(64);
+        name.push('n');
+        let mut data = purge_source::types::RegData::from_sz("abc");
+        data.bytes.reserve_exact(100);
+        let held = data.bytes.capacity();
+        assert!(held >= 100);
+        let values = vec![
+            RegValue { name, data },
+            RegValue {
+                name: String::new(),
+                data: purge_source::types::RegData::from_sz(""),
+            },
+        ];
+        let empty = values[1].data.bytes.capacity();
+        assert!(late.get_or_hold(r"HKLM\SOFTWARE\K", &values).is_none());
+        assert_eq!(
+            late.held_bytes.load(std::sync::atomic::Ordering::SeqCst),
+            std::mem::size_of::<Held>()
+                + r"HKLM\SOFTWARE\K".len()
+                + 2 * std::mem::size_of::<RegValue>()
+                + 64
+                + held
+                + empty
+        );
+        // A key without values still costs its entry.
+        assert!(late.get_or_hold("K", &[]).is_none());
+        assert!(
+            late.held_bytes.load(std::sync::atomic::Ordering::SeqCst)
+                > 2 * std::mem::size_of::<Held>()
+        );
     }
 
     /// A registry that gives a [`LateMatcher`] its matcher when the walk asks for its `at`-th key.

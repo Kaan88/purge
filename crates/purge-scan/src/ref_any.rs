@@ -80,7 +80,9 @@
 use purge_guard::containers;
 use purge_guard::prefix;
 use purge_index::matcher::RefMatcher;
-use purge_index::refscan::{self, RefHit, RefScan, RefScanOptions, Scope, default_prune};
+use purge_index::refscan::{
+    self, LateMatcher, RefHit, RefScan, RefScanOptions, Scope, default_prune,
+};
 use purge_model::{Action, Candidate, Category, Fingerprint, SubtreeBaseline, Target};
 use purge_source::registry::RegistrySource;
 
@@ -194,13 +196,28 @@ pub(crate) fn walk(reg: &dyn RegistrySource, fp: &Fingerprint, refs: &RefMatcher
     walk_scope(reg, refs, &scope_of(reg, fp))
 }
 
-/// [`walk`] over a scope at hand.
-fn walk_scope(reg: &dyn RegistrySource, refs: &RefMatcher, scope: &Scope) -> RefScan {
-    let options = RefScanOptions {
+/// [`walk`] for the pipeline's walk started ahead (`ScanExt::walk_ahead`): the same scope and
+/// options through `refscan::scan_late`, whose walk can be ended. `refs` holds the app's matcher
+/// from the start, so the scan is [`walk`]'s; `None` when `refs` was abandoned meanwhile.
+pub(crate) fn walk_late(
+    reg: &dyn RegistrySource,
+    fp: &Fingerprint,
+    refs: &LateMatcher,
+) -> Option<RefScan> {
+    refscan::scan_late(reg, refs, &scope_of(reg, fp), &walk_options())
+}
+
+/// The options of [`walk`]: every anchor reported, no key budget.
+fn walk_options() -> RefScanOptions {
+    RefScanOptions {
         all_anchors: true,
         ..RefScanOptions::default()
-    };
-    refscan::scan(reg, refs, scope, &options, None)
+    }
+}
+
+/// [`walk`] over a scope at hand.
+fn walk_scope(reg: &dyn RegistrySource, refs: &RefMatcher, scope: &Scope) -> RefScan {
+    refscan::scan(reg, refs, scope, &walk_options(), None)
 }
 
 /// The rest of `key` below its control-set root (`HKLM\SYSTEM\ControlSet00N`), if it lies under one.

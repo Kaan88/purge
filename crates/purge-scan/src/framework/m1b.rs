@@ -33,7 +33,7 @@ use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::Receiver;
-use std::sync::{Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::Instant;
 
 use purge_guard::canon::{CanonKey, GuardEnv, canon_key, canon_path};
@@ -44,7 +44,7 @@ use purge_index::ownership::{
     OwnershipIndex, OwnershipInput, OwnershipLimits, SHARED_DLL_UNKNOWN, TableCache, area,
     pack_guid, unpack_guid,
 };
-use purge_index::refscan::RefHit;
+use purge_index::refscan::{LateMatcher, RefHit};
 use purge_index::sysobj::{self, ProgramRef, SERVICES_KEY, SysObjectIndex};
 use purge_model::object::TaskAction;
 use purge_model::{
@@ -154,13 +154,29 @@ type Walked = (Vec<RefHit>, bool);
 
 /// The reference walk of [`ScanExt::build`], started ahead of it on a thread of its own
 /// ([`ScanExt::walk_ahead`]): where its hits and its completeness arrive.
-pub struct WalkAhead(Receiver<Walked>);
+///
+/// Dropped, it ends the walk: a scan that fails or unwinds before anybody took the hits (the
+/// walk's handle, or the [`ScanExt`] that holds it, goes away) does not leave the walk reading the
+/// rest of the registry for nobody, with the thread scope waiting for it.
+#[derive(Debug)]
+pub struct WalkAhead {
+    arriving: Receiver<Walked>,
+    /// The walk's matcher (given from the start) and its off switch.
+    walk: Arc<LateMatcher>,
+}
+
+impl Drop for WalkAhead {
+    fn drop(&mut self) {
+        // After the walk has ended this changes nothing.
+        self.walk.abandon();
+    }
+}
 
 /// A reference walk that may still be running: its result is taken once, by the first reader, who
 /// waits for it.
 #[derive(Debug)]
 struct LateWalk {
-    arriving: Mutex<Option<Receiver<Walked>>>,
+    arriving: Mutex<Option<WalkAhead>>,
     arrived: OnceLock<Walked>,
 }
 
@@ -178,8 +194,9 @@ impl LateWalk {
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .take();
+            // The handle lives until the result is here: only then is the walk's switch thrown.
             arriving
-                .and_then(|walk| walk.recv().ok())
+                .and_then(|ahead| ahead.arriving.recv().ok())
                 .expect("the reference walk ended without a result")
         })
     }
@@ -202,17 +219,22 @@ impl ScanExt {
         if app.anchors.is_empty() || purge_source::metered::installed().is_some() {
             return None;
         }
-        let refs = app.refs.clone();
+        // The walk has its matcher from the start, so it tests as it reads, as `ref_any::walk`
+        // does; it goes through the late scan for its off switch (`WalkAhead`'s drop).
+        let walk = Arc::new(LateMatcher::new());
+        walk.set(app.refs.clone());
+        let refs = Arc::clone(&walk);
         let (done, arriving) = std::sync::mpsc::channel();
         std::thread::Builder::new()
             .spawn_scoped(threads, move || {
-                let scan = crate::ref_any::walk(reg, fp, &refs);
-                let complete = scan.is_complete();
-                // Nobody waits any more when the scan ended early; the hits are dropped then.
-                let _ = done.send((scan.hits, complete));
+                // Without a result the walk was ended: nobody waits for it.
+                if let Some(scan) = crate::ref_any::walk_late(reg, fp, &refs) {
+                    let complete = scan.is_complete();
+                    let _ = done.send((scan.hits, complete));
+                }
             })
             .ok()
-            .map(|_| WalkAhead(arriving))
+            .map(|_| WalkAhead { arriving, walk })
     }
 
     /// No hits, an empty ownership index, no system objects: the M1a context.
@@ -272,7 +294,7 @@ impl ScanExt {
         self.ref_hits = None;
         self.hits_app = Some(app.clone());
         self.late = Some(LateWalk {
-            arriving: Mutex::new(Some(walk.0)),
+            arriving: Mutex::new(Some(walk)),
             arrived: OnceLock::new(),
         });
         self

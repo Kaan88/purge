@@ -443,6 +443,15 @@ impl RefMatcher {
         if self.needles.is_empty() || s.is_empty() || self.refers_to_nothing(s) {
             return Vec::new();
         }
+        self.find_all_full(s)
+    }
+
+    /// [`RefMatcher::find_all`] without the shortcut for a string that refers to nothing: the whole
+    /// search, which answers the same.
+    fn find_all_full(&self, s: &str) -> Vec<RefMatch> {
+        if self.needles.is_empty() || s.is_empty() {
+            return Vec::new();
+        }
         // At most two spellings are searched: as written, and with the environment expanded.
         let mut hays = vec![fold(s)];
         hays.extend(self.expand(s).map(|expanded| fold(&expanded)));
@@ -1712,6 +1721,88 @@ mod tests {
             m.find("日本語 Çalışma.Belge 日本語").unwrap().how,
             MatchHow::Embedded
         );
+    }
+
+    /// The shortcut for a string that refers to nothing changes no answer: with it and without it
+    /// the matches are the same, for strings with and without `%NAME%` references, with an empty
+    /// environment and with one that knows, does not know or empties the name; and whenever the
+    /// shortcut says "nothing", the whole search finds nothing.
+    #[test]
+    fn the_shortcut_for_strings_that_refer_to_nothing_changes_no_answer() {
+        let mut set = AnchorSet::new();
+        set.add_root(GIT);
+        set.add_exe_path(&format!(r"{GIT}\bin\git.exe"));
+        set.add_exe_name("git.exe");
+        set.add_progid("VSCode.txt");
+        set.add_clsid("{11111111-2222-3333-4444-555555555555}");
+        set.add_token("{EA457B21-F73E-494C-ACAB-524FDE069978}");
+        let strings = [
+            "",
+            " ",
+            "nothing here",
+            GIT,
+            r"c:\program files\git",
+            r"C:/Program Files/Git/",
+            r"C:\\Program Files\\Git\bin\git.exe",
+            r#""C:\Program Files\Git\bin\git.exe" --version"#,
+            r"C:\Program Files\Gitx",
+            r"C:\Program Files\Git\été\x.dll",
+            "ÇA et là",
+            r"%ProgramFiles%\Git\bin\git.exe",
+            r"%programfiles%/git",
+            r"%PROGRAMFILES%\Other",
+            r"%NOPE%\Git\bin\git.exe",
+            r"%EMPTY%C:\Program Files\Git",
+            r"%EMPTY%",
+            r"%GITDIR%",
+            r"x %GITDIR%\bin y",
+            r"%ProgramFiles",
+            "100% sure",
+            "%",
+            "%%",
+            r"%%ProgramFiles%%\Git",
+            "git.exe",
+            "legit.exe",
+            r"D:\tools\git.exe,0",
+            "VSCode.txt",
+            "vscode.TXT",
+            "xVSCode.txtx",
+            "{11111111-2222-3333-4444-555555555555}",
+            "{ea457b21-f73e-494c-acab-524fde069978}_is1",
+            "EA457B21-F73E-494C-ACAB-524FDE069978",
+        ];
+        let envs: [Vec<(&str, &str)>; 3] = [
+            Vec::new(),
+            vec![("ProgramFiles", r"C:\Program Files")],
+            vec![
+                ("PROGRAMFILES", r"C:\Program Files"),
+                ("EMPTY", ""),
+                ("GitDir", GIT),
+            ],
+        ];
+        let mut matched = 0;
+        let mut skipped = 0;
+        for env in envs {
+            let m = RefMatcher::with_env(&set, env.iter().copied());
+            for s in strings {
+                let full = m.find_all_full(s);
+                assert_eq!(m.find_all(s), full, "{s:?} with {env:?}");
+                if !s.is_empty() && m.refers_to_nothing(s) {
+                    assert!(full.is_empty(), "{s:?} with {env:?}");
+                    skipped += 1;
+                }
+                matched += usize::from(!full.is_empty());
+            }
+        }
+        // Both ways are taken: strings that match, and strings the shortcut answers.
+        assert!(
+            matched >= 10 && skipped >= 10,
+            "{matched} matched, {skipped} skipped"
+        );
+        // With an environment a string with a `%` is never answered by the shortcut.
+        let with_env = RefMatcher::with_env(&set, [("X", "y")]);
+        assert!(!with_env.refers_to_nothing("100% sure"));
+        assert!(RefMatcher::new(&set).refers_to_nothing("100% sure"));
     }
 
     /// The runs as they were found before a run was only spelled when long enough: one character

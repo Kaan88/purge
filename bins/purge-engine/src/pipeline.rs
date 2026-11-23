@@ -1845,6 +1845,26 @@ fn synthetic_entry(
     })
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Set by a test: the scan of this thread runs every scanner in catalog order, as it did before
+    /// the scanners that do not read the reference walk were run ahead of the others.
+    static CATALOG_ORDER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether the scan runs its scanners in one pass in catalog order (tests only; never in a build
+/// that ships).
+fn in_catalog_order() -> bool {
+    #[cfg(test)]
+    {
+        CATALOG_ORDER.with(std::cell::Cell::get)
+    }
+    #[cfg(not(test))]
+    {
+        false
+    }
+}
+
 /// The part of [`scan`] and [`scan_path`] after the mode is settled.
 #[allow(clippy::too_many_arguments)]
 fn run_scan(
@@ -1989,8 +2009,15 @@ fn run_scan_threads<'scope, 'env>(
     // scanner runs in that order.
     let scanners = all_scanners();
     let mut found_by: Vec<Option<Vec<Candidate>>> = scanners.iter().map(|_| None).collect();
-    for reads_walk in [false, true] {
-        if reads_walk {
+    // One pass over the scanners that do not read the walk, one over those that do (a test may
+    // ask for a single pass in catalog order, to hold the two against each other).
+    let passes: &[Option<bool>] = if in_catalog_order() {
+        &[None]
+    } else {
+        &[Some(false), Some(true)]
+    };
+    for pass in passes {
+        if *pass != Some(false) {
             warnings.extend(ext_warnings(&ext));
             step.done(&format!(
                 "scan: {} reference(s), {} MSI product(s), {} service(s); MSI table cache in {}",
@@ -2004,7 +2031,7 @@ fn run_scan_threads<'scope, 'env>(
             ));
         }
         for (position, scanner) in scanners.iter().enumerate() {
-            if scanner.reads_ref_walk() != reads_walk {
+            if pass.is_some_and(|reads_walk| scanner.reads_ref_walk() != reads_walk) {
                 continue;
             }
             ext.at_scanner(u32::try_from(position).unwrap_or(u32::MAX));
@@ -2607,6 +2634,129 @@ mod tests {
             )),
             "{targets:#?}"
         );
+    }
+
+    /// The scan runs the scanners that do not read the reference walk first and the others after
+    /// it; a scan that runs every scanner in catalog order, as the engine did before, gives the
+    /// same plan, sidecar, candidates, counts, residue and warnings. The machine has leftovers for
+    /// both groups: a referring value (REF-ANY, after the walk) and the install directory, an App
+    /// Paths key and a ProgID (before it).
+    #[test]
+    fn both_scanner_orders_give_the_same_plan_and_sidecar() {
+        let fixture = probe_machine()
+            .sz(REFERS, "Tool", r"C:\Program Files\Probe\probe.exe")
+            .sz(REFERS, "Other", r"C:\Tools\other.exe")
+            .sz(
+                r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\probe.exe",
+                "",
+                r"C:\Program Files\Probe\probe.exe",
+            )
+            .sz(
+                r"HKLM\SOFTWARE\Classes\Probe.Document\shell\open\command",
+                "",
+                r#""C:\Program Files\Probe\probe.exe" "%1""#,
+            )
+            .sz(
+                r"HKLM\SOFTWARE\Classes\.probe\OpenWithProgids",
+                "Probe.Document",
+                "",
+            )
+            .sz(
+                r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run",
+                "Probe",
+                r#""C:\Program Files\Probe\probe.exe" /tray"#,
+            )
+            .build();
+        let sources = Sources {
+            reg: &fixture,
+            fs: &fixture,
+            sys: &fixture,
+        };
+        let settings = Settings::default();
+        let harvested = harvest(sources, "Probe", Kb::shipped(), &settings, &mut |_| {}).unwrap();
+        let fp = harvested.report.fingerprint;
+        let run = |catalog: bool| {
+            CATALOG_ORDER.with(|order| order.set(catalog));
+            let mut lines: Vec<String> = Vec::new();
+            let scanned = scan(
+                sources,
+                &fp,
+                ScanMode::Forced,
+                None,
+                &settings,
+                &mut |line| {
+                    // The lines without their times.
+                    lines.push(
+                        line.rsplit_once(" (")
+                            .map_or(line, |(text, _)| text)
+                            .to_owned(),
+                    );
+                },
+            );
+            CATALOG_ORDER.with(|order| order.set(false));
+            (scanned.unwrap(), lines)
+        };
+        let (split, split_lines) = run(false);
+        let (catalog, catalog_lines) = run(true);
+
+        assert!(split.candidates.len() >= 3, "{:#?}", split.candidates);
+        let by = |id: &str| split.per_scanner.iter().find(|(s, _)| *s == id).unwrap().1;
+        assert!(by("REF-ANY") > 0, "{:?}", split.per_scanner);
+        assert!(
+            split
+                .per_scanner
+                .iter()
+                .any(|(s, n)| *s != "REF-ANY" && *n > 0),
+            "{:?}",
+            split.per_scanner
+        );
+        assert_eq!(
+            serde_json::to_string_pretty(&split.built.plan).unwrap(),
+            serde_json::to_string_pretty(&catalog.built.plan).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_string_pretty(&split.built.scan).unwrap(),
+            serde_json::to_string_pretty(&catalog.built.scan).unwrap()
+        );
+        assert_eq!(
+            format!("{:#?}", split.candidates),
+            format!("{:#?}", catalog.candidates)
+        );
+        assert_eq!(split.per_scanner, catalog.per_scanner);
+        assert_eq!(
+            format!("{:#?}", split.residue),
+            format!("{:#?}", catalog.residue)
+        );
+        assert_eq!(
+            format!("{:#?}", split.warnings),
+            format!("{:#?}", catalog.warnings)
+        );
+
+        // The two runs did order their scanners differently, and said the same lines.
+        let place = |lines: &[String], start: &str| {
+            lines
+                .iter()
+                .position(|line| line.starts_with(start))
+                .unwrap_or_else(|| panic!("no line {start:?} in {lines:#?}"))
+        };
+        for (lines, split) in [(&split_lines, true), (&catalog_lines, false)] {
+            let summary = lines
+                .iter()
+                .position(|line| line.contains(" reference(s), "))
+                .unwrap();
+            let ref_any = place(lines, "scan: REF-ANY");
+            let progid = place(lines, "scan: CLS-PROGID");
+            let first = place(lines, "scan: FS-INSTALLDIR");
+            assert!(ref_any > summary);
+            assert_eq!(progid < ref_any, split, "{lines:#?}");
+            assert_eq!(first < summary, split, "{lines:#?}");
+        }
+        let sorted = |lines: &[String]| {
+            let mut lines = lines.to_vec();
+            lines.sort();
+            lines
+        };
+        assert_eq!(sorted(&split_lines), sorted(&catalog_lines));
     }
 
     /// A record of an MSI product of Probe in the fingerprint (per-machine).

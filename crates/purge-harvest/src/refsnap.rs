@@ -717,8 +717,141 @@ pub fn capture(ctx: &HarvestCtx<'_>) -> Vec<RefSnapEntry> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use purge_source::fixture::Fixture;
+    use purge_source::types::SourceError;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     const SID: &str = "S-1-5-21-1-2-3-1001";
+
+    /// A registry that counts its reads by kind.
+    struct Counted<'f> {
+        inner: &'f Fixture,
+        infos: AtomicUsize,
+        subkeys: AtomicUsize,
+        values: AtomicUsize,
+        value: AtomicUsize,
+        other: AtomicUsize,
+    }
+
+    impl RegistrySource for Counted<'_> {
+        fn key_info(&self, key: &str) -> SourceResult<KeyInfo> {
+            self.infos.fetch_add(1, Ordering::SeqCst);
+            self.inner.key_info(key)
+        }
+        fn subkeys(&self, key: &str) -> SourceResult<Vec<String>> {
+            self.subkeys.fetch_add(1, Ordering::SeqCst);
+            self.inner.subkeys(key)
+        }
+        fn values(&self, key: &str) -> SourceResult<Vec<RegValue>> {
+            self.values.fetch_add(1, Ordering::SeqCst);
+            self.inner.values(key)
+        }
+        fn value(&self, key: &str, name: &str) -> SourceResult<RegData> {
+            self.value.fetch_add(1, Ordering::SeqCst);
+            self.inner.value(key, name)
+        }
+        fn loaded_user_sids(&self) -> SourceResult<Vec<String>> {
+            self.other.fetch_add(1, Ordering::SeqCst);
+            self.inner.loaded_user_sids()
+        }
+        fn current_control_set(&self) -> SourceResult<u32> {
+            self.other.fetch_add(1, Ordering::SeqCst);
+            self.inner.current_control_set()
+        }
+    }
+
+    /// `ReadOnce` asks the registry once per key and kind of read and hands the same answer out
+    /// after that, an error as well; the three kinds are kept apart; another spelling of a key is
+    /// another key; single values and the hive facts go to the registry every time.
+    #[test]
+    fn read_once_reads_each_key_once_per_kind_and_keeps_errors() {
+        const KEY: &str = r"HKLM\SOFTWARE\Vendor\App";
+        const LOCKED: &str = r"HKLM\SOFTWARE\Vendor\Locked";
+        const MISSING: &str = r"HKLM\SOFTWARE\Vendor\Gone";
+        let f = Fixture::builder()
+            .user_sid(SID)
+            .key(r"HKLM\SYSTEM\ControlSet001\Services")
+            .sz(KEY, "Path", r"C:\App")
+            .sz(KEY, "", "default")
+            .sz(&format!(r"{KEY}\Sub"), "a", "b")
+            .sz(&format!(r"{LOCKED}\Inner"), "a", "b")
+            .denied(LOCKED)
+            .build();
+        let counted = Counted {
+            inner: &f,
+            infos: AtomicUsize::new(0),
+            subkeys: AtomicUsize::new(0),
+            values: AtomicUsize::new(0),
+            value: AtomicUsize::new(0),
+            other: AtomicUsize::new(0),
+        };
+        let once = ReadOnce::new(&counted);
+        let counts = || {
+            (
+                counted.infos.load(Ordering::SeqCst),
+                counted.subkeys.load(Ordering::SeqCst),
+                counted.values.load(Ordering::SeqCst),
+            )
+        };
+
+        // Each kind of read of a key: once, with the registry's answer, whatever is asked first.
+        assert_eq!(once.values(KEY), f.values(KEY));
+        assert_eq!(counts(), (0, 0, 1));
+        assert_eq!(once.key_info(KEY), f.key_info(KEY));
+        assert_eq!(once.subkeys(KEY), f.subkeys(KEY));
+        assert_eq!(counts(), (1, 1, 1));
+        for _ in 0..3 {
+            assert_eq!(once.key_info(KEY), f.key_info(KEY));
+            assert_eq!(once.subkeys(KEY), f.subkeys(KEY));
+            assert_eq!(once.values(KEY), f.values(KEY));
+            assert!(once.key_exists(KEY).is_present());
+        }
+        assert_eq!(counts(), (1, 1, 1));
+        assert_eq!(once.values(KEY).unwrap().len(), 2);
+
+        // Errors are answers too: a missing key and a refused key are asked once per kind.
+        for key in [MISSING, LOCKED] {
+            let before = counts();
+            let (info, subkeys, values) = (once.key_info(key), once.subkeys(key), once.values(key));
+            assert_eq!(info, f.key_info(key), "{key}");
+            assert_eq!(subkeys, f.subkeys(key), "{key}");
+            assert_eq!(values, f.values(key), "{key}");
+            assert!(values.is_err(), "{key}");
+            for _ in 0..2 {
+                assert_eq!(once.key_info(key), info, "{key}");
+                assert_eq!(once.subkeys(key), subkeys, "{key}");
+                assert_eq!(once.values(key), values, "{key}");
+            }
+            assert_eq!(
+                counts(),
+                (before.0 + 1, before.1 + 1, before.2 + 1),
+                "{key}"
+            );
+        }
+        assert_eq!(once.key_info(MISSING), Err(SourceError::NotFound));
+        assert!(!once.key_exists(MISSING).is_present());
+
+        // A key is known by its path as written.
+        let before = counts();
+        assert_eq!(
+            once.values(&KEY.to_lowercase()),
+            f.values(&KEY.to_lowercase())
+        );
+        assert_eq!(counts(), (before.0, before.1, before.2 + 1));
+
+        // Single values and the hive facts are not kept.
+        for n in 1..=3 {
+            assert_eq!(once.value(KEY, "Path"), f.value(KEY, "Path"));
+            assert_eq!(counted.value.load(Ordering::SeqCst), n);
+        }
+        assert!(once.value(KEY, "Nope").is_err());
+        assert_eq!(counted.value.load(Ordering::SeqCst), 4);
+        assert_eq!(once.loaded_user_sids(), f.loaded_user_sids());
+        assert_eq!(once.loaded_user_sids(), f.loaded_user_sids());
+        assert_eq!(once.current_control_set(), f.current_control_set());
+        assert_eq!(counted.other.load(Ordering::SeqCst), 3);
+        assert_eq!(counts(), (before.0, before.1, before.2 + 1));
+    }
 
     #[test]
     fn source_key_rewrites_user_classes_and_binds_hkcu() {
