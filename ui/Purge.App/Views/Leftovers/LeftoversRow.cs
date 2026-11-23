@@ -81,6 +81,20 @@ public sealed partial class LeftoversRow : INotifyPropertyChanged
     // ---- Candidate ----------------------------------------------------------------------------
 
     public string DisplayName => Item?.DisplayName ?? "";
+
+    /// <summary>The main line: a registry item in words, else the raw name (what screen readers say).</summary>
+    public string Title => Item?.Title ?? "";
+
+    public string Location => Item?.Location ?? "";
+
+    /// <summary>A registry item with a label: the friendly title, the location line and the raw path as tooltip.</summary>
+    public bool IsLabelled => Item?.Label is not null;
+
+    public Visibility LabelVisibility => IsLabelled ? Visibility.Visible : Visibility.Collapsed;
+    public Visibility RawVisibility => IsLabelled ? Visibility.Collapsed : Visibility.Visible;
+
+    /// <summary>The exact registry path on hover; null (no tooltip) for rows that already show it.</summary>
+    public string? RawTip => IsLabelled ? Item!.DisplayName : null;
     public string Why => Item?.Why ?? "";
     public string SizeText => Item?.SizeText ?? "";
     public string OwnerText => Item?.OwnerProgram is { Length: > 0 } owner ? "Shared with " + owner : "";

@@ -3,6 +3,7 @@ using System.Globalization;
 using Purge.App.Shell;
 using Purge.Client.Broker;
 using Purge.Client.Rpc;
+using RegistryLabel = Purge.Client.Model.RegistryLabel;
 using RpcBand = Purge.Client.Rpc.Band;
 using RpcCategory = Purge.Client.Rpc.Category;
 using RpcItemKind = Purge.Client.Rpc.ItemKind;
@@ -38,7 +39,18 @@ public enum LeftoversPhase
 public sealed class LeftoverItemModel
 {
     public string CandidateId { get; init; } = "";
+    /// <summary>The broker's exact name (a registry item's wire path); the tooltip and the detail pane show it.</summary>
     public string DisplayName { get; init; } = "";
+
+    /// <summary>A registry item in words (<see cref="RegistryLabel.Describe"/>); null for other kinds or an unknown root.</summary>
+    public RegistryLabel? Label { get; init; }
+
+    /// <summary>The row's main line: the registry label's title, else <see cref="DisplayName"/>.</summary>
+    public string Title => Label?.Title ?? DisplayName;
+
+    /// <summary>The row's readable location line; empty when the row shows the raw name.</summary>
+    public string Location => Label?.Location ?? "";
+
     public string GroupName { get; init; } = "";
     public Band Band { get; init; }
     public RpcBand WireBand { get; init; }
@@ -183,10 +195,14 @@ public sealed class LeftoversViewModel : INotifyPropertyChanged
     private bool _busy;
     private readonly SynchronizationContext? _context;
 
-    public LeftoversViewModel(ILeftoversBroker broker, Action? allowForeground = null)
+    /// <summary>The signed-in user's SID, so registry rows under it read "Your account"; null names no account.</summary>
+    private readonly string? _currentUserSid;
+
+    public LeftoversViewModel(ILeftoversBroker broker, Action? allowForeground = null, string? currentUserSid = null)
     {
         _broker = broker;
         _allowForeground = allowForeground;
+        _currentUserSid = currentUserSid;
         _context = SynchronizationContext.Current;
         _broker.ConsentShown += shown => OnContext(() => OnConsentShown(shown));
         _broker.BaselineChanged += changed => OnContext(() => OnBaselineChanged(changed));
@@ -430,10 +446,11 @@ public sealed class LeftoversViewModel : INotifyPropertyChanged
         }
     }
 
-    private static LeftoverItemModel ToModel(CandidateRow row) => new()
+    private LeftoverItemModel ToModel(CandidateRow row) => new()
     {
         CandidateId = row.CandidateId,
         DisplayName = row.DisplayName,
+        Label = RegistryLabel.Describe(row.DisplayName, row.Kind, _currentUserSid),
         GroupName = GroupNameOf(row),
         Band = Look(row.Band),
         WireBand = row.Band,
@@ -971,6 +988,7 @@ public static class LeftoversSample
         {
             CandidateId = id,
             DisplayName = name,
+            Label = RegistryLabel.Describe(name, kind, null),
             GroupName = group,
             Band = band,
             WireBand = band switch

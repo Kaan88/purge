@@ -38,6 +38,36 @@ public sealed class LeftoversPageTests
     }
 
     [Fact]
+    public async Task RegistryRowsGetAReadableLabelAndKeepTheRawPath()
+    {
+        const string sid = "S-1-5-21-1111111111-2222222222-3333333333-1001";
+        const string raw = @"HKU\" + sid + @"\Software\Mozilla\Firefox";
+        var broker = new ScriptedBroker();
+        var row = Row(1, RpcBand.Safe, RpcCategory.Registration, ItemKind.RegistryKey, pre: true);
+        row.DisplayName = raw;
+        broker.Rows.Add(row);
+        broker.Rows.Add(Row(2, pre: true));
+        var vm = new LeftoversViewModel(broker, currentUserSid: sid);
+        await vm.ScanAsync("s-1", null, forced: false);
+
+        var key = vm.Items.Single(i => i.CandidateId == Id(1));
+        Assert.Equal(raw, key.DisplayName);
+        Assert.Equal("Settings of Mozilla Firefox", key.Title);
+        Assert.Equal("Your account › Software", key.Location);
+
+        // A file row has no label: the raw path stays its main line.
+        var file = vm.Items.Single(i => i.CandidateId == Id(2));
+        Assert.Null(file.Label);
+        Assert.Equal(file.DisplayName, file.Title);
+        Assert.Equal("", file.Location);
+
+        // Without the user's SID the same key belongs to "another account".
+        var other = new LeftoversViewModel(broker);
+        await other.ScanAsync("s-1", null, forced: false);
+        Assert.Equal("Another account › Software", other.Items.Single(i => i.CandidateId == Id(1)).Location);
+    }
+
+    [Fact]
     public void TheBenchFixtureHasTheAskedCountUniqueIdsAndEveryGroupOfTheSample()
     {
         var vm = new LeftoversViewModel(new ScriptedBroker());

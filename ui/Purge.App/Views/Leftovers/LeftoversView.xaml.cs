@@ -87,8 +87,22 @@ public sealed partial class LeftoversView : UserControl, ILeftoversPage
             return;
         }
         var broker = new LeftoversBroker(request.Broker.Rpc);
-        Use(new LeftoversViewModel(broker, request.Broker.AllowForeground));
+        Use(new LeftoversViewModel(broker, request.Broker.AllowForeground, CurrentUserSid()));
         _ = _vm!.ShowRequestAsync(request);
+    }
+
+    /// <summary>The app's (unelevated, signed-in) user, so registry rows under that SID read "Your account".</summary>
+    private static string? CurrentUserSid()
+    {
+        try
+        {
+            using var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
+            return identity.User?.Value;
+        }
+        catch (System.Security.SecurityException)
+        {
+            return null;
+        }
     }
 
     private void Use(LeftoversViewModel vm)
@@ -328,6 +342,8 @@ public sealed partial class LeftoversView : UserControl, ILeftoversPage
     private void ShowDetail(LeftoversRow row)
     {
         if (row.Item is not { } item) return;
+        DTitle.Text = item.Label is { } label ? label.Title : "";
+        DTitle.Visibility = Vis(item.Label is not null);
         DPath.Text = item.DisplayName;
         DSafe.Visibility = Vis(item.Band == Band.Safe);
         DLikely.Visibility = Vis(item.Band == Band.Likely);

@@ -113,11 +113,16 @@
                                         <ColumnDefinition Width="28" /><ColumnDefinition Width="*" /><ColumnDefinition Width="96" /><ColumnDefinition Width="64" />
                                     </Grid.ColumnDefinitions>
                                     <CheckBox IsChecked="{x:Bind Checked, Mode=OneWay}" MinWidth="0" Click="OnItemCheck"
-                                              Visibility="{x:Bind CheckVisibility}" AutomationProperties.Name="{x:Bind DisplayName}" />
+                                              Visibility="{x:Bind CheckVisibility}" AutomationProperties.Name="{x:Bind Title}" />
                                     <FontIcon Glyph="&#xE72E;" FontSize="14" Visibility="{x:Bind LockVisibility}"
                                               Foreground="{ThemeResource TextFillColorTertiaryBrush}" HorizontalAlignment="Left" />
-                                    <StackPanel Grid.Column="1" VerticalAlignment="Center" Opacity="{x:Bind PathOpacity}">
-                                        <TextBlock Text="{x:Bind DisplayName}" Style="{StaticResource Mono}" TextTrimming="CharacterEllipsis" />
+                                    <StackPanel Grid.Column="1" VerticalAlignment="Center" Opacity="{x:Bind PathOpacity}"
+                                                ToolTipService.ToolTip="{x:Bind RawTip}" AutomationProperties.Name="{x:Bind Title}">
+                                        <TextBlock Text="{x:Bind DisplayName}" Style="{StaticResource Mono}" TextTrimming="CharacterEllipsis"
+                                                   Visibility="{x:Bind RawVisibility}" />
+                                        <TextBlock Text="{x:Bind Title}" TextTrimming="CharacterEllipsis" Visibility="{x:Bind LabelVisibility}" />
+                                        <TextBlock Text="{x:Bind Location}" FontSize="12" LineHeight="16" TextTrimming="CharacterEllipsis"
+                                                   Style="{StaticResource SecondaryText}" Visibility="{x:Bind LabelVisibility}" />
                                         <TextBlock Text="{x:Bind Why}" FontSize="12" LineHeight="16" TextTrimming="CharacterEllipsis"
                                                    Style="{StaticResource SecondaryText}" />
                                         <TextBlock Text="{x:Bind RefusalText}" FontSize="12" Foreground="{ThemeResource SystemFillColorCriticalBrush}"
@@ -147,6 +152,7 @@
                 <ScrollViewer Padding="18">
                     <StackPanel Spacing="14">
                         <TextBlock Text="Selected item" FontSize="12" Style="{StaticResource SecondaryText}" />
+                        <TextBlock x:Name="DTitle" FontWeight="SemiBold" TextWrapping="Wrap" IsTextSelectionEnabled="True" />
                         <TextBlock x:Name="DPath" Style="{StaticResource Mono}" FontSize="13" TextWrapping="Wrap" IsTextSelectionEnabled="True" />
                         <StackPanel Orientation="Horizontal" Spacing="8">
                             <Border x:Name="DSafe" Style="{StaticResource ChipSuccess}"><TextBlock Style="{StaticResource ChipTextPrimary}"><Run Text="&#xE73E;" FontFamily="Segoe Fluent Icons" FontSize="10" /><Run Text=" Safe" /></TextBlock></Border>
