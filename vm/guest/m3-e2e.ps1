@@ -10,7 +10,7 @@
   msi1603, msi3010 (the failing-uninstaller MSI fixtures of m3-e2e-msi.ps1).
 
   Outputs: C:\cr\out\m3-e2e\<app>\ (log e2e.log, state.json, step-*.json, e2e.json, execdiff.json, fidelity.json,
-  timings.jsonl, sess-*), and the rigtool run directory C:\cr\out\e2e-<app>\ (snap/lists 0, 1, 2, run.json, fp.json,
+  timings.jsonl, walk-floor.json, sess-*), and the rigtool run directory C:\cr\out\e2e-<app>\ (snap/lists 0, 1, 2, run.json, fp.json,
   plan-purge.json + .scan.json, executed.json), copied into <app>\run by phase finish, which zips <app> to
   C:\cr\out\m3-e2e-<app>.zip. Result lines start with "M3E ".
 
@@ -31,7 +31,9 @@
                  execdiff (collateral), the executed set against the CLI's preselected set
     ui-undo, ui-wait-undone, capture-undo       Undo all, the undone page, deep C, fidelity (undo_fidelity)
     fail-check   (msi1603, msi3010) ARP entry, sessions, quarantine and the fixture key after the uninstaller ran
-    finish       broker timing lines (broker-timings.ps1), the UI closed, e2e.json, the zip
+    finish       broker timing lines (broker-timings.ps1), the walk floor of the G12 harvest row (the installed
+                 engine's `walk-floor`: the bare walk of the harvest's registry scope, read-only), the UI closed,
+                 e2e.json, the zip
   Null run (-NullRun on every phase; the host's m3-e2e-null): the same phases, but in place of consent-approve -Step plan
     consent-cancel -Step plan [-WaitSec <n>]   the plan dialog's Cancel (m3sec press, button IDCANCEL), then <n> idle
                  seconds (the gate's execution time; step null-wait); capture-exec then takes snap B and deep B, checks
@@ -814,6 +816,16 @@ switch ($Phase) {
         $since = $(if ($st.t0) { [datetime]$st.t0 } else { (Get-Date).AddHours(-3) })
         try { $null = & C:\cr\guest\broker-timings.ps1 -Out (Join-Path $AD 'timings.jsonl') -Since $since } catch { $rec.detail = "broker-timings: $($_.Exception.Message)"; Log "!! $($rec.detail)" }
         $rec.brokers_alive = @(Get-Process -Name 'purge-broker' -ErrorAction SilentlyContinue | ForEach-Object { $_.Id })
+        # The walk floor (design 9.1, G12): what the registry itself costs the harvest's walk on this machine, in this
+        # run, after the harvest. Elevated like the broker (this job is), with the engine the broker was built with.
+        try {
+            # No floor from an earlier run in this folder may be scored if this walk fails.
+            Remove-Item -LiteralPath (Join-Path $AD 'walk-floor.json') -Force -ErrorAction SilentlyContinue
+            $r = Invoke-Engine -Exe (Get-E2eEngine) -Arguments ('walk-floor -o ' + (ConvertTo-EngineArg (Join-Path $AD 'walk-floor.json'))) -TimeoutSec 900
+            $rec.walk_floor_exit = $r.exit
+            $rec.walk_floor_timed_out = $r.timed_out
+            if ($r.exit -ne 0) { Log "!! walk-floor exited $($r.exit)" }
+        } catch { Log "!! walk-floor: $($_.Exception.Message)" }
         # Every other "Purge" Application event (warnings, errors) and the crash records of Purge processes, for
         # a broker that ended early.
         try {
@@ -835,7 +847,7 @@ switch ($Phase) {
             setup = $setup; state = $st; steps = $steps
             run = (Read-Json (Join-Path $RD 'run.json')); executed = (Read-Json (Join-Path $RD 'executed.json'))
             files = [ordered]@{ execdiff = (Test-Path -LiteralPath (Join-Path $AD 'execdiff.json')); fidelity = (Test-Path -LiteralPath (Join-Path $AD 'fidelity.json'))
-                                timings = (Test-Path -LiteralPath (Join-Path $AD 'timings.jsonl')); plan = (Test-Path -LiteralPath (Join-Path $RD 'plan-purge.json')) }
+                                timings = (Test-Path -LiteralPath (Join-Path $AD 'timings.jsonl')); walk_floor = (Test-Path -LiteralPath (Join-Path $AD 'walk-floor.json')); plan = (Test-Path -LiteralPath (Join-Path $RD 'plan-purge.json')) }
         }
         Write-JsonFile $doc (Join-Path $AD 'e2e.json') 16
         # The rigtool run directory goes with the evidence (the host scores danger from it); snap A / B stay in the guest.
@@ -845,6 +857,6 @@ switch ($Phase) {
         $zip = Join-Path 'C:\cr\out' "m3-e2e-$App.zip"
         Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
         Compress-Archive -Path (Join-Path $AD '*') -DestinationPath $zip -Force
-        "M3E FINISH $App zip=$((Get-Item $zip).Length) timings=$($doc.files.timings) brokers_alive=$($rec.brokers_alive.Count)"
+        "M3E FINISH $App zip=$((Get-Item $zip).Length) timings=$($doc.files.timings) walk_floor=$($doc.files.walk_floor) brokers_alive=$($rec.brokers_alive.Count)"
     }
 }

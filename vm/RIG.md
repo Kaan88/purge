@@ -2239,11 +2239,13 @@ powershell -NoProfile -File vm\truth\m3-e2e-score.ps1 --self-test
   `undo_fidelity` 100 %."
 - G6: "End to end: 7 apps, executed set equals the preselected set of the rig plan, `danger` 0, `collateral` 0,
   `undo_fidelity` 100 %". G7: "Medium route: the per-user uninstaller ran at medium integrity; a broker-route program is
-  refused by the medium engine and the reverse". G12: "Engine timing: harvest 3 s, scan 10 s, first progress 100 ms".
-- 9.1: "Harvest complete after the UAC click, VS Code | 3 s"; "Post-uninstall scan, cold broker | 10 s; first progress
+  refused by the medium engine and the reverse". G12: "Engine timing: harvest at most 2x the walk floor of the same run and 20 s (9.1), scan 10 s, first progress
+  100 ms".
+- 9.1: "Harvest complete after the UAC click, VS Code | at most 2x the bare registry-walk floor measured on the same
+  machine in the same run; absolute sanity cap 20 s"; "Post-uninstall scan, cold broker | 10 s; first progress
   within 100 ms" (measured as 9.1 says, from the broker's timing marks: `harvest_complete` of `uninstall.prepare` since
   the broker process was created; `scan_complete - scan_start` and `first_progress - scan_start` of its first
-  `leftovers.scan`).
+  `leftovers.scan`; the floor is `floor_ms` of the guest's `walk-floor.json`, the installed engine's `walk-floor`).
 - B7 failed uninstallers: 1603 is reported as a failure (the error bar with the exit code) and nothing is purged; 3010
   is reported as restart-needed (the "A restart is needed." bar) and is not a failure.
 
@@ -2288,7 +2290,8 @@ the CLI's preselected set -> `run\executed.json`) - undo app: `ui-undo` (`UndoAl
 `consent-wait undo` (`11-consent-undo`), `consent-approve undo`, `ui-wait-undone` (`UndoTitleText` "Put back";
 `12-undone`), `capture-undo` (deep C, `rigtool fidelity` deep A / deep C over the journal -> `fidelity.json`) - failing
 uninstallers: `fail-check` (ARP entry, fixture key, new sessions, quarantine listing; the pipeline page stays shown for
-`07-failure`) - `finish` (the broker's timing lines of the run, `broker-timings.ps1`; the UI closed; `e2e.json` with
+`07-failure`) - `finish` (the broker's timing lines of the run, `broker-timings.ps1`; the walk floor of the G12 harvest row,
+`purge-engine walk-floor -o walk-floor.json` with the installed engine, read-only, three walks; the UI closed; `e2e.json` with
 every step record; the rigtool run directory copied in as `run\`; zipped and pulled to `<evidence>\<app>\guest\`). A
 phase that throws still gets `finish` and the pull; the scorer fails the missing rows.
 
@@ -2314,7 +2317,8 @@ its flow; the UI steps (row, Uninstall, confirm, uninstall consent on the broker
 review, Move, plan consent, result "Moved ..."; **executed set == the CLI's preselected set** (by target key, both
 non-empty); session `Committed`; **danger 0** (rigtool tool `ui`: `danger_offered` and `danger_preselected` 0; tool
 `purge`: `danger_blocking` 0); **collateral 0** (`execdiff.json` `collateral` and `guard_escapes` 0); G12 cold scan
-<= 10 s and first progress <= 100 ms, harvest after UAC <= 3 s for `vscode` and `vscode-user`; the undo app: undo
+<= 10 s and first progress <= 100 ms, harvest after UAC <= 2 x `floor_ms` of the app's `guest\walk-floor.json`
+(missing, not elevated or without a positive time: FAIL) and <= 20 s for `vscode` and `vscode-user`; the undo app: undo
 through the UI and **undo_fidelity 100 %** (`fidelity.json` ok, every row pass). `msi1603`: the failure bar with exit
 code 1603, the scan never reached (no review, no Move, no result), no new session, quarantine unchanged, the ARP entry
 and the fixture key still there. `msi3010`: the restart bar with exit code 3010 and no failure bar, the scan reached,

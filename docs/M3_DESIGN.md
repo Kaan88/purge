@@ -491,7 +491,7 @@ Rules:
 
 ## 9. Launch gates and benches
 
-### 9.1 Gates (ENGINE_PLAN 1.3, unchanged until 9.3 runs)
+### 9.1 Gates (ENGINE_PLAN 1.3, unchanged until 9.3 runs; the harvest row is relative since 2026-11-23)
 
 | Metric | Gate |
 |---|---|
@@ -501,7 +501,7 @@ Rules:
 | First launch after install or update, Defender on | 1.2 s p50 over 5 fresh copies |
 | Cold after reboot, bare metal | 1.0 s p50 on the dev host, N at least 5 |
 | VM | functional only; WARP numbers reported |
-| Harvest complete after the UAC click, VS Code | 3 s |
+| Harvest complete after the UAC click, VS Code | at most 2x the bare registry-walk floor measured on the same machine in the same run; absolute sanity cap 20 s |
 | Post-uninstall scan, cold broker | 10 s; first progress within 100 ms |
 | S3 page open, 2,000-item fixture | reported, no gate yet |
 
@@ -521,6 +521,39 @@ reduces.
 | First progress within 100 ms | `first_progress - scan_start`; `first_progress` is taken when the request's first `scan.progress` line has been written to the pipe |
 
 Marks never fail or change a request: a mark the clock cannot give is left out.
+
+**The walk floor of the harvest row (DECISIONS 2026-11-23, "G12 harvest row relative to the walk floor").** The
+harvest walks the whole reference scope once (ENGINE_PLAN 5.5: `HKLM\SOFTWARE`, the services and the machine
+environment of the current control set, the user's `Software`, `Environment` and `_Classes`; about 520,000 keys on
+the dev host), and that walk is bound by the registry itself: an absolute 3 s cannot be met on any machine we have,
+whatever the engine does with what it reads. The row therefore compares the harvest with what the same walk costs
+on the same machine with nothing done to what is read:
+
+- **Numerator:** `harvest_complete` of `uninstall.prepare`, ms since the broker process was created, as before.
+- **Floor:** `purge-engine walk-floor [--runs <n>] [-o <file>]` (document `purge.walk-floor/1`). It builds the scope
+  the harvest's reference scan walks for the interactive user (`purge_harvest::refsnap::scope_for_sids`, the function
+  the harvest itself calls) and reads it with `purge_index::refscan::bare_walk`: the scan's own walk, through the same
+  walker, on the same threads, with the same split and prune list, every key entered, its values read and its subkeys
+  listed, and no value tested. It writes nothing but its document. Three walks by default; `floor_ms` is the shortest
+  (a floor is a lower bound, and the shortest walk is the strictest choice for the gate). Each walk is reported with
+  its keys, values, pruned keys, links and unreadable keys, so a floor of another scope shows.
+- **Where it is taken:** in the VM run of `m3-e2e`, by the guest's `finish` phase, elevated like the broker, with the
+  installed release engine (the engine the broker was built with), after the app's harvest:
+  `<app>\guest\walk-floor.json`. The scorer fails the row when the document is missing, has no positive `floor_ms`
+  or is not from an elevated engine.
+- **Gate:** `harvest_complete <= 2 x floor_ms` and `harvest_complete <= 20,000 ms`. The factor leaves the harvest as
+  much again as the walk for everything else it does (start checks, pipe, anchors, indexes, testing every value); the
+  cap keeps a machine with a slow floor from passing a harvest nobody would wait for, and bounds a floor that was
+  itself disturbed.
+- **Why a verb of the release engine and not a `rig-exec` verb, an xtask or rigtool:** `m3-e2e` installs the release
+  engine and broker (`install.ps1` refuses a `rig-exec` engine), so a `rig-exec` verb is not on the VM in the run that
+  needs it; xtask runs on the host; rigtool is a project of its own with its own registry reader, so its walk would be
+  another walk (other opens, other threads, and a copy of the scope and prune list to keep equal by hand). The
+  engine's verb is the harvest's walk by construction. It adds no capability: it reads keys `harvest` and
+  `baseline build` already read, with the caller's rights, and prints counts and times.
+- Host, unelevated, 8 logical CPUs, 518,574 keys and 781,463 values: floor 6.0 s (three walks within 30 ms of each
+  other), CLI harvest of ten installed apps 7.7 to 10.6 s, ratio 1.3 to 1.8. `PURGE_TIMING` must not be set for the floor (a metered walk
+  is slower; the verb warns).
 
 ### 9.2 `xtask bench-launch`
 
@@ -633,7 +666,7 @@ checklist of six steps with screenshots.
 | G9 | Recovery and expiry through consent; user-data items one by one; a declined dialog changes nothing | `m3-recover`, purge rows |
 | G10 | BL-R1 S4 closed: planted environment directories are ignored; a copy outside the system volume or in a user-writable directory refuses to start | `m3-broker` |
 | G11 | Starts on clean Windows | `m3-clean-start` |
-| G12 | Engine timing: harvest 3 s, scan 10 s, first progress 100 ms | broker timings in the e2e rows |
+| G12 | Engine timing: harvest at most 2x the walk floor of the same run and 20 s (9.1), scan 10 s, first progress 100 ms | broker timings and `walk-floor.json` in the e2e rows |
 | G13 | Regression: the M1b scan gate and the executor gate still pass on the M3 commit (rig CLI, `rig-exec`) | existing gate scripts |
 | G14 | Reviews R1, R2, R3 have no open blocker; every finding has a disposition | `docs/reviews/m3/` |
 

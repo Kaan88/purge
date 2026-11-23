@@ -453,8 +453,10 @@ fn walker_refuses_a_path_below_a_link_that_got_its_target_after_it_was_entered()
 }
 
 /// A key deleted after the walker entered it reads as gone ([`SourceError::NotFound`]), as reading it by
-/// path does, not as unreadable (review S2: `ERROR_KEY_DELETED` through the kept handle). (Writes and
-/// removes `HKU\<SID>\Software\PurgeTest-<random>`.)
+/// path does, not as unreadable (review S2: `ERROR_KEY_DELETED` through the kept handle). Its values
+/// were read when it was entered, while it was there: the walker hands those out once, and every
+/// read made after the deletion says the key is gone. (Writes and removes
+/// `HKU\<SID>\Software\PurgeTest-<random>`.)
 #[test]
 fn walker_reads_a_key_deleted_after_it_was_entered_as_not_found() {
     let scratch = test_ffi::Scratch::new(&me());
@@ -467,10 +469,38 @@ fn walker_reads_a_key_deleted_after_it_was_entered_as_not_found() {
     assert_eq!((info.n_values, info.n_subkeys), (1, 1));
     scratch.delete(r"Gone\Child").unwrap();
     scratch.delete("Gone").unwrap();
+    let entered = walker.values().unwrap();
+    assert_eq!(entered.len(), 1);
+    assert_eq!(entered[0].name, "a");
     assert_eq!(walker.values(), Err(SourceError::NotFound));
     assert_eq!(walker.subkeys(), Err(SourceError::NotFound));
     assert_eq!(live.values(&key), Err(SourceError::NotFound));
     assert_eq!(live.key_exists(&key), ExistsState::Absent);
+}
+
+/// A subkey created after the walker entered a key (and counted its subkeys) costs the walk no
+/// subkey that was there: the registry lists subkeys sorted by name, so a new one that sorts first
+/// moves the others up, and a listing that stopped at the count taken on entry would lose the last
+/// of them with its whole subtree (review of the walker's counted reads). The values handed out are
+/// those read on entry. (Writes and removes `HKU\<SID>\Software\PurgeTest-<random>`.)
+#[test]
+fn walker_lists_every_earlier_subkey_when_one_is_added_after_entry() {
+    let scratch = test_ffi::Scratch::new(&me());
+    scratch.create("P").set_sz("first", "1");
+    scratch.create(r"P\m");
+    scratch.create(r"P\z");
+    let live = LiveRegistry::new();
+    let mut walker = live.walker();
+    let key = scratch.canon("P");
+    let info = walker.enter(&key).unwrap();
+    assert_eq!((info.n_values, info.n_subkeys), (1, 2));
+    scratch.create(r"P\a");
+    scratch.create("P").set_sz("second", "2");
+    assert_eq!(walker.subkeys().unwrap(), ["a", "m", "z"]);
+    assert_eq!(live.subkeys(&key).unwrap(), ["a", "m", "z"]);
+    let entered = walker.values().unwrap();
+    assert_eq!(entered.len(), 1);
+    assert_eq!(entered[0].name, "first");
 }
 
 // -----------------------------------------------------------------------------------------------------

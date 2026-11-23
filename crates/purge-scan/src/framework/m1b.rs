@@ -105,6 +105,10 @@ struct ResidueLog {
     answers: BTreeMap<(String, String), (String, ResidueWhy)>,
 }
 
+/// The reader threads of the ownership index while the reference walk runs beside it
+/// ([`ScanExt::build`]).
+const INDEX_THREADS_BESIDE_WALK: usize = 2;
+
 /// Writes a `PURGE_TIMING` phase line when a source meter is installed (the format of
 /// `purge_index::ownership`).
 struct Phase {
@@ -204,6 +208,14 @@ impl ScanExt {
     /// (the inventory's MSI products without an Uninstall key) and the system-object index. Writes the `PURGE_TIMING` phases `refscan`, `ownership.components`,
     /// `ownership.tables` (from the index) and `ext.sysobj`. Never fails: what cannot be read is
     /// recorded in the index statistics and errors.
+    ///
+    /// The walk and the two indexes read different things and share nothing, so the indexes are built
+    /// on a second thread while the walk runs; each gives what it gives alone. With a source meter
+    /// installed (`PURGE_TIMING`) they run one after the other, so that each phase line counts its
+    /// own reads; so they do when the system refuses the thread. Beside the walk, which reads on up
+    /// to eight threads of its own, the ownership index reads on [`INDEX_THREADS_BESIDE_WALK`]
+    /// threads instead of its default eight: the registry serves more readers hardly faster, and
+    /// the index gives the same result on any number of threads.
     #[allow(clippy::too_many_arguments)]
     pub fn build(
         reg: &dyn RegistrySource,
@@ -216,31 +228,59 @@ impl ScanExt {
         cache: Option<&dyn TableCache>,
         limits: OwnershipLimits,
     ) -> ScanExt {
-        let phase = Phase::start("refscan");
-        // REF-ANY makes no walk for an app without anchors; nothing can refer to it.
-        let (hits, complete) = if app.anchors.is_empty() {
-            (Vec::new(), true)
-        } else {
-            let scan = crate::ref_any::walk(reg, fp, &app.refs);
-            let complete = scan.is_complete();
-            (scan.hits, complete)
+        let walk = || {
+            let phase = Phase::start("refscan");
+            // REF-ANY makes no walk for an app without anchors; nothing can refer to it.
+            let found = if app.anchors.is_empty() {
+                (Vec::new(), true)
+            } else {
+                let scan = crate::ref_any::walk(reg, fp, &app.refs);
+                let complete = scan.is_complete();
+                (scan.hits, complete)
+            };
+            phase.end();
+            found
         };
-        phase.end();
-        let ownership = OwnershipIndex::build_with_limits(
-            &OwnershipInput {
-                reg,
-                fs,
-                sys,
-                products: inventory,
-                msi_only,
-                cache,
-                threads: 0,
-            },
-            limits,
-        );
-        let phase = Phase::start("ext.sysobj");
-        let sysobj = sysobj::build(reg, sys);
-        phase.end();
+        let indexes = |threads: usize| {
+            let ownership = OwnershipIndex::build_with_limits(
+                &OwnershipInput {
+                    reg,
+                    fs,
+                    sys,
+                    products: inventory,
+                    msi_only,
+                    cache,
+                    threads,
+                },
+                limits,
+            );
+            let phase = Phase::start("ext.sysobj");
+            let sysobj = sysobj::build(reg, sys);
+            phase.end();
+            (ownership, sysobj)
+        };
+        let ((hits, complete), (ownership, sysobj)) =
+            if purge_source::metered::installed().is_some() {
+                let found = walk();
+                (found, indexes(0))
+            } else {
+                std::thread::scope(|scope| {
+                    let beside = || indexes(INDEX_THREADS_BESIDE_WALK);
+                    match std::thread::Builder::new().spawn_scoped(scope, beside) {
+                        Ok(worker) => {
+                            let found = walk();
+                            match worker.join() {
+                                Ok(built) => (found, built),
+                                Err(panic) => std::panic::resume_unwind(panic),
+                            }
+                        }
+                        Err(_) => {
+                            let found = walk();
+                            (found, indexes(0))
+                        }
+                    }
+                })
+            };
         ScanExt::new(ownership, sysobj).with_ref_walk(&fp.app.program_id, hits, complete)
     }
 

@@ -66,7 +66,10 @@ pub trait KeyWalker {
     /// Opens `key` and reads its metadata, as [`RegistrySource::key_info`].
     fn enter(&mut self, key: &str) -> SourceResult<KeyInfo>;
 
-    /// The values of the key last entered, as [`RegistrySource::values`].
+    /// The values of the key last entered, as [`RegistrySource::values`]. A walker may have read
+    /// them already when the key was entered and return those: the values are then the key's values
+    /// at [`KeyWalker::enter`], not at this call, and a failure of that read is reported here. A
+    /// caller that needs the values as they are now enters the key again.
     fn values(&mut self) -> SourceResult<Vec<RegValue>>;
 
     /// The subkey names of the key last entered, as [`RegistrySource::subkeys`].

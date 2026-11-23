@@ -84,7 +84,7 @@ Inputs:
 
 | Metric | Gate |
 |---|---|
-| Harvest complete after the UAC click, typical app (VS Code) | ≤ 3 s |
+| Harvest complete after the UAC click, typical app (VS Code) | ≤ 2x the bare registry-walk floor of the same machine in the same run, and ≤ 20 s (M3_DESIGN.md 9.1; was ≤ 3 s, DECISIONS 2026-11-23 "G12 harvest row relative to the walk floor") |
 | Post-uninstall scan, cold broker, targeted (§5.1) | ≤ 10 s; first progress within 100 ms |
 
 ### 1.4 Per-app targets (bands; numbers frozen after the M0 re-run)

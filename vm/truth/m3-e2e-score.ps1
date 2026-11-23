@@ -13,7 +13,9 @@
       plans\purge.json (the CLI plan with the sidecar's actions, as m1a.sh) and plans\ui.json (the executed set: every
       item of the session's report, preselected), then one `rigtool score --set ... --classes` -> score-rigtool.json:
       `danger` is the M1a / M1b scorer's number for the executed set (tool ui) and for the CLI plan (tool purge);
-    * per app, `cargo xtask broker-timings <app>\guest\timings.jsonl --out <app>\timings.json` (G12).
+    * per app, `cargo xtask broker-timings <app>\guest\timings.jsonl --out <app>\timings.json` (G12). The walk
+      floor of the harvest row, <app>\guest\walk-floor.json (`purge-engine walk-floor`, taken by the guest's finish
+      phase), is read as it is.
     -RigTool <exe> (default vm\rigtool\target\release\rigtool.exe or $env:RIG_RIGTOOL), -Xtask <exe> (a built xtask;
     default `cargo xtask` from the repo root).
 
@@ -218,9 +220,23 @@ function Test-Shots([string]$AppDir, $Host_, [string[]]$Names) {
     @($Names | Where-Object { $have -notcontains $_ })
 }
 
+# The walk floor of an app (docs\M3_DESIGN.md 9.1): floor_ms of <app>\guest\walk-floor.json (purge.walk-floor/1), the
+# shortest bare walk of the harvest's registry scope, taken by the guest's elevated engine in the same run. $null with
+# the reason when the document is missing, of another schema, not from an elevated engine (the broker's harvest reads
+# as an administrator; another reader walks other keys) or without a positive time.
+function Get-WalkFloor($F) {
+    if ($null -eq $F) { return @{ ms = $null; why = 'no walk-floor.json' } }
+    if ("$($F.schema)" -ne 'purge.walk-floor/1') { return @{ ms = $null; why = "walk floor schema '$($F.schema)'" } }
+    if ($F.elevated -ne $true) { return @{ ms = $null; why = 'the walk floor is not from an elevated engine' } }
+    $ms = Num $F.floor_ms
+    if ($null -eq $ms -or $ms -le 0) { return @{ ms = $null; why = 'no floor_ms in the walk floor' } }
+    @{ ms = $ms; why = '' }
+}
+
 # G12 rows from <app>\timings.json (purge.broker-timings/1): the broker's cold scan (duration, first progress) and,
-# for the harvest apps, harvest complete after the UAC click.
-function Test-Timings([string]$Id, $T, $X, [bool]$Scan, [bool]$Harvest) {
+# for the harvest apps, harvest complete after the UAC click: at most harvest_floor_factor times the walk floor of the
+# same run ($Floor, <app>\guest\walk-floor.json) and at most harvest_cap_ms.
+function Test-Timings([string]$Id, $T, $X, [bool]$Scan, [bool]$Harvest, $Floor = $null) {
     $b = @(Arr $T.brokers)
     if ($Scan) {
         $s = @($b | ForEach-Object { Arr $_.scans } | Where-Object { $_.cold -eq $true }) | Select-Object -First 1
@@ -231,7 +247,12 @@ function Test-Timings([string]$Id, $T, $X, [bool]$Scan, [bool]$Harvest) {
     if ($Harvest) {
         $h = @($b | ForEach-Object { Arr $_.harvests }) | Select-Object -First 1
         $ms = $(if ($h) { Num $h.after_uac_ms })
-        Row "$Id G12 harvest after UAC <= $($X.gates.harvest_after_uac_ms) ms" ($null -ne $ms -and $ms -le [double]$X.gates.harvest_after_uac_ms) $(if ($null -eq $ms) { 'no harvest timing' } else { "$ms ms" })
+        $factor = Num $X.gates.harvest_floor_factor; $cap = Num $X.gates.harvest_cap_ms
+        $fl = Get-WalkFloor $Floor
+        $relOk = ($null -ne $ms -and $null -ne $fl.ms -and $null -ne $factor -and $factor -gt 0 -and $ms -le $factor * $fl.ms)
+        $relDetail = $(if ($null -eq $ms) { 'no harvest timing' } elseif ($null -eq $fl.ms) { "$ms ms; $($fl.why)" } else { "$ms ms / floor $($fl.ms) ms = $([math]::Round($ms / $fl.ms, 2))" })
+        Row "$Id G12 harvest after UAC <= $factor x the walk floor" $relOk $relDetail
+        Row "$Id G12 harvest after UAC <= $cap ms (sanity cap)" ($null -ne $ms -and $null -ne $cap -and $cap -gt 0 -and $ms -le $cap) $(if ($null -eq $ms) { 'no harvest timing' } else { "$ms ms" })
     }
 }
 
@@ -325,7 +346,7 @@ function Test-App([string]$Ev, $A, $X, $Score, [bool]$Undo, [string]$AmbSha = ''
     $aOk = [bool]($AmbSha -and $hs -ceq $AmbSha -and $ds -ceq $AmbSha -and $gs -ceq $AmbSha)
     $short = { param($s) if ($s) { "$s".Substring(0, [Math]::Min(12, "$s".Length)) } else { 'none' } }
     Row "$id ambient set pushed (host == guest == committed m3-e2e set)" $aOk "committed $(& $short $AmbSha), host $(& $short $hs), declared $(& $short $ds), guest $(& $short $gs)"
-    Test-Timings $id (Read-J (Join-Path $dir 'timings.json')) $X $true (@(Arr $X.gates.harvest_apps) -contains $id)
+    Test-Timings $id (Read-J (Join-Path $dir 'timings.json')) $X $true (@(Arr $X.gates.harvest_apps) -contains $id) (Read-J (Join-Path $dir 'guest\walk-floor.json'))
     if ($Undo) {
         $uu = Get-Step $e2e 'ui-undo'; $ua = Get-Step $e2e 'consent-approve-undo'; $ud = Get-Step $e2e 'ui-wait-undone'
         $w = @()
@@ -442,7 +463,8 @@ function New-PassEvidence($X, [string]$Dir) {
             }
         }
         if ("$($a.kind)" -ne 'fail-1603') {
-            $harv = $(if (@(Arr $X.gates.harvest_apps) -contains $id) { @([ordered]@{ after_uac_ms = 2100 }) } else { @([ordered]@{ after_uac_ms = 900 }) })
+            $harv = $(if (@(Arr $X.gates.harvest_apps) -contains $id) { @([ordered]@{ after_uac_ms = 9000 }) } else { @([ordered]@{ after_uac_ms = 8000 }) })
+            Write-J ([ordered]@{ schema = 'purge.walk-floor/1'; elevated = $true; threads = 4; runs = @([ordered]@{ ms = 6400 }, [ordered]@{ ms = 6000 }); floor_ms = 6000 }) (Join-Path $gd 'walk-floor.json')
             Write-J ([ordered]@{ schema = 'purge.broker-timings/1'; brokers = @([ordered]@{ harvests = $harv; scans = @([ordered]@{ cold = $true; duration_ms = 4200; first_progress_ms = 12 }) }) }) (Join-Path $ad 'timings.json')
         }
         Write-J ([ordered]@{ schema = 'purge.rig.m3e2e.app/1'; app = $id; kind = "$($a.kind)"; uac = [ordered]@{ ConsentPromptBehaviorAdmin = 0 }; steps = $steps
@@ -463,7 +485,14 @@ function Get-E2eDefects {
         @{ name = 'no first-progress mark (git)'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'git\timings.json') { param($d) $d.brokers[0].scans[0].first_progress_ms = $null } } },
         @{ name = 'first progress 150 ms (npp)'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'npp\timings.json') { param($d) $d.brokers[0].scans[0].first_progress_ms = 150 } } },
         @{ name = 'cold scan 12 s (firefox-tb)'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'firefox-tb\timings.json') { param($d) $d.brokers[0].scans[0].duration_ms = 12000 } } },
-        @{ name = 'harvest 3.4 s after UAC (vscode-user)'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'vscode-user\timings.json') { param($d) $d.brokers[0].harvests[0].after_uac_ms = 3400 } } },
+        @{ name = 'harvest over twice the walk floor (vscode-user)'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'vscode-user\timings.json') { param($d) $d.brokers[0].harvests[0].after_uac_ms = 12100 } } },
+        @{ name = 'harvest within twice the floor but over the cap (vscode)'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'vscode\guest\walk-floor.json') { param($d) $d.floor_ms = 15000 }; Edit-E2eJson (Join-Path $ev 'vscode\timings.json') { param($d) $d.brokers[0].harvests[0].after_uac_ms = 20100 } } },
+        @{ name = 'walk floor missing (vscode)'; act = { param($ev) Remove-Item -LiteralPath (Join-Path $ev 'vscode\guest\walk-floor.json') } },
+        @{ name = 'walk floor without a time (vscode-user)'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'vscode-user\guest\walk-floor.json') { param($d) $d.floor_ms = $null } } },
+        @{ name = 'walk floor of zero (vscode)'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'vscode\guest\walk-floor.json') { param($d) $d.floor_ms = 0 } } },
+        @{ name = 'walk floor not from an elevated engine (vscode)'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'vscode\guest\walk-floor.json') { param($d) $d.elevated = $false } } },
+        @{ name = 'walk floor of another schema (vscode-user)'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'vscode-user\guest\walk-floor.json') { param($d) $d.schema = 'purge.walk-floor/0' } } },
+        @{ name = 'no harvest timing (vscode)'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'vscode\timings.json') { param($d) $d.brokers[0].harvests = @() } } },
         @{ name = 'a 1603 shown as success (review reached)'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'msi1603\guest\e2e.json') { param($d) $d.steps.'ui-wait-scan'.state = 'review'; $d.steps.'ui-wait-scan'.seen = @('Ready for review'); $d.steps.'ui-wait-scan'.exit_codes = @(1603) } } },
         @{ name = 'a 1603 without its exit code'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'msi1603\guest\e2e.json') { param($d) $d.steps.'ui-wait-scan'.exit_codes = @() } } },
         @{ name = 'a 1603 that purged (a new session)'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'msi1603\guest\e2e.json') { param($d) $d.steps.'fail-check'.sessions_new = @('20261122-1') } } },
@@ -558,6 +587,15 @@ function Invoke-SelfTest {
         Check 'the ambient rows are scored (the set, and one per executing app)' (@($r.rows | Where-Object { $_.row -like '*ambient set*' }).Count -eq 1 + @(Arr $X.apps | Where-Object { "$($_.kind)" -in 'app', 'fixture' }).Count)
         $sub = Invoke-Score $ev $X @('npp') -Quiet -TruthDir $ev
         Check 'a subset passes but is not a gate score' ($sub.pass -and -not $sub.gate)
+        # The harvest row is relative: 11.9 s passes against a floor of 6 s (the old row was 3 s), and exactly twice
+        # the floor is the bound.
+        $rel = Join-Path $root 'relative'
+        New-PassEvidence $X $rel
+        Edit-E2eJson (Join-Path $rel 'vscode\timings.json') { param($d) $d.brokers[0].harvests[0].after_uac_ms = 12000 }
+        $r3 = Invoke-Score $rel $X -Quiet -TruthDir $rel
+        Check 'a harvest of exactly twice the walk floor passes' $r3.pass
+        Check 'the harvest rows name the floor and the cap' (@($r3.rows | Where-Object { "$($_.row)" -like 'vscode G12 harvest after UAC <= 2 x the walk floor' -and "$($_.detail)" -eq '12000 ms / floor 6000 ms = 2' }).Count -eq 1 -and @($r3.rows | Where-Object { "$($_.row)" -like 'vscode G12 harvest after UAC <= 20000 ms (sanity cap)' }).Count -eq 1)
+        Check 'an app outside harvest_apps has no harvest row' (@($r3.rows | Where-Object { "$($_.row)" -like 'git G12 harvest*' }).Count -eq 0)
         $on = Join-Path $root 'uac-on'
         New-PassEvidence $X $on; Set-E2eUacOn $on
         $r2 = Invoke-Score $on $X -Quiet -TruthDir $on

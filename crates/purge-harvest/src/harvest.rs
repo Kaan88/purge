@@ -6,7 +6,9 @@
 //!
 //! 1. machine facts: Windows edition and build, the interactive user, the environment, the guard facts;
 //!    then the two M1b indexes: the ownership index of `purge-index` (only for an MSI or Burn entry)
-//!    and the system-object index (services, tasks, firewall rules);
+//!    and the system-object index (services, tasks, firewall rules), which a second thread reads
+//!    while steps 1 to 6 run (it depends on the machine alone and is first used in step 7; with a
+//!    source meter installed, `PURGE_TIMING`, step 7 reads it, so each phase counts its own reads);
 //! 2. the Inno Setup uninstall log, when the entry has one ([`crate::inno_map`]);
 //! 3. the identity (`purge-identity`): names, vendors, tokens, proposed main exes; then the MSI facts
 //!    ([`crate::msi`]) of an MSI entry, or the Burn facts ([`crate::burn`]) of a bundle and the MSI
@@ -334,6 +336,26 @@ impl<'a> SharedIndexes<'a> {
         self.sysobj
             .get_or_init(|| sysobj_index::build(self.sources.reg, self.sources.sys))
     }
+
+    /// Whether the system-object index has been built.
+    pub fn sysobj_built(&self) -> bool {
+        self.sysobj.get().is_some()
+    }
+
+    /// [`SharedIndexes::sysobj`], taking the index from `warm` when it is not built yet: a thread
+    /// that is building it from the same sources ([`sysobj_index::build`]), so the index is the one
+    /// the first call would have built.
+    fn sysobj_from(
+        &self,
+        warm: Option<std::thread::ScopedJoinHandle<'_, sysobj_index::SysObjectIndex>>,
+    ) -> &sysobj_index::SysObjectIndex {
+        self.sysobj
+            .get_or_init(|| match warm.map(std::thread::ScopedJoinHandle::join) {
+                Some(Ok(index)) => index,
+                Some(Err(panic)) => std::panic::resume_unwind(panic),
+                None => sysobj_index::build(self.sources.reg, self.sources.sys),
+            })
+    }
 }
 
 /// What the fingerprint records about the view it was harvested with (BASELINE_LOCAL_DESIGN.md §4.5).
@@ -403,6 +425,44 @@ pub fn harvest_report_with(
     kb: &Kb,
     opts: &HarvestOpts<'_>,
 ) -> HarvestReport {
+    // The two M1b indexes, once per engine call: the caller's, or this harvest's own, which the
+    // harvests of the co-product candidates then share.
+    let own_shared;
+    let shared: &SharedIndexes<'_> = match opts.shared {
+        Some(shared) => shared,
+        None => {
+            own_shared = SharedIndexes::new(sources, inventory, opts.table_cache);
+            &own_shared
+        }
+    };
+    // With a source meter installed (`PURGE_TIMING`) nothing is read on a second thread: every
+    // phase line then counts its own reads and no others, as in `ScanExt::build`, so the phase
+    // lines of a harvest and of a scan compare.
+    if shared.sysobj_built() || purge_source::metered::installed().is_some() {
+        return harvest_report_shared(entry, inventory, sources, baseline, kb, shared, None);
+    }
+    // The system-object index (services, tasks, firewall rules) is read from the machine alone and
+    // is first needed in step 7: it is built on a second thread while steps 1 to 6 run. When the
+    // system refuses the thread, step 7 builds it.
+    std::thread::scope(|scope| {
+        let warm = std::thread::Builder::new()
+            .spawn_scoped(scope, || sysobj_index::build(sources.reg, sources.sys))
+            .ok();
+        harvest_report_shared(entry, inventory, sources, baseline, kb, shared, warm)
+    })
+}
+
+/// [`harvest_report_with`] with the indexes of the engine call in hand; `warm` is the thread that is
+/// building the system-object index, when one was started.
+fn harvest_report_shared(
+    entry: &InventoryEntry,
+    inventory: &InventoryDoc,
+    sources: Sources<'_>,
+    baseline: &BaselineView,
+    kb: &Kb,
+    shared: &SharedIndexes<'_>,
+    warm: Option<std::thread::ScopedJoinHandle<'_, sysobj_index::SysObjectIndex>>,
+) -> HarvestReport {
     let Sources { reg, fs, sys } = sources;
     let mut warnings: Vec<String> = Vec::new();
 
@@ -454,20 +514,10 @@ pub fn harvest_report_with(
     } else {
         baseline
     };
-    // The two M1b indexes, once per engine call: the caller's, or this harvest's own, which the
-    // harvests of the co-product candidates then share. The ownership index (component clients, MSI
-    // rows, Burn dependents) is read only for an MSI or Burn entry: nothing else of the harvest asks it.
-    let own_shared;
-    let shared: &SharedIndexes<'_> = match opts.shared {
-        Some(shared) => shared,
-        None => {
-            own_shared = SharedIndexes::new(sources, inventory, opts.table_cache);
-            &own_shared
-        }
-    };
+    // The ownership index (component clients, MSI rows, Burn dependents) is read only for an MSI or
+    // Burn entry: nothing else of the harvest asks it.
     let table_cache = shared.table_cache();
     let ownership = reads_msi(entry).then(|| shared.ownership());
-    let sys_index = shared.sysobj();
 
     // 2. The Inno Setup uninstall log.
     let binding = UserBinding {
@@ -782,7 +832,9 @@ pub fn harvest_report_with(
         warnings: Vec::new(),
     };
 
-    // 7. Everything that needs the full anchor set.
+    // 7. Everything that needs the full anchor set. The system-object index is in hand first: the
+    // harvests of the co-product candidates ask the shared indexes for it.
+    let sys_index = shared.sysobj_from(warm);
     let anchor_set = AnchorSet::from_fingerprint(&fp);
     let ctx = HarvestCtx {
         reg,

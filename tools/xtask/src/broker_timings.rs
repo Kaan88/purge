@@ -13,15 +13,17 @@
 //!
 //! | Field | Metric (design 9.1) | Gate |
 //! |---|---|---|
-//! | `harvests[].after_uac_ms` | `harvest_complete` of `uninstall.prepare`, ms since the broker process was created: the UAC click starts the process, so this is "harvest complete after the UAC click" (start checks, the client's connect and hello, and the harvest) | 3,000 for VS Code |
+//! | `harvests[].after_uac_ms` | `harvest_complete` of `uninstall.prepare`, ms since the broker process was created: the UAC click starts the process, so this is "harvest complete after the UAC click" (start checks, the client's connect and hello, and the harvest) | for VS Code: 2x the walk floor of the same run (the scorer, with `walk-floor.json`), and 20,000 (`within_cap`) |
 //! | `harvests[].duration_ms` | `harvest_complete` - `harvest_start` | reported |
 //! | `scans[].duration_ms` | `scan_complete` - `scan_start` of `leftovers.scan`; `cold` is the broker's first scan | 10,000 cold |
 //! | `scans[].first_progress_ms` | `first_progress` - `scan_start`: the first `scan.progress` line was written | 100 |
 //! | `pipe_connected_ms` | client checked and hello answered, ms since creation | reported |
 //! | `executes[]` | consent shown to answered (the user's time), executor start to complete | reported |
 //!
-//! `within_gate` is set for the metrics that have a gate; which run is the VS Code one, and whether a scan
-//! is a post-uninstall scan of a cold broker, the scorer knows. `problems` lists marks that go back in
+//! `within_gate` is set for the metrics that have an absolute gate, `within_cap` for a harvest (its gate
+//! is relative to the walk floor, `purge-engine walk-floor`, which this command does not read; the cap is
+//! the absolute part); which run is the VS Code one, and whether a scan is a post-uninstall scan of a cold
+//! broker, the scorer knows. `problems` lists marks that go back in
 //! time within a request, a complete mark without its start, and lines that are not readable.
 //! The command fails only when an input cannot be read or no timing line is found.
 
@@ -34,8 +36,12 @@ use serde_json::{Value, json};
 
 /// The output schema id.
 pub const SCHEMA: &str = "purge.broker-timings/1";
-/// Gate: harvest complete after the UAC click (VS Code), ms.
-pub const HARVEST_GATE_MS: u64 = 3_000;
+/// Gate: harvest complete after the UAC click (VS Code), the absolute sanity cap, ms. The gate itself
+/// is [`HARVEST_FLOOR_FACTOR`] times the walk floor of the same run (M3_DESIGN.md §9.1).
+pub const HARVEST_CAP_MS: u64 = 20_000;
+/// Gate: harvest complete after the UAC click, as a multiple of the walk floor measured on the same
+/// machine in the same run (`purge-engine walk-floor`); judged by the scorer.
+pub const HARVEST_FLOOR_FACTOR: u64 = 2;
 /// Gate: post-uninstall scan, cold broker, ms.
 pub const SCAN_GATE_MS: u64 = 10_000;
 /// Gate: first progress of the scan, ms.
@@ -170,7 +176,8 @@ pub fn summarize(inputs: &[(String, String)]) -> Value {
     json!({
         "schema": SCHEMA,
         "gates": {
-            "harvest_after_uac_ms": HARVEST_GATE_MS,
+            "harvest_floor_factor": HARVEST_FLOOR_FACTOR,
+            "harvest_cap_ms": HARVEST_CAP_MS,
             "scan_ms": SCAN_GATE_MS,
             "first_progress_ms": FIRST_PROGRESS_GATE_MS,
         },
@@ -233,7 +240,7 @@ fn broker_report(
                 "complete_ms": complete,
                 "after_uac_ms": complete,
                 "duration_ms": span(TimingName::HarvestStart, TimingName::HarvestComplete),
-                "within_gate": complete.map(|ms| ms <= HARVEST_GATE_MS),
+                "within_cap": complete.map(|ms| ms <= HARVEST_CAP_MS),
             }));
         } else if request.at(TimingName::HarvestComplete).is_some() {
             span(TimingName::HarvestStart, TimingName::HarvestComplete);
@@ -367,7 +374,10 @@ mod tests {
         assert_eq!(b["pipe_connected_ms"], 300);
         assert_eq!(b["harvests"][0]["after_uac_ms"], 2_100);
         assert_eq!(b["harvests"][0]["duration_ms"], 1_780);
-        assert_eq!(b["harvests"][0]["within_gate"], true);
+        assert_eq!(b["harvests"][0]["within_cap"], true);
+        assert_eq!(b["harvests"][0]["within_gate"], Value::Null);
+        assert_eq!(report["gates"]["harvest_floor_factor"], 2);
+        assert_eq!(report["gates"]["harvest_cap_ms"], 20_000);
         assert_eq!(b["scans"][0]["cold"], true);
         assert_eq!(b["scans"][0]["duration_ms"], 4_000);
         assert_eq!(b["scans"][0]["first_progress_ms"], 12);

@@ -33,6 +33,9 @@ verbs:
   baseline info <file>                      check a local baseline file and print its seal
   hello                                     print what engine.hello reports, as JSON: the engine, this
                                             Windows, and the baseline view a scan would work with
+  walk-floor [--runs <n>] [-o <floor.json>] time a bare read of the registry scope a harvest walks:
+                                            every key entered, its values read, nothing tested or
+                                            changed (the VM rig holds the harvest's time against it)
   kb lint <pack.json>... [--baselines <dir>]
 
   <program_id> is an inventory id (HKLM|64|Git_is1) or the Uninstall key name of exactly one entry.
@@ -124,6 +127,8 @@ pub enum Command {
     BaselineInfo,
     /// `hello`.
     Hello,
+    /// `walk-floor`.
+    WalkFloor,
     /// `kb lint`.
     KbLint,
 }
@@ -152,6 +157,7 @@ impl Command {
             Command::BaselineBuild => "baseline build",
             Command::BaselineInfo => "baseline info",
             Command::Hello => "hello",
+            Command::WalkFloor => "walk-floor",
             Command::KbLint => "kb lint",
         }
     }
@@ -177,7 +183,7 @@ impl Command {
             | Command::PlanFromTargets => "M2",
             Command::BaselineBuild | Command::BaselineInfo | Command::Hello => "BL",
             Command::KbLint => "M4",
-            Command::Stdio => "M3",
+            Command::Stdio | Command::WalkFloor => "M3",
         }
     }
 
@@ -366,6 +372,21 @@ pub struct BaselineInfoArgs {
     pub file: PathBuf,
 }
 
+/// `walk-floor [--runs <n>] [-o <floor.json>]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WalkFloorArgs {
+    /// How many times the scope is walked ([`WALK_FLOOR_RUNS`] by default).
+    pub runs: u32,
+    /// Where the document goes; stdout when `None`.
+    pub out: Option<PathBuf>,
+}
+
+/// The walks of one `walk-floor` call when `--runs` is not given.
+pub const WALK_FLOOR_RUNS: u32 = 3;
+
+/// The most walks one `walk-floor` call makes.
+pub const WALK_FLOOR_MAX_RUNS: u32 = 20;
+
 /// `plan show <plan.json>`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanShowArgs {
@@ -400,6 +421,8 @@ pub enum Invocation {
     BaselineInfo(BaselineInfoArgs),
     /// `hello`.
     Hello,
+    /// `walk-floor`.
+    WalkFloor(WalkFloorArgs),
     /// An executor verb (run only by a `rig-exec` build).
     Executor(ExecVerb),
 }
@@ -425,6 +448,7 @@ pub fn parse(args: &[String]) -> Result<Invocation, String> {
         Command::BaselineBuild => baseline_build(&rest).map(Invocation::BaselineBuild),
         Command::BaselineInfo => baseline_info(&rest).map(Invocation::BaselineInfo),
         Command::Hello => no_arguments("hello", &rest).map(|()| Invocation::Hello),
+        Command::WalkFloor => walk_floor(&rest).map(Invocation::WalkFloor),
         Command::PlanFromTargets => from_targets(&rest)
             .map(ExecVerb::PlanFromTargets)
             .map(Invocation::Executor),
@@ -490,6 +514,7 @@ fn verb(args: &[String]) -> Result<Verb, String> {
         "uninstall" => Command::Uninstall,
         "scan" => Command::Scan,
         "hello" => Command::Hello,
+        "walk-floor" => Command::WalkFloor,
         "exec" => Command::Exec,
         "undo" => Command::Undo,
         "plan" => {
@@ -726,6 +751,27 @@ fn baseline_info(args: &[String]) -> Result<BaselineInfoArgs, String> {
     })
 }
 
+fn walk_floor(args: &[String]) -> Result<WalkFloorArgs, String> {
+    let verb = "walk-floor";
+    let p = options(verb, args, &["runs", "out"], &[])?;
+    no_positional(verb, &p)?;
+    let runs = match p.value("runs") {
+        None => WALK_FLOOR_RUNS,
+        Some(text) => match text.parse::<u32>() {
+            Ok(n) if (1..=WALK_FLOOR_MAX_RUNS).contains(&n) => n,
+            _ => {
+                return Err(format!(
+                    "walk-floor: --runs takes a number from 1 to {WALK_FLOOR_MAX_RUNS}, not '{text}'"
+                ));
+            }
+        },
+    };
+    Ok(WalkFloorArgs {
+        runs,
+        out: p.path("out"),
+    })
+}
+
 fn no_arguments(verb: &str, args: &[String]) -> Result<(), String> {
     let p = options(verb, args, &[], &[])?;
     no_positional(verb, &p)
@@ -912,6 +958,28 @@ mod tests {
             }))
         );
         assert_eq!(p("hello"), Ok(Invocation::Hello));
+        assert_eq!(
+            p("walk-floor"),
+            Ok(Invocation::WalkFloor(WalkFloorArgs {
+                runs: WALK_FLOOR_RUNS,
+                out: None
+            }))
+        );
+        assert_eq!(
+            p("walk-floor --runs 5 -o floor.json"),
+            Ok(Invocation::WalkFloor(WalkFloorArgs {
+                runs: 5,
+                out: Some(PathBuf::from("floor.json"))
+            }))
+        );
+        for bad in [
+            "walk-floor --runs 0",
+            "walk-floor --runs 21",
+            "walk-floor --runs x",
+        ] {
+            assert!(err(bad).contains("--runs takes a number"), "{bad}");
+        }
+        assert!(err("walk-floor now").contains("unexpected argument"));
         assert!(err("hello now").contains("unexpected argument"));
         assert!(err("baseline build").contains("needs --out"));
         assert!(err("baseline build --out a b").contains("unexpected argument"));

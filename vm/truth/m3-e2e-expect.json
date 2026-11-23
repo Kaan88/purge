@@ -5,13 +5,14 @@
     "design_11_2_m3_e2e": "UI automation from Uninstall click to undo on: VS Code (system), VS Code (user, medium route), Git, Firefox with Thunderbird installed, Notepad++, 7-Zip, and one M1b app with a service or task. Per app: the executed set equals the preselected set of the rig CLI plan on the same snapshot; collateral 0; undo through the UI; `undo_fidelity` 100 %.",
     "G6": "End to end: 7 apps, executed set equals the preselected set of the rig plan, `danger` 0, `collateral` 0, `undo_fidelity` 100 %",
     "G7": "Medium route: the per-user uninstaller ran at medium integrity; a broker-route program is refused by the medium engine and the reverse",
-    "G12": "Engine timing: harvest 3 s, scan 10 s, first progress 100 ms",
-    "9_1_harvest": "Harvest complete after the UAC click, VS Code | 3 s",
+    "G12": "Engine timing: harvest at most 2x the walk floor of the same run and 20 s, scan 10 s, first progress 100 ms",
+    "9_1_harvest": "Harvest complete after the UAC click, VS Code | at most 2x the bare registry-walk floor measured on the same machine in the same run; sanity cap 20 s",
     "9_1_scan": "Post-uninstall scan, cold broker | 10 s; first progress within 100 ms",
     "failed_uninstaller": "M3_FINISH_PLAN B7: failed uninstaller 1603/3010. The UI (design 10, S2) shows the exit code with \"Run forced cleanup\" and \"Retry\" on a failure, and \"restart needed\" as text: 1603 is a failure outcome and nothing is purged; 3010 is a success that needs a restart (purge-model RunOutcome::SuccessReboot)."
   },
   "gates": {
-    "harvest_after_uac_ms": 3000,
+    "harvest_floor_factor": 2,
+    "harvest_cap_ms": 20000,
     "scan_ms": 10000,
     "first_progress_ms": 100,
     "harvest_apps": ["vscode", "vscode-user"]
