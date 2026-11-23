@@ -112,6 +112,7 @@ impl RegistrySource for LiveRegistry {
             registry: self,
             chain: None,
             info: None,
+            values: None,
         })
     }
 }
@@ -131,6 +132,14 @@ struct Chain {
 /// costs one open instead of one per component, and one open for its values and subkeys instead of
 /// three. The security descriptor is not read ([`KeyInfo::ti_owned`] is `None`).
 ///
+/// A key that has values is read when it is entered: its values are what a walk asks for next, and
+/// they also say whether the key is a link (`Key::link_target_with_values`), so the key is not asked
+/// for `SymbolicLinkValue` by name as well. The values and the subkey names are read up to the counts
+/// the key reported when it was entered (`Key::values_counted`, `Key::subkey_names_counted`), without
+/// the extra call that only ends an enumeration. For a key nobody changes while it is read this is
+/// what the reads by path give; a value or subkey added between the count and the read is left out,
+/// where a read by path may or may not see it.
+///
 /// Only a whole component that is spelled exactly the same is reused, and only as an ancestor: the key
 /// itself is always opened anew, for reading. When an open below a kept key fails, the key is opened
 /// again from its root and that result counts, so a kept key that was deleted meanwhile reads exactly
@@ -144,8 +153,12 @@ struct Chain {
 struct LiveWalker<'a> {
     registry: &'a LiveRegistry,
     chain: Option<Chain>,
-    /// The `RegQueryInfoKey` answer of the key last entered (sizes the subkey name buffer).
+    /// The `RegQueryInfoKey` answer of the key last entered (sizes the subkey name buffer, and counts
+    /// the values and subkeys to read).
     info: Option<reg::KeyInfo>,
+    /// The values of the key last entered, when `enter` read them to see whether the key is a link;
+    /// [`KeyWalker::values`] hands them out once.
+    values: Option<Result<Vec<reg::RegValue>, purge_win::os::Win32Error>>,
 }
 
 impl LiveWalker<'_> {
@@ -230,6 +243,7 @@ impl LiveWalker<'_> {
 impl KeyWalker for LiveWalker<'_> {
     fn enter(&mut self, key: &str) -> SourceResult<KeyInfo> {
         self.info = None;
+        self.values = None;
         if let Err(e) = self.open(key) {
             self.chain = None;
             return Err(e);
@@ -239,8 +253,24 @@ impl KeyWalker for LiveWalker<'_> {
         // As `LiveRegistry::key_info` (a key without values is not asked). "No link" is remembered on
         // the handle only for a key with subkeys of its own, which no link key has, so a link key
         // entered before its target was written is asked again when a path goes below it.
-        let link_target = k.link_target_with_info(&info).ok().flatten();
+        //
+        // A key with values is read here, once: a walk reads the values of every key it enters, and
+        // they show whether the key is a link without a separate question (`SymbolicLinkValue` is
+        // one of them). When they cannot be read, the key is asked by name as before, and
+        // `KeyWalker::values` reports the failed read.
+        let (link_target, values) = if info.n_values == 0 {
+            (k.link_target_with_info(&info).ok().flatten(), None)
+        } else {
+            match k.values_counted(&info) {
+                Ok(values) => (
+                    k.link_target_with_values(&info, &values).ok().flatten(),
+                    Some(Ok(values)),
+                ),
+                Err(e) => (k.link_target_with_info(&info).ok().flatten(), Some(Err(e))),
+            }
+        };
         self.info = Some(info);
+        self.values = values;
         Ok(KeyInfo {
             lwt: FileTime(info.last_write_time),
             n_values: info.n_values,
@@ -252,9 +282,11 @@ impl KeyWalker for LiveWalker<'_> {
     }
 
     fn values(&mut self) -> SourceResult<Vec<RegValue>> {
-        Ok(self
-            .current()?
-            .values()
+        let values = match self.values.take() {
+            Some(read) => read,
+            None => self.current()?.values(),
+        };
+        Ok(values
             .map_err(map_win32)?
             .into_iter()
             .map(to_reg_value)
@@ -264,7 +296,7 @@ impl KeyWalker for LiveWalker<'_> {
     fn subkeys(&mut self) -> SourceResult<Vec<String>> {
         let k = self.current()?;
         match &self.info {
-            Some(info) => k.subkey_names_after(info),
+            Some(info) => k.subkey_names_counted(info),
             None => k.subkey_names(),
         }
         .map_err(map_win32)

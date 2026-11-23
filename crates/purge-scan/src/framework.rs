@@ -1341,7 +1341,10 @@ impl<'a> ScanCtx<'a> {
         }
     }
 
-    /// A key folded for comparison, with the current `ControlSet00N` spelled `CurrentControlSet`.
+    /// A key folded for comparison, with the current `ControlSet00N` spelled `CurrentControlSet`:
+    /// the definition of [`ScanCtx::same_key`] (the folded keys are equal) and of
+    /// [`ScanCtx::key_relation`] (`prefix::relation` of the folded keys). Both compare two keys
+    /// segment by segment instead of building the two strings; the tests hold them to this.
     fn key_norm(&self, key: &str) -> String {
         let current = self.guard.control_set_name();
         let mut out = String::with_capacity(key.len());
@@ -1365,12 +1368,73 @@ impl<'a> ScanCtx<'a> {
 
     /// Whether two canonical key paths name the same key.
     pub fn same_key(&self, a: &str, b: &str) -> bool {
-        self.key_norm(a) == self.key_norm(b)
+        self.key_compare(a, b, false) == Relation::Same
     }
 
     /// How key `a` relates to key `b`, with the control-set alias applied.
     pub fn key_relation(&self, a: &str, b: &str) -> Relation {
-        prefix::relation(&self.key_norm(a), &self.key_norm(b))
+        self.key_compare(a, b, true)
+    }
+
+    /// The relation of two keys as their folded forms have it, where the current `ControlSet00N` as
+    /// the third segment of `HKLM\SYSTEM` counts as `CurrentControlSet`. The keys are compared as
+    /// they are walked, without folding either into a string: a scan asks this for every candidate
+    /// against every record of the fingerprint, and most pairs differ in one of their first
+    /// segments.
+    ///
+    /// Two segments are equal when their folds are ([`prefix::eq_ci`]). With `refold` they are
+    /// equal when `prefix::eq_ci` calls their folds equal, which is how `prefix::relation` reads
+    /// two folded keys; for ASCII segments the two are the same test.
+    fn key_compare(&self, a: &str, b: &str, refold: bool) -> Relation {
+        const CURRENT: &str = "CurrentControlSet";
+        let eq = |x: &str, y: &str| {
+            if !refold || (x.is_ascii() && y.is_ascii()) {
+                prefix::eq_ci(x, y)
+            } else {
+                prefix::eq_ci(&prefix::fold(x), &prefix::fold(y))
+            }
+        };
+        // Whether `seg`, the third segment of a key below `HKLM\SYSTEM`, names the current control
+        // set.
+        let is_current_set = |seg: &str| {
+            self.guard
+                .control_set_name()
+                .as_deref()
+                .is_some_and(|name| prefix::eq_ci(name, seg))
+        };
+        let mut left = prefix::segments(a);
+        let mut right = prefix::segments(b);
+        // Whether the segments so far spell `HKLM\SYSTEM`, on each side.
+        let (mut a_system, mut b_system) = (true, true);
+        let mut index = 0usize;
+        loop {
+            match (left.next(), right.next()) {
+                (None, None) => return Relation::Same,
+                (None, Some(_)) => return Relation::Ancestor,
+                (Some(_), None) => return Relation::Inside,
+                (Some(x), Some(y)) => {
+                    let same = if index == 2 && (a_system || b_system) {
+                        match (a_system && is_current_set(x), b_system && is_current_set(y)) {
+                            (true, true) => true,
+                            (true, false) => eq(CURRENT, y),
+                            (false, true) => eq(x, CURRENT),
+                            (false, false) => eq(x, y),
+                        }
+                    } else {
+                        eq(x, y)
+                    };
+                    if !same {
+                        return Relation::Unrelated;
+                    }
+                    if index < 2 {
+                        let want = ["HKLM", "SYSTEM"][index];
+                        a_system &= prefix::eq_ci(x, want);
+                        b_system &= prefix::eq_ci(y, want);
+                    }
+                    index += 1;
+                }
+            }
+        }
     }
 
     /// Whether two targets name the same item. A segment's `index` is compared only when both have one.
@@ -4106,6 +4170,63 @@ mod tests {
             &seg(format!(r"HKLM\SYSTEM\ControlSet001\{env}"), Some(8))
         ));
         assert!(!ctx.same_target(&key(r"HKLM\SOFTWARE\X"), &path(r"HKLM\SOFTWARE\X")));
+    }
+
+    /// `same_key` and `key_relation` walk the two keys; their definition is the folded key
+    /// (`key_norm`): equal strings, and `prefix::relation` of the two.
+    #[test]
+    fn key_comparisons_equal_the_folded_keys() {
+        let world = World::new(uninstalled());
+        let ctx = world.ctx();
+        let keys = [
+            "",
+            "HKLM",
+            r"HKLM\SYSTEM",
+            r"hklm\system",
+            r"HKLM\SYSTEM\CurrentControlSet",
+            r"HKLM\SYSTEM\currentcontrolset\Services",
+            r"HKLM\SYSTEM\ControlSet001",
+            r"hklm\System\controlset001\Services",
+            r"HKLM\SYSTEM\ControlSet001\Services\Git",
+            r"HKLM\SYSTEM\CurrentControlSet\Services\git",
+            r"HKLM\SYSTEM\ControlSet002\Services\Git",
+            r"HKLM\SYSTEM\ControlSet0010\Services",
+            r"HKLM\SYSTEM\Select",
+            // The alias holds only as the third segment of `HKLM\SYSTEM`.
+            r"HKLM\SOFTWARE\ControlSet001",
+            r"HKLM\SOFTWARE\CurrentControlSet",
+            r"HKU\SYSTEM\ControlSet001",
+            r"HKU\SYSTEM\CurrentControlSet",
+            r"HKLM\SYSTEM\X\ControlSet001",
+            r"HKLM\SYSTEM\X\CurrentControlSet",
+            r"HKLM\SOFTWARE\Git",
+            r"HKLM\SOFTWARE\\Git\",
+            r"HKLM\software\GIT\Sub",
+            r"HKLM\SOFTWARE\Gitx",
+            // Names that are not ASCII: folded, and some Windows keeps apart.
+            r"HKLM\SOFTWARE\Ärger",
+            r"HKLM\SOFTWARE\ärger",
+            r"HKLM\SOFTWARE\ÄRGER\Sub",
+            r"HKLM\SOFTWARE\Straße",
+            r"HKLM\SOFTWARE\STRASSE",
+            "HKLM\\SOFTWARE\\\u{212A}elvin",
+            r"HKLM\SOFTWARE\kelvin",
+            "HKLM\\SOFTWARE\\\u{130}stanbul",
+            r"HKLM\SOFTWARE\istanbul",
+            "HKLM\\SOFTWARE\\\u{1F600}",
+            "HKLM\\SYSTEM\\ControlSet00\u{661}",
+        ];
+        for a in keys {
+            for b in keys {
+                let (na, nb) = (ctx.key_norm(a), ctx.key_norm(b));
+                assert_eq!(ctx.same_key(a, b), na == nb, "{a:?} {b:?}");
+                assert_eq!(
+                    ctx.key_relation(a, b),
+                    prefix::relation(&na, &nb),
+                    "{a:?} {b:?}"
+                );
+            }
+        }
     }
 
     // ---- blockers ----------------------------------------------------------------------------------------

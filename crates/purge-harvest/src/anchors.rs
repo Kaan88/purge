@@ -69,7 +69,7 @@
 //! applications that are not the app's. The token harvest drops a token that occurs in any of them.
 
 use std::cell::{Cell, RefCell};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use purge_guard::canon::GuardEnv;
 use purge_guard::prefix;
@@ -79,9 +79,9 @@ use purge_index::matcher::{AnchorSet, RefMatcher};
 use purge_inventory::kind::is_braced_guid;
 use purge_model::{AnchorKind, Anchors, ExeFile, FileTime, Root, RootKind, RunEntry};
 use purge_source::filesystem::FileSystemSource;
-use purge_source::registry::RegistrySource;
+use purge_source::registry::{KeyWalker, RegistrySource};
 use purge_source::system::SystemSource;
-use purge_source::types::{ExistsState, KnownFolder, SourceError};
+use purge_source::types::{ExistsState, KnownFolder, RegData, SourceError};
 use purge_win::env::EnvMap;
 
 use crate::roots::{OtherAnchor, canon_file, clean_value, command_exe, env_map, parent_dir};
@@ -350,11 +350,38 @@ impl ComCutoff {
 }
 
 /// A registry reader that turns "not there" into nothing and counts everything else.
+///
+/// # Reads through the walker
+///
+/// The passes read tens of thousands of keys that lie next to each other (every class of a Classes
+/// root, every `CLSID\{id}` and its server keys). A read by path opens the key from its hive root,
+/// component by component; the source's [`KeyWalker`] keeps the keys above the last one open and
+/// opens only what differs. [`Reader::subkeys`], [`Reader::default_string`] and [`Reader::listed`]
+/// therefore ask the walker first, and take its answer only where it is the answer of the read by
+/// path:
+///
+/// - a key the walker entered and read gives what [`RegistrySource::subkeys`] and
+///   [`RegistrySource::values`] give for it (the walker's contract), and the default value is the
+///   value with the empty name;
+/// - "not there" from the walker is "not there" by path;
+/// - a link key, and every error other than "not there", is not judged here: the read by path is
+///   made as before, so what is counted as unreadable, and the location named first, do not change.
 struct Reader<'a> {
     reg: &'a dyn RegistrySource,
+    walker: RefCell<Box<dyn KeyWalker + 'a>>,
     unreadable: Cell<usize>,
     /// The first location that could not be read, with the error.
     first_unreadable: RefCell<Option<String>>,
+}
+
+/// What the walker says about one read.
+enum Walked<T> {
+    /// The answer of the read by path.
+    Is(T),
+    /// The key is not there.
+    Missing,
+    /// Not judged: read by path.
+    AskByPath,
 }
 
 impl Reader<'_> {
@@ -372,8 +399,86 @@ impl Reader<'_> {
         }
     }
 
+    /// Enters `key` with the walker and reads it with `read` (given the key's value and subkey
+    /// counts).
+    fn walked<T>(
+        &self,
+        key: &str,
+        read: impl FnOnce(&mut dyn KeyWalker, u32, u32) -> Result<T, SourceError>,
+    ) -> Walked<T> {
+        let mut walker = self.walker.borrow_mut();
+        match walker.enter(key) {
+            Ok(info) if info.is_link => Walked::AskByPath,
+            Ok(info) => match read(walker.as_mut(), info.n_values, info.n_subkeys) {
+                Ok(found) => Walked::Is(found),
+                Err(SourceError::NotFound) => Walked::Missing,
+                Err(_) => Walked::AskByPath,
+            },
+            Err(SourceError::NotFound) => Walked::Missing,
+            Err(_) => Walked::AskByPath,
+        }
+    }
+
     fn subkeys(&self, key: &str) -> Vec<String> {
-        self.note(key, self.reg.subkeys(key)).unwrap_or_default()
+        let walked = self.walked(key, |walker, _, n_subkeys| {
+            if n_subkeys == 0 {
+                Ok(Vec::new())
+            } else {
+                walker.subkeys()
+            }
+        });
+        match walked {
+            Walked::Is(names) => names,
+            Walked::Missing => Vec::new(),
+            Walked::AskByPath => self.note(key, self.reg.subkeys(key)).unwrap_or_default(),
+        }
+    }
+
+    /// The subkey names of `key`, when they settle which of its subkeys a read by path finds:
+    /// `None` when the key cannot be listed through the walker, or when a name is not ASCII (the
+    /// registry compares names in its own case folding, which only agrees with an ASCII comparison
+    /// when both names are ASCII). A missing key has no subkeys.
+    fn listed(&self, key: &str) -> Option<Vec<String>> {
+        let walked = self.walked(key, |walker, _, n_subkeys| {
+            if n_subkeys == 0 {
+                Ok(Vec::new())
+            } else {
+                walker.subkeys()
+            }
+        });
+        match walked {
+            Walked::Is(names) => names.iter().all(|n| n.is_ascii()).then_some(names),
+            Walked::Missing => Some(Vec::new()),
+            Walked::AskByPath => None,
+        }
+    }
+
+    /// Whether a read by path of the subkey `name` (ASCII) of a key can find something: `false`
+    /// only when the key's listing ([`Reader::listed`]) is known and does not hold the name.
+    fn may_have(listed: Option<&[String]>, name: &str) -> bool {
+        debug_assert!(name.is_ascii());
+        listed.is_none_or(|names| names.iter().any(|n| n.eq_ignore_ascii_case(name)))
+    }
+
+    /// [`Reader::string`] of the default value of `key`.
+    fn default_string(&self, key: &str) -> Option<String> {
+        let walked = self.walked(key, |walker, n_values, _| {
+            if n_values == 0 {
+                return Ok(None);
+            }
+            let values = walker.values()?;
+            Ok(values
+                .into_iter()
+                .find(|v| v.name.is_empty())
+                .map(|v| v.data))
+        });
+        let data: Option<RegData> = match walked {
+            Walked::Is(data) => data,
+            Walked::Missing => None,
+            Walked::AskByPath => return self.string(key, ""),
+        };
+        data.and_then(|d| d.string())
+            .filter(|s| !s.trim().is_empty())
     }
 
     fn string(&self, key: &str, name: &str) -> Option<String> {
@@ -398,7 +503,26 @@ struct Pass<'a> {
     reader: Reader<'a>,
     env: EnvMap,
     install_roots: Vec<&'a str>,
+    /// [`same_item_key`] of every file of the exe set.
+    exe_keys: HashSet<String>,
+    /// What [`Pass::shipped_by_other`] found for a file, by the file as it was asked: the classes
+    /// of one app name the same few server files again and again.
+    shipped: RefCell<BTreeMap<String, Option<String>>>,
     matcher: RefMatcher,
+}
+
+/// A key that two paths share exactly when [`prefix::is_same`] calls them the same item: the folded
+/// non-empty segments, joined by one separator. `is_same` compares the non-empty segments pairwise
+/// with [`prefix::eq_ci`], which is equality of their folds, and no fold contains a separator.
+fn same_item_key(path: &str) -> String {
+    let mut key = String::with_capacity(path.len());
+    for segment in prefix::segments(path) {
+        if !key.is_empty() {
+            key.push(prefix::SEP);
+        }
+        key.extend(segment.chars().flat_map(prefix::fold_char));
+    }
+    key
 }
 
 impl<'a> Pass<'a> {
@@ -420,11 +544,14 @@ impl<'a> Pass<'a> {
             input,
             reader: Reader {
                 reg: input.reg,
+                walker: RefCell::new(input.reg.walker()),
                 unreadable: Cell::new(0),
                 first_unreadable: RefCell::new(None),
             },
             env: env_map(input.env),
             install_roots,
+            exe_keys: input.exes.iter().map(|e| same_item_key(&e.path)).collect(),
+            shipped: RefCell::new(BTreeMap::new()),
             matcher: RefMatcher::with_env(&set, input.env.clone()),
         }
     }
@@ -439,11 +566,9 @@ impl<'a> Pass<'a> {
         self.install_roots
             .iter()
             .any(|r| prefix::is_same_or_inside(path, r))
-            || self
-                .input
-                .exes
-                .iter()
-                .any(|e| prefix::is_same(&e.path, path))
+            // `prefix::is_same` with a file of the exe set, asked of the set at once: a COM pass
+            // asks this for every server path of the machine.
+            || (!self.exe_keys.is_empty() && self.exe_keys.contains(&same_item_key(path)))
     }
 
     /// Whether a string (a command line, an icon path, any value) references the app's files.
@@ -566,7 +691,21 @@ impl<'a> Pass<'a> {
     /// *above* this app's root is tested (a suite root such as `Program Files\Vendor` that a sibling
     /// product registers), but only for a file that is not inside this app's root: the app's own copy
     /// must not count as the other product's.
+    ///
+    /// The answer for a file is looked up once in a pass and kept.
     fn shipped_by_other(&self, file: &str) -> Option<String> {
+        if let Some(known) = self.shipped.borrow().get(file) {
+            return known.clone();
+        }
+        let found = self.find_shipped_by_other(file);
+        self.shipped
+            .borrow_mut()
+            .insert(file.to_owned(), found.clone());
+        found
+    }
+
+    /// [`Pass::shipped_by_other`], asked of the file system.
+    fn find_shipped_by_other(&self, file: &str) -> Option<String> {
         let name = prefix::leaf(file).filter(|n| !n.is_empty())?;
         let relative = self
             .install_roots
@@ -759,10 +898,17 @@ fn progid_facts(pass: &Pass<'_>) -> BTreeMap<String, ProgIdFacts> {
                 continue;
             }
             let key = format!(r"{classes}\{name}");
+            // Most classes have no `shell` key: the class's own listing says so in one read.
+            let listed = pass.reader.listed(&key);
+            if !Reader::may_have(listed.as_deref(), "shell") {
+                continue;
+            }
             let shell = format!(r"{key}\shell");
             let (mut ours, mut other) = (0usize, 0usize);
             for verb in pass.reader.subkeys(&shell) {
-                let Some(command) = pass.reader.string(&format!(r"{shell}\{verb}\command"), "")
+                let Some(command) = pass
+                    .reader
+                    .default_string(&format!(r"{shell}\{verb}\command"))
                 else {
                     continue;
                 };
@@ -789,9 +935,12 @@ fn progid_facts(pass: &Pass<'_>) -> BTreeMap<String, ProgIdFacts> {
 
 /// The server a CLSID key names, as raw value data.
 fn clsid_servers(pass: &Pass<'_>, key: &str) -> Vec<String> {
+    // Few classes have both server keys, many have neither: the class's own listing says which.
+    let listed = pass.reader.listed(key);
     ["InprocServer32", "LocalServer32"]
         .iter()
-        .filter_map(|server| pass.reader.string(&format!(r"{key}\{server}"), ""))
+        .filter(|server| Reader::may_have(listed.as_deref(), server))
+        .filter_map(|server| pass.reader.default_string(&format!(r"{key}\{server}")))
         .collect()
 }
 
@@ -875,7 +1024,7 @@ fn collect_com(
                 pass.reader.subkeys(&version_key).iter().any(|lcid| {
                     ["win32", "win64"].iter().any(|platform| {
                         pass.reader
-                            .string(&format!(r"{version_key}\{lcid}\{platform}"), "")
+                            .default_string(&format!(r"{version_key}\{lcid}\{platform}"))
                             .is_some_and(|path| pass.path_is_ours(&path))
                     })
                 })

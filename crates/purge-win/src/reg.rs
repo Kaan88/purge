@@ -103,11 +103,14 @@ const STATUS_OBJECT_NAME_NOT_FOUND: i32 = 0xC000_0034_u32 as i32;
 /// Upper bound for one NT value read: the largest data plus a name (guards runaway growth).
 const MAX_QUERY_BYTES: usize = MAX_DATA_BYTES + 64 * 1024;
 
+/// The 8-byte words an NT value read is first offered: 512 bytes.
+const NT_FIRST_WORDS: usize = 64;
+
 /// Runs a size-probing NT query (`buffer, byte length, needed length -> NTSTATUS`) into an 8-byte
 /// aligned buffer, growing it while the call reports it as too small. Returns the filled buffer as
 /// bytes, or the failing status.
 fn nt_query(mut call: impl FnMut(*mut c_void, u32, *mut u32) -> i32) -> Result<Vec<u8>, i32> {
-    let mut buf = vec![0u64; 64];
+    let mut buf = vec![0u64; NT_FIRST_WORDS];
     loop {
         let mut needed = 0u32;
         let status = call(buf.as_mut_ptr().cast(), (buf.len() * 8) as u32, &mut needed);
@@ -477,7 +480,7 @@ impl Key {
     /// Direct subkeys with their last write times (`RegEnumKeyExW`), in registry order.
     pub fn subkeys(&self) -> Result<Vec<SubkeyEntry>, Win32Error> {
         let info = self.info()?;
-        self.subkeys_with_capacity(info.max_subkey_name_len as usize + 1)
+        self.subkeys_with_capacity(info.max_subkey_name_len as usize + 1, None)
     }
 
     /// Direct subkey names.
@@ -486,21 +489,35 @@ impl Key {
     }
 
     /// [`Key::subkey_names`] for a caller that already holds this key's [`Key::info`]: `info` gives the
-    /// size of the name buffer, which grows if a longer name turns up, so the names are the same.
-    pub fn subkey_names_after(&self, info: &KeyInfo) -> Result<Vec<String>, Win32Error> {
+    /// size of the name buffer (which grows if a longer name turns up) and the number of subkeys to
+    /// read. The enumeration stops after the `info.n_subkeys` subkeys `info` counted: one call per
+    /// subkey, without the last call that only reports the end of the list. On a key nobody changes
+    /// between [`Key::info`] and this call the names are those of [`Key::subkey_names`]; a subkey
+    /// created in between is not read (it was not there when the key was counted), and a list that
+    /// got shorter ends where it ends.
+    pub fn subkey_names_counted(&self, info: &KeyInfo) -> Result<Vec<String>, Win32Error> {
         Ok(self
-            .subkeys_with_capacity(info.max_subkey_name_len as usize + 1)?
+            .subkeys_with_capacity(info.max_subkey_name_len as usize + 1, Some(info.n_subkeys))?
             .into_iter()
             .map(|e| e.name)
             .collect())
     }
 
     /// Enumeration with an explicit starting name buffer (in UTF-16 units); grows on `ERROR_MORE_DATA`.
-    fn subkeys_with_capacity(&self, name_cap: usize) -> Result<Vec<SubkeyEntry>, Win32Error> {
+    /// With a `limit` the enumeration stops after that many subkeys instead of asking for one more
+    /// to be told there is none.
+    fn subkeys_with_capacity(
+        &self,
+        name_cap: usize,
+        limit: Option<u32>,
+    ) -> Result<Vec<SubkeyEntry>, Win32Error> {
         let mut name = vec![0u16; name_cap.max(1)];
-        let mut out = Vec::new();
+        let mut out = Vec::with_capacity(limit.map_or(0, |n| n.min(1024) as usize));
         let mut index = 0u32;
         loop {
+            if limit.is_some_and(|n| index >= n) {
+                return Ok(out);
+            }
             let mut len = name.len() as u32;
             let mut ft = FILETIME {
                 dwLowDateTime: 0,
@@ -544,6 +561,20 @@ impl Key {
     /// registry order. The default value has the empty name. Names are converted lossily, as the Win32
     /// enumeration reported them.
     pub fn values(&self) -> Result<Vec<RegValue>, Win32Error> {
+        self.values_limited(None)
+    }
+
+    /// [`Key::values`] for a caller that holds `info`, this key's [`Key::info`]: reads the
+    /// `info.n_values` values `info` counted and stops there, one call per value, without the last
+    /// call that only reports the end of the list. On a key nobody changes between [`Key::info`] and
+    /// this call the values are the same; a value added in between is not read (it was not there
+    /// when the key was counted), and a list that got shorter ends where it ends.
+    pub fn values_counted(&self, info: &KeyInfo) -> Result<Vec<RegValue>, Win32Error> {
+        self.values_limited(Some(info.n_values))
+    }
+
+    /// The values in registry order, at most `limit` of them when one is given.
+    fn values_limited(&self, limit: Option<u32>) -> Result<Vec<RegValue>, Win32Error> {
         if !self.owned {
             // A predefined root is a pseudo-handle, which only the Win32 calls accept.
             let info = self.info()?;
@@ -552,31 +583,62 @@ impl Key {
                 info.max_value_len as usize,
             );
         }
-        let mut out = Vec::new();
+        let mut out = Vec::with_capacity(limit.map_or(0, |n| n.min(1024) as usize));
+        // One 8-byte aligned buffer for every value of the key. Each value is first asked for with
+        // the small length `nt_query` starts with (the kernel's work grows with the length it is
+        // offered), and only a value that needs more is asked for again with a longer one.
+        let mut buf = vec![0u64; NT_FIRST_WORDS];
         for index in 0u32.. {
-            // SAFETY: the closure passes on a writable buffer of the stated byte length and a valid
-            // out-pointer; `hkey` is a live handle for the borrow.
-            let buf = match nt_query(|buf, len, needed| unsafe {
-                NtEnumerateValueKey(
-                    self.hkey,
-                    index,
-                    KEY_VALUE_FULL_INFORMATION_CLASS,
-                    buf,
-                    len,
-                    needed,
-                )
-            }) {
-                Ok(buf) => buf,
+            if limit.is_some_and(|n| index >= n) {
+                break;
+            }
+            let mut offered = NT_FIRST_WORDS;
+            let filled = loop {
+                let mut needed = 0u32;
+                // SAFETY: `buf` has at least `offered` writable 8-byte words, `needed` is a valid
+                // out-pointer, and `hkey` is a live handle for the borrow.
+                let status = unsafe {
+                    NtEnumerateValueKey(
+                        self.hkey,
+                        index,
+                        KEY_VALUE_FULL_INFORMATION_CLASS,
+                        buf.as_mut_ptr().cast(),
+                        (offered * 8) as u32,
+                        &mut needed,
+                    )
+                };
+                if status >= 0 {
+                    break Ok(());
+                }
+                let too_small =
+                    status == STATUS_BUFFER_OVERFLOW || status == STATUS_BUFFER_TOO_SMALL;
+                if !too_small || offered * 8 >= MAX_QUERY_BYTES {
+                    break Err(status);
+                }
+                // As `nt_query` grows: to what the call asks for, and at least sixteenfold.
+                let want = (needed as usize).max(offered * 8 * 16).min(MAX_QUERY_BYTES);
+                offered = want.div_ceil(8);
+                if buf.len() < offered {
+                    buf.resize(offered, 0);
+                }
+            };
+            match filled {
+                Ok(()) => {}
                 Err(STATUS_NO_MORE_ENTRIES) => break,
                 Err(status) => return Err(nt_error(status)),
-            };
-            let ty = u32_at(&buf, 4)?;
+            }
+            // SAFETY: `buf` holds at least `offered` initialised `u64` words; any bit pattern is a
+            // valid `u8`, the byte view covers exactly those words and is not used after `buf` is
+            // next written.
+            let bytes: &[u8] =
+                unsafe { std::slice::from_raw_parts(buf.as_ptr().cast::<u8>(), offered * 8) };
+            let ty = u32_at(bytes, 4)?;
             // The data offset of an empty value need not lie inside the buffer.
-            let data = match u32_at(&buf, 12)? {
+            let data = match u32_at(bytes, 12)? {
                 0 => &[][..],
-                len => bytes_at(&buf, u32_at(&buf, 8)?, len)?,
+                len => bytes_at(bytes, u32_at(bytes, 8)?, len)?,
             };
-            let name: Vec<u16> = bytes_at(&buf, 20, u32_at(&buf, 16)?)?
+            let name: Vec<u16> = bytes_at(bytes, 20, u32_at(bytes, 16)?)?
                 .chunks_exact(2)
                 .map(|c| u16::from_le_bytes([c[0], c[1]]))
                 .collect();
@@ -765,6 +827,37 @@ impl Key {
             Ok(None)
         } else {
             self.link_target()
+        };
+        if self.owned && info.n_subkeys > 0 && matches!(target, Ok(None)) {
+            self.not_link.store(true, Ordering::Relaxed);
+        }
+        target
+    }
+
+    /// [`Key::link_target_with_info`] for a caller that has also read this key's values through this
+    /// handle (`values`: [`Key::values`] or [`Key::values_counted`]): the same answer, and the same
+    /// "no link" remembered on the handle, without asking for `SymbolicLinkValue` by name when the
+    /// values already show what the lookup finds.
+    ///
+    /// The lookup by name is case-insensitive in the kernel's own upper-casing. Among values whose
+    /// names are all ASCII, it finds exactly the one that equals `SymbolicLinkValue` ignoring ASCII
+    /// case, so that value (or its absence) is the answer. When no such value is there and some
+    /// name is not ASCII, the kernel's folding could still match one of them: the key is then asked
+    /// by name, as [`Key::link_target_with_info`] asks.
+    pub fn link_target_with_values(
+        &self,
+        info: &KeyInfo,
+        values: &[RegValue],
+    ) -> Result<Option<String>, Win32Error> {
+        let named = values
+            .iter()
+            .find(|v| v.name.eq_ignore_ascii_case(SYMBOLIC_LINK_VALUE));
+        let target = match named {
+            Some(v) => Ok(Some(v)
+                .filter(|v| v.ty == REG_LINK)
+                .and_then(|v| v.as_string())),
+            None if values.iter().all(|v| v.name.is_ascii()) => Ok(None),
+            None => self.link_target(),
         };
         if self.owned && info.n_subkeys > 0 && matches!(target, Ok(None)) {
             self.not_link.store(true, Ordering::Relaxed);
@@ -995,7 +1088,10 @@ mod tests {
         );
 
         let un = Key::open(RegRoot::Hklm, UNINSTALL, RegView::K64).unwrap();
-        assert_eq!(un.subkeys_with_capacity(1).unwrap(), un.subkeys().unwrap());
+        assert_eq!(
+            un.subkeys_with_capacity(1, None).unwrap(),
+            un.subkeys().unwrap()
+        );
     }
 
     /// Whether a value is string-typed with an odd byte length: the only data the Win32 reads report
@@ -1376,6 +1472,68 @@ mod tests {
             Key::open(RegRoot::Hku, &s.path(r"Plain\Sub"), RegView::K64).unwrap_err(),
             Win32Error::LINK_ON_PATH
         );
+    }
+
+    /// The reads a walk makes with a key's counts in hand give what the plain reads give: the same
+    /// values and subkey names, and from the values the same link answer as the lookup by name (a
+    /// link key, a `SymbolicLinkValue` of another type, no such value, a name the lookup must judge).
+    #[test]
+    fn counted_reads_and_link_facts_from_values_equal_the_plain_reads() {
+        let mut s = Scratch::new();
+        s.create("T").set(SYMBOLIC_LINK_VALUE, REG_SZ, &[0x41, 0]);
+        drop(s.create(r"T\Sub"));
+        drop(s.create(r"T\Other"));
+        let plain = s.create("Plain");
+        plain.set("", REG_SZ, &[0x41, 0, 0, 0]);
+        plain.set("Second", REG_BINARY, &[1, 2, 3]);
+        plain.set("symboliclinkVALUE", REG_DWORD, &[1, 0, 0, 0]);
+        drop(s.create(r"Plain\Sub"));
+        drop(s.create("Empty"));
+        // A name that equals `SymbolicLinkValue` only if the registry folds the dotless i to `I`.
+        s.create("Odd")
+            .set("Symbol\u{131}cLinkValue", REG_SZ, &[0x41, 0]);
+        let link = s.link("L");
+        link.set_link_target(&s.nt_path("T"));
+
+        for name in ["T", "Plain", "Empty", "Odd", "L"] {
+            let open = || Key::open(RegRoot::Hku, &s.path(name), RegView::K64).unwrap();
+            let k = open();
+            let info = k.info().unwrap();
+            let values = k.values_counted(&info).unwrap();
+            assert_eq!(values, k.values().unwrap(), "{name}");
+            assert_eq!(values.len(), info.n_values as usize, "{name}");
+            assert_eq!(
+                k.subkey_names_counted(&info).unwrap(),
+                k.subkey_names().unwrap(),
+                "{name}"
+            );
+            // Asked of a handle of its own: what one answer remembers must not shape the other.
+            let by_name = open().link_target_with_info(&info).unwrap();
+            assert_eq!(
+                k.link_target_with_values(&info, &values).unwrap(),
+                by_name,
+                "{name}"
+            );
+            assert_eq!(by_name.is_some(), name == "L", "{name}");
+            // "No link" is remembered exactly where the lookup by name remembers it.
+            assert_eq!(
+                k.not_link.load(Ordering::Relaxed),
+                info.n_subkeys > 0 && by_name.is_none(),
+                "{name}"
+            );
+        }
+
+        // A count that is too small ends the read early; one that is too large ends where the
+        // list ends.
+        let k = Key::open(RegRoot::Hku, &s.path("Plain"), RegView::K64).unwrap();
+        let mut info = k.info().unwrap();
+        let all = k.values().unwrap();
+        info.n_values = 2;
+        assert_eq!(k.values_counted(&info).unwrap(), all[..2]);
+        info.n_values = 50;
+        info.n_subkeys = 50;
+        assert_eq!(k.values_counted(&info).unwrap(), all);
+        assert_eq!(k.subkey_names_counted(&info).unwrap(), ["Sub"]);
     }
 
     /// The predefined roots are pseudo-handles that the NT calls refuse; their values are still read

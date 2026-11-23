@@ -685,6 +685,10 @@ pub fn fold_char(c: char) -> impl Iterator<Item = char> {
 
 /// Folds a string for case-insensitive comparison or use as a map key ([`fold_char`] per character).
 pub fn fold(s: &str) -> String {
+    // An ASCII character folds to its lower-case form ([`fold_char`]); most names are ASCII.
+    if s.is_ascii() {
+        return s.to_ascii_lowercase();
+    }
     s.chars().flat_map(fold_char).collect()
 }
 
