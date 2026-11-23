@@ -144,8 +144,11 @@ public sealed class RemovedLeftoversTests
     }
 
     [Fact]
-    public async Task A_scan_the_broker_turns_forced_reaches_the_leftovers_page_as_forced()
+    public async Task Defensive_a_scan_mode_other_than_external_is_passed_on_unchanged()
     {
+        // Defensive only: the broker answers every stored scan with mode External (scan.rs), and a failed
+        // verify-gone check keeps External with nothing Safe or pre-selected. Should it ever answer another mode,
+        // the controller must pass that mode to the Leftovers page as it came, never assume External.
         var broker = new ScriptedStoredBroker { Stored = [Program], ScanMode = ScanMode.Forced };
         var controller = new RemovedLeftoversController(_ => true, _ => Task.FromResult(Started(broker)));
         StoredScanOutcome? done = null;

@@ -9,7 +9,7 @@ public enum RemovedCheckState
     /// <summary>Purge may have stored its fingerprint: "Check for leftovers" is offered.</summary>
     Record,
 
-    /// <summary>Purge has no record of what it installed: no button, no broker, no guess-based scan.</summary>
+    /// <summary>Purge did not record what it installed: no button, no broker, no guess-based scan.</summary>
     NoRecord,
 
     /// <summary>The Windows prompt for the administrator part is up (or the part is starting).</summary>
@@ -39,8 +39,10 @@ public sealed record StoredLeftoversLaunch(UninstallLaunchState State, IStoredLe
 /// "Check for leftovers" on the Programs page's "removed outside Purge" group (M3 design 7a delta 5, section 10 S1).
 /// A program whose fingerprint Purge cannot have stored is <see cref="RemovedCheckState.NoRecord"/> from the start
 /// (<see cref="FingerprintStore.MayHaveRecord"/>, no prompt); for the others the click starts the elevated broker,
-/// asks <c>leftovers.stored</c>, and scans from the stored fingerprint (<c>leftovers.scan {program_id}</c>, external
-/// mode, or forced when the broker's verify-gone check fails). The scan goes to the Leftovers page through
+/// asks <c>leftovers.stored</c>, and scans from the stored fingerprint (<c>leftovers.scan {program_id}</c>). Such a
+/// scan is always mode <see cref="ScanMode.External"/> (<c>bins/purge-broker/src/scan.rs</c>); when the broker's
+/// verify-gone check of the program fails, the forced-mode rule applies inside that mode: nothing is Safe or
+/// pre-selected (<c>purge-policy</c> band rules). The scan goes to the Leftovers page through
 /// <see cref="Completed"/>, as after an uninstall. No XAML and no process here: the page supplies the probe and the
 /// launcher, so every state is testable against scripted ones.
 /// </summary>

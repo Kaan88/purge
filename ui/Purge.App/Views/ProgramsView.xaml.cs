@@ -49,7 +49,7 @@ public sealed partial class RemovedRow(Purge.Client.Rpc.ProgramRef program) : Sy
     {
         Detail = state switch
         {
-            RemovedCheckState.NoRecord => "Removed outside Purge. Purge has no record of what it installed, so it can't tell its leftovers apart.",
+            RemovedCheckState.NoRecord => "Removed outside Purge. Purge did not record what this program installed, so it cannot tell which leftovers are its own.",
             RemovedCheckState.Starting => "Removed outside Purge. Purge is asking for administrator permission…",
             RemovedCheckState.Checking => "Removed outside Purge. Reading Purge's record of it…",
             RemovedCheckState.Scanning => "Looking for what it left" + (progress is { Length: > 0 } p ? " · " + p : "…"),
