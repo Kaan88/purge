@@ -70,6 +70,9 @@ const MARKERS: &[&str] = &[
     "programs_ctor",
     "rows_set",
     "first_row",
+    // Report only, no gate: the first live layout pass that finds a realized row (`first_row` also fires in the
+    // pre-layout inside the window constructor, before the window is shown).
+    "first_row_live",
     "first_tick",
     "presented",
     "names_visible",
@@ -1284,7 +1287,13 @@ mod tests {
 
     #[test]
     fn the_new_markers_are_reported() {
-        for m in ["names_visible", "icons_visible", "s3_start", "s3_open"] {
+        for m in [
+            "names_visible",
+            "icons_visible",
+            "s3_start",
+            "s3_open",
+            "first_row_live",
+        ] {
             assert!(MARKERS.contains(&m), "{m}");
         }
     }

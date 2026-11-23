@@ -28,9 +28,6 @@ public sealed partial class MainWindow : Window
 
         SystemBackdrop = new MicaBackdrop();
         LaunchMarkers.Mark("w_backdrop");
-        ExtendsContentIntoTitleBar = true;
-        SetTitleBar(AppTitleBar);
-        LaunchMarkers.Mark("w_titlebar");
         var icon = Path.Combine(AppContext.BaseDirectory, "Assets", "Purge.ico");
         if (File.Exists(icon)) AppWindow.SetIcon(icon);
         LaunchMarkers.Mark("w_icon");
@@ -51,13 +48,28 @@ public sealed partial class MainWindow : Window
         LaunchMarkers.Mark("programs_ctor");
         _views["programs"] = _programs;
         ContentCard.Child = _programs;
-        if (Program.Startup.IsCompletedSuccessfully)
-            OnStartup(Program.Startup.Result);
-        else
-            _ = LoadWhenReadyAsync();
+        var loaded = Program.Startup.IsCompletedSuccessfully;
+        if (loaded) OnStartup(Program.Startup.Result);
 
         if (Program.Options.Page is { } page) Navigate(page);
-        LaunchMarkers.Mark("rows_set");
+        if (loaded) LaunchMarkers.Mark("rows_set");
+        PreMeasurePrograms();
+
+        // The title bar goes last (M3 launch perf): the first ExtendsContentIntoTitleBar call waits until the
+        // window's composition is ready (about 200 ms after start on the bench laptop, the same wait the bare
+        // control pays in its first frame). Everything above runs before that wait ends instead of after it.
+        // It is still before Activate(), so the window never shows the system caption.
+        ExtendsContentIntoTitleBar = true;
+        SetTitleBar(AppTitleBar);
+        LaunchMarkers.Mark("w_titlebar");
+        _programs.WatchLiveRows();
+        // A list reply that came in during that wait still makes the first frame.
+        if (!loaded)
+        {
+            if (Program.Startup.IsCompletedSuccessfully) OnStartup(Program.Startup.Result);
+            else _ = LoadWhenReadyAsync();
+            LaunchMarkers.Mark("rows_set");
+        }
         CompositionTarget.Rendering += OnFirstRendering;
         // No engine outlives the window: the client ends what it runs and closes its kill-on-close job.
         Closed += (_, _) => Program.Engine.DisposeAsync().AsTask().GetAwaiter().GetResult();
@@ -67,7 +79,8 @@ public sealed partial class MainWindow : Window
 
     private void OnStartup(StartupResult data)
     {
-        _programs.Load(data);
+        // Prepared may still be running on the engine reply thread; then Load builds the rows on this thread.
+        _programs.Load(data, Program.Prepared is { IsCompletedSuccessfully: true } prepared ? prepared.Result : null);
         // The "Administrator" chip shows only when the UI itself runs elevated (7a delta 2); the token is read
         // off the UI thread, so it also holds when the engine is not used.
         ElevationChip.Visibility = data.UiElevated ? Visibility.Visible : Visibility.Collapsed;
@@ -123,6 +136,7 @@ public sealed partial class MainWindow : Window
         _firstTickSeen = true;
         CompositionTarget.Rendering -= OnFirstRendering;
         LaunchMarkers.Mark("first_tick");
+        _programs.RecordRowsAtTick();
 
         // Approximate "first presented frame": the next DWM composition after the first tick has been committed.
         // The precise number comes from Dwm-Core present events in WPR (§9.2 (a)).
@@ -294,6 +308,48 @@ public sealed partial class MainWindow : Window
         AppWindow.MoveAndResize(new RectInt32(
             area.X + (area.Width - size.Width) / 2, area.Y + (area.Height - size.Height) / 2, size.Width, size.Height));
     }
+
+    /// <summary>Width of the rail column and height of the title bar row in MainWindow.xaml (plus the card's 1 px border).</summary>
+    private const double RailWidth = 232, TitleBarHeight = 48, CardBorder = 1;
+
+    /// <summary>
+    /// Lays out the Programs page once at the size it will get, while the title bar call below still has to wait
+    /// for composition (M3 launch perf): templates are applied now instead of after Activate(). The list realizes
+    /// only one row container here (a diagnostic build counted 1 at the end of the constructor); the live layout
+    /// after Activate() realizes the first screenful and measures the page again, so a size that is slightly off
+    /// only means it does more of that work itself.
+    /// </summary>
+    private void PreMeasurePrograms()
+    {
+        if (ContentCard.Child != _programs) return;
+        var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+        var dpi = GetDpiForWindow(hwnd);
+        if (dpi == 0 || !GetClientRect(hwnd, out var client)) return;
+        var scale = dpi / 96.0;
+        // The client area does not include the system caption yet; the extended title bar takes it over.
+        var caption = GetSystemMetricsForDpi(SmCyCaption, dpi) + GetSystemMetricsForDpi(SmCySizeFrame, dpi)
+                      + GetSystemMetricsForDpi(SmCxPaddedBorder, dpi);
+        var width = (client.Right - client.Left) / scale - RailWidth - CardBorder;
+        var height = (client.Bottom - client.Top + caption) / scale - TitleBarHeight - CardBorder;
+        if (width <= 0 || height <= 0) return;
+        _programs.Measure(new Windows.Foundation.Size(width, height));
+        _programs.Arrange(new Windows.Foundation.Rect(0, 0, width, height));
+    }
+
+    private const int SmCyCaption = 4, SmCySizeFrame = 33, SmCxPaddedBorder = 92;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct Rect32
+    {
+        public int Left, Top, Right, Bottom;
+    }
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetClientRect(nint hwnd, out Rect32 rect);
+
+    [LibraryImport("user32.dll")]
+    private static partial int GetSystemMetricsForDpi(int index, uint dpi);
 
     [LibraryImport("user32.dll")]
     private static partial uint GetDpiForWindow(nint hwnd);
