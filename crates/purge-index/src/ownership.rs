@@ -96,7 +96,7 @@ const DEFAULT_HIVE_LINK_TARGET: &str = r"\Registry\User\.Default";
 /// is named at its target, and no link is followed.
 ///
 /// The exception is exactly this: the name is `S-1-5-18`, the key `HKU\S-1-5-18` is a link, and its
-/// target is `\Registry\User\.Default`. Anything else (another SID that is a link, another target, a
+/// target is `\Registry\User\.Default` (compared ignoring case and a trailing `\` or NUL). Anything else (another SID that is a link, another target, a
 /// link below the hive, a key that cannot be read) gives `sid` back, and the read of it fails as it
 /// always did.
 pub fn user_hive_name(reg: &dyn RegistrySource, sid: &str) -> String {

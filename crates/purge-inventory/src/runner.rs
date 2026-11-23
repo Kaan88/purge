@@ -9,8 +9,10 @@
 //! 2. Record the Authenticode signer CN of the uninstaller exe, and the routing facts of §4.4
 //!    ([`Routing`]: how the engine runs and whether the entry should run at medium integrity). The routing
 //!    rule is **recorded, not enforced** in M1a: the CLI runs the command with its own token. An elevated
-//!    start gets the machine environment plus the profile variables and the uninstaller's own directory,
-//!    never the engine's environment or working directory (review M3-R2 S4).
+//!    start gets the machine environment plus the profile variables, never the engine's environment
+//!    (review M3-R2 S4), and starts in the system directory, never in the uninstaller's own folder
+//!    (`neutral_working_dir`); only when the system directory is not admin-only does it keep the
+//!    engine's working directory, with a warning.
 //! 3. List running processes whose image is under the app's roots. M1a does not close or terminate them
 //!    (`WM_CLOSE` and termination need consent, M2/M3); they only appear in [`RunDoc::processes`].
 //! 4. Start the command inside a Job object with breakaway disallowed, so NSIS/Inno copies re-launched from
@@ -464,7 +466,10 @@ fn admin_only_path(path: &str, fs: &dyn FileSystemSource) -> String {
 /// - S4 asks that the directory is not one a medium process chose and that nothing is resolved through
 ///   it. The system directory is named by `HKLM`, is admin-only (checked here) and is already searched
 ///   by `CreateProcess` for a bare name and by the DLL loader, so as working directory it adds no
-///   place to either search.
+///   place to either search. (A 32-bit uninstaller sees relative paths in it redirected to SysWOW64,
+///   which is just as admin-only.)
+/// - When the system directory is not admin-only the engine's own working directory is kept, with a
+///   warning: the broker's is its install directory, an elevated CLI engine's is the admin's shell.
 /// - An `UninstallString` names no working directory, so whoever starts it (Settings, Control Panel,
 ///   a deployment tool) starts it in a directory of its own choosing and an uninstaller cannot rely on
 ///   starting in its own folder; its own directory is searched for its DLLs whatever the working

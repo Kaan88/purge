@@ -2,6 +2,7 @@
 
 use purge_index::ownership::{
     BurnProviderRef, INSTALLER_FOLDERS, MACHINE_DEPENDENCIES, SHARED_DLL_UNKNOWN, SHARED_DLLS,
+    user_hive_name,
 };
 use purge_source::types::RegData;
 
@@ -216,6 +217,43 @@ fn local_system_dependencies_are_read_in_the_default_hive() {
     );
     // A machine bundle still sees the machine's records only (R2a S6).
     assert!(ix.burn_providers_in("{SYSTEM-BUNDLE}", None).is_empty());
+}
+
+/// `user_hive_name` names the default hive only for the one link Windows defines. The target is
+/// compared ignoring case and a trailing `\` or NUL; nothing else matches (review of 7026a8c).
+#[test]
+fn user_hive_name_matches_only_the_default_hive_link() {
+    let named = |sid: &str, target: Option<&str>| {
+        let mut fx = base();
+        if let Some(target) = target {
+            fx.set_link(r"HKU\S-1-5-18", target);
+        }
+        user_hive_name(&LinkRefusing(&fx), sid)
+    };
+    for target in [
+        DEFAULT_HIVE_TARGET,
+        r"\REGISTRY\USER\.DEFAULT",
+        r"\Registry\User\.Default\",
+        "\\Registry\\User\\.Default\0",
+    ] {
+        assert_eq!(named("S-1-5-18", Some(target)), ".DEFAULT", "{target:?}");
+        assert_eq!(named("s-1-5-18", Some(target)), ".DEFAULT", "{target:?}");
+    }
+    for target in [
+        r"\Registry\User\.Default\Software",
+        r"\Registry\User\.DefaultX",
+        r"\Registry\User\S-1-5-21-9-9-9-1001",
+        r"\Registry\Machine\Software",
+    ] {
+        assert_eq!(named("S-1-5-18", Some(target)), "S-1-5-18", "{target:?}");
+    }
+    // No link, a key that cannot be read, another SID: the name stays.
+    assert_eq!(named("S-1-5-18", None), "S-1-5-18");
+    assert_eq!(
+        user_hive_name(&LinkRefusing(&Fixture::default()), "S-1-5-18"),
+        "S-1-5-18"
+    );
+    assert_eq!(named("S-1-5-19", Some(DEFAULT_HIVE_TARGET)), "S-1-5-19");
 }
 
 /// Without the link `S-1-5-18` is read as the hive it names, and `.DEFAULT` is not read in its place.
