@@ -2344,7 +2344,9 @@ M3_FINISH_PLAN). Host driver `vm\rig-m3-ci.ps1` (dot-sources rig.ps1 with `-VmNa
 ```powershell
 $env:VMPWFILE = 'C:\path\to\pw.txt'
 .\vm\rig-m3-ci.ps1                     # or .\vm\rig.ps1 -Mode m3-elevated-ci [-RunPrefix x-] [-Snapshot rig-base]
-#   -AllowDirty  -SkipUi  -Threads <n>  -TimeoutBinSec 1800  -TimeoutUiSec 1800  -KeepBundle
+#   -AllowDirty  -SkipUi  -Threads <n>  -TimeoutBinSec 1800  -TimeoutUiSec 1800  -StepCapSec 10800  -StaleSec 900  -KeepBundle
+#   rig.ps1 forwards -AllowDirty, -SkipUi and -Threads (its parameters $M3AllowDirty, $M3SkipUi, $M3Threads); the
+#   other options need rig-m3-ci.ps1 itself. rig.ps1 refuses the mode with a -VmName other than Inbound-Win11-Test.
 .\vm\rig-m3-ci.ps1 -BuildOnly          # host side only (build, collect, bundle, manifest), no VM
 .\vm\rig-m3-ci.ps1 -HostRun -Threads 2 # dry run: the same guest runner on this host, with this shell's token
 powershell -NoProfile -ExecutionPolicy Bypass -File vm\guest\tests\rig-m3-ci.tests.ps1
@@ -2367,13 +2369,16 @@ with and without rig-exec, and the guest unpacks each step's own copy just befor
 cargo did. Every test executable runs as cargo runs it: no arguments (`--test-threads` only with `-Threads`), working
 directory the package directory, and `CARGO_MANIFEST_DIR`, `CARGO_PKG_NAME` and `CARGO_PKG_VERSION` set. One binary at
 a time, with a per-binary timeout (`-TimeoutBinSec`). On timeout the process tree is ended. `#[ignore]`d tests do
-not run, as in xtask ci (the elevated ignored tests are m2-elevated's, section 11.9).
+not run, as in xtask ci. About 30 of them need elevation (firewall, SeRestorePrivilege, services,
+PendingFileRenameOperations, HKLM writes, restore points); they run in win-unit's elevated pass `p2-elevated`
+(`--include-ignored`, section 10), and the engine's elevated runs are m2-elevated (section 11.9) and m1b-x-elevated
+(section 12.8). This mode does not cover them.
 
 Host-only steps, with the reason in the report (`Get-M3CiHostOnly`). fmt, the three clippy runs and `dotnet build` are
 compilation or text checks. check-deps, no-new-walks, baseline-sites, ui-strings, scanner-coverage and
 `gen-dto --check` read sources, metadata or compiled-in tables. The doctests of `cargo test --workspace` are compiled
-by rustdoc at test time, and the guest has no toolchain. They are `compile_fail` type checks and one example of a pure
-function, and none calls Windows. The driver reads `tools\xtask\src\main.rs` before it builds. It refuses when ci has a
+by rustdoc at test time, and the guest has no toolchain. They are `compile_fail` type checks (purge-exec's journal
+writer, purge-win's `fs_write`) and one example of a pure function, and none calls Windows. The driver reads `tools\xtask\src\main.rs` before it builds. It refuses when ci has a
 step that is neither run nor listed host-only, or when a step it runs is gone from ci (`Get-M3CiUncovered`).
 
 **Paths.** Tests read the repository through `env!("CARGO_MANIFEST_DIR")`, which bakes in the host's absolute path.
@@ -2388,6 +2393,11 @@ the host's own paths:
 
 The checkout and the target directory must be on C: (refused otherwise; build from the main checkout, not from an
 `E:\purge-build` path). Archives are tar.gz (`System32\tar.exe` on both sides).
+
+Mirror completeness is first proven by a VM run. `-HostRun` runs against the real checkout (`-NoUnpack`), so it
+never uses `repo.tgz` or `ui.tgz`. A test file that is neither tracked nor in `Get-M3CiRepoExtras` is missing in
+the guest. Mostly that fails a test, but a test that skips when a file is absent would pass quietly. Compare the
+guest's pass count with the host run's (4,006).
 
 **UI tests in the guest.** The guest has no .NET SDK of its own, and `dotnet test` needs one (vstest), not just a runtime.
 The rig pushes a portable copy of the host's SDK: `dotnet.exe`, `host\fxr`, `shared\Microsoft.NETCore.App`,
@@ -2405,33 +2415,58 @@ step, binary label regex, exact test name and reason. They are passed as `--skip
 empty. Static reading found no test that needs anything the bundle does not bring. If the first VM run shows one,
 it is added here with its reason; elevation-caused failures are findings, never exclusions.
 
-**Flow.** Refusals (exit 2): no `VMPWFILE`, VM missing, any VM running, lock `vm\runs\.lock-Inbound-Win11-Test` held, or
-a dirty checkout (`-AllowDirty` records it in `dirty`). Then:
+**Flow.** Refusals (exit 2): no `VMPWFILE`, VM missing, any VM running or Inbound not off or saved
+(`Get-M3CiVmBusy`), lock `vm\runs\.lock-Inbound-Win11-Test` held, or a tracked change in the checkout
+(`git status --porcelain`, lines other than `??`; `-AllowDirty` goes on and records them in `dirty`). Untracked paths
+are never refused. The main checkout always has some (`.claude/`, `out/`, bench files), and only tracked files and the
+two extras are mirrored. They are recorded in `untracked`, with an untracked directory as one entry. Then:
 1. host build and bundle in `%TEMP%\m3ci-<run>`;
-2. restore the snapshot (default `rig-base`) and wait for the agent;
+2. `Get-M3CiVmBusy` again. The build takes minutes, and another campaign may have started a VM in that window. If one
+   runs, the run is refused (exit 2) before anything touches a VM: `Restore-Base` would power a running Inbound off,
+   and the cleanup leaves the VM alone. Otherwise restore the snapshot (default `rig-base`) and wait for the agent;
 3. check the guest's free space on C: (archives + unpacked + 2 GB);
 4. push the bundle to `C:\cr\m3ci`;
 5. agent jobs `unpack`, `step` × 3, `ui`, `pack`;
 6. pull `out.tgz` to `vm\runs\<run>\guest\`;
 7. power off and restore the snapshot (left off).
 
-Job timeouts: unpack 3600 s; a step gets (binaries × (TimeoutBin + 30)) + 900 s, an upper bound that the per-binary
-timeout keeps; ui gets TimeoutUi + 900 s; pack 1800 s.
+Job timeouts: unpack 3600 s; a step gets min((binaries × (TimeoutBin + 30)) + 900 s, `-StepCapSec` 10,800 s). Without
+the cap the workspace step would get 67 × 1,830 + 900 s, about 34 h. The host ran that step in 15 min. ui gets
+min(TimeoutUi + 900 s, cap); pack 1800 s.
+
+Liveness. The guest runner rewrites `C:\cr\m3ci\heartbeat.txt` (time, a counter, phase, step, what it waits for) at
+the start of a phase, before each binary and each tar, and at least every 30 s while it waits for one
+(`heartbeat_sec` in the manifest). The steps' `results.json` record the count (`heartbeats`). The host does not use
+rig.ps1's `Invoke-GuestJob` for the phases. `Invoke-M3CiGuestJob` speaks the same job protocol and, every 60 s,
+stats `C:\cr\jobs\agent.alive` and fetches the heartbeat. A phase is given up (`Get-M3CiStaleReason`) when the
+heartbeat has not changed for `-StaleSec` (900 s, counted from the job's submission until the first change), or when
+guestcontrol has failed for that long. The run then fails with the reason, powers the VM off and restores the
+snapshot. A dead guest or agent therefore holds Inbound and the lock for about 15 min, not for the whole job budget.
 
 **Output** `vm\runs\<run>\` (default `m3-elevated-ci`, `-RunPrefix` through rig.ps1; an existing one goes to `_old\`):
-- `m3-elevated-ci.json`, schema `purge.rig.m3elevatedci/1`: commit, dirty, rustc, dotnet_sdk, admin, integrity,
-  guest (OS, token, free space, the guest's .NET), host_only, exclusions, steps[].binaries[] and ui;
+- `m3-elevated-ci.json`, schema `purge.rig.m3elevatedci/1`: commit, dirty (tracked changes), untracked, rustc,
+  dotnet_sdk, admin, integrity, users, expected_user, guest (OS, token, free space, the guest's .NET), host_only,
+  exclusions, steps[] (binaries[], support[], heartbeats) and ui;
 - `manifest.json`, `rig.log`, `build\*.log`, `jobs\*.log`;
 - `guest\<step>\<n>.txt`, the libtest output with stderr appended.
 
 Each binary row has the label, exe, SHA-256 on the host and in the guest (`sha_match`), exit, timed_out, seconds,
-passed, failed, ignored, filtered_out and failing (from `test X ... FAILED`). The ui object has the dll and its
-SHA-256 on both sides, exit, the TRX counters and the failing names.
+passed, failed, ignored, filtered_out and failing (from `test X ... FAILED`). Each step's `support[]` lists the
+binaries and examples the step built (what the tests start through `CARGO_BIN_EXE_*`, e.g. `purge-engine.exe` with or
+without rig-exec). Each entry has the host's SHA-256 from the build and the guest's, taken right after that step's
+unpack. The ui object has the dll and its SHA-256 on both sides, `pipe_harness.exe` the same way (`support`), exit,
+the TRX outcome and counters, and the failing names.
 
 `pass` requires all of these, and `why` lists every reason it is not:
-- `admin` true for every phase;
-- every binary: exit 0, a libtest summary, 0 failed, the SHA-256 the same on both sides;
-- UI: run, exit 0, TRX present, at least 1 test, 0 failed, the same SHA-256.
+- `admin` true for every phase (unpack, each step, ui);
+- integrity `High Mandatory Level` in every phase, and every phase's token user the rig user (`tester`; on a
+  `-HostRun`, this shell's user). LocalSystem is an administrator too and would pass `admin` alone, but G1 means the
+  elevated interactive user;
+- every binary: exit 0, a libtest summary, 0 failed, `filtered_out` equal to the number of the rig's skips (0 while
+  the exclusion list is empty), and the SHA-256 the same on both sides;
+- every support executable of every step: the same SHA-256 on both sides;
+- UI: run, exit 0, TRX present, at least 1 test, 0 failed, passed + not executed = total (no aborted or partial run),
+  the same SHA-256 for the dll and `pipe_harness.exe`.
 
 Exit 0 on pass, 1 otherwise.
 

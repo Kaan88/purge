@@ -7,6 +7,7 @@
 
     $env:VMPWFILE = 'C:\path\to\pw.txt'
     .\vm\rig-m3-ci.ps1                       # or: .\vm\rig.ps1 -Mode m3-elevated-ci [-RunPrefix x-] [-Snapshot rig-base]
+                                             #     [-AllowDirty] [-SkipUi] [-Threads n] (rig.ps1 forwards these)
     .\vm\rig-m3-ci.ps1 -BuildOnly            # host side only: build, collect, bundle, manifest (no VM)
     .\vm\rig-m3-ci.ps1 -HostRun -Threads 2   # dry run of the guest runner on this host (no VM; the token is this shell's)
 
@@ -37,14 +38,20 @@
   CARGO_PKG_VERSION set as cargo sets them.
 
   Output: vm\runs\<run>\ (default run m3-elevated-ci; an existing one is moved to vm\runs\_old\): m3-elevated-ci.json
-  (schema purge.rig.m3elevatedci/1: commit, dirty, per binary exit code, pass/fail/ignored counts, failing test names,
-  SHA-256 on the host and in the guest; the UI test counts and failures; the guest token; host-only steps and
-  exclusions with reasons; pass), rig.log, build\*.log (cargo and dotnet stderr), jobs\*.log, guest\ (the guest's
+  (schema purge.rig.m3elevatedci/1: commit, dirty (tracked changes), untracked, per binary exit code,
+  pass/fail/ignored/filtered counts, failing test names, SHA-256 on the host and in the guest of every test and support
+  executable; the UI test counts and failures; the guest token (user, admin, integrity); host-only steps and exclusions
+  with reasons; pass), rig.log, build\*.log (cargo and dotnet stderr), jobs\*.log, guest\ (the guest's
   outputs: <step>\<n>.txt libtest output per binary, results.json, ui\ui.trx). The bundle is built in
   %TEMP%\m3ci-<run> and deleted after a VM run unless -KeepBundle.
 
-  Refuses (exit 2) unless VMPWFILE names a readable file, the VM exists, no VirtualBox VM runs, the lock
-  vm\runs\.lock-Inbound-Win11-Test is free and the checkout is clean (-AllowDirty records the dirty files and goes on).
+  Refuses (exit 2) unless VMPWFILE names a readable file, the VM exists, no VirtualBox VM runs (checked at the start and
+  again right before the snapshot restore, which so never powers a running VM off), the lock
+  vm\runs\.lock-Inbound-Win11-Test is free and the checkout has no tracked change (-AllowDirty records the changed files
+  and goes on). Untracked files are recorded, never refused: only tracked files and two extras are mirrored.
+  Guest jobs: a step gets min(binaries x (TimeoutBin+30) + 900, StepCapSec = 3 h). Every phase rewrites
+  C:\cr\m3ci\heartbeat.txt at least every 30 s; the host fails the phase when it has not changed for StaleSec (900 s)
+  or when guestcontrol has failed for that long.
   Exit 0 when the verdict is pass, 1 otherwise.
 #>
 [CmdletBinding()]
@@ -60,6 +67,10 @@ param(
     [int] $TimeoutBinSec = 1800,
     [int] $TimeoutUiSec = 1800,
     [int] $AgentTimeoutSec = 600,
+    # Upper bound of one step's agent job (the sum of the per-binary timeouts is far longer: 67 x 1830 s for workspace).
+    [int] $StepCapSec = 10800,
+    # A guest phase fails when its heartbeat has not changed, or guestcontrol has failed, for this long.
+    [int] $StaleSec = 900,
     [switch] $KeepBundle
 )
 $ErrorActionPreference = 'Stop'
@@ -67,12 +78,14 @@ $ErrorActionPreference = 'Stop'
 # rig.ps1 has parameters of its own (Snapshot, Mode, RunPrefix, ...): ours are kept here first. The VM is fixed.
 $CI = [ordered]@{ snapshot = $Snapshot; run = $Run; build_only = [bool]$BuildOnly; host_run = [bool]$HostRun; skip_ui = [bool]$SkipUi
                   allow_dirty = [bool]$AllowDirty; threads = $Threads; timeout_bin = $TimeoutBinSec; timeout_ui = $TimeoutUiSec
-                  agent_timeout = $AgentTimeoutSec; keep_bundle = [bool]$KeepBundle; vm = 'Inbound-Win11-Test' }
+                  agent_timeout = $AgentTimeoutSec; step_cap = $StepCapSec; stale = $StaleSec; keep_bundle = [bool]$KeepBundle
+                  vm = 'Inbound-Win11-Test' }
 . (Join-Path $PSScriptRoot 'rig.ps1') -VmName $CI.vm
 
 $M3CiGuestRoot = 'C:\cr\m3ci'
 $M3CiSchema = 'purge.rig.m3elevatedci/1'
 $script:CiLock = $null
+$script:CiRefused = $false
 
 # ------------------------------------------------------------------------------------------------- pure: what runs
 
@@ -97,7 +110,7 @@ function Get-M3CiHostOnly {
         [ordered]@{ step = 'clippy --workspace --all-targets -- -D warnings'; why = $lint }
         [ordered]@{ step = 'clippy -p purge-mcp --all-targets -- -D warnings'; why = $lint }
         [ordered]@{ step = 'clippy -p purge-engine -p purge-exec --features purge-engine/rig-exec,purge-exec/test-support --all-targets -- -D warnings'; why = $lint }
-        [ordered]@{ step = 'doctests of test --workspace'; why = 'rustdoc compiles and runs them at test time and the guest has no toolchain; the workspace''s doctests are compile_fail type checks (purge-exec journal writer) and one example of a pure function (purge-model bind); none calls Windows' }
+        [ordered]@{ step = 'doctests of test --workspace'; why = 'rustdoc compiles and runs them at test time and the guest has no toolchain; the workspace''s doctests are compile_fail type checks (purge-exec journal writer, purge-win fs_write) and one example of a pure function (purge-model bind); none calls Windows' }
         [ordered]@{ step = 'check-deps'; why = 'reads cargo metadata and source text' }
         [ordered]@{ step = 'no-new-walks'; why = 'reads source text' }
         [ordered]@{ step = 'baseline-sites'; why = 'reads source text' }
@@ -234,6 +247,10 @@ function Get-M3CiVerdict($Doc) {
     $why = @()
     if ($Doc.error) { $why += "error: $($Doc.error)" }
     if (-not $Doc.admin) { $why += 'the runner''s token was not elevated (admin=false)' }
+    # LocalSystem is an administrator too; G1 means the elevated interactive rig user (High integrity, its own profile).
+    if ($Doc.integrity -cne 'High Mandatory Level') { $why += "the runner's integrity was '$($Doc.integrity)', not High Mandatory Level" }
+    $names = @(@($Doc.users) | Where-Object { $_ } | ForEach-Object { "$_".Split('\')[-1] } | Sort-Object -Unique)
+    if ($names.Count -ne 1 -or $names[0] -ne $Doc.expected_user) { $why += "the runner ran as '$(@($Doc.users) -join ',')', not the rig user '$($Doc.expected_user)'" }
     if (-not @($Doc.steps).Count) { $why += 'no step ran' }
     foreach ($s in @($Doc.steps)) {
         if (-not @($s.binaries).Count) { $why += "step $($s.id): no test binary" }
@@ -242,8 +259,10 @@ function Get-M3CiVerdict($Doc) {
             elseif ($b.exit -ne 0) { $why += "$($s.id) $($b.label): exit $($b.exit)$(if (@($b.failing).Count) { ' (' + (@($b.failing) -join ', ') + ')' })" }
             elseif (-not $b.summary) { $why += "$($s.id) $($b.label): no libtest summary" }
             elseif ($b.failed -gt 0) { $why += "$($s.id) $($b.label): $($b.failed) failed" }
+            elseif ($b.filtered_out -ne @($b.skipped_by_rig).Count) { $why += "$($s.id) $($b.label): $($b.filtered_out) filtered out, the rig skips $(@($b.skipped_by_rig).Count)" }
             if (-not $b.sha_match) { $why += "$($s.id) $($b.label): the guest's SHA-256 differs from the host build" }
         }
+        foreach ($x in @($s.support)) { if (-not $x.sha_match) { $why += "$($s.id) support $($x.label): the guest's SHA-256 differs from the host build" } }
     }
     $u = $Doc.ui
     if (-not $u -or $u.skipped) { $why += 'ui tests not run (-SkipUi); G1 needs --require-ui' }
@@ -251,7 +270,9 @@ function Get-M3CiVerdict($Doc) {
     elseif (-not $u.trx) { $why += "ui: no TRX (exit $($u.exit))" }
     elseif ($u.exit -ne 0 -or $u.failed -gt 0) { $why += "ui: exit $($u.exit), $($u.failed) failed$(if (@($u.failing).Count) { ' (' + (@($u.failing) -join ', ') + ')' })" }
     elseif ($u.total -lt 1) { $why += 'ui: no test ran' }
+    elseif ($u.passed + $u.not_executed -ne $u.total) { $why += "ui: $($u.passed) passed + $($u.not_executed) not executed of $($u.total) (an aborted or partial run)" }
     elseif (-not $u.sha_match) { $why += 'ui: the guest''s assembly SHA-256 differs from the host build' }
+    if ($u -and -not $u.skipped) { foreach ($x in @($u.support)) { if (-not $x.sha_match) { $why += "ui support $($x.label): the guest's SHA-256 differs from the host build" } } }
     [pscustomobject]@{ pass = ($why.Count -eq 0); why = $why }
 }
 
@@ -265,6 +286,44 @@ function New-M3CiPhaseText([string]$Phase, [string]$Step = '') {
 
 # The run name: letters, digits, '.', '_' and '-'.
 function Assert-M3CiRunName([string]$Name) { if ($Name -cnotmatch '^[a-z0-9][a-z0-9_.-]*$') { throw "bad run name '$Name'" } }
+
+# The agent-job timeout of one step: the sum of the per-binary timeouts plus 900 s, capped (a dead guest must not hold
+# the VM and the lock for that whole sum; the host ran the workspace step in 15 min).
+function Get-M3CiStepTimeout([int]$Binaries, [int]$TimeoutBin, [int]$Cap) {
+    [int][Math]::Min([int64][Math]::Max(1, $Binaries) * ($TimeoutBin + 30) + 900, [int64]$Cap)
+}
+
+# Why the rig must not touch the VMs now, or $null: `list runningvms` failed or lists a VM, or our VM is in a state other
+# than off or saved. Checked before the build and again right before the snapshot restore (which powers a running VM off).
+function Get-M3CiVmBusy($ListResult, [string]$State, [string]$Vm) {
+    if ($ListResult.code -ne 0) { return "VBoxManage list runningvms failed: $(@($ListResult.out) -join ' ')" }
+    $running = @($ListResult.out | Where-Object { "$_".Trim() })
+    if ($running.Count) { return "a VM is running ($($running -join '; ')); one VM at a time" }
+    if (@('poweroff', 'saved', 'aborted') -notcontains $State) { return "VM $Vm is in state '$State', not off or saved" }
+    $null
+}
+
+# Why a watched guest job counts as dead, or $null. $LastBeat: when the heartbeat last changed (the job's start until the
+# first one); $FailingSince: since when every guestcontrol call of the watch has failed ($null when the last one worked).
+function Get-M3CiStaleReason([datetime]$Now, [datetime]$LastBeat, $FailingSince, [int]$StaleSec) {
+    if ($null -ne $FailingSince) {
+        $f = ($Now - [datetime]$FailingSince).TotalSeconds
+        if ($f -ge $StaleSec) { return "guestcontrol has failed for $([int]$f) s" }
+    }
+    $b = ($Now - $LastBeat).TotalSeconds
+    if ($b -ge $StaleSec) { return "the guest heartbeat has not changed for $([int]$b) s" }
+    $null
+}
+
+# The checkout's state: tracked changes (refused unless -AllowDirty) and untracked paths (recorded only; git status
+# collapses an untracked directory into one entry).
+function Get-M3CiWorktreeState([string]$Repo) {
+    $ErrorActionPreference = 'Continue'
+    $lines = @(& git -C $Repo status --porcelain --untracked-files=normal 2>$null | Where-Object { $_ })
+    if ($LASTEXITCODE -ne 0) { throw "git status in $Repo exited $LASTEXITCODE" }
+    [pscustomobject]@{ tracked = @($lines | Where-Object { -not "$_".StartsWith('?? ') })
+                       untracked = @($lines | Where-Object { "$_".StartsWith('?? ') } | ForEach-Object { "$_".Substring(3) }) }
+}
 
 # ------------------------------------------------------------------------------------------------- host build
 
@@ -327,7 +386,8 @@ function Invoke-M3CiBuild([string]$Bundle, [string]$LogDir) {
     New-Item -ItemType Directory -Force $Bundle, $LogDir | Out-Null
     $git = Invoke-M3CiNative 'git' @('rev-parse', 'HEAD') $repo (Join-Path $LogDir 'git.log')
     $head = "$($git.out | Select-Object -First 1)".Trim()
-    $dirty = @((Invoke-M3CiNative 'git' @('status', '--porcelain') $repo (Join-Path $LogDir 'git.log')).out | Where-Object { $_ })
+    $wt = Get-M3CiWorktreeState $repo
+    $dirty = @($wt.tracked)
     $rustc = "$((Invoke-M3CiNative 'rustc' @('-V') $repo (Join-Path $LogDir 'rustc.log')).out | Select-Object -First 1)"
     $meta = Invoke-M3CiNative 'cargo' @('metadata', '--no-deps', '--format-version', '1') $repo (Join-Path $LogDir 'cargo-metadata.log')
     if ($meta.code -ne 0) { throw "cargo metadata exited $($meta.code)" }
@@ -401,8 +461,10 @@ function Invoke-M3CiBuild([string]$Bundle, [string]$LogDir) {
         $bytes += $dsz; $raw += $draw
         New-M3CiFakeCargo (Join-Path $Bundle 'cargo-standin.exe')
         $filter = (@(@(Get-M3CiExclusions) | Where-Object { $_.step -eq 'ui' } | ForEach-Object { "FullyQualifiedName!=$($_.test)" }) -join '&')
+        $harness = @(@($steps | Where-Object { $_.id -eq 'ui-harness' } | Select-Object -First 1).support)
+        if (-not $harness.Count) { throw 'step ui-harness: cargo reported no executable (pipe_harness)' }
         $ui = [ordered]@{ archive = 'ui.tgz'; dir = $udir; dll = $tp; dll_sha256 = (Get-FileHash -LiteralPath $tp -Algorithm SHA256).Hash.ToLowerInvariant()
-                          harness_archive = 'step-ui-harness.tgz'; filter = $filter; archive_bytes = $usz }
+                          harness_archive = 'step-ui-harness.tgz'; support = $harness; filter = $filter; archive_bytes = $usz }
         $dotnetInfo = [ordered]@{ archive = 'dotnet.tgz'; sdk = $sdkVer; from = $droot; archive_bytes = $dsz; bytes = $draw }
     }
     # The checkout's tracked files (working tree) and the extras the host has.
@@ -413,16 +475,17 @@ function Invoke-M3CiBuild([string]$Bundle, [string]$LogDir) {
     $rsz = New-M3CiTar (Join-Path $Bundle 'repo.tgz') $repo $rel
     $bytes += $rsz; $raw += ($rel | ForEach-Object { (Get-Item -LiteralPath (Join-Path $repo $_)).Length } | Measure-Object -Sum).Sum
     Copy-Item -LiteralPath (Join-Path $script:RigDir 'guest\m3-ci.ps1') -Destination (Join-Path $Bundle 'm3-ci.ps1') -Force
-    $man = [ordered]@{ schema = 'purge.rig.m3ci.manifest/1'; built = (Get-Date).ToString('o'); commit = $head; dirty = $dirty; rustc = $rustc
+    $man = [ordered]@{ schema = 'purge.rig.m3ci.manifest/1'; built = (Get-Date).ToString('o'); commit = $head; dirty = $dirty
+                       untracked = @($wt.untracked); rustc = $rustc
                        repo = [ordered]@{ archive = 'repo.tgz'; dir = $repo; files = $rel.Count; extras = $extras; archive_bytes = $rsz }
                        target_dir = $target; make_dirs = @((Join-Path $target 'tmp'))
                        steps = @($steps | Where-Object { $_.id -ne 'ui-harness' }); ui = $ui; dotnet = $dotnetInfo; fakecargo = 'cargo-standin.exe'
-                       threads = $CI.threads; timeout_bin = $CI.timeout_bin; timeout_ui = $CI.timeout_ui
+                       threads = $CI.threads; timeout_bin = $CI.timeout_bin; timeout_ui = $CI.timeout_ui; heartbeat_sec = 30
                        host_only = @(Get-M3CiHostOnly); exclusions = @(Get-M3CiExclusions)
                        archives_bytes = $bytes; unpacked_bytes = $raw }
     [IO.File]::WriteAllText((Join-Path $Bundle 'manifest.json'), (ConvertTo-Json -InputObject $man -Depth 8), (New-Object Text.UTF8Encoding($false)))
     $nb = @($man.steps | ForEach-Object { @($_.binaries).Count } | Measure-Object -Sum).Sum
-    Write-RigLog ("bundle {0}: {1} test executables in {2} steps, archives {3:N0} MB, unpacked {4:N0} MB, commit {5}{6}" -f $Bundle, $nb, @($man.steps).Count, ($bytes / 1MB), ($raw / 1MB), $head, $(if ($dirty.Count) { " (dirty: $($dirty.Count) path(s))" }))
+    Write-RigLog ("bundle {0}: {1} test executables in {2} steps, archives {3:N0} MB, unpacked {4:N0} MB, commit {5}{6}; {7} untracked path(s), not mirrored" -f $Bundle, $nb, @($man.steps).Count, ($bytes / 1MB), ($raw / 1MB), $head, $(if ($dirty.Count) { " (dirty: $($dirty.Count) tracked path(s))" }), @($wt.untracked).Count)
     $man
 }
 
@@ -431,20 +494,34 @@ function Invoke-M3CiBuild([string]$Bundle, [string]$LogDir) {
 # The result document from the manifest and the runner's outputs in $GuestOut (pulled from the guest, or the host run's).
 function New-M3CiResult($Man, [string]$GuestOut, [string]$Where, [string]$Started, [string]$Err) {
     $doc = [ordered]@{ schema = $M3CiSchema; run = $CI.run; mode = 'm3-elevated-ci'; where = $Where; vm = $(if ($Where -eq 'vm') { $CI.vm }); snapshot = $(if ($Where -eq 'vm') { $CI.snapshot })
-                       start = $Started; end = (Get-Date).ToString('o'); commit = $Man.commit; dirty = @($Man.dirty); rustc = $Man.rustc
-                       dotnet_sdk = $(if ($Man.dotnet) { $Man.dotnet.sdk }); admin = $false; integrity = $null; guest = $null
+                       start = $Started; end = (Get-Date).ToString('o'); commit = $Man.commit; dirty = @($Man.dirty); untracked = @($Man.untracked)
+                       rustc = $Man.rustc; dotnet_sdk = $(if ($Man.dotnet) { $Man.dotnet.sdk }); admin = $false; integrity = $null; users = @()
+                       expected_user = $(if ($Where -eq 'vm') { $script:GuestUser } else { $env:USERNAME }); guest = $null
                        host_only = @($Man.host_only); exclusions = @($Man.exclusions); steps = @(); ui = $null; totals = $null; error = $Err; pass = $false; why = @() }
+    $admins = @(); $integ = @(); $users = @()
     $up = Join-Path $GuestOut 'unpack.json'
     if (Test-Path -LiteralPath $up) {
         $u = Get-Content -LiteralPath $up -Raw | ConvertFrom-Json
         $doc.guest = $u
+        $admins += [bool]$u.token.admin; $integ += "$($u.token.integrity)"; $users += "$($u.token.user)"
     }
-    $admins = @(); $integ = @()
+    # Support executables (binaries and examples the tests start): host hash from the manifest, guest hash after unpack.
+    $supportRows = {
+        param($Want, $Got)
+        @(foreach ($x in @($Want)) {
+            $g = @(@($Got) | Where-Object { $_.exe -eq $x.exe }) | Select-Object -First 1
+            [pscustomobject][ordered]@{ label = $x.label; exe = $x.exe; sha256 = $x.sha256; guest_sha256 = $(if ($g) { $g.sha256 })
+                                        sha_match = [bool]($g -and $g.sha256 -eq $x.sha256) }
+        })
+    }
     $tp = 0; $tf = 0; $ti = 0; $tb = 0
     foreach ($s in @($Man.steps)) {
         $rf = Join-Path $GuestOut "$($s.id)\results.json"
         $res = $null
-        if (Test-Path -LiteralPath $rf) { $res = Get-Content -LiteralPath $rf -Raw | ConvertFrom-Json; $admins += [bool]$res.token.admin; $integ += "$($res.token.integrity)" }
+        if (Test-Path -LiteralPath $rf) {
+            $res = Get-Content -LiteralPath $rf -Raw | ConvertFrom-Json
+            $admins += [bool]$res.token.admin; $integ += "$($res.token.integrity)"; $users += "$($res.token.user)"
+        }
         $rows = @()
         foreach ($b in @($s.binaries)) {
             $g = $(if ($res) { @($res.binaries | Where-Object { $_.n -eq $b.n }) | Select-Object -First 1 })
@@ -456,30 +533,38 @@ function New-M3CiResult($Man, [string]$GuestOut, [string]$Where, [string]$Starte
                                summary = $lt.summary; passed = $lt.passed; failed = $lt.failed; ignored = $lt.ignored; filtered_out = $lt.filtered_out
                                failing = @($lt.failing); skipped_by_rig = @($b.skip); output = "guest/$($s.id)/$($b.n).txt"
                                error = $(if (-not $g) { 'no result from the runner' } elseif ($g.start_error) { $g.start_error }) }
-            $row.pass = ($g -and -not $row.timed_out -and $row.exit -eq 0 -and $row.summary -and $row.failed -eq 0 -and $row.sha_match)
+            $row.pass = ($g -and -not $row.timed_out -and $row.exit -eq 0 -and $row.summary -and $row.failed -eq 0 -and $row.sha_match -and
+                         $row.filtered_out -eq @($b.skip).Count)
             $tp += $row.passed; $tf += $row.failed; $ti += $row.ignored; $tb++
             $rows += [pscustomobject]$row
         }
-        $doc.steps += [pscustomobject][ordered]@{ id = $s.id; cargo = $s.cargo; xtask = $s.xtask; binaries = $rows; pass = (@($rows | Where-Object { -not $_.pass }).Count -eq 0 -and $rows.Count -gt 0) }
+        $sup = & $supportRows $s.support $(if ($res) { $res.support })
+        $doc.steps += [pscustomobject][ordered]@{ id = $s.id; cargo = $s.cargo; xtask = $s.xtask; binaries = $rows; support = $sup
+                                                  heartbeats = $(if ($res) { $res.heartbeats })
+                                                  pass = (@($rows | Where-Object { -not $_.pass }).Count -eq 0 -and $rows.Count -gt 0 -and -not @($sup | Where-Object { -not $_.sha_match }).Count) }
     }
     if ($Man.ui) {
         $ur = Join-Path $GuestOut 'ui\results.json'
         $trx = Join-Path $GuestOut 'ui\ui.trx'
         $u = [ordered]@{ skipped = $false; dll = $Man.ui.dll; dll_sha256 = $Man.ui.dll_sha256; guest_dll_sha256 = $null; sha_match = $false; exit = $null; timed_out = $false
-                         trx = $false; total = 0; passed = 0; failed = 0; not_executed = 0; failing = @(); excluded_filter = $Man.ui.filter; output = 'guest/ui/dotnet-test.txt' }
+                         trx = $false; outcome = $null; total = 0; passed = 0; failed = 0; not_executed = 0; failing = @(); support = @()
+                         excluded_filter = $Man.ui.filter; output = 'guest/ui/dotnet-test.txt' }
+        $g = $null
         if (Test-Path -LiteralPath $ur) {
             $g = Get-Content -LiteralPath $ur -Raw | ConvertFrom-Json
-            $admins += [bool]$g.token.admin; $integ += "$($g.token.integrity)"
+            $admins += [bool]$g.token.admin; $integ += "$($g.token.integrity)"; $users += "$($g.token.user)"
             $u.guest_dll_sha256 = $g.dll_sha256; $u.sha_match = ($g.dll_sha256 -eq $Man.ui.dll_sha256); $u.exit = $g.exit; $u.timed_out = [bool]$g.timed_out
         }
+        $u.support = & $supportRows $Man.ui.support $(if ($g) { $g.support })
         if (Test-Path -LiteralPath $trx) {
             $t = Get-M3CiTrxResult ([IO.File]::ReadAllText($trx))
-            $u.trx = $true; $u.total = $t.total; $u.passed = $t.passed; $u.failed = $t.failed; $u.not_executed = $t.not_executed; $u.failing = @($t.failing)
+            $u.trx = $true; $u.outcome = $t.outcome; $u.total = $t.total; $u.passed = $t.passed; $u.failed = $t.failed; $u.not_executed = $t.not_executed; $u.failing = @($t.failing)
         }
         $doc.ui = [pscustomobject]$u
     } else { $doc.ui = [pscustomobject]@{ skipped = $true } }
     $doc.admin = ($admins.Count -gt 0 -and -not @($admins | Where-Object { -not $_ }).Count)
     $doc.integrity = (@($integ | Sort-Object -Unique) -join ',')
+    $doc.users = @($users | Where-Object { $_ } | Sort-Object -Unique)
     $doc.totals = [ordered]@{ binaries = $tb; passed = $tp; failed = $tf; ignored = $ti
                               ui_total = $(if ($doc.ui.skipped) { 0 } else { $doc.ui.total }); ui_failed = $(if ($doc.ui.skipped) { 0 } else { $doc.ui.failed }) }
     $v = Get-M3CiVerdict ([pscustomobject]$doc)
@@ -508,27 +593,78 @@ function Assert-M3CiStart {
     if (-not $env:VMPWFILE -or -not (Test-Path -LiteralPath $env:VMPWFILE -PathType Leaf)) { Stop-M3Ci 2 'REFUSED: $env:VMPWFILE does not name a readable file' }
     $vms = (Invoke-VBox @('list', 'vms')).out -join "`n"
     if ($vms -notmatch ('"' + [regex]::Escape($CI.vm) + '"')) { Stop-M3Ci 2 "REFUSED: VM $($CI.vm) not found" }
-    $running = @((Invoke-VBox @('list', 'runningvms')).out | Where-Object { "$_".Trim() })
-    if ($running.Count) { Stop-M3Ci 2 "REFUSED: a VM is running ($($running -join '; ')); one VM at a time" }
+    $busy = Get-M3CiVmBusy (Invoke-VBox @('list', 'runningvms')) (Get-VmState) $CI.vm
+    if ($busy) { Stop-M3Ci 2 "REFUSED: $busy" }
     New-Item -ItemType Directory -Force $script:RunsDir | Out-Null
     try { $script:CiLock = [IO.File]::Open((Join-Path $script:RunsDir ".lock-$($CI.vm)"), 'OpenOrCreate', 'ReadWrite', 'None') }
     catch { Stop-M3Ci 2 "REFUSED: another rig script holds the lock for $($CI.vm)" }
 }
 
-# One guest phase as an agent job; keeps the job log in $Dst\jobs\ and logs the "M3CI" lines.
+# rig.ps1's Invoke-GuestJob (vmjob.ps1 protocol: stage, move into C:\cr\jobs, wait for <job>.done, fetch <job>.log) with
+# a liveness watch: every 60 s the host stats C:\cr\jobs\agent.alive (guestcontrol works) and fetches the runner's
+# heartbeat; the job is given up when Get-M3CiStaleReason says so. Returns {name, done, stale, seconds, log, log_file}.
+function Invoke-M3CiGuestJob([string]$Text, [string]$Name, [int]$TimeoutSec, [string]$LogCopy, [int]$StaleSec) {
+    $job = "$(Get-Date -Format 'yyyyMMdd-HHmmss')-$($Name -replace '[^\w.-]', '_').ps1"
+    $tmpDir = Join-Path (Get-HostTemp) 'vmjobs'
+    New-Item -ItemType Directory -Force $tmpDir | Out-Null
+    $local = Join-Path $tmpDir $job
+    [IO.File]::WriteAllText($local, $Text, (New-Object System.Text.UTF8Encoding($true)))
+    $r = Invoke-Guest @('copyto', '--target-directory', 'C:\cr\stage\', $local)
+    if ($r.code -ne 0) {
+        $null = Invoke-Guest @('mkdir', '--parents', 'C:\cr\stage')
+        $r = Invoke-Guest @('copyto', '--target-directory', 'C:\cr\stage\', $local)
+        if ($r.code -ne 0) { throw "copyto failed: $($r.out -join ' ')" }
+    }
+    $r = Invoke-Guest @('mv', "C:\cr\stage\$job", "C:\cr\jobs\$job")
+    if ($r.code -ne 0) { throw "guest mv failed: $($r.out -join ' ')" }
+    $t = Get-Date
+    $deadline = $t.AddSeconds($TimeoutSec)
+    $hbLocal = Join-Path $tmpDir "$job.heartbeat"
+    $lastBeat = $t; $prevBeat = $null; $failSince = $null; $nextWatch = $t.AddSeconds(60)
+    $done = $false; $stale = $null
+    while (-not $done -and -not $stale -and (Get-Date) -lt $deadline) {
+        Start-Sleep -Seconds 5
+        $done = ((Invoke-Guest @('stat', "C:\cr\jobs\$job.done")).code -eq 0)
+        if ($done -or (Get-Date) -lt $nextWatch) { continue }
+        $nextWatch = (Get-Date).AddSeconds(60)
+        if ((Invoke-Guest @('stat', 'C:\cr\jobs\agent.alive')).code -eq 0) { $failSince = $null } elseif ($null -eq $failSince) { $failSince = Get-Date }
+        Remove-Item -LiteralPath $hbLocal -Force -ErrorAction SilentlyContinue
+        $null = Invoke-Guest @('copyfrom', "$M3CiGuestRoot\heartbeat.txt", $hbLocal)
+        if (Test-Path -LiteralPath $hbLocal) {
+            $beat = [IO.File]::ReadAllText($hbLocal)
+            if ($beat -cne $prevBeat) { $prevBeat = $beat; $lastBeat = Get-Date }
+        }
+        $stale = Get-M3CiStaleReason (Get-Date) $lastBeat $failSince $StaleSec
+    }
+    Remove-Item -LiteralPath $hbLocal -Force -ErrorAction SilentlyContinue
+    $secs = [int]((Get-Date) - $t).TotalSeconds
+    Remove-Item -LiteralPath $LogCopy -Force -ErrorAction SilentlyContinue
+    $null = Invoke-Guest @('copyfrom', "C:\cr\jobs\$job.log", $LogCopy)
+    $log = ''
+    if (Test-Path -LiteralPath $LogCopy) { $log = Get-Content -LiteralPath $LogCopy -Raw }
+    Remove-Item -LiteralPath $local -Force -ErrorAction SilentlyContinue
+    [pscustomobject]@{ name = $job; done = $done; stale = $stale; seconds = $secs; log = $log; log_file = $LogCopy }
+}
+
+# One guest phase as a watched agent job; keeps the job log in $Dst\jobs\ and logs the "M3CI" lines.
 function Invoke-M3CiGuestPhase([string]$Phase, [string]$Step, [int]$TimeoutSec, [string]$Dst) {
     $jobs = Join-Path $Dst 'jobs'
     New-Item -ItemType Directory -Force $jobs | Out-Null
     $name = "m3ci-$Phase$(if ($Step) { "-$Step" })"
-    $j = Invoke-GuestJob -Text (New-M3CiPhaseText $Phase $Step) -Name $name -TimeoutSec $TimeoutSec -LogCopy (Join-Path $jobs "$name.log")
+    $j = Invoke-M3CiGuestJob -Text (New-M3CiPhaseText $Phase $Step) -Name $name -TimeoutSec $TimeoutSec -LogCopy (Join-Path $jobs "$name.log") -StaleSec $CI.stale
     $lines = @("$($j.log)" -split "`r?`n" | Where-Object { $_ -match '^M3CI ' })
     foreach ($l in $lines) { Write-RigLog "  $l" }
+    if ($j.stale) { throw "phase $name given up after $($j.seconds) s: $($j.stale)" }
     if (-not $j.done) { throw "phase $name did not finish within $TimeoutSec s" }
     if (-not @($lines | Where-Object { $_ -match "^M3CI $Phase " }).Count) { throw "phase $name wrote no result line; log $($j.log_file)" }
     $j
 }
 
 function Invoke-M3CiVm($Man, [string]$Bundle, [string]$Dst) {
+    # The build took minutes; another campaign may have started a VM since Assert-M3CiStart. Restore-Base would power
+    # it off, so look again and refuse (nothing is touched, and the cleanup below leaves the VM alone).
+    $busy = Get-M3CiVmBusy (Invoke-VBox @('list', 'runningvms')) (Get-VmState) $CI.vm
+    if ($busy) { $script:CiRefused = $true; throw "REFUSED before the snapshot restore: $busy" }
     $script:CiVmStarted = $true
     Restore-Base -Snapshot $CI.snapshot -AgentTimeoutSec $CI.agent_timeout
     # Guest disk: the archives, what they unpack to, and 2 GB for the tests' own files.
@@ -549,10 +685,9 @@ function Invoke-M3CiVm($Man, [string]$Bundle, [string]$Dst) {
     Write-RigLog ("  pushed {0} files ({1:N0} MB) in {2} s" -f $files.Count, (($files | ForEach-Object { (Get-Item -LiteralPath $_).Length } | Measure-Object -Sum).Sum / 1MB), [int]((Get-Date) - $t).TotalSeconds)
     $null = Invoke-M3CiGuestPhase 'unpack' '' 3600 $Dst
     foreach ($s in @($Man.steps)) {
-        $budget = [Math]::Max(1, @($s.binaries).Count) * ($CI.timeout_bin + 30) + 900
-        $null = Invoke-M3CiGuestPhase 'step' $s.id $budget $Dst
+        $null = Invoke-M3CiGuestPhase 'step' $s.id (Get-M3CiStepTimeout @($s.binaries).Count $CI.timeout_bin $CI.step_cap) $Dst
     }
-    if ($Man.ui) { $null = Invoke-M3CiGuestPhase 'ui' '' ($CI.timeout_ui + 900) $Dst }
+    if ($Man.ui) { $null = Invoke-M3CiGuestPhase 'ui' '' ([Math]::Min($CI.timeout_ui + 900, $CI.step_cap)) $Dst }
     $null = Invoke-M3CiGuestPhase 'pack' '' 1800 $Dst
     $tgz = Join-Path $Dst 'guest-out.tgz'
     $r = Invoke-Guest @('copyfrom', "$M3CiGuestRoot\out.tgz", $tgz)
@@ -592,11 +727,10 @@ if ($CI.build_only -and $CI.host_run) { Write-Host 'REFUSED: -BuildOnly and -Hos
 $vmRun = -not ($CI.build_only -or $CI.host_run)
 if ($vmRun) {
     Assert-M3CiStart
-    # A VM run binds a commit: the tests read the working tree, so a dirty one is refused before anything is built.
-    $ErrorActionPreference = 'Continue'
-    $dirty0 = @(& git -C $script:RepoRoot status --porcelain 2>$null | Where-Object { $_ })
-    $ErrorActionPreference = 'Stop'
-    if ($dirty0.Count -and -not $CI.allow_dirty) { Stop-M3Ci 2 "REFUSED: the checkout is dirty ($($dirty0.Count) path(s), first: $($dirty0[0])); commit, or pass -AllowDirty" }
+    # A VM run binds a commit: the tests read the tracked working tree, so a tracked change is refused before anything
+    # is built. Untracked paths are not mirrored (only tracked files and Get-M3CiRepoExtras), so they are only recorded.
+    try { $wt0 = Get-M3CiWorktreeState $script:RepoRoot } catch { Stop-M3Ci 2 "REFUSED: $($_.Exception.Message)" }
+    if ($wt0.tracked.Count -and -not $CI.allow_dirty) { Stop-M3Ci 2 "REFUSED: the checkout has tracked changes ($($wt0.tracked.Count) path(s), first: $($wt0.tracked[0])); commit, or pass -AllowDirty" }
 }
 $script:CiVmStarted = $false
 New-Item -ItemType Directory -Force $script:RunsDir | Out-Null
@@ -633,5 +767,6 @@ if ($man) {
     Save-M3CiResult $doc $dst
     if (-not $doc.pass) { $code = 1 }
 } else { $code = 1 }
+if ($script:CiRefused) { $code = 2 }
 if ($vmRun -and -not $CI.keep_bundle) { Remove-Item -LiteralPath $bundle -Recurse -Force -ErrorAction SilentlyContinue }
 Stop-M3Ci $code "m3-elevated-ci done, exit $code"

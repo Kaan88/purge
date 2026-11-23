@@ -113,7 +113,12 @@ param(
     [Alias('HideExact')] [switch] $BlHideExact,
     # The baseline trust engine.hello must report in every engine run (exact, merged, local, none, below-exact).
     # M1b modes: default 'exact' without -HideExact / -NoBaselines, 'below-exact' with -HideExact.
-    [ValidateSet('', 'exact', 'merged', 'local', 'none', 'below-exact')] [Alias('ExpectTrust')] [string] $BlExpectTrust = ''
+    [ValidateSet('', 'exact', 'merged', 'local', 'none', 'below-exact')] [Alias('ExpectTrust')] [string] $BlExpectTrust = '',
+    # -Mode m3-elevated-ci (RIG.md section 18): forwarded to rig-m3-ci.ps1 as -AllowDirty, -SkipUi, -Threads (prefixed,
+    # as above, so rig-m3-ci.ps1, which dot-sources this file, keeps its own $AllowDirty, $SkipUi, $Threads).
+    [Alias('AllowDirty')] [switch] $M3AllowDirty,
+    [Alias('SkipUi')] [switch] $M3SkipUi,
+    [Alias('Threads')] [int] $M3Threads = 0
 )
 
 # Host platform: Windows (PowerShell 5.1 or 7) or Linux (pwsh 7, RIG.md §9). 5.1 has no $IsWindows.
@@ -1799,7 +1804,9 @@ if ($MyInvocation.InvocationName -ne '.' -and $m1bModes -ccontains $Mode) {
 }
 # M3 gate G1, elevated half (RIG.md section 18): vm\rig-m3-ci.ps1 on Inbound-Win11-Test, run name <prefix>m3-elevated-ci.
 if ($MyInvocation.InvocationName -ne '.' -and $Mode -ceq 'm3-elevated-ci') {
-    $ciArgs = @{ Run = "$RunPrefix" + 'm3-elevated-ci' }
+    # rig-m3-ci.ps1 always uses Inbound-Win11-Test; another -VmName is refused, not quietly ignored.
+    if ($VmName -cne 'Inbound-Win11-Test') { Write-Host "REFUSED: -Mode m3-elevated-ci runs on Inbound-Win11-Test only (got -VmName $VmName)"; exit 2 }
+    $ciArgs = @{ Run = "$RunPrefix" + 'm3-elevated-ci'; AllowDirty = [bool]$M3AllowDirty; SkipUi = [bool]$M3SkipUi; Threads = $M3Threads }
     if ($PSBoundParameters.ContainsKey('Snapshot')) { $ciArgs.Snapshot = $Snapshot }
     & (Join-Path $PSScriptRoot 'rig-m3-ci.ps1') @ciArgs
     exit $LASTEXITCODE

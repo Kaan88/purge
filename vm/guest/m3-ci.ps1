@@ -11,6 +11,8 @@
 #   ui          `dotnet test` of the UI tests' built assembly with the portable SDK; TRX -> <Root>\out\ui\ui.trx
 #   pack        <Root>\out -> <Root>\out.tgz
 # Every phase prints one line "M3CI <phase> ..." with its result. The host parses the outputs (rig-m3-ci.ps1).
+# Liveness: <Root>\heartbeat.txt is rewritten at the start of a phase and at least every heartbeat_sec (manifest, 30 s)
+# while it waits for a test binary or tar; the host gives a phase up when the file stops changing.
 # -Root and -NoUnpack exist for the host dry run (rig-m3-ci.ps1 -HostRun), which runs this same script on the host.
 param(
     [Parameter(Mandatory)][ValidateSet('unpack', 'step', 'ui', 'pack')][string]$Phase,
@@ -23,17 +25,28 @@ $man = Get-Content -LiteralPath (Join-Path $Root 'manifest.json') -Raw | Convert
 $out = Join-Path $Root 'out'
 New-Item -ItemType Directory -Force $out | Out-Null
 
+$HeartbeatSec = $(if ($man.heartbeat_sec -gt 0) { [int]$man.heartbeat_sec } else { 30 })
+$script:Beats = 0
+
 function Write-JsonUtf8($Object, [string]$Path) {
     [IO.File]::WriteAllText($Path, (ConvertTo-Json -InputObject $Object -Depth 8), (New-Object Text.UTF8Encoding($false)))
 }
 
-# Extracts <Root>\<archive> into $Dir (created first). bsdtar (System32\tar.exe) keeps the archive's mtimes.
-function Expand-M3CiArchive([string]$Archive, [string]$Dir) {
-    $a = Join-Path $Root $Archive
-    if (-not (Test-Path -LiteralPath $a -PathType Leaf)) { throw "archive missing: $a" }
-    New-Item -ItemType Directory -Force $Dir | Out-Null
-    & tar.exe -xzf $a -C $Dir
-    if ($LASTEXITCODE -ne 0) { throw "tar -x $Archive -> $Dir exited $LASTEXITCODE" }
+# The heartbeat the host watches. A failed write never fails the phase (the host then sees a stale heartbeat).
+function Write-M3CiHeartbeat([string]$What) {
+    $script:Beats++
+    try { [IO.File]::WriteAllText((Join-Path $Root 'heartbeat.txt'), "$((Get-Date).ToString('o')) $($script:Beats) $Phase $Step $What") } catch { }
+}
+Write-M3CiHeartbeat 'start'
+
+# SHA-256 of a file, lower case; $null when it is missing.
+function Get-M3CiSha([string]$Path) {
+    if (Test-Path -LiteralPath $Path -PathType Leaf) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
+}
+
+# The support executables of a step as they are after its unpack: { exe, label, sha256 } (the host compares).
+function Get-M3CiSupportHashes($Support) {
+    @(foreach ($x in @($Support)) { if ($x) { [ordered]@{ exe = $x.exe; label = $x.label; sha256 = (Get-M3CiSha $x.exe) } } })
 }
 
 function Get-M3CiToken {
@@ -51,12 +64,19 @@ function Invoke-M3CiProcess([string]$Exe, [string[]]$Arguments, [string]$Cwd, [s
     $al = @($Arguments | Where-Object { "$_" -ne '' } | ForEach-Object { & $q "$_" })
     if ($al.Count) { $sp.ArgumentList = $al }
     $t = Get-Date
+    $deadline = $t.AddSeconds($TimeoutSec)
     $code = $null; $to = $false; $startError = $null
     try {
         $p = Start-Process @sp
         $null = $p.Handle   # keeps the exit code readable after exit
-        $to = -not $p.WaitForExit($TimeoutSec * 1000)
-        if ($to) { & taskkill.exe /T /F /PID $p.Id 2>&1 | Out-Null; $null = $p.WaitForExit(30000) } else { $code = $p.ExitCode }
+        # Wait in slices of at most HeartbeatSec, writing the heartbeat between them.
+        while ($true) {
+            $left = ($deadline - (Get-Date)).TotalMilliseconds
+            if ($left -le 0) { $to = -not $p.HasExited; break }
+            if ($p.WaitForExit([int][Math]::Min($HeartbeatSec * 1000, [Math]::Ceiling($left)))) { break }
+            Write-M3CiHeartbeat "running $(Split-Path -Leaf $Exe)"
+        }
+        if ($to) { & taskkill.exe /T /F /PID $p.Id 2>&1 | Out-Null; $null = $p.WaitForExit(30000) } else { $p.WaitForExit(); $code = $p.ExitCode }
     } catch { $startError = "$($_.Exception.Message)"; $code = -1 }
     if (Test-Path -LiteralPath $err) {
         $e = [IO.File]::ReadAllText($err)
@@ -65,6 +85,21 @@ function Invoke-M3CiProcess([string]$Exe, [string[]]$Arguments, [string]$Cwd, [s
     }
     if ($startError) { [IO.File]::AppendAllText($OutFile, "`r`nm3-ci runner: could not start ${Exe}: $startError`r`n") }
     [ordered]@{ exit = $code; timed_out = $to; seconds = [int]((Get-Date) - $t).TotalSeconds; start_error = $startError }
+}
+
+# Runs System32\tar.exe with $Arguments (heartbeat while it runs, at most an hour); its output goes to <Root>\tar.log.
+function Invoke-M3CiTar([string[]]$Arguments, [string]$What) {
+    $r = Invoke-M3CiProcess (Join-Path $env:SystemRoot 'System32\tar.exe') $Arguments $Root (Join-Path $Root 'tar.log') 3600
+    if ($r.exit -ne 0) { throw "tar $What exited $($r.exit)$(if ($r.timed_out) { ' (timed out)' })$(if ($r.start_error) { ": $($r.start_error)" })" }
+}
+
+# Extracts <Root>\<archive> into $Dir (created first). bsdtar (System32\tar.exe) keeps the archive's mtimes.
+function Expand-M3CiArchive([string]$Archive, [string]$Dir) {
+    $a = Join-Path $Root $Archive
+    if (-not (Test-Path -LiteralPath $a -PathType Leaf)) { throw "archive missing: $a" }
+    New-Item -ItemType Directory -Force $Dir | Out-Null
+    Write-M3CiHeartbeat "unpack $Archive"
+    Invoke-M3CiTar @('-xzf', $a, '-C', $Dir) "-x $Archive -> $Dir"
 }
 
 switch ($Phase) {
@@ -98,13 +133,15 @@ switch ($Phase) {
         # The step's executables at their host paths. Steps run in xtask ci's order; a later step's archive replaces the
         # binaries an earlier one put there (purge-engine.exe with and without rig-exec), as the host's cargo did.
         Expand-M3CiArchive $s.archive $man.target_dir
+        # What the step's tests will start through CARGO_BIN_EXE_*, hashed right after this step's unpack.
+        $support = Get-M3CiSupportHashes $s.support
         $od = Join-Path $out $s.id
         New-Item -ItemType Directory -Force $od | Out-Null
         $rows = @()
         foreach ($b in @($s.binaries)) {
             $exe = $b.exe
-            $row = [ordered]@{ n = $b.n; exe = $exe; sha256 = $null; exit = $null; timed_out = $false; seconds = 0; start_error = $null }
-            if (Test-Path -LiteralPath $exe -PathType Leaf) { $row.sha256 = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant() }
+            Write-M3CiHeartbeat "start $($b.n) $($b.label)"
+            $row = [ordered]@{ n = $b.n; exe = $exe; sha256 = (Get-M3CiSha $exe); exit = $null; timed_out = $false; seconds = 0; start_error = $null }
             $a = @()
             if ($man.threads -gt 0) { $a += "--test-threads=$($man.threads)" }
             foreach ($k in @($b.skip)) { if ($k) { $a += @('--skip', $k) } }
@@ -118,13 +155,15 @@ switch ($Phase) {
             $rows += $row
             "M3CI bin $($s.id) $($b.n) exit=$($row.exit) timed_out=$($row.timed_out) $($row.seconds)s $($b.label)"
         }
-        Write-JsonUtf8 ([ordered]@{ step = $s.id; token = $tok; binaries = $rows; t = (Get-Date).ToString('o') }) (Join-Path $od 'results.json')
-        "M3CI step $($s.id) done binaries=$($rows.Count) admin=$($tok.admin)"
+        Write-JsonUtf8 ([ordered]@{ step = $s.id; token = $tok; binaries = $rows; support = $support; heartbeats = $script:Beats; t = (Get-Date).ToString('o') }) (Join-Path $od 'results.json')
+        "M3CI step $($s.id) done binaries=$($rows.Count) support=$(@($support).Count) admin=$($tok.admin)"
     }
     'ui' {
         $tok = Get-M3CiToken
         # The pipe_harness example the UI tests start, built on the host by the same cargo command the tests run.
         Expand-M3CiArchive $man.ui.harness_archive $man.target_dir
+        $support = Get-M3CiSupportHashes $man.ui.support
+        Write-M3CiHeartbeat 'dotnet test'
         $od = Join-Path $out 'ui'
         New-Item -ItemType Directory -Force $od | Out-Null
         $dn = Join-Path $Root 'dotnet'
@@ -141,8 +180,8 @@ switch ($Phase) {
         if ($man.ui.filter) { $a += @('--filter', $man.ui.filter) }
         $r = Invoke-M3CiProcess (Join-Path $dn 'dotnet.exe') $a $man.ui.dir (Join-Path $od 'dotnet-test.txt') $man.timeout_ui
         $dll = $man.ui.dll
-        $res = [ordered]@{ token = $tok; dll = $dll; dll_sha256 = $(if (Test-Path -LiteralPath $dll) { (Get-FileHash -LiteralPath $dll -Algorithm SHA256).Hash.ToLowerInvariant() })
-                           trx = (Test-Path -LiteralPath (Join-Path $od 'ui.trx')); t = (Get-Date).ToString('o') }
+        $res = [ordered]@{ token = $tok; dll = $dll; dll_sha256 = (Get-M3CiSha $dll); support = $support
+                           trx = (Test-Path -LiteralPath (Join-Path $od 'ui.trx')); heartbeats = $script:Beats; t = (Get-Date).ToString('o') }
         foreach ($k in $r.Keys) { $res[$k] = $r[$k] }
         Write-JsonUtf8 $res (Join-Path $od 'results.json')
         "M3CI ui exit=$($res.exit) timed_out=$($res.timed_out) trx=$($res.trx) $($res.seconds)s"
@@ -150,8 +189,7 @@ switch ($Phase) {
     'pack' {
         $z = Join-Path $Root 'out.tgz'
         Remove-Item -LiteralPath $z -Force -ErrorAction SilentlyContinue
-        & tar.exe -czf $z -C $out .
-        if ($LASTEXITCODE -ne 0) { throw "tar -c out exited $LASTEXITCODE" }
+        Invoke-M3CiTar @('-czf', $z, '-C', $out, '.') '-c out'
         "M3CI pack ok bytes=$((Get-Item -LiteralPath $z).Length)"
     }
 }

@@ -27,6 +27,18 @@ foreach ($f in $files) {
 }
 $rigText = [IO.File]::ReadAllText((Join-Path $Vm 'rig.ps1'))
 Check 'rig.ps1 -Mode m3-elevated-ci hands over to rig-m3-ci.ps1' ($rigText -match "Mode -ceq 'm3-elevated-ci'" -and $rigText.Contains("'rig-m3-ci.ps1'"))
+Check 'rig.ps1 forwards -AllowDirty, -SkipUi and -Threads' ($rigText.Contains('AllowDirty = [bool]$M3AllowDirty; SkipUi = [bool]$M3SkipUi; Threads = $M3Threads'))
+$rigAst = [Management.Automation.Language.Parser]::ParseFile((Join-Path $Vm 'rig.ps1'), [ref]$null, [ref]$null)
+$rigAliases = @($rigAst.ParamBlock.Parameters | ForEach-Object { $_.Attributes | Where-Object { $_.TypeName.Name -eq 'Alias' } | ForEach-Object { $_.PositionalArguments.Value } })
+Check 'rig.ps1 takes -AllowDirty, -SkipUi and -Threads (aliases of prefixed parameters)' ((@('AllowDirty', 'SkipUi', 'Threads') | Where-Object { $rigAliases -ccontains $_ }).Count -eq 3) ($rigAliases -join ',')
+Check 'rig.ps1 refuses -Mode m3-elevated-ci with another -VmName' ($rigText.Contains("if (`$VmName -cne 'Inbound-Win11-Test') { Write-Host ""REFUSED: -Mode m3-elevated-ci"))
+$ciAst = [Management.Automation.Language.Parser]::ParseFile((Join-Path $Vm 'rig-m3-ci.ps1'), [ref]$null, [ref]$null)
+$vmFn = "$(@($ciAst.FindAll({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Invoke-M3CiVm' }, $true))[0].Body.Extent.Text)"
+$iBusy = $vmFn.IndexOf('Get-M3CiVmBusy'); $iStarted = $vmFn.IndexOf('$script:CiVmStarted = $true'); $iRestore = $vmFn.IndexOf('Restore-Base -Snapshot')
+Check 'vm run: the running-VM check comes again right before Restore-Base, before the cleanup may touch the VM' ($iBusy -ge 0 -and $iBusy -lt $iStarted -and $iStarted -lt $iRestore) "$iBusy $iStarted $iRestore"
+Check 'vm run: the step and ui jobs use the capped timeout and the watched job' ($vmFn.Contains('Get-M3CiStepTimeout') -and $vmFn.Contains('$CI.step_cap') -and -not $vmFn.Contains('Invoke-GuestJob -Text (New-M3CiPhaseText'))
+$ciText = [IO.File]::ReadAllText((Join-Path $Vm 'rig-m3-ci.ps1'))
+Check 'main: refuses on tracked changes only' ($ciText.Contains('$wt0.tracked.Count -and -not $CI.allow_dirty') -and -not $ciText.Contains("status', '--porcelain')"))
 
 & {
     . (Join-Path $Vm 'rig-m3-ci.ps1')
@@ -119,6 +131,37 @@ Check 'rig.ps1 -Mode m3-elevated-ci hands over to rig-m3-ci.ps1' ($rigText -matc
     $threw = $false; try { Assert-M3CiRunName 'x-m3-elevated-ci' } catch { $threw = $true }
     Check 'run name: prefix + m3-elevated-ci is taken' (-not $threw)
 
+    # ---------------------------------------------------------------------------- job timeout, liveness, VM busy
+    Check 'step timeout: workspace (67 binaries) is capped at 3 h' ((Get-M3CiStepTimeout 67 1800 10800) -eq 10800)
+    Check 'step timeout: a small step keeps its sum' ((Get-M3CiStepTimeout 3 1800 10800) -eq (3 * 1830 + 900))
+    Check 'step timeout: no binary counts as one' ((Get-M3CiStepTimeout 0 100 10800) -eq 1030)
+    $t0 = [datetime]'2026-11-23T10:00:00'
+    Check 'liveness: a fresh heartbeat is alive' ($null -eq (Get-M3CiStaleReason $t0.AddSeconds(899) $t0 $null 900))
+    Check 'liveness: a heartbeat unchanged for 900 s is stale' ((Get-M3CiStaleReason $t0.AddSeconds(900) $t0 $null 900) -match 'heartbeat')
+    Check 'liveness: guestcontrol failing for 900 s is stale' ((Get-M3CiStaleReason $t0.AddSeconds(1000) $t0.AddSeconds(950) $t0.AddSeconds(100) 900) -match 'guestcontrol')
+    Check 'liveness: guestcontrol failing for a short while is not' ($null -eq (Get-M3CiStaleReason $t0.AddSeconds(1000) $t0.AddSeconds(950) $t0.AddSeconds(500) 900))
+    $ok0 = [pscustomobject]@{ code = 0; out = @('') }
+    Check 'vm busy: nothing running and the VM off or saved is free' ($null -eq (Get-M3CiVmBusy $ok0 'poweroff' 'X') -and $null -eq (Get-M3CiVmBusy $ok0 'saved' 'X'))
+    Check 'vm busy: a running VM refuses' ((Get-M3CiVmBusy ([pscustomobject]@{ code = 0; out = @('"Purge-CleanPro" {1234}') }) 'poweroff' 'X') -match 'Purge-CleanPro')
+    Check 'vm busy: our VM starting refuses' ((Get-M3CiVmBusy $ok0 'starting' 'X') -match "state 'starting'")
+    Check 'vm busy: a failed list refuses' ((Get-M3CiVmBusy ([pscustomobject]@{ code = 1; out = @('VBOX_E_x') }) 'poweroff' 'X') -match 'failed')
+
+    # ---------------------------------------------------------------------------- dirty check (tracked only)
+    $g = Join-Path $Work 'git'; New-Item -ItemType Directory -Force $g | Out-Null
+    $ErrorActionPreference = 'Continue'
+    & git -C $g init -q 2>$null
+    [IO.File]::WriteAllText((Join-Path $g 'a.txt'), 'a')
+    & git -C $g add a.txt 2>$null
+    & git -C $g -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -q -m init 2>$null
+    $ErrorActionPreference = 'Stop'
+    New-Item -ItemType Directory -Force (Join-Path $g 'out\sub') | Out-Null
+    [IO.File]::WriteAllText((Join-Path $g 'out\sub\x.json'), 'x'); [IO.File]::WriteAllText((Join-Path $g 'EngineLink.cs'), 'x')
+    $w = Get-M3CiWorktreeState $g
+    Check 'dirty: untracked paths are recorded, not counted as tracked changes' ($w.tracked.Count -eq 0 -and (@($w.untracked) -join ',') -eq 'EngineLink.cs,out/') ("tracked=$(@($w.tracked) -join ',') untracked=$(@($w.untracked) -join ',')")
+    [IO.File]::WriteAllText((Join-Path $g 'a.txt'), 'b')
+    $w = Get-M3CiWorktreeState $g
+    Check 'dirty: a modified tracked file is a tracked change' ($w.tracked.Count -eq 1 -and $w.tracked[0] -match 'a\.txt$' -and @($w.untracked).Count -eq 2) ("tracked=$(@($w.tracked) -join ',') untracked=$(@($w.untracked) -join ',')")
+
     # ---------------------------------------------------------------------------- the guest runner, end to end
     $csc = Join-Path $env:SystemRoot 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
     if (-not (Test-Path -LiteralPath $csc)) { Check 'runner: csc.exe present (needed for the fake executables)' $false $csc; return }
@@ -139,8 +182,9 @@ static class FakeTest {
             Console.WriteLine("test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s");
             return 101;
         }
+        int skips = 0; foreach (string x in a) if (x == "--skip") skips++;
         Console.WriteLine("running 2 tests\ntest t::one ... ok\ntest t::two ... ignored\n");
-        Console.WriteLine("test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s");
+        Console.WriteLine("test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; " + skips + " filtered out; finished in 0.00s");
         return 0;
     }
 }
@@ -170,10 +214,13 @@ static class FakeDotnet {
     $exes = @{}
     foreach ($n in 'good', 'bad', 'hang') { $exes[$n] = Join-Path $target "debug\deps\$n-1.exe"; Copy-Item (Join-Path $src 'fake.exe') $exes[$n] }
     Copy-Item (Join-Path $src 'fake.exe') (Join-Path $target 'debug\examples\pipe_harness.exe')
+    # Two support executables of step s1 (what CARGO_BIN_EXE_* names): sup.exe as built, sup2.exe with another hash on the host.
+    Copy-Item (Join-Path $src 'fake.exe') (Join-Path $target 'debug\sup.exe')
+    Copy-Item (Join-Path $src 'dotnet.exe') (Join-Path $target 'debug\sup2.exe')
     Copy-Item (Join-Path $src 'dotnet.exe') (Join-Path $Work 'dn\dotnet.exe')
     [IO.File]::WriteAllText((Join-Path $repo 'Cargo.toml'), '[workspace]')
     [IO.File]::WriteAllText((Join-Path $uidir 'Purge.Client.Tests.dll'), 'not a real assembly')
-    $null = New-M3CiTar (Join-Path $root 'step-s1.tgz') $target @('debug/deps/good-1.exe', 'debug/deps/bad-1.exe', 'debug/deps/hang-1.exe')
+    $null = New-M3CiTar (Join-Path $root 'step-s1.tgz') $target @('debug/deps/good-1.exe', 'debug/deps/bad-1.exe', 'debug/deps/hang-1.exe', 'debug/sup.exe', 'debug/sup2.exe')
     $null = New-M3CiTar (Join-Path $root 'step-ui-harness.tgz') $target @('debug/examples/pipe_harness.exe')
     $null = New-M3CiTar (Join-Path $root 'repo.tgz') $repo @('Cargo.toml')
     $null = New-M3CiTar (Join-Path $root 'ui.tgz') $uidir @('Purge.Client.Tests.dll')
@@ -186,18 +233,22 @@ static class FakeDotnet {
     $ErrorActionPreference = 'Stop'
     Check 'cargo stand-in: exit 0 for the harness build, 101 for anything else' ($c1 -eq 0 -and $c2 -eq 101) "$c1 $c2"
     # Remove the executables from the target: the runner must put them back from the step archive.
-    Remove-Item -LiteralPath $exes['good'], $exes['bad'], $exes['hang'], (Join-Path $target 'debug\examples\pipe_harness.exe') -Force
+    Remove-Item -LiteralPath $exes['good'], $exes['bad'], $exes['hang'], (Join-Path $target 'debug\examples\pipe_harness.exe'), (Join-Path $target 'debug\sup.exe'), (Join-Path $target 'debug\sup2.exe') -Force
     Remove-Item -LiteralPath (Join-Path $repo 'Cargo.toml') -Force
     $sha = @{}; foreach ($n in 'good', 'bad', 'hang') { $sha[$n] = (Get-FileHash -LiteralPath (Join-Path $src 'fake.exe') -Algorithm SHA256).Hash.ToLowerInvariant() }
     $bin = { param($n, $i, $skip) [ordered]@{ n = $i; label = "$n test it"; package = $n; version = '0.1.0'; target = 'it'; target_kind = 'test'; exe = $exes[$n]
                                               cwd = (Join-Path $repo "crates\$n"); sha256 = $sha[$n]; bytes = 1; skip = @($skip) } }
-    $man = [ordered]@{ schema = 'purge.rig.m3ci.manifest/1'; commit = 'abc'; dirty = @(); rustc = 'rustc test'
+    $fakeSha = (Get-FileHash -LiteralPath (Join-Path $src 'fake.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
+    $support = @([ordered]@{ exe = (Join-Path $target 'debug\sup.exe'); label = 'p bin sup'; sha256 = $fakeSha },
+                 [ordered]@{ exe = (Join-Path $target 'debug\sup2.exe'); label = 'p bin sup2'; sha256 = $fakeSha })
+    $man = [ordered]@{ schema = 'purge.rig.m3ci.manifest/1'; commit = 'abc'; dirty = @(); untracked = @('out/'); rustc = 'rustc test'
                        repo = [ordered]@{ archive = 'repo.tgz'; dir = $repo }; target_dir = $target; make_dirs = @((Join-Path $target 'tmp'))
-                       steps = @([ordered]@{ id = 's1'; cargo = 'test --workspace'; xtask = 'test --workspace'; archive = 'step-s1.tgz'
+                       steps = @([ordered]@{ id = 's1'; cargo = 'test --workspace'; xtask = 'test --workspace'; archive = 'step-s1.tgz'; support = $support
                                              binaries = @((& $bin 'good' '001' @('t::x', 't::y')), (& $bin 'bad' '002' @()), (& $bin 'hang' '003' @())) })
-                       ui = [ordered]@{ archive = 'ui.tgz'; dir = $uidir; dll = (Join-Path $uidir 'Purge.Client.Tests.dll'); dll_sha256 = 'x'; harness_archive = 'step-ui-harness.tgz'; filter = '' }
+                       ui = [ordered]@{ archive = 'ui.tgz'; dir = $uidir; dll = (Join-Path $uidir 'Purge.Client.Tests.dll'); dll_sha256 = 'x'; harness_archive = 'step-ui-harness.tgz'; filter = ''
+                                        support = @([ordered]@{ exe = (Join-Path $target 'debug\examples\pipe_harness.exe'); label = 'purge-broker example pipe_harness'; sha256 = $fakeSha }) }
                        dotnet = [ordered]@{ archive = 'dotnet.tgz'; sdk = '10.0.0' }; fakecargo = 'cargo-standin.exe'
-                       threads = 2; timeout_bin = 5; timeout_ui = 60; host_only = @(Get-M3CiHostOnly); exclusions = @() }
+                       threads = 2; timeout_bin = 5; timeout_ui = 60; heartbeat_sec = 1; host_only = @(Get-M3CiHostOnly); exclusions = @() }
     [IO.File]::WriteAllText((Join-Path $root 'manifest.json'), (ConvertTo-Json -InputObject $man -Depth 8), (New-Object Text.UTF8Encoding($false)))
     $runner = Join-Path $Guest 'm3-ci.ps1'
     $phaseOut = @{}
@@ -229,6 +280,12 @@ static class FakeDotnet {
     Check 'runner ui: DOTNET_ROOT, CARGO_TARGET_DIR, the stand-in first on PATH' ($ou.Contains("root=$(Join-Path $root 'dotnet')") -and $ou.Contains("target=$target") -and $ou.Contains("path0=$(Join-Path $root 'fakecargo')")) $ou
     Check 'runner ui: the harness archive put pipe_harness.exe back' (Test-Path (Join-Path $target 'debug\examples\pipe_harness.exe'))
     Check 'runner pack: out.tgz' (Test-Path (Join-Path $root 'out.tgz'))
+    Check 'runner: the heartbeat file is written by every phase (last: pack)' ([IO.File]::ReadAllText((Join-Path $root 'heartbeat.txt')) -match ' pack ')
+    Check 'runner step: heartbeats while a binary runs (hang, 5 s at 1 s slices)' ($res.heartbeats -ge 5) "$($res.heartbeats)"
+    $sup = @($res.support)
+    Check 'runner step: the support executables are hashed after the unpack' ($sup.Count -eq 2 -and $sup[0].sha256 -eq $fakeSha -and $sup[1].sha256 -and $sup[1].sha256 -ne $fakeSha) (ConvertTo-Json $sup -Compress)
+    $uires = Get-Content -LiteralPath (Join-Path $root 'out\ui\results.json') -Raw | ConvertFrom-Json
+    Check 'runner ui: pipe_harness hashed after the harness unpack' (@($uires.support).Count -eq 1 -and @($uires.support)[0].sha256 -eq $fakeSha)
 
     # ---------------------------------------------------------------------------- result document and verdict
     $CI.run = 'selftest-m3-elevated-ci'
@@ -243,14 +300,26 @@ static class FakeDotnet {
     $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
     Check 'result: admin is what the runner''s token was' ($doc.admin -eq $isAdmin -and ($isAdmin -or @($doc.why | Where-Object { $_ -match 'admin=false' }).Count -eq 1))
     Check 'result: host-only steps carried with reasons' (@($doc.host_only).Count -eq @(Get-M3CiHostOnly).Count)
+    Check 'result: filtered_out equals the rig''s skips (2 for good)' ($b[0].filtered_out -eq 2 -and $b[0].pass)
+    $ds = @($doc.steps[0].support)
+    Check 'result: support hashes host = guest for sup, differ for sup2' ($ds.Count -eq 2 -and $ds[0].sha_match -and -not $ds[1].sha_match -and -not $doc.steps[0].pass)
+    Check 'result: a support mismatch is a reason' (@($doc.why | Where-Object { $_ -match 's1 support p bin sup2' }).Count -eq 1) (@($doc.why) -join ' | ')
+    Check 'result: ui pipe_harness hash matches' (@($doc.ui.support).Count -eq 1 -and @($doc.ui.support)[0].sha_match)
+    Check 'result: untracked paths recorded' ((@($doc.untracked) -join ',') -eq 'out/')
+    $isHigh = $doc.integrity -ceq 'High Mandatory Level'
+    Check 'result: integrity other than High is a reason' ($isHigh -or @($doc.why | Where-Object { $_ -match 'not High Mandatory Level' }).Count -eq 1) $doc.integrity
+    Check 'result: the runner user is the expected one (this shell''s user on the host)' ($doc.expected_user -eq $env:USERNAME -and -not @($doc.why | Where-Object { $_ -match 'not the rig user' }).Count) (@($doc.users) -join ',')
     $json = ConvertTo-Json -InputObject $doc -Depth 10
     Check 'result: schema purge.rig.m3elevatedci/1, serialises' (($json | ConvertFrom-Json).schema -eq 'purge.rig.m3elevatedci/1')
 
     # The verdict alone: a clean document passes; each defect fails it.
     $mk = {
-        [pscustomobject]@{ error = $null; admin = $true
-            steps = @([pscustomobject]@{ id = 's'; binaries = @([pscustomobject]@{ label = 'p test t'; exit = 0; timed_out = $false; summary = $true; failed = 0; failing = @(); sha_match = $true }) })
-            ui = [pscustomobject]@{ skipped = $false; timed_out = $false; trx = $true; exit = 0; failed = 0; failing = @(); total = 5; sha_match = $true } }
+        [pscustomobject]@{ error = $null; admin = $true; integrity = 'High Mandatory Level'; users = @('INBOUND\tester'); expected_user = 'tester'
+            steps = @([pscustomobject]@{ id = 's'; support = @([pscustomobject]@{ label = 'p bin e'; sha_match = $true })
+                                         binaries = @([pscustomobject]@{ label = 'p test t'; exit = 0; timed_out = $false; summary = $true; failed = 0; failing = @(); sha_match = $true
+                                                                         filtered_out = 1; skipped_by_rig = @('t::x') }) })
+            ui = [pscustomobject]@{ skipped = $false; timed_out = $false; trx = $true; exit = 0; failed = 0; failing = @(); total = 5; passed = 4; not_executed = 1; sha_match = $true
+                                    support = @([pscustomobject]@{ label = 'h'; sha_match = $true }) } }
     }
     Check 'verdict: a clean document passes' ((Get-M3CiVerdict (& $mk)).pass)
     $cases = @(
@@ -263,7 +332,17 @@ static class FakeDotnet {
         @{ n = 'ui skipped'; f = { param($d) $d.ui = [pscustomobject]@{ skipped = $true } } },
         @{ n = 'ui without TRX'; f = { param($d) $d.ui.trx = $false } },
         @{ n = 'ui with no test'; f = { param($d) $d.ui.total = 0 } },
-        @{ n = 'ui failed'; f = { param($d) $d.ui.failed = 2 } }
+        @{ n = 'ui failed'; f = { param($d) $d.ui.failed = 2 } },
+        @{ n = 'Medium integrity'; f = { param($d) $d.integrity = 'Medium Mandatory Level' } },
+        @{ n = 'System integrity (LocalSystem is an administrator too)'; f = { param($d) $d.integrity = 'System Mandatory Level'; $d.users = @('NT AUTHORITY\SYSTEM') } },
+        @{ n = 'another user'; f = { param($d) $d.users = @('INBOUND\other') } },
+        @{ n = 'two users'; f = { param($d) $d.users = @('INBOUND\tester', 'NT AUTHORITY\SYSTEM') } },
+        @{ n = 'no user recorded'; f = { param($d) $d.users = @() } },
+        @{ n = 'filtered_out above the skips'; f = { param($d) $d.steps[0].binaries[0].filtered_out = 3 } },
+        @{ n = 'filtered_out with no skip'; f = { param($d) $d.steps[0].binaries[0].skipped_by_rig = @() } },
+        @{ n = 'a support exe hash mismatch'; f = { param($d) $d.steps[0].support[0].sha_match = $false } },
+        @{ n = 'ui partial (passed + not executed < total)'; f = { param($d) $d.ui.passed = 3 } },
+        @{ n = 'ui harness hash mismatch'; f = { param($d) $d.ui.support[0].sha_match = $false } }
     )
     foreach ($c in $cases) { $d = & $mk; & $c.f $d; Check "verdict: $($c.n) fails" (-not (Get-M3CiVerdict $d).pass) }
 }
