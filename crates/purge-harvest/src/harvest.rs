@@ -452,6 +452,36 @@ pub fn harvest_report_with(
     })
 }
 
+/// Writes a `PURGE_TIMING` phase line when a source meter is installed (the format of
+/// `purge_index::ownership`): `timing:   phase harvest.<step> <seconds>s; <source calls>`.
+struct Phase {
+    name: &'static str,
+    started: std::time::Instant,
+    before: Option<purge_source::metered::MeterSnapshot>,
+}
+
+impl Phase {
+    fn start(name: &'static str) -> Self {
+        Self {
+            name,
+            started: std::time::Instant::now(),
+            before: purge_source::metered::installed().map(|m| m.snapshot()),
+        }
+    }
+
+    fn end(self) {
+        if let (Some(meter), Some(before)) = (purge_source::metered::installed(), self.before) {
+            let calls = meter.snapshot().since(&before).summary();
+            eprintln!(
+                "timing:   phase {} {:.3}s; {}",
+                self.name,
+                self.started.elapsed().as_secs_f64(),
+                calls
+            );
+        }
+    }
+}
+
 /// [`harvest_report_with`] with the indexes of the engine call in hand; `warm` is the thread that is
 /// building the system-object index, when one was started.
 fn harvest_report_shared(
@@ -466,6 +496,7 @@ fn harvest_report_shared(
     let Sources { reg, fs, sys } = sources;
     let mut warnings: Vec<String> = Vec::new();
 
+    let phase = Phase::start("harvest.facts");
     // 1. Machine facts.
     let os = sys.os_info().unwrap_or_else(|e| {
         warnings.push(format!(
@@ -519,6 +550,8 @@ fn harvest_report_shared(
     let table_cache = shared.table_cache();
     let ownership = reads_msi(entry).then(|| shared.ownership());
 
+    phase.end();
+    let phase = Phase::start("harvest.inno");
     // 2. The Inno Setup uninstall log.
     let binding = UserBinding {
         hive_sid: entry.hive_sid.clone(),
@@ -527,6 +560,8 @@ fn harvest_report_shared(
     let inno = inno_map::read(fs, entry, &binding, &env, guard);
     warnings.extend(inno.warnings.iter().cloned());
 
+    phase.end();
+    let phase = Phase::start("harvest.identity");
     // 3. Identity.
     let hints = IdentityHints {
         inno_app_name: inno.app_name.clone(),
@@ -538,6 +573,8 @@ fn harvest_report_shared(
     let identity = AppIdentity::resolve_with(entry, &inventory.entries, fs, &hints);
     warnings.extend(identity.warnings().iter().cloned());
 
+    phase.end();
+    let phase = Phase::start("harvest.msi");
     // 3b. MSI facts and Burn facts.
     let mut msi_harvests: Vec<msi::MsiHarvest> = Vec::new();
     let mut burn_harvest: Option<burn::BurnHarvest> = None;
@@ -610,6 +647,8 @@ fn harvest_report_shared(
         .map(|h| h.facts.packed_code.clone())
         .collect();
 
+    phase.end();
+    let phase = Phase::start("harvest.roots");
     // 4. Roots and the exe set.
     let inno_facts = InnoRootFacts {
         app_path: reg
@@ -671,6 +710,8 @@ fn harvest_report_shared(
         warnings
             .push("roots: the app has no validated root; nothing can be attributed by path".into());
     }
+    phase.end();
+    let phase = Phase::start("harvest.exes");
     let mut exe_set = exes::collect(
         fs,
         &root_set.roots,
@@ -691,6 +732,8 @@ fn harvest_report_shared(
     exe_set.files.sort_by_key(|f| prefix::fold(&f.path));
     let cutoff = install_cutoff(&demoted, &entry.install_time_evidence);
 
+    phase.end();
+    let phase = Phase::start("harvest.anchors");
     // 5. Anchors and tokens.
     let mut anchor_harvest = anchors::collect(AnchorInput {
         reg,
@@ -714,6 +757,8 @@ fn harvest_report_shared(
             class.id, class.reason
         ));
     }
+    phase.end();
+    let phase = Phase::start("harvest.tokens");
     // Anchors from the app's own MSI tables.
     if let (Some(ix), false) = (&ownership, msi_harvests.is_empty()) {
         let foreign: Vec<String> = anchor_harvest
@@ -754,6 +799,8 @@ fn harvest_report_shared(
         baseline: matching_baseline,
     });
 
+    phase.end();
+    let phase = Phase::start("harvest.outside");
     // 6. Files outside the roots, and the sparse packages.
     let mut outside_root_files = inno
         .log_path
@@ -834,7 +881,10 @@ fn harvest_report_shared(
 
     // 7. Everything that needs the full anchor set. The system-object index is in hand first: the
     // harvests of the co-product candidates ask the shared indexes for it.
+    phase.end();
+    let phase = Phase::start("harvest.sysobj_index");
     let sys_index = shared.sysobj_from(warm);
+    phase.end();
     let anchor_set = AnchorSet::from_fingerprint(&fp);
     let ctx = HarvestCtx {
         reg,
@@ -865,11 +915,20 @@ fn harvest_report_shared(
             coproducts::candidates(&ctx),
         )
     } else {
+        let phase = Phase::start("harvest.refsnap");
         let snapshot = refsnap::capture_report(&ctx);
+        phase.end();
+        let phase = Phase::start("harvest.subtree");
         let keys = subtree::keys(&ctx, &snapshot.entries);
         let subtrees = subtree::capture_with(&ctx, &keys, &SubtreeOptions::default());
+        phase.end();
+        let phase = Phase::start("harvest.assoc");
         let journal = assoc::capture_detailed(&ctx);
-        (snapshot, subtrees, journal, coproducts::candidates(&ctx))
+        phase.end();
+        let phase = Phase::start("harvest.coproducts");
+        let co = coproducts::candidates(&ctx);
+        phase.end();
+        (snapshot, subtrees, journal, co)
     };
     warnings.extend(snapshot.warnings.iter().cloned());
     warnings.extend(subtrees.warnings.iter().cloned());
@@ -879,9 +938,12 @@ fn harvest_report_shared(
     fp.ref_snapshot = snapshot.entries;
     fp.subtrees = subtrees.subtrees;
     fp.ext_journal = journal.records.into_iter().map(|r| r.entry).collect();
+    let phase = Phase::start("harvest.older_keys");
     let candidates = subtree::older_key_candidates(&fp.subtrees, &fp.ext_journal, &fp.inno);
     fp.older_keys = subtree::older_keys(&ctx, candidates);
 
+    phase.end();
+    let phase = Phase::start("harvest.sysobj");
     // 7b. The system objects the app registered.
     let msi_services: Vec<String> = fp
         .msi
@@ -900,6 +962,7 @@ fn harvest_report_shared(
         baseline: matching_baseline,
         env: &sys_env,
     });
+    phase.end();
     warnings.extend(objects.warnings);
     fp.sys = objects.objects;
     fp.warnings = warnings;
