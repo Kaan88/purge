@@ -687,7 +687,13 @@ fn list_session(
             // Not due: offered for a delete the user asks for, when `purge` would take it (in the
             // quarantine, nothing holding it). A held one is not listed at all; nothing is past
             // retention.
-            if session_hold.is_none() && quarantine_state(op) == InQuarantine::Yes {
+            // An op whose restore failed or met a conflict is not offered either: a second
+            // restore could still complete it, and Delete now would take that away before the
+            // retention the user was promised (Fable review of Delete now, L1). It expires as usual.
+            if session_hold.is_none()
+                && matches!(op.undo, UndoState::NotStarted)
+                && quarantine_state(op) == InQuarantine::Yes
+            {
                 listing
                     .not_due
                     .push(record.item(id, op, expiry.quarantine, &categories, false));

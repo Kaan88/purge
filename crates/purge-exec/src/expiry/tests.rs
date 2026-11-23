@@ -1234,6 +1234,39 @@ fn a_session_whose_undo_run_stopped_between_two_ops_is_not_expired() {
     assert!(expire_records(&built.session).is_empty());
 }
 
+/// Fable review of Delete now, L1: a restore that failed could still be run again and complete, so its
+/// item is not offered for Delete now; the other item of the session still is.
+#[test]
+fn an_item_whose_restore_failed_is_not_offered_for_delete_now() {
+    let fx = Fx::new("earlyfailed");
+    let a = fx.scratch.file(r"src\a.txt", b"aaa");
+    let b = fx.scratch.file(r"src\b.txt", b"bbb");
+    let built = build(&fx, at_day(0), &[app(a), app(b)], false, true);
+    let mut w = JournalWriter::open_append(&built.session).unwrap();
+    w.undo_plan(at_day(1), vec![OpId(1)]).unwrap();
+    let token = w.undo_intent(OpId(1)).unwrap();
+    w.undo_done(
+        token,
+        UndoOutcome::Failed {
+            code: FailCode::VerifyFailed,
+            os_error: None,
+            detail: String::new(),
+        },
+    )
+    .unwrap();
+    drop(w);
+
+    let listing = expiring(&fx.roots, at_day(3)).unwrap();
+    let listed: Vec<&ExpiryId> = listing.not_due.iter().map(|i| &i.id).collect();
+    assert_eq!(listed, [&built.ids[1]], "{listing:?}");
+    // It still expires as usual.
+    let later = expiring(&fx.roots, at_day(40)).unwrap();
+    assert!(
+        later.items.iter().any(|i| i.id == built.ids[0]),
+        "{later:?}"
+    );
+}
+
 /// The journal header of a test session with `items` items, started at day 0.
 fn header_of(session: &SessionDir, items: u32) -> Header {
     Header {
