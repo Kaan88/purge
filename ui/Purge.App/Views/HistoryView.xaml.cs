@@ -52,6 +52,9 @@ public sealed partial class HistoryRow
     public string State => Session?.State ?? "";
     public string AlertTip => "Purge found another object in quarantine in place of one of these items. Show items to see it.";
 
+    /// <summary>What a screen reader says for the row (a list item reads its item's ToString, else the class name).</summary>
+    public override string ToString() => IsDay ? Title : $"{Title}, {Time}, {State}";
+
     // Board 13 timeline marker
     public double MarkWidth => IsDay ? 92 : 156;
     public string MarkRestorable => Session?.Restorable ?? "";
@@ -75,7 +78,6 @@ public sealed partial class HistoryView : UserControl
     private List<HistoryRow> _rows = [];
     private string _rowsKey = "";
     private bool _syncing;
-    private bool _cancelShown;
 
     public HistoryView()
     {
@@ -87,11 +89,11 @@ public sealed partial class HistoryView : UserControl
         Render();
     }
 
-    private static async Task<HistoryBrokerLaunch> LaunchAsync(CancellationToken ct)
+    private async Task<HistoryBrokerLaunch> LaunchAsync(CancellationToken ct)
     {
         try
         {
-            if (!await MainWindow.Instance.ConfirmFirstElevationAsync())
+            if (!await MainWindow.Instance.ConfirmFirstElevationAsync(readOnly: _vm.LaunchIsReadOnly))
                 return new HistoryBrokerLaunch(null, true, "", DeclinedExplanation: true);
             var result = await BrokerLauncher.LaunchAsync(BrokerLauncher.PathBesideApp(), ct);
             return result.Status switch
@@ -193,7 +195,14 @@ public sealed partial class HistoryView : UserControl
     private void RenderDetail()
     {
         InfoBarHost.Children.Clear();
-        if (_vm.Selected is not { } s) return;
+        if (_vm.Selected is not { } s)
+        {
+            // No cleanup chosen: the page's action (the check for interrupted cleanups) still gets its answer.
+            if (_vm.Waiting is { } wait) ShowInfo(InfoBarSeverity.Informational, wait, _vm.WaitingDetail, closable: false);
+            if (_vm.ActionInfo is { } note) ShowInfo(InfoBarSeverity.Informational, note, "");
+            if (_vm.ActionError is { } fault) ShowInfo(InfoBarSeverity.Error, "Couldn't finish that.", fault);
+            return;
+        }
         DTitle.Text = $"{s.Name} · {s.Started.ToLocalTime().ToString("d MMM yyyy HH:mm", CultureInfo.CurrentCulture)}";
         DSummary.Text = s.Detail;
         DExpiry.Text = s.Expiry;
@@ -230,16 +239,13 @@ public sealed partial class HistoryView : UserControl
             ShowInfo(InfoBarSeverity.Informational, info, "");
         if (_vm.ActionError is { } error)
             ShowInfo(InfoBarSeverity.Error, "Couldn't finish that.", error);
-        // The shell's cancelled bar, once per cancelled prompt.
-        if (_vm.PromptCancelled && !_cancelShown)
-            MainWindow.Instance.ShowAdminPromptCancelled(_vm.PromptDeclined);
-        _cancelShown = _vm.PromptCancelled;
+        // A declined or cancelled admin prompt is said by the page's own line (ActionInfo), not the window's bar.
     }
 
     private void UpdateRestore()
     {
         var n = _vm.CheckedCount;
-        RestoreSelected.Content = $"Restore {n} selected";
+        RestoreSelected.Content = $"Put back {n} selected";
         RestoreSelected.IsEnabled = n > 0 && _vm.CanRestore;
         RestoreAll.IsEnabled = _vm.CanRestore;
     }

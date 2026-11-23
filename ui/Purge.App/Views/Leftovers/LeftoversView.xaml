@@ -19,15 +19,16 @@
         <StackPanel Padding="28,20,28,12" Spacing="12">
             <Grid ColumnSpacing="12">
                 <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                <Border x:Name="AppTile" Width="36" Height="36" CornerRadius="8" VerticalAlignment="Center">
-                    <TextBlock x:Name="AppInitial" Text="F" Foreground="White" FontWeight="SemiBold" FontSize="16"
+                <Border x:Name="AppTile" Width="36" Height="36" CornerRadius="8" VerticalAlignment="Center" Visibility="Collapsed">
+                    <TextBlock x:Name="AppInitial" Foreground="White" FontWeight="SemiBold" FontSize="16"
                                HorizontalAlignment="Center" VerticalAlignment="Center" />
                 </Border>
                 <StackPanel Grid.Column="1" VerticalAlignment="Center">
                     <TextBlock x:Name="TitleText" Text="Leftovers" FontSize="24" LineHeight="30" FontWeight="SemiBold" />
                     <TextBlock x:Name="SubtitleText" FontSize="13" Style="{StaticResource SecondaryText}" />
                 </StackPanel>
-                <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                <StackPanel x:Name="ListButtons" Grid.Column="2" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center"
+                            Visibility="Collapsed">
                     <Button x:Name="ExpandButton" Content="Collapse all" Style="{StaticResource SubtleButton}" Click="OnExpandAll" />
                     <Button x:Name="WeakButton" Style="{StaticResource SubtleButton}" Click="OnToggleWeak" />
                 </StackPanel>
@@ -72,7 +73,8 @@
             </Border>
 
             <Border Grid.Row="1" Style="{StaticResource Card}" Padding="6">
-                <ListView x:Name="Items" SelectionMode="Single" SelectionChanged="OnSelectionChanged">
+                <ListView x:Name="Items" SelectionMode="Single" SelectionChanged="OnSelectionChanged"
+                          ContainerContentChanging="OnContainerContentChanging" AutomationProperties.Name="Leftovers">
                     <ListView.ItemContainerStyle>
                         <Style TargetType="ListViewItem" BasedOn="{StaticResource DefaultListViewItemStyle}">
                             <Setter Property="MinHeight" Value="40" />
@@ -92,9 +94,14 @@
                                             AutomationProperties.Name="{x:Bind GroupName}">
                                         <FontIcon Glyph="{x:Bind Chevron}" FontSize="12" />
                                     </Button>
-                                    <CheckBox Grid.Column="1" IsChecked="{x:Bind GroupChecked, Mode=OneWay}" IsThreeState="False"
-                                              MinWidth="0" Click="OnGroupCheck" Visibility="{x:Bind GroupTickVisibility}"
-                                              AutomationProperties.Name="{x:Bind GroupName}" />
+                                    <!-- The tooltip sits on a Border: a disabled CheckBox gets no pointer events. -->
+                                    <Border Grid.Column="1" Background="Transparent" Visibility="{x:Bind GroupTickVisibility}"
+                                            ToolTipService.ToolTip="{x:Bind GroupTickTip}">
+                                        <CheckBox IsChecked="{x:Bind GroupChecked, Mode=OneWay}" IsThreeState="False"
+                                                  MinWidth="0" Click="OnGroupCheck" IsEnabled="{x:Bind GroupTickEnabled}"
+                                                  AutomationProperties.Name="{x:Bind GroupName}"
+                                                  AutomationProperties.HelpText="{x:Bind GroupTickTip}" />
+                                    </Border>
                                     <TextBlock Grid.Column="2" VerticalAlignment="Center">
                                         <Run Text="{x:Bind GroupName}" FontWeight="SemiBold" /><Run Text="  " /><Run Text="{x:Bind CountText}" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                                     </TextBlock>
@@ -149,19 +156,25 @@
 
             <!-- Why this item -->
             <Border Grid.Row="1" Grid.Column="1" Style="{StaticResource Card}" VerticalAlignment="Top">
-                <ScrollViewer Padding="18">
+                <ScrollViewer Padding="18" AutomationProperties.Name="Selected item">
                     <StackPanel Spacing="14">
                         <TextBlock Text="Selected item" FontSize="12" Style="{StaticResource SecondaryText}" />
+                        <!-- Nothing chosen yet: one line instead of an empty legend of every chip. -->
+                        <TextBlock x:Name="DNone" Style="{StaticResource Body13}" TextWrapping="Wrap"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                   Text="Choose an item in the list to see why Purge listed it." />
+                        <StackPanel x:Name="DBody" Spacing="14" Visibility="Collapsed">
                         <TextBlock x:Name="DTitle" FontWeight="SemiBold" TextWrapping="Wrap" IsTextSelectionEnabled="True" />
                         <TextBlock x:Name="DPath" Style="{StaticResource Mono}" FontSize="13" TextWrapping="Wrap" IsTextSelectionEnabled="True" />
                         <StackPanel Orientation="Horizontal" Spacing="8">
-                            <Border x:Name="DSafe" Style="{StaticResource ChipSuccess}"><TextBlock Style="{StaticResource ChipTextPrimary}"><Run Text="&#xE73E;" FontFamily="Segoe Fluent Icons" FontSize="10" /><Run Text=" Safe" /></TextBlock></Border>
-                            <Border x:Name="DLikely" Style="{StaticResource ChipCaution}"><TextBlock Style="{StaticResource ChipTextPrimary}"><Run Text="&#xE7BA;" FontFamily="Segoe Fluent Icons" FontSize="10" /><Run Text=" Likely" /></TextBlock></Border>
-                            <Border x:Name="DWeak" Style="{StaticResource Chip}"><TextBlock Style="{StaticResource ChipText}"><Run Text="&#xE9CE;" FontFamily="Segoe Fluent Icons" FontSize="10" /><Run Text=" Weak" /></TextBlock></Border>
-                            <Border x:Name="DProtected" Style="{StaticResource ChipOutline}"><TextBlock Style="{StaticResource ChipText}"><Run Text="&#xE72E;" FontFamily="Segoe Fluent Icons" FontSize="10" /><Run Text=" Protected" /></TextBlock></Border>
-                            <Border x:Name="DUserData" Style="{StaticResource ChipCritical}"><TextBlock Style="{StaticResource ChipTextPrimary}"><Run Text="&#xE77B;" FontFamily="Segoe Fluent Icons" FontSize="10" /><Run Text=" User data" /></TextBlock></Border>
-                            <TextBlock x:Name="DPreselect" FontSize="13" VerticalAlignment="Center" Style="{StaticResource SecondaryText}" />
+                            <Border x:Name="DSafe" Style="{StaticResource ChipSuccess}" Visibility="Collapsed"><TextBlock Style="{StaticResource ChipTextPrimary}"><Run Text="&#xE73E;" FontFamily="Segoe Fluent Icons" FontSize="10" /><Run Text=" Safe" /></TextBlock></Border>
+                            <Border x:Name="DLikely" Style="{StaticResource ChipCaution}" Visibility="Collapsed"><TextBlock Style="{StaticResource ChipTextPrimary}"><Run Text="&#xE7BA;" FontFamily="Segoe Fluent Icons" FontSize="10" /><Run Text=" Likely" /></TextBlock></Border>
+                            <Border x:Name="DWeak" Style="{StaticResource Chip}" Visibility="Collapsed"><TextBlock Style="{StaticResource ChipText}"><Run Text="&#xE9CE;" FontFamily="Segoe Fluent Icons" FontSize="10" /><Run Text=" Weak" /></TextBlock></Border>
+                            <Border x:Name="DProtected" Style="{StaticResource ChipOutline}" Visibility="Collapsed"><TextBlock Style="{StaticResource ChipText}"><Run Text="&#xE72E;" FontFamily="Segoe Fluent Icons" FontSize="10" /><Run Text=" Protected" /></TextBlock></Border>
+                            <Border x:Name="DUserData" Style="{StaticResource ChipCritical}" Visibility="Collapsed"><TextBlock Style="{StaticResource ChipTextPrimary}"><Run Text="&#xE77B;" FontFamily="Segoe Fluent Icons" FontSize="10" /><Run Text=" User data" /></TextBlock></Border>
                         </StackPanel>
+                        <!-- On its own line: beside two chips it pushed "User data" out of the 340 px pane. -->
+                        <TextBlock x:Name="DPreselect" FontSize="13" Style="{StaticResource SecondaryText}" />
                         <TextBlock x:Name="DRefused" FontSize="13" TextWrapping="Wrap" Foreground="{ThemeResource SystemFillColorCriticalBrush}" />
                         <TextBlock Text="Evidence" FontWeight="SemiBold" FontSize="13" />
                         <ItemsControl x:Name="DEvidence">
@@ -183,10 +196,11 @@
                             <TextBlock x:Name="DContents" Grid.Column="1" Style="{StaticResource Body13}" TextWrapping="Wrap" />
                             <TextBlock Grid.Row="1" Text="If removed" FontSize="13" Style="{StaticResource SecondaryText}" />
                             <TextBlock x:Name="DIfRemoved" Grid.Row="1" Grid.Column="1" Style="{StaticResource Body13}" TextWrapping="Wrap" />
-                            <TextBlock Grid.Row="2" Text="Found by" FontSize="13" Style="{StaticResource SecondaryText}" />
+                            <TextBlock Grid.Row="2" Text="Kind" FontSize="13" Style="{StaticResource SecondaryText}" />
                             <TextBlock x:Name="DFoundBy" Grid.Row="2" Grid.Column="1" Style="{StaticResource Body13}" TextWrapping="Wrap" />
                         </Grid>
                         <TextBlock x:Name="DOwner" Style="{StaticResource Body13}" TextWrapping="Wrap" />
+                        </StackPanel>
                     </StackPanel>
                 </ScrollViewer>
             </Border>
@@ -270,7 +284,7 @@
                     </StackPanel>
 
                     <StackPanel Orientation="Horizontal" Spacing="10">
-                        <Button x:Name="UndoAllButton" Content="Undo all" Click="OnUndoAll" />
+                        <Button x:Name="UndoAllButton" Content="Put back all" Click="OnUndoAll" />
                         <Button x:Name="RetryHeldButton" Content="Try the held items again" Click="OnRetryHeld" />
                         <Button x:Name="DoneButton" Content="Done" Style="{StaticResource AccentButtonStyle}" Click="OnDone" />
                     </StackPanel>
@@ -301,8 +315,7 @@
             <Border Style="{StaticResource Card}" Padding="28" VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="620">
                 <StackPanel Spacing="10">
                     <TextBlock x:Name="EmptyTitle" Text="No scan yet" FontSize="22" FontWeight="SemiBold" />
-                    <TextBlock x:Name="EmptyText" Style="{StaticResource SecondaryText}" TextWrapping="Wrap"
-                               Text="Start an uninstall, or check a program for what it left behind. Purge shows this page after the uninstaller has run." />
+                    <TextBlock x:Name="EmptyText" Style="{StaticResource SecondaryText}" TextWrapping="Wrap" />
                 </StackPanel>
             </Border>
         </Grid>
@@ -317,7 +330,7 @@
                 <Run x:Name="FooterCount" FontWeight="SemiBold" />
                 <Run x:Name="FooterDetail" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
             </TextBlock>
-            <TextBlock Grid.Column="1" Text="You'll confirm in the Purge security prompt" FontSize="12" VerticalAlignment="Center"
+            <TextBlock x:Name="FooterHint" Grid.Column="1" Text="You'll confirm in the Purge security prompt" FontSize="12" VerticalAlignment="Center"
                        Style="{StaticResource SecondaryText}" />
             <Button Grid.Column="2" Content="Skip" Click="OnSkip" />
             <Button x:Name="MoveButton" Grid.Column="3" Style="{StaticResource AccentButtonStyle}" Click="OnMove">

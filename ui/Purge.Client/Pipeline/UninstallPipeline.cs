@@ -532,10 +532,14 @@ public sealed class UninstallController : IAsyncDisposable
                 _broker = launch.Broker;
                 return true;
             case UninstallLaunchState.Cancelled:
-                // "Not now" at the explanation and No at the Windows prompt both end here: the words fit either.
-                SetStep(UninstallStep.Record, StepState.Failed, "Administrator permission was not given");
+                // "Not now" at the explanation and No at the Windows prompt both end here: the words fit either. It is
+                // a choice, not a failure: the step stays "not started" (no red cross), and the bar offers to try again.
+                SetStep(UninstallStep.Record, StepState.Pending, "Not started: administrator permission was not given");
                 AddNotice(new UninstallNotice(UninstallNoticeKind.Info, "Administrator permission was not given.",
-                    "Nothing was changed. Uninstalling needs administrator permission."));
+                    launch.DeclinedExplanation
+                        ? "Not started: you chose Not now, so Purge did not ask Windows. Nothing was changed."
+                        : "Not started: the Windows prompt was cancelled. Nothing was changed.",
+                    CanRetry: true));
                 AdminPromptCancelled?.Invoke(launch.DeclinedExplanation);
                 return false;
             case UninstallLaunchState.NotAdministrator:

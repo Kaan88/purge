@@ -93,6 +93,39 @@ public sealed class LeftoverItemModel
 
     public string SizeText => SizeBytes is { } bytes ? FormatSize(bytes) : "";
 
+    /// <summary>What the item is and what it belongs to, in words (the detail pane's "Kind" line).</summary>
+    public string KindText => $"{KindWords(Kind)} · {CategoryWords(Category)}";
+
+    private static string KindWords(RpcItemKind kind) => kind switch
+    {
+        RpcItemKind.File => "File",
+        RpcItemKind.Folder => "Folder",
+        RpcItemKind.RegistryKey => "Registry key",
+        RpcItemKind.RegistryValue => "Registry value",
+        RpcItemKind.RegistryData => "Registry data",
+        RpcItemKind.Service => "Service",
+        RpcItemKind.Task => "Scheduled task",
+        RpcItemKind.FirewallRule => "Firewall rule",
+        RpcItemKind.Package => "App package",
+        _ => "Item",
+    };
+
+    private static string CategoryWords(RpcCategory category) => category switch
+    {
+        RpcCategory.AppFiles => "the program's files",
+        RpcCategory.AppData => "the program's settings and data",
+        RpcCategory.UserData => "your own data",
+        RpcCategory.Cache => "a cache",
+        RpcCategory.Registration => "the program's registration",
+        RpcCategory.Association => "a file type or link association",
+        RpcCategory.ShellCom => "Explorer and COM registration",
+        RpcCategory.Startup => "something that starts with Windows",
+        RpcCategory.System => "a system setting",
+        RpcCategory.Privacy => "usage traces",
+        RpcCategory.Package => "an app package",
+        _ => "other",
+    };
+
     public string Why =>
         Blockers.Count > 0 ? Blockers[0]
         : Warnings.Count > 0 ? Warnings[0].Message
@@ -227,6 +260,12 @@ public sealed class LeftoversViewModel : INotifyPropertyChanged
     public UndoResult? Undo { get; private set; }
     public string ProgramName { get; private set; } = "";
 
+    /// <summary>True for the sample rows of <c>--sample</c>: there is no broker, so nothing can be moved.</summary>
+    public bool IsSample { get; private set; }
+
+    /// <summary>True when the scan is a forced one (the broker ticks nothing for you then).</summary>
+    public bool IsForced => Scan?.Mode == ScanMode.Forced;
+
     /// <summary>The code the broker's dialog shows in its footer; null until the plan exists.</summary>
     public string? Code { get; private set; }
 
@@ -290,6 +329,9 @@ public sealed class LeftoversViewModel : INotifyPropertyChanged
     /// <summary>The rows the list shows: group filters, weak matches, collapsed groups handled by the view.</summary>
     public List<LeftoverItemModel> VisibleItems(LeftoverGroup group) =>
         group.Items.Where(item => ShowWeak || !item.IsWeak).ToList();
+
+    /// <summary>The weak matches of a group that the list hides while weak matches are hidden.</summary>
+    public int HiddenCount(LeftoverGroup group) => ShowWeak ? 0 : group.Items.Count(item => item.IsWeak);
 
     /// <summary>The groups with at least one visible row.</summary>
     public List<LeftoverGroup> VisibleGroups() =>
@@ -772,7 +814,7 @@ public sealed class LeftoversViewModel : INotifyPropertyChanged
         Code = null;
         Attention.Clear();
         Phase = LeftoversPhase.Waiting;
-        WaitingTitle = "Confirm the restore in the Purge security prompt.";
+        WaitingTitle = "Confirm putting it back in the Purge security prompt.";
         WaitingDetail = "Nothing has been put back yet.";
         Notify();
         try
@@ -805,7 +847,7 @@ public sealed class LeftoversViewModel : INotifyPropertyChanged
         catch (BrokerLinkException)
         {
             Phase = LeftoversPhase.Interrupted;
-            Error = "The administrator part ended during the restore. Purge cannot tell what was put back; " +
+            Error = "The administrator part ended while putting things back. Purge cannot tell what was put back; " +
                     "check History & undo.";
         }
         catch (BrokerRpcException ex)
@@ -873,6 +915,7 @@ public sealed class LeftoversViewModel : INotifyPropertyChanged
     public void LoadSample(string name = "Mozilla Firefox", int count = 0)
     {
         ProgramName = name;
+        IsSample = true;
         Items.Clear();
         Items.AddRange(count > 0 ? LeftoversSample.Fixture(count) : LeftoversSample.Items());
         Scan = new ScanResult { ScanId = "sample", Mode = ScanMode.Forced };

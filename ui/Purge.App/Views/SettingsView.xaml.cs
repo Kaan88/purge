@@ -1,23 +1,17 @@
-using System.Collections.ObjectModel;
+using System.Diagnostics;
+using System.Reflection;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Xaml.Input;
 
 namespace Purge.App.Views;
 
 /// <summary>
-/// S5 with the board 17 safety dial. Live: theme, preset, "Pre-select user data"
-/// (in memory, see <see cref="Settings"/>). The rest shows the planned settings on sample values.
+/// S5. Only what works or is true is shown (DECISIONS 2026-11-24): the theme, a link to the quarantine, the rule of
+/// what Purge ticks for you, and the versions. The launch markers show in a DEBUG build only.
 /// </summary>
 public sealed partial class SettingsView : UserControl
 {
     private readonly bool _ready;
-    private readonly ObservableCollection<string> _protected =
-        [@"D:\Projects", @"%USERPROFILE%\Documents", @"HKCU\Software\Mozilla\Thunderbird"];
-
-    // The preview counts over the same sample the Leftovers page shows offline: a preview, not a scan of this PC.
-    private readonly List<LeftoverItemModel> _sample = LeftoversSample.Items().Where(r => r.Band != Band.Weak).ToList();
-    private SafetyPreset? _hover;
 
     public SettingsView()
     {
@@ -28,104 +22,49 @@ public sealed partial class SettingsView : UserControl
             ElementTheme.Dark => 2,
             _ => 0,
         };
-        UserDataSwitch.IsOn = Settings.PreSelectUserData;
-        PreviewTile.Background = ProgramRow.TileFor("Mozilla");
-        (Settings.Preset switch
-        {
-            SafetyPreset.Cautious => PresetCautious,
-            SafetyPreset.Thorough => PresetThorough,
-            _ => PresetBalanced,
-        }).IsChecked = true;
         _ready = true;
-        UpdatePresets();
 
-        ProtectedList.ItemsSource = _protected;
+        AboutLine.Text = AboutText();
 
+#if DEBUG
         var marks = LaunchMarkers.Snapshot();
         Markers.Text = string.Join(Environment.NewLine, marks.Select(m => $"{m.Name,-12} {m.Ms,8:F1}"));
-        string Ms(string name)
+        MarkersExpander.Visibility = Visibility.Visible;
+#endif
+    }
+
+    /// <summary>
+    /// "Purge 0.1.2 · engine 0.1.2 · policy …", with "sample data" only when the app shows the sample data (--sample,
+    /// or an engine that could not start). The app's version is the exe's FILEVERSION, which comes from Cargo.toml.
+    /// </summary>
+    private static string AboutText()
+    {
+        var parts = new List<string> { "Purge " + AppVersion() };
+        var hello = Program.Startup.IsCompletedSuccessfully ? Program.Startup.Result.Hello : null;
+        var live = Program.Engine.IsLive;
+        if (live && hello is not null)
         {
-            foreach (var (n, ms) in marks) if (n == name) return $"{ms:F0} ms";
-            return "–";
+            parts.Add("engine " + hello.Version);
+            if (hello.PolicyVersion.Length > 0) parts.Add("policy " + hello.PolicyVersion);
         }
-        LastStart.Text = $"Last start: first frame {Ms("presented")}, names visible {Ms("first_tick")}. " +
-                         "Leftover scanners include code ported from Bulk Crap Uninstaller (Apache-2.0).";
-
-        var engine = Program.Startup.IsCompletedSuccessfully ? Program.Startup.Result.Hello : null;
-        AboutLine.Text = engine is null
-            ? "Purge 0.1 (shell preview)"
-            : $"Purge 0.1 · engine {engine.Version}" + (engine.PolicyVersion.Length > 0 ? $" · policy {engine.PolicyVersion}" : "")
-              + " · sample data";
+        if (!live) parts.Add("sample data");
+        return string.Join(" · ", parts);
     }
 
-    private int Selectable => _sample.Count(r => r.Selectable);
-
-    private int SelectedBy(SafetyPreset preset) =>
-        _sample.Count(r => r.Selectable && Settings.PreSelects(preset, r.Band, r.IsUserData));
-
-    private void UpdatePresets()
+    private static string AppVersion()
     {
-        CountCautious.Text = $"{SelectedBy(SafetyPreset.Cautious)} of {Selectable} selected for Firefox";
-        CountBalanced.Text = $"{SelectedBy(SafetyPreset.Balanced)} of {Selectable} selected for Firefox";
-        CountThorough.Text = $"{SelectedBy(SafetyPreset.Thorough)} of {Selectable} selected for Firefox";
-        OnCautious.Visibility = Settings.Preset == SafetyPreset.Cautious ? Visibility.Visible : Visibility.Collapsed;
-        OnBalanced.Visibility = Settings.Preset == SafetyPreset.Balanced ? Visibility.Visible : Visibility.Collapsed;
-        OnThorough.Visibility = Settings.Preset == SafetyPreset.Thorough ? Visibility.Visible : Visibility.Collapsed;
-        UpdatePreview();
-    }
-
-    private void UpdatePreview()
-    {
-        var preset = _hover ?? Settings.Preset;
-        var selected = SelectedBy(preset);
-        var left = Selectable - selected;
-        var prot = _sample.Count(r => r.Band == Band.Protected);
-        PreviewTitle.Text = $"Firefox, with {preset}";
-        PvSelected.Text = selected.ToString();
-        PvLeft.Text = left.ToString();
-        PvProtected.Text = prot.ToString();
-        PvSelCol.Width = new GridLength(Math.Max(selected, 0.01), GridUnitType.Star);
-        PvLeftCol.Width = new GridLength(Math.Max(left, 0.01), GridUnitType.Star);
-        PvProtCol.Width = new GridLength(Math.Max(prot, 0.01), GridUnitType.Star);
-        var userData = _sample.Count(r => r.IsUserData);
-        PvUserData.Text = Settings.PreSelectUserData
-            ? $"User data is pre-selected because you turned that on ({userData} item here)."
-            : $"{userData} item holds user data and stays unticked.";
-    }
-
-    private static SafetyPreset ParsePreset(object? tag) => tag switch
-    {
-        "Cautious" => SafetyPreset.Cautious,
-        "Thorough" => SafetyPreset.Thorough,
-        _ => SafetyPreset.Balanced,
-    };
-
-    private void OnPresetChecked(object sender, RoutedEventArgs e)
-    {
-        if (!_ready) return;
-        Settings.Preset = ParsePreset((sender as FrameworkElement)?.Tag);
-        Settings.RaiseChanged();
-        UpdatePresets();
-    }
-
-    private void OnPresetHover(object sender, PointerRoutedEventArgs e)
-    {
-        _hover = ParsePreset((sender as FrameworkElement)?.Tag);
-        UpdatePreview();
-    }
-
-    private void OnPresetLeave(object sender, PointerRoutedEventArgs e)
-    {
-        _hover = null;
-        UpdatePreview();
-    }
-
-    private void OnUserDataToggled(object sender, RoutedEventArgs e)
-    {
-        if (!_ready) return;
-        Settings.PreSelectUserData = UserDataSwitch.IsOn;
-        Settings.RaiseChanged();
-        UpdatePresets();
+        try
+        {
+            if (Environment.ProcessPath is { Length: > 0 } exe
+                && FileVersionInfo.GetVersionInfo(exe).FileVersion is { Length: > 0 } file)
+                return file;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            // Fall back to the assembly's version below.
+        }
+        return typeof(SettingsView).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+               ?? "(version unknown)";
     }
 
     private void OnOpenPage(object sender, RoutedEventArgs e)
@@ -142,11 +81,5 @@ public sealed partial class SettingsView : UserControl
             2 => ElementTheme.Dark,
             _ => ElementTheme.Default,
         });
-    }
-
-    private void OnRemoveProtected(object sender, RoutedEventArgs e)
-    {
-        if ((sender as FrameworkElement)?.Tag is string path) _protected.Remove(path);
-        ProtectedCount.Text = $"{_protected.Count} of yours";
     }
 }

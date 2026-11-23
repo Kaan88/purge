@@ -21,7 +21,7 @@ public static class ElevationPrompts
     /// (<c>DeclinedExplanation</c>), so the bar does not claim a cancelled Windows prompt; no state is kept here for
     /// it, because two routes can ask at once.
     /// </summary>
-    public static async Task<bool> ConfirmFirstElevationAsync(XamlRoot root, ElementTheme theme)
+    public static async Task<bool> ConfirmFirstElevationAsync(XamlRoot root, ElementTheme theme, bool readOnly = false)
     {
         if (Explained) return true;
         var dialog = new ContentDialog
@@ -35,8 +35,12 @@ public static class ElevationPrompts
                 MaxWidth = 440,
                 Text = "For this, Purge starts a helper called purge-broker.exe with administrator permission. Windows asks "
                      + "you first, and may show the publisher as unknown until Purge is signed.\n\n"
-                     + "Any program can show a prompt like that, so the Windows prompt is not your approval. Before anything "
-                     + "is moved or removed, Purge shows its own review and waits for you.",
+                     + (readOnly
+                         // History's check for interrupted cleanups and "Show items" only read Purge's own records.
+                         ? "The helper only reads Purge's records of earlier cleanups; nothing is moved or removed. "
+                           + "Anything that would change your PC later is asked for in Purge's own review first."
+                         : "Any program can show a prompt like that, so the Windows prompt is not your approval. Before "
+                           + "anything is moved or removed, Purge shows its own review and waits for you."),
             },
             PrimaryButtonText = "Continue",
             CloseButtonText = "Not now",

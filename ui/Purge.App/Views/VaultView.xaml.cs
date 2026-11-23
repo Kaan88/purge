@@ -16,7 +16,6 @@ public sealed partial class VaultView : UserControl
     private string _rowsKey = "";
     private string _itemsKey = "";
     private List<VaultBatch> _rows = [];
-    private bool _cancelShown;
 
     public VaultView()
     {
@@ -75,8 +74,13 @@ public sealed partial class VaultView : UserControl
         Totals.Text = _vm.Phase == VaultPhase.Ready ? _vm.Totals : "";
         var expired = _vm.ExpiredBatches.ToList();
         ReviewButton.IsEnabled = !_vm.Busy && expired.Count > 0;
+        // Why it is off, on the host (a disabled button shows no tooltip).
+        ToolTipService.SetToolTip(ReviewHost, ReviewButton.IsEnabled ? null
+            : _vm.Busy ? "Wait until the current action has finished."
+            : "Nothing has passed its retention yet. \"Delete now\" on a cleanup deletes it sooner.");
 
         InfoBarHost.Children.Clear();
+        EmptyCard.Visibility = _vm.Phase == VaultPhase.Empty ? Visibility.Visible : Visibility.Collapsed;
         switch (_vm.Phase)
         {
             case VaultPhase.Loading:
@@ -84,10 +88,6 @@ public sealed partial class VaultView : UserControl
                 break;
             case VaultPhase.Error:
                 ShowInfo(InfoBarSeverity.Error, "Couldn't read the quarantine.", _vm.Error ?? "");
-                break;
-            case VaultPhase.Empty:
-                ShowInfo(InfoBarSeverity.Informational, "The quarantine is empty.",
-                    "Cleanups you run from Leftovers appear here, with Put back.");
                 break;
         }
         if (_vm.Interrupted > 0)
@@ -116,10 +116,7 @@ public sealed partial class VaultView : UserControl
             ShowInfo(InfoBarSeverity.Informational, info, "");
         if (_vm.ActionError is { } error)
             ShowInfo(InfoBarSeverity.Error, "Couldn't finish that.", error);
-        // The shell's cancelled bar, once per cancelled prompt.
-        if (_vm.PromptCancelled && !_cancelShown)
-            MainWindow.Instance.ShowAdminPromptCancelled(_vm.PromptDeclined);
-        _cancelShown = _vm.PromptCancelled;
+        // A declined or cancelled admin prompt is said by the page's own line (ActionInfo), not the window's bar.
     }
 
     private void OnRestore(object sender, RoutedEventArgs e)
