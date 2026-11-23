@@ -119,10 +119,17 @@ jobs:
             Write-Warning "$notesSrc does not exist; the release gets a one-line text"
             [IO.File]::WriteAllText("$PWD/dist/$notesName", "# Purge $v`n`nPurge $v.`n", (New-Object System.Text.UTF8Encoding($false)))
           }
-          # Hub's one-line notes: the first line of the notes that is not a heading.
-          $oneLine = (Get-Content "dist/$notesName" -Encoding UTF8 | Where-Object { $_.Trim() -ne '' -and -not $_.TrimStart().StartsWith('#') } | Select-Object -First 1)
+          # Hub's one-line notes: the first paragraph of the notes after the headings, its wrapped
+          # lines joined (a list item counts as a paragraph). write-hub-txt cuts it at 1024 bytes.
+          $para = New-Object System.Collections.Generic.List[string]
+          foreach ($l in (Get-Content "dist/$notesName" -Encoding UTF8)) {
+            $s = $l.Trim()
+            if ($s -eq '' -or $s.StartsWith('#')) { if ($para.Count -gt 0) { break } else { continue } }
+            if ($s -match '^[-*]\s+' -and $para.Count -gt 0) { break }
+            $para.Add(($s -replace '^[-*]\s+', ''))
+          }
+          $oneLine = ($para -join ' ').Trim()
           if (-not $oneLine) { $oneLine = "Purge $v." }
-          $oneLine = $oneLine.Trim() -replace '^[-*]\s+', ''
           $files = @(
             @{ Name = "Purge-Setup-$v.exe"; Path = "dist/Purge-Setup-$v.exe"; Role = 'setup'; Silent = '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART'; Scope = 'machine' }
           )
