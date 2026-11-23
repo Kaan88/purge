@@ -68,11 +68,17 @@ if (-not $SkipBuild) {
     $env:CARGO_INCREMENTAL = '0'
     $cargo = Get-Command cargo -ErrorAction SilentlyContinue
     if (-not $cargo) { throw 'cargo was not found on PATH' }
-    foreach ($cargoArgs in @(@('build', '--release', '--locked', '-p', 'purge-engine'), @('build', '--release', '--locked', '-p', 'purge-broker'), @('xtask', 'check-deps'))) {
-        $line = 'cargo ' + ($cargoArgs -join ' ')
-        Write-Step $line
-        & $cargo.Source @cargoArgs
-        if ($LASTEXITCODE -ne 0) { throw "$line failed with exit code $LASTEXITCODE" }
+    # cargo builds the workspace of the current folder: run it in this script's repository, never the caller's.
+    Push-Location -LiteralPath $repo
+    try {
+        foreach ($cargoArgs in @(@('build', '--release', '--locked', '-p', 'purge-engine'), @('build', '--release', '--locked', '-p', 'purge-broker'), @('xtask', 'check-deps'))) {
+            $line = 'cargo ' + ($cargoArgs -join ' ')
+            Write-Step $line
+            & $cargo.Source @cargoArgs
+            if ($LASTEXITCODE -ne 0) { throw "$line failed with exit code $LASTEXITCODE" }
+        }
+    } finally {
+        Pop-Location
     }
     $dotnet = Get-Command dotnet -ErrorAction SilentlyContinue
     $dotnetPath = if ($dotnet) { $dotnet.Source } else { Join-Path $env:ProgramFiles 'dotnet\dotnet.exe' }

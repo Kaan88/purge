@@ -307,7 +307,7 @@ setup log) and exits with code 9 instead of 0 (`GetCustomSetupExitCode`), so Hub
 update. There is no rollback: Inno has already copied the files and written the uninstall entry with
 the new `DisplayVersion` when `ssPostInstall` runs, and it cannot undo them from there (an `Abort` at
 that point is swallowed and the setup still exits 0). An interactive run says so on the Finished page
-and does not offer to launch Purge; running the setup again repeats the step. `SetupLogging=yes`, so
+and does not offer to launch Purge; running the setup again repeats the step. Hub does not offer it again (the new `Purge.exe` already carries the new version), so after an exit 9 the owner runs the setup by hand. `SetupLogging=yes`, so
 the setup's own log is always `%TEMP%\Setup Log <date> #<n>.txt`, also for Hub's run, which passes
 no `/LOG`.
 
