@@ -110,3 +110,15 @@ VMs. Host replays (A2, B1) can overlap A3 but not B7 timings.
 - Branch m3-bench-tools (not merged): B3 tooling written (`--real-engine` with `names_visible`/`icons_visible`,
   `--s3-open` on the 2,000-item fixture; docs/M3_BENCH.md), functional smoke only; G1 owner tests made
   elevation-aware (pass unelevated on the host; the elevated run is B2 in the Inbound VM).
+
+## Open low findings for the overall audit (2026-11-23, all Fable "low, not blocking")
+- perf-harvest-2 (785979c): the WalkAhead drop test does not prove the wiring (needs a gated registry wrapper,
+  `crates/purge-scan/tests/m1b_framework.rs:423`); held-bytes still omits Vec<RegValue>/Vec<Held> slack
+  (`refscan.rs:914`); skip the empty flush when `held_bytes == 0` (`refscan.rs:1318`).
+- ui-broker-followups (5722af8), `ui/Purge.App/Views/Uninstall/UninstallView.xaml.cs`: stale "The scan is on the
+  Leftovers page." bar after a Programs check replaces the page (:356); a fresh completion still replaces an unread
+  Leftovers outcome (:604, hold when `LeftoversOnScreen` and phase Result/Interrupted/Undone); "Waiting for a
+  leftovers check." shown with nothing disabled (:326); `HandOff` clears `_droppedHeld` too early (:621); no test for
+  `StageRerun` in `RetryAsync` (`UninstallPipeline.cs:388`); off-screen `LeftoversView.Show` needs one e2e/manual pass
+  (hold -> leave Leftovers -> return); `ReviewPage` can be internal.
+- Fixed in 44b1472: the M3 security run looked for the old cancelled-bar text.
