@@ -2378,7 +2378,13 @@ the e2e gets an ambient set from null runs of its own flow:
   built into a temporary file and refused if a record or pattern names a fixture (`PurgeExec*`, `PurgeE2eMsi`,
   `C:\ProgramData\Purge`) or one of the null runs' own preselected objects (`capture-post` `cli.preselected_keys`: a
   record on or under a Path / RegKey target, that RegValue, a Service's key, a Task's file; a pattern holding the
-  path). Any refusal writes no file and leaves an older one as it was. **One file per VM** (`Get-M3E2eAmbientFile`):
+  path). Any refusal writes no file and leaves an older one as it was. One exception, decided after the first null
+  run (`tn1-m3-e2e-vscode`, 2026-11-23): the broker writes Purge's own store in a cancelled plan's window too
+  (`+F C:\ProgramData\Purge\sessions\writer.lock`, `~D C:\ProgramData\Purge\sessions`), so every set would be refused.
+  Entries under `C:\ProgramData\Purge` are dropped from the built set (`Remove-M3E2eStoreEntries`, noted in the set's
+  `note`), not refused: in a gate run execdiff judges every record under the store by its own store rule (authorised
+  as `store`), never by the ambient set, and dropping entries only makes the set stricter. `PurgeExec*` and
+  `PurgeE2eMsi` still refuse it, and the scorer still fails a committed set that names the store. **One file per VM** (`Get-M3E2eAmbientFile`):
   Inbound `truth\m3-e2e-ambient.json`, Purge-CleanPro `truth\m3-e2e-ambient-cleanpro.json`; `-AmbientFile` names
   another. Regenerate it when rig-base, the UI's flow or the window changes.
 - **The gate** (`-Mode m3-e2e`) refuses to start without the file (no fallback to the M2 set) and a `-RunName` of the

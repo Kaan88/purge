@@ -2135,6 +2135,17 @@ exit 0
     & $refused 'fewer than 6 null runs' { $M3.count = 5 } { $M3.count = 6 }
     & $refused 'a set naming a fixture' { [IO.File]::AppendAllText((Join-Path $Work 'stub-records.txt'), "`r`n-K:HKLM\SOFTWARE\PurgeE2eMsi\1603") } { [IO.File]::WriteAllText((Join-Path $Work 'stub-records.txt'), "~F:C:\WINDOWS\Prefetch\TASKLIST.EXE-2448BC7D.pf") }
     & $refused 'a set naming a null run''s own preselected object' { [IO.File]::AppendAllText((Join-Path $Work 'stub-records.txt'), "`r`n~F:C:\Program Files\Microsoft VS Code\Code.exe") } { [IO.File]::WriteAllText((Join-Path $Work 'stub-records.txt'), "~F:C:\WINDOWS\Prefetch\TASKLIST.EXE-2448BC7D.pf") }
+    # Purge's own store (the broker's writer.lock and sessions dir, also in a cancelled plan's window): dropped, not refused.
+    [IO.File]::WriteAllText((Join-Path $Work 'stub-records.txt'), "~F:C:\WINDOWS\Prefetch\TASKLIST.EXE-2448BC7D.pf`r`n+F:C:\ProgramData\Purge\sessions\writer.lock`r`n~D:C:\ProgramData\Purge\sessions`r`n~D:C:\ProgramData\Microsoft\Windows\WER")
+    $dirs = @(Invoke-M3E2eBuildAmbient)
+    $built = Read-M3Json $out
+    $allEntries = @(@($built.records) + @($built.patterns) + @($built.runs | ForEach-Object { @($_.records) + @($_.patterns) }))
+    Check 'm3-e2e ambient build: store entries are dropped (set, every run), the rest kept, the drop noted' ($dirs.Count -eq 6 -and -not @($allEntries | Where-Object { "$_" -match '(?i)programdata\\purge\\|programdata\\purge$' }).Count -and
+        @($built.records) -contains '~D:C:\ProgramData\Microsoft\Windows\WER' -and @($built.records) -contains '~F:C:\WINDOWS\Prefetch\TASKLIST.EXE-2448BC7D.pf' -and "$($built.note)" -match '2 store entries dropped' -and
+        @(Get-M3E2eAmbientFixtureHits $built @()).Count -eq 0) "records $(@($built.records) -join ' | '); note $($built.note)"
+    $s2 = [pscustomobject]@{ schema = 'purge.rig.m2ambient/1'; note = ''; records = @('-K:HKLM\SOFTWARE\PurgeExecApp', '+F:C:\ProgramData\Purge\x'); patterns = @('^\~F:C:\\ProgramData\\Purge\\[0-9a-f]{16}$'); runs = @() }
+    $d2 = @(Remove-M3E2eStoreEntries $s2)
+    Check 'm3-e2e ambient: the store drop keeps every other fixture (PurgeExec still refuses)' ($d2.Count -eq 2 -and @($s2.records) -ceq '-K:HKLM\SOFTWARE\PurgeExecApp' -and @($s2.patterns).Count -eq 0 -and @(Get-M3E2eAmbientFixtureHits $s2 @()).Count -eq 1)
     Remove-Item Env:\RIG_RIGTOOL
 
     # Save-M3E2eNullRun: the pulled pair renamed into vm\runs\<run>, run.json written, and it passes the check.

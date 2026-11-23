@@ -965,6 +965,26 @@ function Get-M3E2eAmbientFixtureHits($Set, $Roots = @()) {
     @($hits | Select-Object -Unique)
 }
 
+# Purge's own store C:\ProgramData\Purge: the broker writes there in both windows, a null run's cancelled plan too
+# (+F sessions\writer.lock, ~D sessions; first null run 2026-11-23). Such entries are dropped from the built set, not
+# refused: in a gate run execdiff judges every record under the store by its own store rule (authorised as 'store'),
+# never by the ambient set, and dropping entries can only make the set stricter. Every other fixture name (PurgeExec*,
+# PurgeE2eMsi) still refuses the set, and the scorer still refuses a committed set naming the store.
+$M3E2eStoreRx = '(?i)programdata\\+purge(\\|\$|$)'
+# Removes the store entries from $Set (records, patterns, per run, in place); returns them.
+function Remove-M3E2eStoreEntries($Set) {
+    $isStore = { param($s) "$s" -match $M3E2eStoreRx -and "$s" -notmatch '(?i)purgeexec|purgee2emsi' }
+    $out = @(@(@($Set.records) + @($Set.patterns)) | Where-Object { $null -ne $_ -and (& $isStore $_) } | ForEach-Object { "$_" })
+    $Set.records = @(@($Set.records) | Where-Object { $null -ne $_ -and -not (& $isStore $_) })
+    $Set.patterns = @(@($Set.patterns) | Where-Object { $null -ne $_ -and -not (& $isStore $_) })
+    foreach ($r in @($Set.runs | Where-Object { $_ })) {
+        $out += @(@(@($r.records) + @($r.patterns)) | Where-Object { $null -ne $_ -and (& $isStore $_) } | ForEach-Object { "$_" })
+        $r.records = @(@($r.records) | Where-Object { $null -ne $_ -and -not (& $isStore $_) })
+        $r.patterns = @(@($r.patterns) | Where-Object { $null -ne $_ -and -not (& $isStore $_) })
+    }
+    @($out | Select-Object -Unique)
+}
+
 # The host rigtool (ambient builds): $env:RIG_RIGTOOL, else vm\rigtool\target\release\rigtool.exe.
 function Get-M3E2eHostRigTool {
     $t = $(if ($env:RIG_RIGTOOL) { $env:RIG_RIGTOOL } else { Join-Path $script:RigDir 'rigtool\target\release\rigtool.exe' })
@@ -1029,6 +1049,13 @@ function Invoke-M3E2eBuildAmbient {
         if ($LASTEXITCODE -ne 0) { throw "rigtool ambient --m2 --added exited $LASTEXITCODE; no ambient set written" }
         $set = Read-M3Json $tmp
         if (-not $set -or "$($set.schema)" -cne 'purge.rig.m2ambient/1') { throw "the built set has schema '$(if ($set) { $set.schema })'; no ambient set written" }
+        $dropped = @(Remove-M3E2eStoreEntries $set)
+        if ($dropped.Count) {
+            Write-RigLog "  dropped $($dropped.Count) entr$(if ($dropped.Count -eq 1) { 'y' } else { 'ies' }) of Purge's own store (execdiff's store rule judges them in a gate run): $($dropped -join ' | ')"
+            $set | Add-Member -Force -NotePropertyName note -NotePropertyValue "$($set.note)$(if ($set.note) { ' ' })m3-e2e: $($dropped.Count) store entries dropped (C:\ProgramData\Purge; the broker's writer.lock and the sessions dir of the cancelled plan)."
+            [IO.File]::WriteAllText($tmp, (ConvertTo-Json $set -Depth 10), (New-Object System.Text.UTF8Encoding($false)))
+            $set = Read-M3Json $tmp
+        }
         $hits = @(Get-M3E2eAmbientFixtureHits $set $roots)
         if ($hits.Count) { throw "the built set names fixture or plan objects ($($hits.Count)), no ambient set written; rerun the null rounds: $(@($hits | Select-Object -First 10) -join ' | ')" }
         Move-Item -LiteralPath $tmp -Destination $out -Force
