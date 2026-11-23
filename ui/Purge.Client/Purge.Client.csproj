@@ -11,6 +11,10 @@
     <RootNamespace>Purge.Client</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <!-- BrokerSession.OverAsync: the tests' broker sessions over a scripted pipe, made by the same handshake as a launch. -->
+    <InternalsVisibleTo Include="Purge.Client.Tests" />
+  </ItemGroup>
+  <ItemGroup>
     <EmbeddedResource Include="Fake\sample-inventory.json" LogicalName="Purge.Client.sample-inventory.json" />
     <EmbeddedResource Include="Fake\sample-sizes.json" LogicalName="Purge.Client.sample-sizes.json" />
     <EmbeddedResource Include="Fake\sample-forecast.json" LogicalName="Purge.Client.sample-forecast.json" />

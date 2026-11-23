@@ -113,17 +113,15 @@ public interface IMediumUninstall
 }
 
 /// <summary>
-/// The broker's uninstall methods over a checked <see cref="BrokerSession"/>. <c>engine.hello</c> goes out before the
-/// first request (design 3.3 step 6); progress notifications feed the current call only, and a lost client does not
-/// stop the broker's run.
+/// The broker's uninstall methods over a checked <see cref="BrokerSession"/> (its <c>engine.hello</c>, design 3.3 step 6,
+/// was answered when the session was made); progress notifications feed the current call only, and a lost client does
+/// not stop the broker's run.
 /// </summary>
 public sealed class BrokerUninstallClient : IUninstallBroker
 {
     private readonly BrokerSession _session;
-    private readonly SemaphoreSlim _helloGate = new(1, 1);
     private readonly object _progressGate = new();
     private Action<Progress>? _progress;
-    private bool _hello;
     private int _disposed;
     private int _handedOver;
 
@@ -198,7 +196,6 @@ public sealed class BrokerUninstallClient : IUninstallBroker
         System.Text.Json.Serialization.Metadata.JsonTypeInfo<T> resultInfo, Action<Progress>? progress, CancellationToken ct)
         where TParams : notnull
     {
-        await EnsureHelloAsync(ct).ConfigureAwait(false);
         lock (_progressGate) _progress = progress;
         try
         {
@@ -210,27 +207,10 @@ public sealed class BrokerUninstallClient : IUninstallBroker
         }
     }
 
-    private async Task EnsureHelloAsync(CancellationToken ct)
-    {
-        if (_hello) return;
-        await _helloGate.WaitAsync(ct).ConfigureAwait(false);
-        try
-        {
-            if (_hello) return;
-            await _session.Rpc.HelloAsync(ct).ConfigureAwait(false);
-            _hello = true;
-        }
-        finally
-        {
-            _helloGate.Release();
-        }
-    }
-
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         _session.Rpc.Notification -= OnNotification;
-        _helloGate.Dispose();
         // A session handed to the leftovers page belongs to that page now.
         if (Volatile.Read(ref _handedOver) == 0)
             await _session.DisposeAsync().ConfigureAwait(false);

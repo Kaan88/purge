@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using Microsoft.Win32.SafeHandles;
+using Purge.Client.Rpc;
 
 namespace Purge.Client.Broker;
 
@@ -67,20 +68,26 @@ public sealed class BrokerLaunchResult
 /// The connected broker: its pipe client and the process handle <c>ShellExecuteExW</c> returned. The handle is held
 /// so the pid cannot be reused while the UI talks to it, and the broker ends when this is disposed (the pipe closes;
 /// the broker also holds the UI as its parent).
+/// <para>
+/// A session exists only after <c>engine.hello</c> was answered (<see cref="OpenAsync"/> is the one way to make one):
+/// the broker refuses a client whose first line is anything else (<c>serve.rs</c>, <c>accept</c>), so no caller of
+/// <see cref="Rpc"/> sends a hello of its own, and none can forget it.
+/// </para>
 /// </summary>
 public sealed partial class BrokerSession : IAsyncDisposable
 {
     private readonly SafeProcessHandle _process;
 
-    internal BrokerSession(BrokerRpcClient rpc, SafeProcessHandle process, int processId, string brokerPath)
+    private BrokerSession(BrokerRpcClient rpc, SafeProcessHandle process, int processId, string brokerPath, EngineHello hello)
     {
         Rpc = rpc;
         _process = process;
         ProcessId = processId;
         BrokerPath = brokerPath;
+        Hello = hello;
     }
 
-    /// <summary>The JSON-RPC link to the broker (server check already passed).</summary>
+    /// <summary>The JSON-RPC link to the broker (server check passed, <c>engine.hello</c> answered).</summary>
     public BrokerRpcClient Rpc { get; }
 
     /// <summary>The broker's pid.</summary>
@@ -88,6 +95,39 @@ public sealed partial class BrokerSession : IAsyncDisposable
 
     /// <summary>The broker executable that was launched.</summary>
     public string BrokerPath { get; }
+
+    /// <summary>The broker's answer to <c>engine.hello</c>.</summary>
+    public EngineHello Hello { get; }
+
+    /// <summary>
+    /// Sends <c>engine.hello</c>, the first request on a link that passed the server check, and makes the session.
+    /// On a failure the caller still owns <paramref name="rpc"/> and <paramref name="process"/>.
+    /// </summary>
+    internal static async Task<BrokerSession> OpenAsync(BrokerRpcClient rpc, SafeProcessHandle process, int processId,
+        string brokerPath, CancellationToken ct)
+    {
+        var hello = await rpc.HelloAsync(ct).ConfigureAwait(false);
+        return new BrokerSession(rpc, process, processId, brokerPath, hello);
+    }
+
+    /// <summary>
+    /// The tests' session over a connected stream played by a scripted broker: the same <see cref="OpenAsync"/> as a
+    /// launch, with no process behind it. The session owns <paramref name="duplex"/>.
+    /// </summary>
+    internal static async Task<BrokerSession> OverAsync(Stream duplex, CancellationToken ct = default)
+    {
+        var rpc = BrokerRpcClient.Over(duplex, ownsStream: true);
+        try
+        {
+            return await OpenAsync(rpc, new SafeProcessHandle(0, ownsHandle: false), Environment.ProcessId, "", ct)
+                .ConfigureAwait(false);
+        }
+        catch
+        {
+            await rpc.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+    }
 
     /// <summary>
     /// Lets the broker bring its own consent dialog to the foreground (design 3.3: called before <c>plan.execute</c>
@@ -117,6 +157,9 @@ public static partial class BrokerLauncher
     /// <summary>How long the broker may take to create its pipe (design 3.3 step 3: retry for up to 10 s).</summary>
     public static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(10);
 
+    /// <summary>How long the broker may take to answer <c>engine.hello</c> once the pipe is open.</summary>
+    public static readonly TimeSpan HelloTimeout = TimeSpan.FromSeconds(10);
+
     private const uint SeeMaskNoCloseProcess = 0x00000040;
     private const uint SeeMaskNoAsync = 0x00000100;
     // The broker has no window of its own: the show command reaches the first window it creates, the consent
@@ -137,7 +180,8 @@ public static partial class BrokerLauncher
     public static string PathBesideApp() => Path.Combine(AppContext.BaseDirectory, "purge-broker.exe");
 
     /// <summary>
-    /// Starts <c>purge-broker.exe</c> elevated, waits for its pipe, and verifies the server before returning it.
+    /// Starts <c>purge-broker.exe</c> elevated, waits for its pipe, verifies the server, and sends <c>engine.hello</c>
+    /// before returning it (<see cref="BrokerSession"/>).
     /// A cancelled Windows prompt is <see cref="BrokerLaunchStatus.Cancelled"/>; nothing is shown or started at app
     /// start. The prompt gets no owner window (hwnd 0, as Process.Start "runas" does). With Purge's window as the
     /// owner (the call runs on a separate STA thread) the prompt was observed parked as a flashing taskbar button on
@@ -217,7 +261,7 @@ public static partial class BrokerLauncher
                 if (open.Stream is not null)
                 {
                     var rpc = BrokerRpcClient.Over(open.TakeStream(), ownsStream: true);
-                    return BrokerLaunchResult.Started(new BrokerSession(rpc, process, (int)pid, brokerPath));
+                    return await HandshakeAsync(rpc, process, (int)pid, brokerPath, ct).ConfigureAwait(false);
                 }
                 var error = open.Win32Error;
                 if (error != ErrorPipeBusy && error != ErrorFileNotFound && error != ErrorSemTimeout)
@@ -241,6 +285,42 @@ public static partial class BrokerLauncher
         catch (OperationCanceledException)
         {
             Terminate(process);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// <c>engine.hello</c> on the checked link (<see cref="BrokerSession.OpenAsync"/>): the session is returned only once
+    /// the broker answered it. A refusal, a closed link or no answer within <see cref="HelloTimeout"/> ends the link
+    /// and fails the launch; the caller's cancellation is rethrown (the caller terminates the process).
+    /// </summary>
+    private static async Task<BrokerLaunchResult> HandshakeAsync(BrokerRpcClient rpc, SafeProcessHandle process, int pid,
+        string brokerPath, CancellationToken ct)
+    {
+        using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        limit.CancelAfter(HelloTimeout);
+        try
+        {
+            var session = await BrokerSession.OpenAsync(rpc, process, pid, brokerPath, limit.Token).ConfigureAwait(false);
+            return BrokerLaunchResult.Started(session);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            await rpc.DisposeAsync().ConfigureAwait(false);
+            Terminate(process);
+            return BrokerLaunchResult.Failed(BrokerLaunchStatus.TimedOut,
+                $"The administrator part did not answer within {HelloTimeout.TotalSeconds:0} seconds.");
+        }
+        catch (Exception e) when (e is BrokerRpcException or BrokerLinkException or InvalidDataException)
+        {
+            await rpc.DisposeAsync().ConfigureAwait(false);
+            Terminate(process);
+            return BrokerLaunchResult.Failed(BrokerLaunchStatus.CannotStart,
+                "The administrator part did not accept Purge's connection. " + e.Message);
+        }
+        catch
+        {
+            await rpc.DisposeAsync().ConfigureAwait(false);
             throw;
         }
     }

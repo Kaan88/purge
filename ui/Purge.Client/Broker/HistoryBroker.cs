@@ -55,7 +55,10 @@ public interface IVaultBroker : IAsyncDisposable
     Task<PurgeResult> PurgeAsync(IReadOnlyList<string> expiryIds, CancellationToken ct);
 }
 
-/// <summary><see cref="IHistoryBroker"/> and <see cref="IVaultBroker"/> over a launched broker; disposing it ends the broker.</summary>
+/// <summary>
+/// <see cref="IHistoryBroker"/> and <see cref="IVaultBroker"/> over a launched broker; disposing it ends the broker. The
+/// session's <c>engine.hello</c> was answered when it was made (<see cref="BrokerSession"/>), so these calls go straight out.
+/// </summary>
 public sealed class HistoryBroker : IHistoryBroker, IVaultBroker
 {
     private readonly BrokerSession _session;

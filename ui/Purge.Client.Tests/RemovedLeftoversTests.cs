@@ -271,7 +271,7 @@ public sealed class RemovedLeftoversTests
     // ---- the wire client ------------------------------------------------------------------------------------
 
     [Fact]
-    public async Task The_client_says_hello_first_then_asks_stored_and_scans_by_program_id_only()
+    public async Task The_session_says_hello_first_then_the_client_asks_stored_and_scans_by_program_id_only()
     {
         await using var peer = await Peer.StartAsync((line, p) =>
         {
@@ -290,8 +290,9 @@ public sealed class RemovedLeftoversTests
                     break;
             }
         });
-        await using var rpc = BrokerRpcClient.Over(peer.Client, ownsStream: true);
-        await using var client = new StoredLeftoversClient(rpc);
+        // The session sends engine.hello when it is made (BrokerSession.OpenAsync); the client sends none of its own.
+        await using var session = await BrokerSession.OverAsync(peer.Client);
+        await using var client = new StoredLeftoversClient(session);
         var phases = new List<string>();
 
         var stored = await client.StoredAsync([Program, "HKLM|64|Other"], CancellationToken.None);
@@ -300,7 +301,8 @@ public sealed class RemovedLeftoversTests
         Assert.Equal([Program], stored);
         Assert.Equal("s-0123456789abcdef", scan.ScanId);
         Assert.Equal(["scan"], phases);
-        Assert.Null(client.TakeSession()); // a bare link has no session to hand over
+        Assert.Same(session, client.TakeSession());
+        Assert.Null(client.TakeSession()); // handed over once
 
         var requests = peer.Requests.Select(line => JsonDocument.Parse(line)).ToList();
         Assert.Equal(["engine.hello", "leftovers.stored", "leftovers.scan"],
