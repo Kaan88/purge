@@ -14,6 +14,7 @@ namespace Purge.Client.Rpc;
 [JsonSerializable(typeof(ErrorObject))]
 [JsonSerializable(typeof(ExecResult))]
 [JsonSerializable(typeof(ExpiringList))]
+[JsonSerializable(typeof(ExpiringParams))]
 [JsonSerializable(typeof(ExplainParams))]
 [JsonSerializable(typeof(Explanation))]
 [JsonSerializable(typeof(HistoryDetail))]

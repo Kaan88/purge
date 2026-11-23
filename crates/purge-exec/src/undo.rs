@@ -858,12 +858,14 @@ impl Driver<'_> {
             );
         };
         if !op.expired.is_empty() {
+            let how = if op.deleted_early {
+                "was deleted from quarantine at the user's request before its retention ended"
+            } else {
+                "was deleted by expiry"
+            };
             return step.conflict(
                 UndoConflict::Expired,
-                format!(
-                    "the data of op {} was deleted by expiry; it cannot be put back",
-                    op.op
-                ),
+                format!("the data of op {} {how}; it cannot be put back", op.op),
             );
         }
         // An inverse that may have run in part (interrupted, or failed) is run again in its completing
@@ -1277,7 +1279,10 @@ pub struct UndoPreview {
     /// The session's plan, bound again from its scan copy and journal.
     pub plan: BoundPlan,
     /// The ops the run puts back, in the order it does: not settled, standing changed, with an
-    /// inverse. Every one is an item of `plan` whose op the journal's intent equals.
+    /// inverse, and with their kept data still there (an op whose quarantined item or backup was
+    /// deleted, by expiry or by the user before it, is gone through by the run and ends as the
+    /// `Expired` conflict; a prompt must not say it comes back). Every one is an item of `plan` whose
+    /// op the journal's intent equals.
     pub put_back: Vec<OpId>,
     /// The ops outside the selection that the restores depend on; the run goes through them too.
     pub pulled_in: Vec<OpId>,
@@ -1329,7 +1334,11 @@ pub fn preview(
     let put_back = undo_order(&read.records, &all)
         .into_iter()
         .filter(|op| reach.covered.contains(op))
-        .filter(|op| state.op(*op).is_some_and(stands_changed))
+        .filter(|op| {
+            state
+                .op(*op)
+                .is_some_and(|op| stands_changed(op) && op.expired.is_empty())
+        })
         .filter(|op| {
             plan.item(*op)
                 .and_then(|item| item.exec_op.as_ref())

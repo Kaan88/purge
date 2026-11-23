@@ -3517,6 +3517,86 @@ fn the_ops_a_run_goes_through_beyond_the_preview_change_nothing() {
     assert!(exists(&real));
 }
 
+/// "Delete now" and undo (DECISIONS 2026-11-23): an item the user had deleted from quarantine before
+/// its retention ended is not among the ops a preview says the run puts back (so no prompt promises
+/// it), the run ends it as the `Expired` conflict in words that say it was asked for, and the other
+/// items of the session are put back as before.
+#[test]
+fn an_item_deleted_before_its_retention_is_not_promised_by_the_preview_and_ends_as_a_conflict() {
+    use crate::expiry::{self, ExpiryId, PurgeConsent, PurgeOutcome};
+    let mut rig = Rig::new("m3undo-early");
+    let kept = rig.s.file(r"app\kept.txt", b"kept");
+    let deleted = rig.s.file(r"app\deleted.txt", b"deleted");
+    let request = preselected(
+        vec![
+            quarantine("c-kept", &kept),
+            quarantine("c-deleted", &deleted),
+        ],
+        Vec::new(),
+    );
+    let id = rig.run(request).session;
+    let read = rig.journal(&id);
+    let gone = op_of(&read, "c-deleted");
+    let unit = ExpiryId {
+        session: id.clone(),
+        op: gone,
+    };
+    // The moment the session started: 30 days before its retention ends.
+    let now = read.state.header().created;
+    let mut consent = PurgeConsent::naming([unit.clone()]);
+    consent.confirm_user_data(unit.clone());
+    let report = expiry::purge(&rig.roots, std::slice::from_ref(&unit), &consent, now).unwrap();
+    assert!(
+        matches!(
+            report.items[0].outcome,
+            PurgeOutcome::Excluded(expiry::Exclusion::NotExpired { .. })
+        ),
+        "not without the early consent: {report:?}"
+    );
+    consent.allow_early(unit.clone());
+    let report = expiry::purge(&rig.roots, std::slice::from_ref(&unit), &consent, now).unwrap();
+    assert_eq!(report.items[0].outcome, PurgeOutcome::Purged, "{report:?}");
+    let state = rig.journal(&id).state;
+    assert!(state.op(gone).unwrap().deleted_early);
+
+    let preview = crate::undo::preview(&rig.roots, &id, None).unwrap();
+    assert_eq!(
+        preview.put_back,
+        [op_of(&read, "c-kept")],
+        "the deleted item is not promised"
+    );
+    assert!(
+        preview.expect.ops.contains(&gone),
+        "the run still goes through it"
+    );
+    let done =
+        crate::undo::undo_expecting(&preview.request, undo_env(&mut rig), &preview.expect).unwrap();
+    let result = done
+        .report
+        .items
+        .iter()
+        .find(|item| item.op == gone)
+        .unwrap()
+        .result
+        .clone();
+    match result {
+        purge_model::exec::session::UndoResult::Conflict { conflict, detail } => {
+            assert_eq!(conflict, UndoConflict::Expired);
+            assert!(
+                detail.contains("at the user's request before its retention ended"),
+                "{detail}"
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(exists(&kept), "the other item is back");
+    assert!(!exists(&deleted), "what was deleted stays deleted");
+
+    // Settled: a second preview has nothing left to put back.
+    let again = crate::undo::preview(&rig.roots, &id, None).unwrap();
+    assert!(again.put_back.is_empty(), "{:?}", again.put_back);
+}
+
 /// M3-R2 point 2: a recovery with nothing to change on the machine runs without a dialog, so it must
 /// be bound to the journal its preview read. An `Unindexed` session (its run ended, its report was
 /// never written) whose journal changed after the preview is refused before anything is written.

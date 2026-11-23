@@ -34,7 +34,8 @@ public interface IHistoryBroker : IAsyncDisposable
 
 /// <summary>
 /// The broker calls of the Quarantine vault (design 7a page table): <c>undo.run</c> for "Put back…" and
-/// <c>quarantine.expiring</c> then <c>quarantine.purge</c> for "Review and delete…". The list is
+/// <c>quarantine.expiring</c> then <c>quarantine.purge</c> for "Review and delete…" and for "Delete now" (the same
+/// two calls, with the items that are not past their retention listed too). The list is
 /// <c>history.index</c> on the medium engine; only these start the broker.
 /// </summary>
 public interface IVaultBroker : IAsyncDisposable
@@ -48,10 +49,17 @@ public interface IVaultBroker : IAsyncDisposable
     /// <summary><c>undo.run {session}</c> for the whole session.</summary>
     Task<UndoResult> UndoAsync(string session, IReadOnlyList<uint>? ops, IProgress<Progress>? progress, CancellationToken ct);
 
-    /// <summary><c>quarantine.expiring</c>: what is past its retention now, with the broker's ids.</summary>
-    Task<ExpiringList> ExpiringAsync(CancellationToken ct);
+    /// <summary>
+    /// <c>quarantine.expiring {include_not_due}</c>: what is past its retention now, with the broker's ids; with
+    /// <paramref name="includeNotDue"/> also the quarantined items that are not (<see cref="ExpiringItem.Due"/> false).
+    /// </summary>
+    Task<ExpiringList> ExpiringAsync(bool includeNotDue, CancellationToken ct);
 
-    /// <summary><c>quarantine.purge {expiry_ids}</c>: the broker's purge dialogs, then the deletes the user approved.</summary>
+    /// <summary>
+    /// <c>quarantine.purge {expiry_ids}</c>: the broker's purge dialogs, then the deletes the user approved. The ids
+    /// are all the request says; the broker itself tells an expired entry from one deleted before its retention ends
+    /// and asks for the latter in its "Delete now" dialog.
+    /// </summary>
     Task<PurgeResult> PurgeAsync(IReadOnlyList<string> expiryIds, CancellationToken ct);
 }
 
@@ -101,8 +109,9 @@ public sealed class HistoryBroker : IHistoryBroker, IVaultBroker
     public Task<PendingList> PendingAsync(CancellationToken ct) =>
         _session.Rpc.CallAsync("journal.pending", RpcJsonContext.Default.PendingList, ct);
 
-    public Task<ExpiringList> ExpiringAsync(CancellationToken ct) =>
-        _session.Rpc.CallAsync("quarantine.expiring", RpcJsonContext.Default.ExpiringList, ct);
+    public Task<ExpiringList> ExpiringAsync(bool includeNotDue, CancellationToken ct) =>
+        _session.Rpc.CallAsync("quarantine.expiring", new ExpiringParams { IncludeNotDue = includeNotDue },
+            RpcJsonContext.Default.ExpiringParams, RpcJsonContext.Default.ExpiringList, ct);
 
     public Task<PurgeResult> PurgeAsync(IReadOnlyList<string> expiryIds, CancellationToken ct) =>
         _session.Rpc.CallAsync("quarantine.purge", new PurgeParams { ExpiryIds = [.. expiryIds] },

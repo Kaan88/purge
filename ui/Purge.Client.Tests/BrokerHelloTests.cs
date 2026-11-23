@@ -61,13 +61,39 @@ public sealed class BrokerHelloTests
         var session = await BrokerSession.OverAsync(peer.Client).WaitAsync(Limit);
         await using IVaultBroker vault = new HistoryBroker(session);
 
-        var expiring = await vault.ExpiringAsync(CancellationToken.None).WaitAsync(Limit);
+        var expiring = await vault.ExpiringAsync(false, CancellationToken.None).WaitAsync(Limit);
         await vault.PurgeAsync(["x-1"], CancellationToken.None).WaitAsync(Limit);
         await vault.UndoAsync("u-1122334455667788", null, null, CancellationToken.None).WaitAsync(Limit);
 
         Assert.NotNull(expiring);
         Assert.False(peer.Refused);
         Assert.Equal(["engine.hello", "quarantine.expiring", "quarantine.purge", "undo.run"], peer.Methods);
+    }
+
+    /// <summary>
+    /// "Delete now" on the wire: the listing asks for the items that are not due with <c>include_not_due</c>, and the
+    /// delete is <c>quarantine.purge</c> with the broker's ids and nothing else (no path, no "early" word of the
+    /// client's: the broker reads that from its own listing).
+    /// </summary>
+    [Fact]
+    public async Task Delete_now_asks_for_the_items_that_are_not_due_and_names_only_ids()
+    {
+        await using var peer = await HelloFirstPeer.StartAsync();
+        var session = await BrokerSession.OverAsync(peer.Client).WaitAsync(Limit);
+        await using IVaultBroker vault = new HistoryBroker(session);
+
+        var all = await vault.ExpiringAsync(true, CancellationToken.None).WaitAsync(Limit);
+        await vault.ExpiringAsync(false, CancellationToken.None).WaitAsync(Limit);
+        await vault.PurgeAsync([all.Items[0].ExpiryId], CancellationToken.None).WaitAsync(Limit);
+
+        Assert.True(all.Items[0].Due);
+        Assert.Equal(
+            [
+                ("quarantine.expiring", "{\"include_not_due\":true}"),
+                ("quarantine.expiring", "{\"include_not_due\":false}"),
+                ("quarantine.purge", "{\"expiry_ids\":[\"e-0e0e000000000007\"]}"),
+            ],
+            peer.Requests.Skip(1));
     }
 
     [Fact]
@@ -188,6 +214,7 @@ public sealed class BrokerHelloTests
         private readonly NamedPipeClientStream _client;
         private readonly StreamWriter _writer;
         private readonly List<string> _methods = [];
+        private readonly List<(string Method, string Params)> _requests = [];
         private readonly bool _refuseHello;
         private readonly bool _dropAtHello;
         private readonly bool _silentAtHello;
@@ -218,6 +245,12 @@ public sealed class BrokerHelloTests
             get { lock (_methods) return [.. _methods]; }
         }
 
+        /// <summary>Every request with its params as sent (<c>""</c> when it had none).</summary>
+        public List<(string Method, string Params)> Requests
+        {
+            get { lock (_methods) return [.. _requests]; }
+        }
+
         /// <param name="silentAtHello">Reads the hello and never answers it (the link stays open).</param>
         public static async Task<HelloFirstPeer> StartAsync(bool refuseHello = false, bool dropAtHello = false,
             bool silentAtHello = false)
@@ -244,7 +277,12 @@ public sealed class BrokerHelloTests
                     var method = root.GetProperty("method").GetString() ?? "";
                     if (method == "$/cancel") continue;
                     var id = root.GetProperty("id").GetUInt64();
-                    lock (_methods) _methods.Add(method);
+                    var sent = root.TryGetProperty("params", out var p) ? p.GetRawText() : "";
+                    lock (_methods)
+                    {
+                        _methods.Add(method);
+                        _requests.Add((method, sent));
+                    }
                     if (first)
                     {
                         first = false;

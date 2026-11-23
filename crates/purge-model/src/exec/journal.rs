@@ -692,7 +692,8 @@ pub struct Reconcile {
     pub result: ReconcileResult,
 }
 
-/// A confirmed expiry deleted an op's quarantined item or backup. The op can no longer be undone.
+/// A confirmed expiry deleted an op's quarantined item or backup, or the user had a quarantined item
+/// deleted before its retention ended ([`Expire::early`]). The op can no longer be undone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct Expire {
     /// When the data was deleted.
@@ -703,6 +704,19 @@ pub struct Expire {
     pub class: RetentionClass,
     /// How many bytes were freed.
     pub bytes: u64,
+    /// The retention of the class had not ended at [`Expire::at`]: the user asked for the quarantined
+    /// item to be deleted now and confirmed it in the prompt that names it. Only ever written for
+    /// [`RetentionClass::Quarantine`]. Absent (false) in the record of an expiry and in every journal
+    /// written before the member existed; a reader that does not know it reads an expiry, and the
+    /// rule for undo is the same.
+    #[serde(default, skip_serializing_if = "is_unset")]
+    pub early: bool,
+}
+
+/// Whether a flag is unset; the journal leaves such a member out.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_unset(flag: &bool) -> bool {
+    !*flag
 }
 
 /// One line of `journal.jsonl`. Serialised as an object tagged by `"rec"`, in snake case: `header`,
@@ -872,6 +886,34 @@ mod tests {
             r#"{"rec":"undo_plan","at":6,"ops":[]}"#.to_owned(),
             r#"{"rec":"group_end","group":2,"ops":64,"registry_flushed":true}"#.to_owned(),
         ]
+    }
+
+    /// The `early` mark of `expire`: absent in the record of an expiry and in older lines (read as
+    /// `false`, written as before), `true` written and read back for a delete the user asked for
+    /// before the retention ended.
+    #[test]
+    fn expire_early_mark_reads_both_ways() {
+        let line = r#"{"rec":"expire","at":7,"op":2,"class":"Quarantine","bytes":9}"#;
+        let old: Record = serde_json::from_str(line).unwrap();
+        let expire = Expire {
+            at: FileTime(7),
+            op: OpId(2),
+            class: RetentionClass::Quarantine,
+            bytes: 9,
+            early: false,
+        };
+        assert_eq!(old, Record::Expire(expire));
+        assert_eq!(serde_json::to_string(&old).unwrap(), line);
+        let new = Record::Expire(Expire {
+            early: true,
+            ..expire
+        });
+        let text = serde_json::to_string(&new).unwrap();
+        assert_eq!(
+            text,
+            r#"{"rec":"expire","at":7,"op":2,"class":"Quarantine","bytes":9,"early":true}"#
+        );
+        assert_eq!(serde_json::from_str::<Record>(&text).unwrap(), new);
     }
 
     /// The `registry_flushed` mark of `group_end`: absent in older lines (read as `false`, which is

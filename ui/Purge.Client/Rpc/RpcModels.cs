@@ -94,6 +94,18 @@ public enum Category
 }
 
 /// <summary>
+/// How the kept data of a history item was deleted.
+/// </summary>
+[JsonConverter(typeof(JsonStringEnumConverter<Deleted>))]
+public enum Deleted
+{
+    [JsonStringEnumMemberName("expired")]
+    Expired,
+    [JsonStringEnumMemberName("early")]
+    Early,
+}
+
+/// <summary>
 /// The engine token's `TokenElevationType`.
 /// </summary>
 [JsonConverter(typeof(JsonStringEnumConverter<ElevationType>))]
@@ -792,7 +804,7 @@ public sealed class ExecResult
 }
 
 /// <summary>
-/// One entry past retention.
+/// One entry past retention, or (asked for with `include_not_due`) a quarantined item before it.
 /// </summary>
 public sealed class ExpiringItem
 {
@@ -804,6 +816,9 @@ public sealed class ExpiringItem
 
     [JsonPropertyName("class")]
     public RetentionClass Class { get; set; } = default!;
+
+    [JsonPropertyName("due")]
+    public bool Due { get; set; }
 
     [JsonPropertyName("expired")]
     public ulong Expired { get; set; }
@@ -829,6 +844,16 @@ public sealed class ExpiringList
 {
     [JsonPropertyName("items")]
     public System.Collections.Generic.List<ExpiringItem> Items { get; set; } = new();
+
+}
+
+/// <summary>
+/// `quarantine.expiring {include_not_due?}`. Absent, `null` and `{}` ask for what is past retention.
+/// </summary>
+public sealed class ExpiringParams
+{
+    [JsonPropertyName("include_not_due")]
+    public bool IncludeNotDue { get; set; }
 
 }
 
@@ -950,6 +975,10 @@ public sealed class HistoryItem
     [JsonPropertyName("alert")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Alert? Alert { get; set; }
+
+    [JsonPropertyName("deleted")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Deleted? Deleted { get; set; }
 
     [JsonPropertyName("display_name")]
     public string DisplayName { get; set; } = "";

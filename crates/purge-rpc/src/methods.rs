@@ -157,7 +157,7 @@ broker_id!(
 );
 
 broker_id!(
-    /// One expired quarantine entry offered by `quarantine.expiring`, e.g. `e-9f3a6c1d2b7e4a50`.
+    /// One quarantine entry offered by `quarantine.expiring`, e.g. `e-9f3a6c1d2b7e4a50`.
     ExpiryId,
     "e",
     "^e-[0-9a-f]{16}$"
@@ -688,11 +688,25 @@ pub struct UndoParams {
     pub item_ids: Option<NonEmpty<OpId>>,
 }
 
+/// `quarantine.expiring {include_not_due?}`. Absent, `null` and `{}` ask for what is past retention.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExpiringParams {
+    /// Also list the quarantined items whose retention has not ended ([`ExpiringItem::due`] false),
+    /// for a "Delete now". Backups and journals are never among them.
+    #[serde(default)]
+    pub include_not_due: bool,
+}
+
 /// `quarantine.purge {expiry_ids[]}`.
+///
+/// The request names ids and nothing else. Whether an entry is past its retention is the broker's own
+/// reading at purge time, never the client's word: an entry that is not due is deleted only through
+/// the dialog that says so (it is a "Delete now"), and only when it is a quarantined item.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PurgeParams {
-    /// The expired entries from `quarantine.expiring`, at least one.
+    /// The entries from `quarantine.expiring`, at least one.
     pub expiry_ids: NonEmpty<ExpiryId>,
 }
 
@@ -1160,6 +1174,20 @@ pub struct HistoryItem {
     /// A reconcile that found another object in quarantine in this op's place (review M3-R2 S5).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alert: Option<Alert>,
+    /// What it kept (the quarantined item, or its backup) was deleted for good, and how; it cannot be
+    /// put back. Absent while the kept data is there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deleted: Option<Deleted>,
+}
+
+/// How the kept data of a history item was deleted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Deleted {
+    /// After its retention ended, confirmed in the purge prompt.
+    Expired,
+    /// Before its retention ended, because the user asked for it ("Delete now") and confirmed it.
+    Early,
 }
 
 /// `history.get`.
@@ -1241,7 +1269,7 @@ pub struct OutcomeResult {
     pub alerts: Vec<Alert>,
 }
 
-/// One entry past retention.
+/// One entry past retention, or (asked for with `include_not_due`) a quarantined item before it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ExpiringItem {
     /// The id to purge it by.
@@ -1250,10 +1278,13 @@ pub struct ExpiringItem {
     pub session: SessionId,
     /// The app of the session.
     pub app: String,
-    /// Which retention class expired.
+    /// Which retention class it is of. An entry that is not due is always `Quarantine`.
     pub class: RetentionClass,
-    /// When it expired.
+    /// When its retention ends: in the past for a due entry, in the future for one that is not due.
     pub expired: FileTime,
+    /// Whether the retention has ended (or an earlier delete of the entry was left unfinished). An
+    /// entry that is not due can still be put back until it is deleted; deleting it is a "Delete now".
+    pub due: bool,
     /// The files and backup files it holds, for display.
     pub files: Vec<String>,
     /// Bytes.
@@ -1511,7 +1542,7 @@ call_set!(
         JournalResume(SessionParams) -> OutcomeResult,
         JournalRollback(SessionParams) -> OutcomeResult,
         JournalRetryHeld(SessionParams) -> OutcomeResult,
-        QuarantineExpiring(NoParams) -> ExpiringList,
+        QuarantineExpiring(ExpiringParams) -> ExpiringList,
         QuarantinePurge(PurgeParams) -> PurgeResult,
         BrokerShutdown(NoParams) -> ShutdownResult,
     }
@@ -1582,6 +1613,10 @@ pub fn dtos() -> Vec<Dto> {
     out.push(Dto::of::<LeftoversScanParams>(
         "pipe.leftovers.scan.params.stored".into(),
         Direction::Request(Transport::Pipe),
+    ));
+    out.push(Dto::of::<HistoryDetail>(
+        "pipe.history.get.result.deleted".into(),
+        Direction::Result,
     ));
     out.push(Dto::of::<PlanCreateParams>(
         "pipe.plan.create.params.preselected".into(),

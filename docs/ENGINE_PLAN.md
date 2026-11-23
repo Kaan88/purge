@@ -991,6 +991,7 @@ The ladder:
 - **Expiry proposes; it never acts on its own.** After first paint, the UI reads `sessions\index.json` (Users: read) and shows "N items expire soon" in History. Deletion runs in the broker after its own prompt, with a handle-based walk that never follows reparse points (it deletes the link, never descends), and re-checks volume serial and FileId. **UserData items are exempt** unless confirmed one by one.
 - **Size cap:** min(10 GB, 5 % of the volume). Purge never auto-evicts; it refuses a new run that would exceed the cap and explains why.
 - **Retention:** file quarantine 30 days; registry/service/task backups 180 days; journal 1 year.
+- **The retention is not a lock on the user ("Delete now", DECISIONS 2026-11-23).** It is how long Purge keeps something unasked. The user may have a quarantined item (or all of a session's) deleted before its 30 days end, through the same path as the purge of an expired item: broker-listed ids only, the broker's own prompt naming every item (user data one item per prompt), the same handle walk. The prompt says that this is before the retention date, that it cannot be undone and that Undo no longer restores the item; the journal's `expire` record carries `early`. Only quarantined items: backups and journals are never deleted before their class is due.
 - **Learning signal:** undo events are stored as false-positive labels.
 
 ### 7.9 Platform notes

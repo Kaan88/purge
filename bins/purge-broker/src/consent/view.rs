@@ -60,6 +60,9 @@ pub enum Variant {
     Recover(RecoverKind),
     /// `quarantine.purge`: delete expired items for good.
     Purge,
+    /// `quarantine.purge` of quarantined items whose retention has not ended: delete them now, for
+    /// good, because the user asked.
+    DeleteNow,
     /// `uninstall.run`: start a program's own uninstaller as administrator.
     Uninstall,
 }
@@ -339,6 +342,8 @@ pub enum ViewError {
     DuplicateUnit(String),
     /// A backup unit that names no file.
     NoFiles(String),
+    /// A backup unit in a "Delete now" dialog: a backup is never deleted before its class is due.
+    BackupNotDue(String),
     /// An uninstall command that names no program.
     NoCommand,
 }
@@ -356,6 +361,9 @@ impl fmt::Display for ViewError {
             }
             ViewError::DuplicateUnit(id) => write!(f, "{id} is named twice"),
             ViewError::NoFiles(id) => write!(f, "{id} names no backup file"),
+            ViewError::BackupNotDue(id) => {
+                write!(f, "{id}: a backup is not deleted before its retention ends")
+            }
             ViewError::NoCommand => f.write_str("the uninstall command names no program"),
         }
     }
@@ -1433,6 +1441,111 @@ pub fn view_purge_user_data(unit: PurgeUnit<'_>) -> Result<ConsentView, ViewErro
         &[unit],
         "Delete this user data for good? This cannot be undone.".to_owned(),
         "Delete 1 item for good".to_owned(),
+        true,
+    )
+}
+
+/// What every "Delete now" dialog says below its count: the delete comes before the retention date,
+/// and what that takes away.
+pub const DELETE_NOW_WARNING: &str = "This is before the retention date. Until then Purge keeps \
+    these items, and Undo can put them back. Once they are deleted here, Undo and History can no \
+    longer restore them.";
+
+/// The confirmation code of a "Delete now" dialog: over the same ids as the purge dialog's, and
+/// never the same code, so the two cannot be taken for each other.
+fn delete_now_code(units: &[PurgeUnit<'_>]) -> ConfirmCode {
+    let ids: Vec<CandidateId> = std::iter::once(CandidateId("delete-now".to_owned()))
+        .chain(units.iter().map(|u| CandidateId(u.id().to_string())))
+        .collect();
+    ConfirmCode::of(&selection_hash(&ids))
+}
+
+fn delete_now_view(
+    units: &[PurgeUnit<'_>],
+    instruction: String,
+    button: String,
+    single: bool,
+) -> Result<ConsentView, ViewError> {
+    if units.is_empty() {
+        return Err(ViewError::NothingToRun);
+    }
+    // Only quarantined items are ever deleted before their retention ends.
+    if let Some(u) = units.iter().find(|u| matches!(u, PurgeUnit::Backup(_))) {
+        return Err(ViewError::BackupNotDue(u.id().to_string()));
+    }
+    let (entries, counts, flags) = purge_entries(units)?;
+    let mut summary = vec![
+        format!(
+            "{}, {} in all. Every item is listed; nothing else is deleted.",
+            count(
+                u64::from(counts.items),
+                "quarantined item",
+                "quarantined items"
+            ),
+            size(counts.bytes),
+        ),
+        DELETE_NOW_WARNING.to_owned(),
+    ];
+    if !flags.is_plain() {
+        summary.push(LEGEND.to_owned());
+    }
+    let code = delete_now_code(units);
+    let box_text = if single {
+        format!("I reviewed the item marked {MARK}")
+    } else {
+        format!("I reviewed the items marked {MARK}")
+    };
+    Ok(ConsentView {
+        variant: Variant::DeleteNow,
+        code,
+        icon: Icon::Warning,
+        instruction,
+        summary,
+        attention: entries,
+        others: Vec::new(),
+        others_more: None,
+        verification: Some(box_text),
+        button,
+        footer: footer(code),
+        counts,
+        plan_hash: None,
+        selection_hash: None,
+        uninstall: None,
+    })
+}
+
+/// The "Delete now" dialog of `quarantine.purge` for quarantined items whose retention has **not**
+/// ended and that are not user data: every item is named, in pages, never cut, and the dialog says
+/// that this is before the retention date, that it cannot be undone, and that Undo will no longer
+/// restore the items. A backup is refused ([`ViewError::BackupNotDue`]); user data belongs in
+/// [`view_delete_now_user_data`], one item per dialog.
+pub fn view_delete_now(units: &[PurgeUnit<'_>]) -> Result<ConsentView, ViewError> {
+    if let Some(u) = units.iter().find(|u| u.user_data()) {
+        return Err(ViewError::UserDataMisplaced(u.id().to_string()));
+    }
+    let n = units.len() as u64;
+    delete_now_view(
+        units,
+        format!(
+            "Delete {} now, before {} retention ends? This cannot be undone.",
+            count(n, "quarantined item", "quarantined items"),
+            if n == 1 { "its" } else { "their" },
+        ),
+        format!("Delete {} now, for good", items(units.len() as u32)),
+        false,
+    )
+}
+
+/// The "Delete now" dialog for one user-data item whose retention has not ended, in a dialog of its
+/// own.
+pub fn view_delete_now_user_data(unit: PurgeUnit<'_>) -> Result<ConsentView, ViewError> {
+    if !unit.user_data() {
+        return Err(ViewError::UserDataMisplaced(unit.id().to_string()));
+    }
+    delete_now_view(
+        &[unit],
+        "Delete this user data now, before its retention ends? This cannot be undone.".to_owned(),
+        "Delete 1 item now, for good".to_owned(),
         true,
     )
 }

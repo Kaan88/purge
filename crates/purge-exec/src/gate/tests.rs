@@ -2220,6 +2220,7 @@ fn done_state(id: u32, exec_op: &ExecOp, inverse: Inverse, outcome: ItemOutcome)
         undo: crate::journal::UndoState::NotStarted,
         undo_attempts: 0,
         expired: Vec::new(),
+        deleted_early: false,
         retry_in_flight: false,
     }
 }

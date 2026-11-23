@@ -1,11 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "PurgeParams",
-  "description": "`quarantine.purge {expiry_ids[]}`.",
+  "description": "`quarantine.purge {expiry_ids[]}`.\n\nThe request names ids and nothing else. Whether an entry is past its retention is the broker's own\nreading at purge time, never the client's word: an entry that is not due is deleted only through\nthe dialog that says so (it is a \"Delete now\"), and only when it is a quarantined item.",
   "type": "object",
   "properties": {
     "expiry_ids": {
-      "description": "The expired entries from `quarantine.expiring`, at least one.",
+      "description": "The entries from `quarantine.expiring`, at least one.",
       "type": "array",
       "items": {
         "$ref": "#/$defs/ExpiryId"

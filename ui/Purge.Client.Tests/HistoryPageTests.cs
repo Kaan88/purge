@@ -150,6 +150,58 @@ public sealed class HistoryPageTests
         Assert.False(vm.Busy);
     }
 
+    /// <summary>
+    /// An item whose kept data was deleted (after its retention, or before it with the vault's "Delete now") says so,
+    /// cannot be ticked for a restore, and its undo conflict is said in words.
+    /// </summary>
+    [Fact]
+    public async Task ADeletedItemIsShownAsDeletedAndCannotBeChosenForARestore()
+    {
+        var detail = Fixture<HistoryDetail>("pipe.history.get.result.deleted.json");
+        Assert.Equal([Deleted.Early, Deleted.Expired], detail.Items.Select(i => i.Deleted));
+        detail.Items.Add(new HistoryItem
+        {
+            Op = 3, DisplayName = @"C:\Program Files\Git", Kind = ItemKind.Folder, Outcome = new ItemOutcome { Kind = "Done" },
+        });
+        var broker = new ScriptedHistoryBroker
+        {
+            Detail = detail,
+            Undo = new UndoResult
+            {
+                Outcome = Outcome.UndoConflicts,
+                Conflicts =
+                [
+                    new ConflictRow { Op = 1, DisplayName = @"C:\ProgramData\Git\cache1", Conflict = new UndoConflict { Kind = "Expired" } },
+                    new ConflictRow { Op = 3, DisplayName = @"C:\Program Files\Git", Conflict = new UndoConflict { Kind = "DestinationExists" } },
+                ],
+            },
+        };
+        var vm = new HistoryViewModel(_ => Task.FromResult(GitIndex()), _ => Launch(broker));
+        await vm.LoadAsync();
+        await vm.ShowItemsAsync();
+
+        var items = vm.Items!;
+        Assert.Equal("Deleted from quarantine at your request · cannot be put back", items[0].OutcomeText);
+        Assert.Equal("Deleted after its retention ended · cannot be put back", items[1].OutcomeText);
+        Assert.Equal("Moved to quarantine", items[2].OutcomeText);
+        Assert.Equal([true, true, false], items.Select(i => i.IsDeleted));
+        Assert.Equal([false, false, true], items.Select(i => i.Selectable));
+
+        // Ticking a deleted item selects nothing: only the item that is still kept is sent.
+        foreach (var item in items) item.Checked = true;
+        Assert.Equal(1, vm.CheckedCount);
+        await vm.RestoreAsync(all: false);
+
+        Assert.Equal([3u], Assert.Single(broker.UndoCalls).Item2!);
+        Assert.Equal("Put back, with conflicts", vm.RestoreTitle);
+        Assert.Equal(
+            [
+                @"C:\ProgramData\Git\cache1: was deleted from quarantine, so it cannot be put back",
+                @"C:\Program Files\Git: DestinationExists",
+            ],
+            vm.RestoreLines);
+    }
+
     [Fact]
     public async Task RestoreAllSendsNoItemIdsAndADeclinedPromptPutsNothingBack()
     {

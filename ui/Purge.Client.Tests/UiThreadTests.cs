@@ -124,7 +124,7 @@ public sealed class UiThreadTests
         public Task<PendingList> PendingAsync(CancellationToken ct) =>
             OnPool(Fixture<PendingList>("pipe.journal.pending.result.json"));
 
-        public Task<ExpiringList> ExpiringAsync(CancellationToken ct) =>
+        public Task<ExpiringList> ExpiringAsync(bool includeNotDue, CancellationToken ct) =>
             OnPool(Fixture<ExpiringList>("pipe.quarantine.expiring.result.json"));
 
         public Task<PurgeResult> PurgeAsync(IReadOnlyList<string> expiryIds, CancellationToken ct)

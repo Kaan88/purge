@@ -510,6 +510,7 @@ fn history_get_answers_from_the_backend_and_an_unknown_session_is_gone() {
             outcome: ItemOutcome::Done,
             undone: false,
             alert: None,
+            deleted: None,
         }],
     });
     let rig = Rig::start(backend.clone());

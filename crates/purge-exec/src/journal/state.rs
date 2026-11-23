@@ -130,6 +130,10 @@ pub enum Violation {
     /// A second `expire` of the same class for an op.
     #[error("op {0}: expired twice")]
     DuplicateExpire(OpId),
+    /// An `expire` with `early` for a class other than the quarantine: only a quarantined item is ever
+    /// deleted before its retention ends.
+    #[error("op {0}: an early delete of something that is not a quarantined item")]
+    EarlyExpireNotQuarantine(OpId),
     /// A `settings` record anywhere but right after the header, or a second one.
     #[error("a settings record that does not follow the header directly")]
     SettingsMisplaced,
@@ -238,8 +242,12 @@ pub struct OpState {
     pub undo: UndoState,
     /// How many `undo_intent` records the op has.
     pub undo_attempts: u32,
-    /// The retention classes of its data that expiry deleted.
+    /// The retention classes of its data that were deleted: by a confirmed expiry, or (the quarantine
+    /// class only) at the user's request before the retention ended, see [`OpState::deleted_early`].
     pub expired: Vec<RetentionClass>,
+    /// The op's quarantined item was deleted before its retention ended, because the user asked for
+    /// it (an `expire` record with `early`). It is in [`OpState::expired`] too.
+    pub deleted_early: bool,
     /// Whether a retry of the held item is in flight: a `retry_intent` with no `reconcile` after it.
     /// The retry may have moved the item; recovery probes it and ends it with the token of
     /// `JournalWriter::resume_retry`.
@@ -813,6 +821,9 @@ impl JournalState {
                 if s.retry_in_flight {
                     return Err(Violation::RetryInFlight(e.op));
                 }
+                if e.early && e.class != RetentionClass::Quarantine {
+                    return Err(Violation::EarlyExpireNotQuarantine(e.op));
+                }
                 if s.expired.contains(&e.class) {
                     return Err(Violation::DuplicateExpire(e.op));
                 }
@@ -847,6 +858,7 @@ impl JournalState {
                         undo: UndoState::NotStarted,
                         undo_attempts: 0,
                         expired: Vec::new(),
+                        deleted_early: false,
                         retry_in_flight: false,
                     },
                 );
@@ -936,7 +948,11 @@ impl JournalState {
                     self.counts.record(&outcome);
                 }
             }
-            Record::Expire(e) => self.known_mut(e.op).expired.push(e.class),
+            Record::Expire(e) => {
+                let s = self.known_mut(e.op);
+                s.expired.push(e.class);
+                s.deleted_early |= e.early;
+            }
         }
     }
 

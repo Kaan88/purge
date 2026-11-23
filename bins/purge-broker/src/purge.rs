@@ -3,8 +3,11 @@
 //!
 //! # What the client can say
 //!
-//! `quarantine.expiring` takes nothing. `quarantine.purge` takes a list of [`ExpiryId`]s and nothing
-//! else: no path, no item, no user-data flag. The ids are not stored in a table: each one is a stable
+//! `quarantine.expiring` takes one flag, `include_not_due`: whether the answer also lists the
+//! quarantined items whose retention has not ended (each marked `due: false`), for the vault's
+//! "Delete now". `quarantine.purge` takes a list of [`ExpiryId`]s and nothing
+//! else: no path, no item, no user-data flag, and no word about whether an entry is due. The ids are
+//! not stored in a table: each one is a stable
 //! hash of the executor's own `<session>/<op>` id ([`purge_exec::expiry::ExpiryId`]), and every id a
 //! request names is looked up in a **fresh** listing of the broker's own store at purge time. An id
 //! that is not in that listing is `gone` (`expiry`) before any dialog opens; a duplicate id is used
@@ -27,9 +30,30 @@
 //! and leaves the other decisions standing. When every dialog of the request is declined the answer is
 //! `consent_declined`, not `partial`, and the broker does not end on it (review S3).
 //!
+//! # Delete now: a quarantined item before its retention ends
+//!
+//! The retention is how long Purge keeps an item unasked, not a lock on the user (DECISIONS
+//! 2026-11-23). An id of the fresh listing that names a quarantined item whose retention has **not**
+//! ended is therefore not `gone`: it is asked for in dialogs of its own kind, after those of the
+//! expired units. The broker reads "not due" from its own listing at purge time; the request cannot
+//! say it, and cannot hide it. The items that are not user data are named in one dialog
+//! ([`view::view_delete_now`]) and every user-data item in a dialog of its own
+//! ([`view::view_delete_now_user_data`]); each says that this is before the retention date, that it
+//! cannot be undone, and that Undo and History can no longer restore the items. Cancelling the
+//! "Delete now" bulk dialog keeps every not-due item of the request (no user-data dialog of them is
+//! asked) and leaves the decisions about expired units standing.
+//!
+//! Only quarantined items: the executor lists no backup as not due, `view_delete_now` refuses a backup
+//! unit, and `purge_exec::expiry::purge` deletes no backup file before its class is due whatever the
+//! consent says.
+//!
+//! # The consent
+//!
 //! [`PurgeConsent`] is then built from **only** the units whose dialog was approved: the ids are
-//! named, user-data units are confirmed one by one, and every backup file of an approved backup unit
-//! is named by its session-relative path. `purge_exec::expiry::purge` refuses the whole request if the
+//! named, user-data units are confirmed one by one, every backup file of an approved backup unit
+//! is named by its session-relative path, and an item approved in a "Delete now" dialog is allowed
+//! early ([`PurgeConsent::allow_early`]), which is what the executor's `expire` record then says.
+//! `purge_exec::expiry::purge` refuses the whole request if the
 //! consent misses an id, so the dialog is the only gate to a deletion.
 //!
 //! # Ending
@@ -83,6 +107,9 @@ pub struct Listing {
     pub items: Vec<ExpiringItem>,
     /// Backup files of one op that are due.
     pub backups: Vec<ExpiringBackup>,
+    /// Quarantined items whose retention has not ended and that nothing holds: deleted only through a
+    /// "Delete now" dialog.
+    pub not_due: Vec<ExpiringItem>,
     /// The app of each session, for display; a session without an index entry is absent and its
     /// items carry an empty app.
     pub apps: BTreeMap<SessionId, String>,
@@ -152,6 +179,7 @@ impl ExpirySource for StorageExpiry {
         Ok(Listing {
             items: listing.items,
             backups: listing.backups,
+            not_due: listing.not_due,
             apps,
         })
     }
@@ -196,9 +224,11 @@ impl Purger {
         call: &PipeCall,
     ) -> Option<Result<Value, ErrorObject>> {
         match call {
-            PipeCall::QuarantineExpiring(_) => Some(self.expiring().and_then(|list| {
-                serde_json::to_value(list).map_err(|e| ErrorObject::runtime(e.to_string()))
-            })),
+            PipeCall::QuarantineExpiring(params) => {
+                Some(self.expiring(params.include_not_due).and_then(|list| {
+                    serde_json::to_value(list).map_err(|e| ErrorObject::runtime(e.to_string()))
+                }))
+            }
             PipeCall::QuarantinePurge(params) => Some(self.purge(ctx, params).and_then(|result| {
                 serde_json::to_value(result).map_err(|e| ErrorObject::runtime(e.to_string()))
             })),
@@ -206,28 +236,31 @@ impl Purger {
         }
     }
 
-    /// `quarantine.expiring`: the units that are due, each with the id a purge request can name.
-    pub fn expiring(&self) -> Result<ExpiringList, ErrorObject> {
+    /// `quarantine.expiring`: the units that are due, each with the id a purge request can name; with
+    /// `include_not_due`, after them the quarantined items whose retention has not ended.
+    pub fn expiring(&self, include_not_due: bool) -> Result<ExpiringList, ErrorObject> {
         let now = self.source.now();
         let listing = self.source.listing(now).map_err(store_error)?;
         // Two units with one id would make the purge ambiguous; refuse the listing instead.
         id_map(&listing)?;
         let mut items = Vec::with_capacity(listing.items.len() + listing.backups.len());
+        let quarantined = |item: &ExpiringItem, due: bool| WireItem {
+            expiry_id: wire_id(&item.id),
+            session: item.id.session.clone(),
+            app: listing
+                .apps
+                .get(&item.id.session)
+                .cloned()
+                .unwrap_or_default(),
+            class: RetentionClass::Quarantine,
+            expired: item.expires,
+            due,
+            files: vec![item.original_path.clone()],
+            bytes: item.bytes,
+            user_data: item.user_data,
+        };
         for item in &listing.items {
-            items.push(WireItem {
-                expiry_id: wire_id(&item.id),
-                session: item.id.session.clone(),
-                app: listing
-                    .apps
-                    .get(&item.id.session)
-                    .cloned()
-                    .unwrap_or_default(),
-                class: RetentionClass::Quarantine,
-                expired: item.expires,
-                files: vec![item.original_path.clone()],
-                bytes: item.bytes,
-                user_data: item.user_data,
-            });
+            items.push(quarantined(item, true));
         }
         for backup in &listing.backups {
             items.push(WireItem {
@@ -240,10 +273,16 @@ impl Purger {
                     .unwrap_or_default(),
                 class: RetentionClass::Backup,
                 expired: backup.expires,
+                due: true,
                 files: backup.files.clone(),
                 bytes: backup.bytes,
                 user_data: backup.user_data,
             });
+        }
+        if include_not_due {
+            for item in &listing.not_due {
+                items.push(quarantined(item, false));
+            }
         }
         Ok(ExpiringList { items })
     }
@@ -259,9 +298,9 @@ impl Purger {
         let listing = self.source.listing(now).map_err(store_error)?;
         let map = id_map(&listing)?;
 
-        // Every id must name a unit that is due now, and it is used once. An unknown or already
-        // purged id refuses the whole request before a dialog opens (nothing was shown, nothing is
-        // changed).
+        // Every id must name a unit of the listing made now (due, or a quarantined item that is not
+        // due yet), and it is used once. An unknown or already purged id refuses the whole request
+        // before a dialog opens (nothing was shown, nothing is changed).
         let mut requested: BTreeSet<ExecExpiryId> = BTreeSet::new();
         for id in params.expiry_ids.as_slice() {
             let unit = map.get(id).ok_or_else(|| gone(IdKind::Expiry))?;
@@ -282,10 +321,19 @@ impl Purger {
             .filter(|backup| requested.contains(&backup.id))
             .cloned()
             .collect();
+        // The requested items whose retention has not ended, by the listing made now and nothing
+        // else: these are a "Delete now" and get the dialogs that say so.
+        let not_due: Vec<ExpiringItem> = listing
+            .not_due
+            .iter()
+            .filter(|item| requested.contains(&item.id))
+            .cloned()
+            .collect();
 
         // The executor's own user-data flag decides the dialog, never the client. `view_purge`
         // refuses a user-data unit, so a split that missed one fails closed.
         let (bulk, personal) = view::split_purge(&items, &backups);
+        let (now_bulk, now_personal) = view::split_purge(&not_due, &[]);
         // No dialog while another broker writes the store: the purge would be refused after it.
         if self.source.writer_busy() {
             return Err(ErrorObject::server(ErrorData::Busy));
@@ -293,6 +341,9 @@ impl Purger {
         let mut named: Vec<ExecExpiryId> = Vec::new();
         let mut confirmed: Vec<ExecExpiryId> = Vec::new();
         let mut files: Vec<(ExecExpiryId, Vec<String>)> = Vec::new();
+        // The items approved in a "Delete now" dialog; only these are allowed before their retention
+        // ends.
+        let mut early: Vec<ExecExpiryId> = Vec::new();
 
         if !bulk.is_empty() {
             let Ok(page_view) = view::view_purge(&bulk) else {
@@ -328,6 +379,32 @@ impl Purger {
             }
         }
 
+        // Delete now: the items whose retention has not ended, in dialogs that say so. A view that
+        // cannot be built (a backup, a user-data unit in the bulk) fails safe: those items stay.
+        let now_approved = now_bulk.is_empty()
+            || view::view_delete_now(&now_bulk).is_ok_and(|page_view| {
+                !ctx.lost() && dialog::ask(ctx, &page_view) == Outcome::Approved
+            });
+        if now_approved {
+            for unit in &now_bulk {
+                named.push(unit.id().clone());
+                early.push(unit.id().clone());
+            }
+            for unit in now_personal {
+                if ctx.lost() {
+                    break;
+                }
+                let Ok(page_view) = view::view_delete_now_user_data(unit) else {
+                    continue;
+                };
+                if dialog::ask(ctx, &page_view) == Outcome::Approved {
+                    named.push(unit.id().clone());
+                    confirmed.push(unit.id().clone());
+                    early.push(unit.id().clone());
+                }
+            }
+        }
+
         // No dialog of this request was approved: the request is declined, not a partial purge. The
         // broker must not count it as a completed change and must not end (review S3).
         if named.is_empty() {
@@ -337,6 +414,9 @@ impl Purger {
         let mut consent = PurgeConsent::naming(named.iter().cloned());
         for id in &confirmed {
             consent.confirm_user_data(id.clone());
+        }
+        for id in &early {
+            consent.allow_early(id.clone());
         }
         for (id, names) in files {
             consent.name_files(id, names);
@@ -399,6 +479,7 @@ fn id_map(listing: &Listing) -> Result<BTreeMap<ExpiryId, ExecExpiryId>, ErrorOb
         .iter()
         .map(|item| &item.id)
         .chain(listing.backups.iter().map(|backup| &backup.id))
+        .chain(listing.not_due.iter().map(|item| &item.id))
     {
         if map.insert(wire_id(id), id.clone()).is_some() {
             return Err(ErrorObject::runtime(

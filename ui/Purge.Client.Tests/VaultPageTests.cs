@@ -236,6 +236,195 @@ public sealed class VaultPageTests
         Assert.Equal(1, second.ExpiringCalls);
     }
 
+    // ------------------------------------------------------------------------------------------------------------
+    // "Delete now": a cleanup's quarantined items before their retention ends (DECISIONS 2026-11-23).
+    // ------------------------------------------------------------------------------------------------------------
+
+    private const string OtherSession = "20251116T080000Z-0000000000000001";
+
+    /// <summary>
+    /// What the broker lists with <c>include_not_due</c>: two quarantined items of the Git cleanup that are not due
+    /// (one of them user data), its registry backup (due), and an item of another cleanup.
+    /// </summary>
+    private static ExpiringList Held()
+    {
+        var until = (ulong)DateTimeOffset.Now.AddDays(20).ToFileTime();
+        ExpiringItem Item(string id, string session, RetentionClass kind, bool due, string file, bool userData = false) => new()
+        {
+            ExpiryId = id, Session = session, App = "Git", Class = kind, Due = due, Expired = until, Files = [file],
+            Bytes = 2048, UserData = userData,
+        };
+        return new ExpiringList
+        {
+            Items =
+            [
+                Item("e-0000000000000003", GitSession, RetentionClass.Backup, true, @"reg\000003.regbackup.json"),
+                Item("e-0000000000000001", GitSession, RetentionClass.Quarantine, false, @"C:\Program Files\Git"),
+                Item("e-0000000000000002", GitSession, RetentionClass.Quarantine, false, @"C:\Users\u\Documents\Git", userData: true),
+                Item("e-0000000000000004", OtherSession, RetentionClass.Quarantine, false, @"C:\Program Files\Other"),
+            ],
+        };
+    }
+
+    [Fact]
+    public async Task DeleteNowSendsTheBrokersIdsOfThatCleanupsQuarantinedItemsAndNothingElse()
+    {
+        var broker = new ScriptedVaultBroker { Expiring = Held(), Purge = new PurgeResult { Outcome = Outcome.Complete, Purged = 2 } };
+        var reads = 0;
+        var vm = new VaultViewModel(_ => { reads++; return Task.FromResult(GitIndex()); }, _ => Launch(broker));
+        await vm.LoadAsync();
+
+        await vm.DeleteNowAsync(GitSession);
+
+        // The listing asked for the items that are not due; the delete names ids, not paths: never the backup, never
+        // another cleanup's item.
+        Assert.Equal([true], broker.ExpiringFlags);
+        Assert.Equal([["e-0000000000000001", "e-0000000000000002"]], broker.PurgeCalls);
+        Assert.Equal(1, broker.Foreground);
+        Assert.Equal("2 items of HKLM|64|Git_is1 deleted for good", vm.ResultTitle);
+        Assert.Null(vm.ActionInfo);
+        Assert.Null(vm.ActionError);
+        Assert.Equal(2, reads);
+        Assert.False(vm.Busy);
+        // A completed delete ends the broker; the page drops its end.
+        Assert.True(broker.Disposed);
+    }
+
+    [Fact]
+    public async Task ADeclinedDeleteNowPromptDeletesNothingAndKeepsTheList()
+    {
+        var broker = new ScriptedVaultBroker
+        {
+            Expiring = Held(),
+            PurgeError = new BrokerRpcException(-32000, "consent_declined", "declined"),
+        };
+        var reads = 0;
+        var vm = new VaultViewModel(_ => { reads++; return Task.FromResult(GitIndex()); }, _ => Launch(broker));
+        await vm.LoadAsync();
+
+        await vm.DeleteNowAsync(GitSession);
+
+        Assert.Equal("Nothing was deleted: the prompt was cancelled.", vm.ActionInfo);
+        Assert.Null(vm.ResultTitle);
+        Assert.Null(vm.ActionError);
+        Assert.Equal(1, reads);
+        Assert.False(broker.Disposed);
+        Assert.False(vm.Busy);
+    }
+
+    [Fact]
+    public async Task ACleanupWithNothingInQuarantineIsANoteNotAPrompt()
+    {
+        var only = Held();
+        only.Items.RemoveAll(i => i.Session == GitSession && i.Class == RetentionClass.Quarantine);
+        var broker = new ScriptedVaultBroker { Expiring = only };
+        var vm = new VaultViewModel(_ => Task.FromResult(GitIndex()), _ => Launch(broker));
+        await vm.LoadAsync();
+
+        await vm.DeleteNowAsync(GitSession);
+
+        Assert.Empty(broker.PurgeCalls);
+        Assert.Equal(0, broker.Foreground);
+        Assert.StartsWith("This cleanup has no quarantined files to delete now.", vm.ActionInfo);
+        Assert.Null(vm.ResultTitle);
+    }
+
+    [Fact]
+    public async Task ChooseItemsListsTheCleanupsItemsAndDeletesOneByItsId()
+    {
+        var broker = new ScriptedVaultBroker { Expiring = Held(), Purge = new PurgeResult { Outcome = Outcome.Complete, Purged = 1 } };
+        var second = new ScriptedVaultBroker { Expiring = Held(), Purge = new PurgeResult { Outcome = Outcome.Partial, Purged = 0, Kept = 1 } };
+        var brokers = new Queue<ScriptedVaultBroker>([broker, second]);
+        var vm = new VaultViewModel(_ => Task.FromResult(GitIndex()), _ => Launch(brokers.Dequeue()));
+        await vm.LoadAsync();
+
+        // An id the page was not given by the broker starts nothing.
+        await vm.DeleteItemNowAsync("e-0000000000000001");
+        Assert.Equal(0, broker.ExpiringCalls);
+
+        await vm.ShowItemsAsync(GitSession);
+
+        Assert.Equal(GitSession, vm.ItemsFor);
+        Assert.Equal("HKLM|64|Git_is1", vm.ItemsName);
+        Assert.Equal(["e-0000000000000001", "e-0000000000000002"], vm.Items.Select(i => i.ExpiryId));
+        Assert.Equal(@"C:\Program Files\Git", vm.Items[0].Path);
+        var size = LeftoverItemModel.FormatSize(2048);
+        Assert.Equal($"{size} · can be put back for 20 more days", vm.Items[0].Detail);
+        Assert.Equal($"{size} · user data · can be put back for 20 more days", vm.Items[1].Detail);
+        Assert.False(vm.Items[0].Due);
+        Assert.Empty(broker.PurgeCalls);
+        Assert.Equal(0, broker.Foreground);
+
+        // Not an id of this list: nothing is sent.
+        await vm.DeleteItemNowAsync("e-0000000000000004");
+        await vm.DeleteItemNowAsync(@"C:\Windows");
+        Assert.Empty(broker.PurgeCalls);
+
+        await vm.DeleteItemNowAsync("e-0000000000000001");
+
+        Assert.Equal([["e-0000000000000001"]], broker.PurgeCalls);
+        Assert.Equal(1, broker.Foreground);
+        Assert.Equal("1 item of HKLM|64|Git_is1 deleted for good", vm.ResultTitle);
+        // The deleted item leaves the list; the other stays, with its own "Delete now".
+        Assert.Equal(["e-0000000000000002"], vm.Items.Select(i => i.ExpiryId));
+        Assert.True(broker.Disposed);
+
+        // The next delete starts a new broker; an item the prompt declined (or the executor kept) stays listed.
+        await vm.DeleteItemNowAsync("e-0000000000000002");
+        Assert.Equal([["e-0000000000000002"]], second.PurgeCalls);
+        Assert.Equal("Nothing was deleted", vm.ResultTitle);
+        Assert.Equal("1 kept: you declined them, or they could not be deleted.", vm.ActionInfo);
+        Assert.Equal(["e-0000000000000002"], vm.Items.Select(i => i.ExpiryId));
+
+        vm.CloseItems();
+        Assert.Null(vm.ItemsFor);
+        Assert.Empty(vm.Items);
+    }
+
+    [Fact]
+    public async Task AnItemThatIsNoLongerListedByTheBrokerClosesTheListAndDeletesNothing()
+    {
+        var broker = new ScriptedVaultBroker
+        {
+            Expiring = Held(),
+            PurgeError = new BrokerRpcException(-32000, "gone", "gone"),
+        };
+        var reads = 0;
+        var vm = new VaultViewModel(_ => { reads++; return Task.FromResult(GitIndex()); }, _ => Launch(broker));
+        await vm.LoadAsync();
+        await vm.ShowItemsAsync(GitSession);
+
+        await vm.DeleteItemNowAsync("e-0000000000000001");
+
+        Assert.Null(vm.ItemsFor);
+        Assert.Equal("That is no longer in quarantine as listed; nothing was deleted. The list is read again.", vm.ActionInfo);
+        Assert.Null(vm.ResultTitle);
+        Assert.Equal(2, reads);
+    }
+
+    [Fact]
+    public async Task NoSecondActionStartsWhileOneRuns()
+    {
+        var gate = new TaskCompletionSource<VaultBrokerLaunch>();
+        var launches = 0;
+        var vm = new VaultViewModel(_ => Task.FromResult(GitIndex()), _ => { launches++; return gate.Task; });
+        await vm.LoadAsync();
+
+        var first = vm.DeleteNowAsync(GitSession);
+        Assert.True(vm.Busy);
+        // Every other action is refused while the broker (or its prompt) is busy.
+        await vm.DeleteNowAsync(GitSession);
+        await vm.ShowItemsAsync(GitSession);
+        await vm.RestoreAsync(GitSession);
+        await vm.ReviewExpiredAsync();
+        Assert.Equal(1, launches);
+
+        gate.SetResult(new VaultBrokerLaunch(null, true, ""));
+        await first;
+        Assert.False(vm.Busy);
+        Assert.True(vm.PromptCancelled);
+    }
+
     private static HistoryIndex GitIndex() => Fixture<HistoryIndex>("stdio.history.index.result.json");
 
     private static T Fixture<T>(string name) =>
@@ -267,15 +456,20 @@ public sealed class VaultPageTests
             return UndoError is { } e ? Task.FromException<UndoResult>(e) : Task.FromResult(Undo);
         }
 
-        public Task<ExpiringList> ExpiringAsync(CancellationToken ct)
+        /// <summary>Whether each <c>quarantine.expiring</c> asked for the items that are not due.</summary>
+        public List<bool> ExpiringFlags { get; } = [];
+
+        public Task<ExpiringList> ExpiringAsync(bool includeNotDue, CancellationToken ct)
         {
             ExpiringCalls++;
+            ExpiringFlags.Add(includeNotDue);
             if (ExpiringError is { } e)
             {
                 IsLive = false;
                 return Task.FromException<ExpiringList>(e);
             }
-            return Task.FromResult(Expiring);
+            // As the broker: an item that is not due is listed only when asked for.
+            return Task.FromResult(includeNotDue ? Expiring : new ExpiringList { Items = [.. Expiring.Items.Where(i => i.Due)] });
         }
 
         public Task<PurgeResult> PurgeAsync(IReadOnlyList<string> expiryIds, CancellationToken ct)

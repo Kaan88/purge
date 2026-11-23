@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ExpiringParams",
+  "description": "`quarantine.expiring {include_not_due?}`. Absent, `null` and `{}` ask for what is past retention.",
+  "type": "object",
+  "properties": {
+    "include_not_due": {
+      "description": "Also list the quarantined items whose retention has not ended ([`ExpiringItem::due`] false),\nfor a \"Delete now\". Backups and journals are never among them.",
+      "type": "boolean",
+      "default": false
+    }
+  },
+  "additionalProperties": false
+}

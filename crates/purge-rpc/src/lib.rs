@@ -609,7 +609,12 @@ mod api_tests {
                     v(SessionParams { session: session() }),
                 );
             }
-            put("pipe.quarantine.expiring.params", none.clone());
+            put(
+                "pipe.quarantine.expiring.params",
+                v(ExpiringParams {
+                    include_not_due: true,
+                }),
+            );
             put(
                 "pipe.quarantine.purge.params",
                 v(PurgeParams {
@@ -792,7 +797,30 @@ mod api_tests {
                             original_path: "C:\\Program Files\\Git".into(),
                             moved_back: true,
                         }),
+                        deleted: None,
                     }],
+                }),
+            );
+            // The second form of a history item: its kept data was deleted, here before the retention
+            // ended ("Delete now"), and after it.
+            put(
+                "pipe.history.get.result.deleted",
+                v(HistoryDetail {
+                    session: session(),
+                    state: SessionState::Committed,
+                    items: [Deleted::Early, Deleted::Expired]
+                        .into_iter()
+                        .zip(1..)
+                        .map(|(deleted, op)| HistoryItem {
+                            op: OpId(op),
+                            display_name: format!("C:\\ProgramData\\Git\\cache{op}"),
+                            kind: ItemKind::Folder,
+                            outcome: ItemOutcome::Done,
+                            undone: false,
+                            alert: None,
+                            deleted: Some(deleted),
+                        })
+                        .collect(),
                 }),
             );
             put(
@@ -853,6 +881,7 @@ mod api_tests {
                         app: "Git".into(),
                         class: RetentionClass::Quarantine,
                         expired: FileTime(started().0 + 25_920_000_000_000),
+                        due: true,
                         files: vec!["C:\\Program Files\\Git".into()],
                         bytes: 345_000_000,
                         user_data: false,
@@ -1424,6 +1453,7 @@ mod api_tests {
             "PlanExecuteParams",
             "SessionParams",
             "UndoParams",
+            "ExpiringParams",
             "PurgeParams",
             "CancelParams",
         ] {

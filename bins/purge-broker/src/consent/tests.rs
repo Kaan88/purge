@@ -18,9 +18,10 @@ use purge_win::taskdialog::{self, Icon as DialogIcon};
 use super::dialog::{self, PRIMARY};
 use super::text::{LINE_COST, Stamp};
 use super::view::{
-    ConflictKind, ConsentView, Facts, OTHER_SHOWN, PAGE_CHARS, PAGE_ENTRIES, PurgeUnit, Reason,
-    RecoverFacts, RecoverKind, RestoreFacts, UninstallFacts, Variant, ViewError, split_purge, view,
-    view_purge, view_purge_user_data, view_recover, view_restore, view_uninstall,
+    ConflictKind, ConsentView, DELETE_NOW_WARNING, Facts, OTHER_SHOWN, PAGE_CHARS, PAGE_ENTRIES,
+    PurgeUnit, Reason, RecoverFacts, RecoverKind, RestoreFacts, UninstallFacts, Variant, ViewError,
+    split_purge, view, view_delete_now, view_delete_now_user_data, view_purge,
+    view_purge_user_data, view_recover, view_restore, view_uninstall,
 };
 
 // ---------------------------------------------------------------------------------------------------
@@ -1608,5 +1609,125 @@ fn uninstall_refuses_a_command_without_a_program() {
             view_uninstall(&uninstall_facts(quiet_command(exe, "/S"), true)),
             Err(ViewError::NoCommand)
         );
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Delete now: quarantined items before their retention ends.
+// ---------------------------------------------------------------------------------------------------
+
+#[test]
+fn delete_now_names_every_item_and_says_what_is_given_up() {
+    let items: Vec<ExpiringItem> = (1..=45)
+        .map(|op| expiring_item(op, &format!(r"C:\Program Files\Vendor\part{op}"), false))
+        .collect();
+    let (bulk, user) = split_purge(&items, &[]);
+    assert!(user.is_empty());
+    let v = view_delete_now(&bulk).unwrap();
+    assert_eq!(v.variant, Variant::DeleteNow);
+    assert_eq!(v.icon, super::view::Icon::Warning);
+    assert_eq!(
+        v.instruction,
+        "Delete 45 quarantined items now, before their retention ends? This cannot be undone."
+    );
+    assert_eq!(v.button, "Delete 45 items now, for good");
+    assert_eq!((v.counts.items, v.counts.files), (45, 0));
+    assert!(
+        v.summary[0].starts_with("45 quarantined items, "),
+        "{}",
+        v.summary[0]
+    );
+    // Plainly: before the retention date, and Undo will no longer restore them.
+    assert_eq!(v.summary[1], DELETE_NOW_WARNING);
+    assert!(DELETE_NOW_WARNING.contains("before the retention date"));
+    assert!(DELETE_NOW_WARNING.contains("Undo and History can no longer restore them"));
+    for line in every_line(&v) {
+        assert!(!line.contains("expired"), "not an expiry: {line}");
+    }
+    // Every item is an attention entry; there is no "and N more".
+    assert_eq!(v.attention.len(), 45);
+    assert!(v.others.is_empty() && v.others_more.is_none());
+    for (op, entry) in (1..=45).zip(&v.attention) {
+        assert!(
+            entry
+                .text
+                .contains(&format!(r#"was "C:\Program Files\Vendor\part{op}""#)),
+            "{}",
+            entry.text
+        );
+        assert!(entry.reasons.contains(&Reason::Irreversible));
+    }
+    assert_eq!(
+        v.verification.as_deref(),
+        Some("I reviewed the items marked \u{26A0}")
+    );
+    let pages = dialog::pages(&v);
+    assert_eq!(page_counts(&v), [40, 5]);
+    taskdialog::check(&pages, PRIMARY).unwrap();
+    assert!(pages[1].verification.is_some() && pages[1].buttons[0].id == PRIMARY);
+    assert!(pages[0].buttons.is_empty());
+
+    // Never the code of the purge dialog over the same units.
+    assert_ne!(v.code, view_purge(&bulk).unwrap().code);
+
+    let one = view_delete_now(&bulk[..1]).unwrap();
+    assert_eq!(
+        one.instruction,
+        "Delete 1 quarantined item now, before its retention ends? This cannot be undone."
+    );
+    assert_eq!(one.button, "Delete 1 item now, for good");
+}
+
+#[test]
+fn delete_now_keeps_user_data_apart_and_refuses_backups() {
+    let items = [
+        expiring_item(1, r"C:\Program Files\Vendor\a", false),
+        expiring_item(2, r"C:\Users\u\Documents\Vendor", true),
+    ];
+    let backup = expiring_backup(3, &[r"reg\000003.regbackup.json"], false);
+    let personal_backup = expiring_backup(4, &[r"reg\000004.regbackup.json"], true);
+    assert_eq!(
+        view_delete_now(&[PurgeUnit::Item(&items[0]), PurgeUnit::Item(&items[1])]),
+        Err(ViewError::UserDataMisplaced(expiry(2).to_string()))
+    );
+    assert_eq!(
+        view_delete_now_user_data(PurgeUnit::Item(&items[0])),
+        Err(ViewError::UserDataMisplaced(expiry(1).to_string()))
+    );
+    // A backup is never deleted before its class is due: no "Delete now" dialog can name one.
+    assert_eq!(
+        view_delete_now(&[PurgeUnit::Item(&items[0]), PurgeUnit::Backup(&backup)]),
+        Err(ViewError::BackupNotDue(expiry(3).to_string()))
+    );
+    assert_eq!(
+        view_delete_now_user_data(PurgeUnit::Backup(&personal_backup)),
+        Err(ViewError::BackupNotDue(expiry(4).to_string()))
+    );
+    assert_eq!(view_delete_now(&[]), Err(ViewError::NothingToRun));
+    assert_eq!(
+        view_delete_now(&[PurgeUnit::Item(&items[0]), PurgeUnit::Item(&items[0])]),
+        Err(ViewError::DuplicateUnit(expiry(1).to_string()))
+    );
+
+    let v = view_delete_now_user_data(PurgeUnit::Item(&items[1])).unwrap();
+    assert_eq!(
+        v.instruction,
+        "Delete this user data now, before its retention ends? This cannot be undone."
+    );
+    assert_eq!(v.button, "Delete 1 item now, for good");
+    assert_eq!(v.summary[1], DELETE_NOW_WARNING);
+    assert_eq!(v.attention.len(), 1);
+    assert!(v.attention[0].reasons.contains(&Reason::UserData));
+    assert_eq!(
+        v.verification.as_deref(),
+        Some("I reviewed the item marked \u{26A0}")
+    );
+    taskdialog::check(&dialog::pages(&v), PRIMARY).unwrap();
+
+    // Names cannot mislead here either.
+    let odd = expiring_item(5, "C:\\Users\\u\\evil\u{202e}gpj.exe\nSafe", false);
+    let v = view_delete_now(&[PurgeUnit::Item(&odd)]).unwrap();
+    for line in every_line(&v) {
+        assert_clean(line);
     }
 }

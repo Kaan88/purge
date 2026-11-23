@@ -21,6 +21,22 @@
 //! directory. The backup class is listed as due as a whole too, and per op in
 //! [`ExpiryListing::backups`].
 //!
+//! # Deleting a quarantined item before its retention ends
+//!
+//! The retention is how long Purge keeps an item without being asked; it is not a lock on the user.
+//! [`expiring`] therefore also lists the quarantined items whose retention has **not** ended and that
+//! nothing holds ([`ExpiryListing::not_due`]), and [`purge`] deletes such an item when the consent, on
+//! top of naming it, says that the user asked for it now ([`PurgeConsent::allow_early`]). Everything
+//! else is the purge of an expired item: the same holds, the same user-data confirmation, the same
+//! identity check and walk, the `expire` record first. That record carries `early` ([`Expire::early`]),
+//! so the journal says the delete was asked for and was not an expiry; from then on the op is not
+//! undone, as after an expiry.
+//!
+//! Only quarantined items: a backup file is never deleted before its class is due, with or without
+//! `allow_early` (the journal refuses an early `expire` of another class too). The backups belong to
+//! other ops than the quarantine moves (an op has one or the other), so deleting a quarantined item
+//! early makes no backup meaningless; each still undoes its own registry or package op.
+//!
 //! # Every session is read against its index entry
 //!
 //! A session's journal is read with [`journal::read_indexed`] and the [`JournalMark`] of the session's
@@ -294,6 +310,10 @@ pub struct ExpiryListing {
     pub problems: Vec<SessionProblem>,
     /// Backup files that may be purged now, per op, in session and op order.
     pub backups: Vec<ExpiringBackup>,
+    /// Quarantined items whose retention has **not** ended and that nothing holds, in session and op
+    /// order; [`ExpiringItem::expires`] is in the future. [`purge`] deletes one only when the consent
+    /// allows it early ([`PurgeConsent::allow_early`]). Never a backup.
+    pub not_due: Vec<ExpiringItem>,
 }
 
 /// The consent for one irreversible [`purge`]: the items the user saw and confirmed, by id, among them
@@ -304,6 +324,7 @@ pub struct PurgeConsent {
     items: BTreeSet<ExpiryId>,
     user_data: BTreeSet<ExpiryId>,
     files: BTreeMap<ExpiryId, BTreeSet<String>>,
+    early: BTreeSet<ExpiryId>,
 }
 
 impl PurgeConsent {
@@ -341,6 +362,18 @@ impl PurgeConsent {
     pub fn confirms_user_data(&self, id: &ExpiryId) -> bool {
         self.names(id) && self.user_data.contains(id)
     }
+
+    /// Says that the user asked for the quarantined item `id` to be deleted **before its retention
+    /// ends**, in a prompt that said so. It counts only if the consent also names the item, and only
+    /// for a quarantined item: backup files are never deleted before their class is due.
+    pub fn allow_early(&mut self, id: ExpiryId) {
+        self.early.insert(id);
+    }
+
+    /// Whether `id` is named and may be deleted before its retention ends.
+    pub fn allows_early(&self, id: &ExpiryId) -> bool {
+        self.names(id) && self.early.contains(id)
+    }
 }
 
 /// Why [`purge`] refused the whole request; nothing was opened for delete and nothing was written.
@@ -361,7 +394,8 @@ pub enum Exclusion {
     /// The item is user data (or its category is unknown) and the consent does not confirm it
     /// individually.
     UserDataNotConfirmed,
-    /// Its retention has not ended.
+    /// Its retention has not ended, and for a quarantined item the consent does not allow it early
+    /// ([`PurgeConsent::allow_early`]). Backup files before their class is due always end here.
     NotExpired {
         /// When it ends.
         expires: FileTime,
@@ -650,6 +684,14 @@ fn list_session(
             continue;
         }
         if expiry.quarantine > now {
+            // Not due: offered for a delete the user asks for, when `purge` would take it (in the
+            // quarantine, nothing holding it). A held one is not listed at all; nothing is past
+            // retention.
+            if session_hold.is_none() && quarantine_state(op) == InQuarantine::Yes {
+                listing
+                    .not_due
+                    .push(record.item(id, op, expiry.quarantine, &categories, false));
+            }
             continue;
         }
         // The session's hold comes first, as in `purge`.
@@ -1279,6 +1321,9 @@ fn purge_one(
         return purge_backup(session, writer, id, cx, alerts);
     };
     let resume = op.expired.contains(&RetentionClass::Quarantine);
+    // Before the retention ends the item goes only when the consent says the user asked for that; the
+    // expire record then says so too. Judged on the same `now` as everything else.
+    let early = !resume && cx.expires > cx.now;
     if !resume {
         if let Some(reason) = cx.session_hold {
             return excluded(Exclusion::Held(reason.clone()));
@@ -1288,7 +1333,7 @@ fn purge_one(
             InQuarantine::No => return excluded(Exclusion::NotInQuarantine),
             InQuarantine::Held(reason) => return excluded(Exclusion::Held(reason)),
         }
-        if cx.expires > cx.now {
+        if early && !cx.consent.allows_early(id) {
             return excluded(Exclusion::NotExpired {
                 expires: cx.expires,
             });
@@ -1325,7 +1370,7 @@ fn purge_one(
     let Some((op_dir, leaf)) = found else {
         // Nothing left of the item: record the expiry (if not yet) and report it gone.
         if !resume {
-            if let Err(e) = write_expire(writer, id.op, &record, cx.now) {
+            if let Err(e) = write_expire(writer, id.op, &record, cx.now, early) {
                 return untouched(id, PurgeOutcome::Failed(Failure::Journal(e)));
             }
             result.expire_recorded = true;
@@ -1423,7 +1468,7 @@ fn purge_one(
 
     // 3. Write-ahead: the expire record is durable before anything is deleted.
     if !resume {
-        if let Err(e) = write_expire(writer, id.op, &record, cx.now) {
+        if let Err(e) = write_expire(writer, id.op, &record, cx.now, early) {
             return untouched(id, PurgeOutcome::Failed(Failure::Journal(e)));
         }
         result.expire_recorded = true;
@@ -1510,6 +1555,8 @@ fn purge_backup(
             op: id.op,
             class: RetentionClass::Backup,
             bytes,
+            // Never early: the class is due here, or the record exists already.
+            early: false,
         };
         if let Err(e) = writer.expire(expire) {
             return untouched(id, PurgeOutcome::Failed(Failure::Journal(e.to_string())));
@@ -1545,12 +1592,14 @@ fn purge_backup(
     result
 }
 
-/// Writes and flushes the op's `expire` record of the quarantine class.
+/// Writes and flushes the op's `expire` record of the quarantine class; `early` when the retention has
+/// not ended and the consent allowed the delete.
 fn write_expire(
     writer: &mut JournalWriter,
     op: OpId,
     record: &QuarantineRecord,
     now: FileTime,
+    early: bool,
 ) -> Result<(), String> {
     writer
         .expire(Expire {
@@ -1558,6 +1607,7 @@ fn write_expire(
             op,
             class: RetentionClass::Quarantine,
             bytes: record.bytes,
+            early,
         })
         .map_err(|e| e.to_string())
 }

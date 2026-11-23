@@ -146,7 +146,8 @@ method_table! {
     JournalRollback => "journal.rollback", Execute, Pipe, cancel: false, consent: true;
     /// `journal.retry_held` ⇢ `consent.shown`.
     JournalRetryHeld => "journal.retry_held", Execute, Pipe, cancel: false, consent: true;
-    /// `quarantine.expiring`: items past retention.
+    /// `quarantine.expiring`: items past retention; with `include_not_due`, the quarantined items
+    /// before it too.
     QuarantineExpiring => "quarantine.expiring", Read, Pipe, cancel: false, consent: false;
     /// `quarantine.purge` ⇢ `consent.shown`.
     QuarantinePurge => "quarantine.purge", Execute, Pipe, cancel: false, consent: true;

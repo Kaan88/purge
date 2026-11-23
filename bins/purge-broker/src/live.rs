@@ -30,7 +30,8 @@ use purge_model::exec::session::{
 use purge_model::{FileTime, ProgramId};
 use purge_rpc::error::Outcome;
 use purge_rpc::methods::{
-    Alert, ConflictRow, HistoryDetail, HistoryItem, OutcomeResult, PendingSession, UndoResult,
+    Alert, ConflictRow, Deleted, HistoryDetail, HistoryItem, OutcomeResult, PendingSession,
+    UndoResult,
 };
 use purge_source::filesystem::FileSystemSource;
 use purge_source::live::Live;
@@ -399,6 +400,15 @@ impl Backend for LiveBackend {
                         UndoState::Finished(UndoOutcome::Restored | UndoOutcome::AlreadyRestored)
                     ),
                     alert,
+                    // The journal's `expire` records: the kept data is gone and the op is not undone
+                    // any more, by an expiry or by a "Delete now" the user asked for.
+                    deleted: if op.deleted_early {
+                        Some(Deleted::Early)
+                    } else if op.expired.is_empty() {
+                        None
+                    } else {
+                        Some(Deleted::Expired)
+                    },
                 }
             })
             .collect();

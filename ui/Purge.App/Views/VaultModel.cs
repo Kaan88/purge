@@ -114,6 +114,41 @@ public sealed class VaultVolumeModel(VolumeCap v, ulong expiringBytes)
         : "Nothing expiring this week";
 }
 
+/// <summary>
+/// One quarantined item of a cleanup as the broker lists it (<c>quarantine.expiring {include_not_due}</c>): the id
+/// a delete names, where the item was, its size, and whether its retention has ended. Plain data.
+/// </summary>
+public sealed class VaultItemModel
+{
+    public VaultItemModel(ExpiringItem item, DateTimeOffset now)
+    {
+        ExpiryId = item.ExpiryId;
+        Path = item.Files.FirstOrDefault() ?? "";
+        Bytes = item.Bytes;
+        UserData = item.UserData;
+        Due = item.Due;
+        var until = HistorySessionModel.FromFileTime(item.Expired);
+        var days = until <= now ? 0 : (int)Math.Ceiling((until - now).TotalDays);
+        var parts = new List<string> { LeftoverItemModel.FormatSize(item.Bytes) };
+        if (item.UserData) parts.Add("user data");
+        parts.Add(item.Due || days == 0 ? "past its retention"
+            : $"can be put back for {days.ToString(CultureInfo.CurrentCulture)} more {(days == 1 ? "day" : "days")}");
+        Detail = string.Join(" · ", parts);
+    }
+
+    /// <summary>The broker's id for the item; the only thing a delete request names.</summary>
+    public string ExpiryId { get; }
+
+    /// <summary>Where the item was before it was quarantined (display only).</summary>
+    public string Path { get; }
+    public ulong Bytes { get; }
+    public bool UserData { get; }
+
+    /// <summary>Its retention has ended; deleting it is the ordinary purge, not a "Delete now".</summary>
+    public bool Due { get; }
+    public string Detail { get; }
+}
+
 /// <summary>How the vault's broker launch ended (the view maps <c>BrokerLauncher</c> onto this).</summary>
 /// <param name="Broker">The live broker; null when it was not started.</param>
 /// <param name="Cancelled">The user said No at the Windows prompt or "Not now" at the explanation.</param>
@@ -127,6 +162,12 @@ public sealed record VaultBrokerLaunch(IVaultBroker? Broker, bool Cancelled, str
 /// (<c>undo.run</c> for the whole session) and "Review and delete…" (<c>quarantine.expiring</c>, then
 /// <c>quarantine.purge</c> with the broker's own dialogs) start the broker on the click. There is no "Empty
 /// quarantine" in M3, and expiry only proposes: nothing is deleted without the broker's prompt.
+/// <para>
+/// "Delete now" (DECISIONS 2026-11-23) is the same two calls for one cleanup or one item of it before the
+/// retention ends: the page asks the broker for the cleanup's quarantined items (<c>include_not_due</c>) and sends
+/// back only the broker's ids. The broker decides from its own listing that this is an early delete and says so in
+/// its prompt, which is the confirmation; the page adds none of its own. Backups keep their own retention.
+/// </para>
 /// <para>
 /// Threading as <see cref="HistoryViewModel"/>: driven from the UI thread, it never leaves its context.
 /// </para>
@@ -168,6 +209,15 @@ public sealed class VaultViewModel
 
     /// <summary>The held cleanups past a retention date: "Review and delete…" offers them.</summary>
     public IEnumerable<VaultBatchModel> ExpiredBatches => Batches.Where(b => b.Expired);
+
+    /// <summary>The cleanup whose quarantined items are listed for "Delete now" (<see cref="Items"/>), or null.</summary>
+    public string? ItemsFor { get; private set; }
+
+    /// <summary>The name of the <see cref="ItemsFor"/> cleanup.</summary>
+    public string ItemsName { get; private set; } = "";
+
+    /// <summary>The quarantined items of the <see cref="ItemsFor"/> cleanup, as the broker listed them.</summary>
+    public List<VaultItemModel> Items { get; } = [];
 
     /// <summary>The totals line.</summary>
     public string Totals { get; private set; } = "";
@@ -255,7 +305,7 @@ public sealed class VaultViewModel
                 Outcome.Partial => $"{batch.Name} is partly back",
                 _ => $"{batch.Name} is back",
             };
-            var lines = undo.Conflicts.Select(c => $"{c.DisplayName}: {c.Conflict.Kind}")
+            var lines = undo.Conflicts.Select(ReconcileAlert.Text)
                 .Concat(undo.Alerts.Select(ReconcileAlert.Text)).ToList();
             ActionInfo = lines.Count == 0 ? null : string.Join(" ", lines);
         }
@@ -294,7 +344,7 @@ public sealed class VaultViewModel
         try
         {
             if (await BrokerAsync(ct) is not { } broker) return;
-            var expiring = await broker.ExpiringAsync(ct);
+            var expiring = await broker.ExpiringAsync(false, ct);
             if (expiring.Items.Count == 0)
             {
                 ActionInfo = "Nothing has passed its retention yet; nothing was deleted.";
@@ -335,6 +385,155 @@ public sealed class VaultViewModel
         }
         if (changed) await LoadAsync(ct);
     }
+
+    /// <summary>
+    /// "Choose items…": asks the broker which quarantined items the cleanup still holds (<c>quarantine.expiring</c>
+    /// with <c>include_not_due</c>) and lists them, each with its "Delete now". Reading changes nothing and shows no
+    /// security prompt of Purge.
+    /// </summary>
+    public async Task ShowItemsAsync(string sessionId, CancellationToken ct = default)
+    {
+        if (_busy || Batches.FirstOrDefault(b => b.Id == sessionId) is not { } batch) return;
+        Begin("Reading what this cleanup holds…");
+        try
+        {
+            if (await BrokerAsync(ct) is not { } broker) return;
+            var held = Quarantined(await broker.ExpiringAsync(true, ct), batch.Id);
+            if (held.Count == 0)
+            {
+                CloseItems();
+                ActionInfo = NothingToDelete;
+                return;
+            }
+            var now = DateTimeOffset.Now;
+            ItemsFor = batch.Id;
+            ItemsName = batch.Name;
+            Items.Clear();
+            Items.AddRange(held.Select(i => new VaultItemModel(i, now)));
+        }
+        catch (BrokerRpcException e)
+        {
+            Describe(e, "");
+        }
+        catch (BrokerLinkException)
+        {
+            await DropBrokerAsync();
+            ActionError = "The administrator part ended while it read the quarantine. Nothing was changed.";
+        }
+        catch (Exception e) when (e is not OutOfMemoryException and not OperationCanceledException)
+        {
+            ActionError = "Couldn't read the quarantined items: " + e.Message;
+        }
+        finally
+        {
+            End();
+        }
+    }
+
+    /// <summary>Closes the item list of "Choose items…".</summary>
+    public void CloseItems()
+    {
+        if (ItemsFor is null) return;
+        ItemsFor = null;
+        ItemsName = "";
+        Items.Clear();
+        if (!_busy) Changed?.Invoke();
+    }
+
+    /// <summary>
+    /// "Delete now" for a whole cleanup: every quarantined item the broker lists for it, before or after its
+    /// retention. The broker names each one in its prompt (user data one item per prompt) and says that an early
+    /// delete cannot be undone and takes the item out of Undo; only what is approved there is deleted. Registry
+    /// and task backups are not part of it.
+    /// </summary>
+    public Task DeleteNowAsync(string sessionId, CancellationToken ct = default) => DeleteNowAsync(sessionId, null, ct);
+
+    /// <summary>"Delete now" for one item of the list <see cref="ShowItemsAsync"/> read, by the broker's id.</summary>
+    public Task DeleteItemNowAsync(string expiryId, CancellationToken ct = default) =>
+        ItemsFor is { } session && Items.Any(i => i.ExpiryId == expiryId)
+            ? DeleteNowAsync(session, expiryId, ct)
+            : Task.CompletedTask;
+
+    private async Task DeleteNowAsync(string sessionId, string? only, CancellationToken ct)
+    {
+        if (_busy || Batches.FirstOrDefault(b => b.Id == sessionId) is not { } batch) return;
+        Begin(only is null ? "Reading what this cleanup holds…" : "Confirm the delete in the Purge security prompt.");
+        var changed = false;
+        try
+        {
+            if (await BrokerAsync(ct) is not { } broker) return;
+            List<string> ids;
+            if (only is not null) ids = [only];
+            else
+            {
+                // The ids are the broker's own, from a listing made now: the page never names a path.
+                ids = Quarantined(await broker.ExpiringAsync(true, ct), batch.Id).Select(i => i.ExpiryId).ToList();
+                if (ids.Count == 0)
+                {
+                    ActionInfo = NothingToDelete;
+                    return;
+                }
+                Waiting = "Confirm the delete in the Purge security prompt.";
+                Changed?.Invoke();
+            }
+            broker.AllowForeground();
+            var result = await broker.PurgeAsync(ids, ct);
+            changed = true;
+            ResultTitle = result.Purged == 0 ? "Nothing was deleted"
+                : $"{result.Purged.ToString(CultureInfo.CurrentCulture)} {(result.Purged == 1 ? "item" : "items")} of {batch.Name} deleted for good";
+            ActionInfo = result.Kept > 0
+                ? $"{result.Kept.ToString(CultureInfo.CurrentCulture)} kept: you declined them, or they could not be deleted."
+                : null;
+            // What was deleted leaves the item list; a list that may be stale is closed instead of guessed.
+            if (only is not null && result.Purged > 0 && ItemsFor == batch.Id)
+            {
+                Items.RemoveAll(i => i.ExpiryId == only);
+                if (Items.Count == 0) CloseItems();
+            }
+            else if (only is null && ItemsFor == batch.Id) CloseItems();
+            // A completed delete ends the broker; the next click starts a new one.
+            await DropBrokerAsync();
+        }
+        catch (BrokerRpcException e) when (e.Kind == "busy")
+        {
+            ActionError = "Another Purge window is changing the quarantine; nothing was deleted. Try again when it has finished.";
+        }
+        catch (BrokerRpcException e) when (e.Kind == "gone")
+        {
+            // The id no longer names anything in the broker's listing: put back, deleted, or in use meanwhile.
+            CloseItems();
+            changed = true;
+            ActionInfo = "That is no longer in quarantine as listed; nothing was deleted. The list is read again.";
+        }
+        catch (BrokerRpcException e)
+        {
+            Describe(e, "Nothing was deleted: the prompt was cancelled.");
+        }
+        catch (BrokerLinkException)
+        {
+            await DropBrokerAsync();
+            CloseItems();
+            changed = true;
+            ActionError = "The administrator part ended during the delete. The list is read again.";
+        }
+        catch (Exception e) when (e is not OutOfMemoryException and not OperationCanceledException)
+        {
+            ActionError = "Couldn't delete from quarantine: " + e.Message;
+        }
+        finally
+        {
+            End();
+        }
+        if (changed) await LoadAsync(ct);
+    }
+
+    private const string NothingToDelete =
+        "This cleanup has no quarantined files to delete now. Registry and task backups keep their own retention, " +
+        "and a cleanup that is being put back or recovered is left alone.";
+
+    /// <summary>The quarantined items (never the backups) the broker lists for one cleanup.</summary>
+    private static List<ExpiringItem> Quarantined(ExpiringList list, string sessionId) =>
+        list.Items.Where(i => i.Session == sessionId && i.Class == RetentionClass.Quarantine).ToList();
 
     /// <summary>Ends the broker this page started (the page is closing).</summary>
     public async Task CloseAsync() => await DropBrokerAsync();

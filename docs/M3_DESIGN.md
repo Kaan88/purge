@@ -309,8 +309,8 @@ Broker over the pipe:
 | `undo.run` ⇢ `consent.shown`, `undo.progress` | Execute | `{session, item_ids?}`, result `{outcome, conflicts[]}` |
 | `journal.pending` | Read | result: interrupted sessions |
 | `journal.resume`, `journal.rollback`, `journal.retry_held` ⇢ `consent.shown` | Execute | `{session}`, result `{outcome}` |
-| `quarantine.expiring` | Read | result: items past retention, with files and the user-data flag |
-| `quarantine.purge` ⇢ `consent.shown` | Execute | `{expiry_ids[]}`, result `{outcome, purged, kept}` |
+| `quarantine.expiring` | Read | `{include_not_due?}`, result: items past retention, with files and the user-data flag; with `include_not_due` also the quarantined items before it, each marked `due: false` (for "Delete now", DECISIONS 2026-11-23) |
+| `quarantine.purge` ⇢ `consent.shown` | Execute | `{expiry_ids[]}`, result `{outcome, purged, kept}`. An id of an item that is not due is asked for in the "Delete now" dialog (the broker reads "not due" from its own listing; the request cannot say it) |
 | `broker.shutdown` | Read | the broker exits when nothing runs |
 
 `code` is the first eight hex digits of the confirm hash, written `A1B2-C3D4`. The UI shows it while it waits; the
@@ -489,6 +489,7 @@ Rules:
 | Restore | `undo.run` | "Restore 22 items of Mozilla Firefox?" Lists items that will overwrite or conflict as attention items. Button "Restore 22 items". |
 | Recover | `journal.resume`, `journal.rollback`, `journal.retry_held` | Names the interrupted session, its time and "37 of 52 done". Button "Finish the cleanup", "Roll the cleanup back" or "Try the held items again". Attention list: the items still to be changed that are user data. |
 | Purge | `quarantine.purge` | Icon: warning. "Delete 41 expired items for good? This cannot be undone." Every item and every backup file is named, in pages, never cut. User-data items are not in this dialog: each gets its own dialog, one item per dialog (DECISIONS 2026-11-16). Button "Delete 41 items for good". |
+| Delete now | `quarantine.purge` (ids of quarantined items that are not due) | Icon: warning. "Delete 3 quarantined items now, before their retention ends? This cannot be undone." The summary adds: "This is before the retention date. Until then Purge keeps these items, and Undo can put them back. Once they are deleted here, Undo and History can no longer restore them." Every item is named, in pages, never cut; never a backup. User data: one item per dialog ("Delete this user data now, before its retention ends? This cannot be undone."). Button "Delete 3 items now, for good". Its confirmation code is never the purge dialog's (DECISIONS 2026-11-23). |
 
 ## 9. Launch gates and benches
 
@@ -596,7 +597,7 @@ All wording is our own. Each page is created lazily, after the first Rendering t
 | Consent prompts, variant A | section 8 | `consent.shown` | The UI side is one state: "Confirm in the Purge security prompt", the code, and a spinner. |
 | Result (part of S3) | new | `plan.execute` result | Moved, already gone, held (with what holds it and "Try again"), failed. "Undo all", "Done". Outcomes of 6.4. |
 | History & undo ("Time scrubber", no drag marker) | stopgap History view, real data | `history.index` (medium), `history.get`, `undo.run`, `journal.*` (broker) | Sessions newest first: time, app, count, size, days left, state. "Show items" and "Restore" start the broker. Recovery banner with Resume and Roll back. No journal or `.reg` export in M3. |
-| Quarantine vault | stopgap vault view, real data | `history.index`, `quarantine.expiring`, `quarantine.purge` | Usage and real cap per volume (delta 4). "Expired" list with "Review and delete…". No "Empty quarantine". |
+| Quarantine vault | stopgap vault view, real data | `history.index`, `quarantine.expiring`, `quarantine.purge` | Usage and real cap per volume (delta 4). "Expired" list with "Review and delete…". "Delete now…" per cleanup and, under "Choose items…", per quarantined item, before the retention ends (DECISIONS 2026-11-23). No "Empty quarantine". |
 | Safety dial settings | stopgap Settings view | UI settings file in `%LOCALAPPDATA%\Purge\settings.json` | Theme; prefer quiet uninstall; after uninstall: ask or scan; restore point: off, high-risk only (default), always; show weak matches; retention and cap shown read-only; last 10 launch markers; versions and licences. Not shown: running apps (delta 1), start as administrator, packs, other profiles, AI. |
 | Snapped narrow | new | none | Under 720 px: the rail collapses to icons, the details pane becomes a page, list columns drop to name and size. |
 | High contrast | new | none | System colours only, no Mica, band pills carry text and a glyph, focus visuals on every control. |
