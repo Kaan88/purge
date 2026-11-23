@@ -174,6 +174,10 @@ public sealed class RemovedLeftoversTests
         Assert.True(broker.Disposed);
         Assert.False(broker.SessionTaken);
         Assert.Equal(RemovedCheckState.NoRecord, controller.StateOf(Program));
+        // The user approved a prompt, so a bar says why nothing followed.
+        Assert.Equal(UninstallNoticeKind.Info, controller.Notice!.Kind);
+        Assert.Equal("Purge has no record of Git.", controller.Notice.Title);
+        Assert.Equal("Nothing was scanned or changed.", controller.Notice.Message);
 
         // A second click on it does nothing: no prompt for a program without a record.
         var launches = 0;
@@ -230,7 +234,9 @@ public sealed class RemovedLeftoversTests
 
         Assert.False(completed);
         Assert.Equal(RemovedCheckState.NoRecord, controller.StateOf(Program));
-        Assert.Null(controller.Notice);
+        Assert.Equal(UninstallNoticeKind.Info, controller.Notice!.Kind);
+        Assert.Equal("Purge has no record of Git.", controller.Notice.Title);
+        Assert.Equal("Nothing was scanned or changed.", controller.Notice.Message);
         Assert.True(broker.Disposed);
     }
 

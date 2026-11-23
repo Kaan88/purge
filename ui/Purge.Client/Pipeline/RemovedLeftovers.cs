@@ -164,6 +164,7 @@ public sealed class RemovedLeftoversController
             if (!stored.Contains(programId, StringComparer.Ordinal))
             {
                 Set(programId, RemovedCheckState.NoRecord);
+                Notice = NoRecordNotice(programName);
                 return;
             }
 
@@ -189,6 +190,7 @@ public sealed class RemovedLeftoversController
         {
             // The broker has no fingerprint for it (removed meanwhile, or another account's program).
             Set(programId, RemovedCheckState.NoRecord);
+            Notice = NoRecordNotice(programName);
         }
         catch (BrokerRpcException e)
         {
@@ -246,6 +248,15 @@ public sealed class RemovedLeftoversController
                 break;
         }
     }
+
+    /// <summary>
+    /// The bar after an approved prompt that ended without a record (<c>leftovers.stored</c> did not list the program,
+    /// or <c>gone</c>): the user said yes to a prompt, so the page says why nothing followed.
+    /// </summary>
+    private static RemovedNotice NoRecordNotice(string programName) =>
+        new(UninstallNoticeKind.Info,
+            $"Purge has no record of {(programName.Length > 0 ? programName : "this program")}.",
+            "Nothing was scanned or changed.");
 
     private RemovedCheckState Probe(string programId)
     {
