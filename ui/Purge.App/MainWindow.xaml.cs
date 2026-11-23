@@ -78,7 +78,7 @@ public sealed partial class MainWindow : Window
 
     private void OnStartup(StartupResult data)
     {
-        _programs.Load(data);
+        _programs.Load(data, Program.Prepared is { IsCompletedSuccessfully: true } prepared ? prepared.Result : null);
         // The "Administrator" chip shows only when the UI itself runs elevated (7a delta 2); the token is read
         // off the UI thread, so it also holds when the engine is not used.
         ElevationChip.Visibility = data.UiElevated ? Visibility.Visible : Visibility.Collapsed;

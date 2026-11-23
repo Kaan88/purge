@@ -20,6 +20,9 @@ public static class Program
     /// <summary><c>engine.hello</c> + <c>programs.list</c>, started before XAML init.</summary>
     public static Task<StartupResult> Startup { get; private set; } = null!;
 
+    /// <summary>The rows of the <see cref="Startup"/> list, built off the UI thread when the reply comes in.</summary>
+    public static Task<Views.ProgramsView.PreparedList> Prepared { get; private set; } = null!;
+
     /// <summary>Next to <c>Purge.exe</c>, or the file named by <c>PURGE_ENGINE</c> (development).</summary>
     private static string EnginePath() =>
         Environment.GetEnvironmentVariable("PURGE_ENGINE") is { Length: > 0 } path ? path : Path.Combine(AppContext.BaseDirectory, "purge-engine.exe");
@@ -53,6 +56,10 @@ public static class Program
             engineReady: () => LaunchMarkers.Mark("engine_ready"),
             listReply: () => LaunchMarkers.Mark("list_reply"));
         Startup = _link.Startup;
+        // The rows are built and sorted on the thread that read the reply, not on the UI thread (M3 launch perf).
+        // The first culture-aware sort also loads ICU there.
+        Prepared = Startup.ContinueWith(t => Views.ProgramsView.Prepare(t.Result.Inventory), CancellationToken.None,
+            TaskContinuationOptions.OnlyOnRanToCompletion | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
 
         // (d) The XAML optional changes under test (ENGINE_PLAN.md §9.2 step 8); none is on by default.
         // OptimizeApplyStyles is refused: it stays off on Windows App SDK 2.6.5 (ContentDialog regression).

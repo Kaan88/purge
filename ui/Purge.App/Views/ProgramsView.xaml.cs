@@ -121,8 +121,30 @@ public sealed partial class ProgramsView : UserControl
     /// <summary>All rows, for the command box in the title bar.</summary>
     public IReadOnlyList<ProgramRow> All => _all;
 
+    /// <summary>
+    /// The rows of a <c>programs.list</c> reply and the list the view first shows (Apps tab, no search or filter,
+    /// by name), built off the UI thread as soon as the reply is in (M3 launch perf). <see cref="Load"/> uses them
+    /// when the view is still in that default state; otherwise it builds the rows itself.
+    /// </summary>
+    public sealed class PreparedList(InventoryDoc doc, List<ProgramRow> all, List<ProgramRow> shown)
+    {
+        public InventoryDoc Doc { get; } = doc;
+        public List<ProgramRow> All { get; } = all;
+        public List<ProgramRow> Shown { get; } = shown;
+    }
+
+    /// <summary>Builds the rows of <paramref name="doc"/> the way <see cref="Rebuild"/> and the default <see cref="Refresh"/> do.
+    /// Any thread: rows create no XAML objects until they are shown.</summary>
+    public static PreparedList Prepare(InventoryDoc doc)
+    {
+        var today = DateTime.Today;
+        var all = doc.Entries.Select(e => new ProgramRow(e, null, today)).ToList();
+        var shown = Arrange(all, ProgramTab.Apps, "", false, false, false, "name", false);
+        return new PreparedList(doc, all, shown);
+    }
+
     /// <summary>Takes the <c>programs.list</c> reply. Called before Activate() when it has already arrived.</summary>
-    public void Load(StartupResult data)
+    public void Load(StartupResult data, PreparedList? prepared = null)
     {
         _doc = data.Inventory;
         _startup = data;
@@ -132,17 +154,20 @@ public sealed partial class ProgramsView : UserControl
             data.Engine.ProgramsPatched += OnLatePatches;
         }
         UpdateCommandState();
-        Rebuild();
+        var fresh = prepared is not null && ReferenceEquals(prepared.Doc, data.Inventory) && _all.Count == 0 && _sizes.Count == 0
+                    && _icons.Count == 0 && _forecasts.Count == 0 && _current is null && _tab == ProgramTab.Apps && _query.Length == 0
+                    && _sortKey == "name" && !_sortDescending && !_onlyLeftovers && !_onlyPerUser && !_only32;
+        Rebuild(fresh ? prepared : null);
         // The list can arrive after the first tick; then what the tick would have started starts here.
         if (_firstTickDone) StartAfterFirstFrame();
     }
 
-    private void Rebuild()
+    private void Rebuild(PreparedList? prepared = null)
     {
         if (_doc is null) return;
         var today = DateTime.Today;
         var currentId = _current?.Entry.ProgramId;
-        _all = _doc.Entries.Select(e => new ProgramRow(e, _sizes.TryGetValue(e.ProgramId, out var s) ? s : null, today)).ToList();
+        _all = prepared?.All ?? _doc.Entries.Select(e => new ProgramRow(e, _sizes.TryGetValue(e.ProgramId, out var s) ? s : null, today)).ToList();
         _byId.Clear();
         foreach (var r in _all)
         {
@@ -159,7 +184,8 @@ public sealed partial class ProgramsView : UserControl
         if (_firstTickDone) UpdateTabCounts();
         UpdateSummary();
         MainWindow.Instance.SetProgramsCount(_all.Count);
-        Refresh();
+        if (prepared is not null) Show(prepared.Shown);
+        else Refresh();
     }
 
     private void UpdateBars()
@@ -411,22 +437,29 @@ public sealed partial class ProgramsView : UserControl
         ShowDetails(row);
     }
 
-    private void Refresh()
-    {
-        IEnumerable<ProgramRow> rows = _all.Where(r => r.InTab(_tab) && r.Matches(_query)
-                                                       && (!_onlyLeftovers || r.Verdict is ForecastVerdict.Some or ForecastVerdict.Large)
-                                                       && (!_onlyPerUser || r.Entry.Scope == InstallScope.User)
-                                                       && (!_only32 || r.Entry.View == RegistryView.K32));
-        rows = _sortKey switch
-        {
-            "publisher" => Order(rows, r => r.Publisher),
-            "size" => Order(rows, r => r.SizeBytes ?? -1),
-            "junk" => Order(rows, r => r.JunkRank),
-            "date" => Order(rows, r => r.Installed ?? DateTime.MinValue),
-            _ => Order(rows, r => r.Name),
-        };
-        var list = rows.ToList();
+    private void Refresh() => Show(Arrange(_all, _tab, _query, _onlyLeftovers, _onlyPerUser, _only32, _sortKey, _sortDescending));
 
+    /// <summary>The rows the list shows for a tab, search, filters and sort (the UI thread and <see cref="Prepare"/>).</summary>
+    private static List<ProgramRow> Arrange(IEnumerable<ProgramRow> all, ProgramTab tab, string query, bool onlyLeftovers, bool onlyPerUser,
+                                            bool only32, string sortKey, bool descending)
+    {
+        var rows = all.Where(r => r.InTab(tab) && r.Matches(query)
+                                  && (!onlyLeftovers || r.Verdict is ForecastVerdict.Some or ForecastVerdict.Large)
+                                  && (!onlyPerUser || r.Entry.Scope == InstallScope.User)
+                                  && (!only32 || r.Entry.View == RegistryView.K32));
+        return (sortKey switch
+        {
+            "publisher" => Order(rows, r => r.Publisher, descending),
+            "size" => Order(rows, r => r.SizeBytes ?? -1, descending),
+            "junk" => Order(rows, r => r.JunkRank, descending),
+            "date" => Order(rows, r => r.Installed ?? DateTime.MinValue, descending),
+            _ => Order(rows, r => r.Name, descending),
+        }).ToList();
+    }
+
+    /// <summary>Puts <paramref name="list"/> (filtered and sorted) in the list and keeps or picks the current row.</summary>
+    private void Show(List<ProgramRow> list)
+    {
         _refreshing = true;
         ProgramList.ItemsSource = list;
         var keep = _current is null ? null : list.FirstOrDefault(r => r.Entry.ProgramId == _current.Entry.ProgramId);
@@ -441,8 +474,8 @@ public sealed partial class ProgramsView : UserControl
     }
 
     // Child rows (updates, Burn children) stay directly under their parent.
-    private IEnumerable<ProgramRow> Order<TKey>(IEnumerable<ProgramRow> rows, Func<ProgramRow, TKey> key) =>
-        ProgramRules.Order(rows, r => r.Entry, key, _sortDescending);
+    private static IEnumerable<ProgramRow> Order<TKey>(IEnumerable<ProgramRow> rows, Func<ProgramRow, TKey> key, bool descending) =>
+        ProgramRules.Order(rows, r => r.Entry, key, descending);
 
     private static string KeyName(string keyPath) => ProgramRules.KeyName(keyPath);
 
