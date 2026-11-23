@@ -868,7 +868,7 @@ fn run<H: FlowHandler>(
         machine.sources(),
     ) {
         return Err(ErrorObject::runtime(format!(
-            "Windows Installer now lists {} for a user as well, so its uninstaller was not started              as administrator. Check the program list and try again.",
+            "Windows Installer now lists {} for a user as well, so its uninstaller was not started as administrator. Check the program list and try again.",
             session.display_name
         )));
     }
@@ -911,18 +911,16 @@ fn run<H: FlowHandler>(
 }
 
 /// Whether `command` may still start: anything but `msiexec` always may; `msiexec` only when the
-/// session's ProductCode is still per-machine only. A broker-route `msiexec` without one named an
-/// admin-only package path, which no user registration redirects.
+/// session's ProductCode is still per-machine only (the route accepts no other msiexec form).
 fn msiexec_still_machine_only(
     command: &QuietCommand,
     machine_product: Option<&str>,
     sources: Sources<'_>,
 ) -> bool {
-    let is_msiexec = std::path::Path::new(&command.exe)
-        .file_name()
-        .is_some_and(|name| name.eq_ignore_ascii_case("msiexec.exe"));
-    match (is_msiexec, machine_product) {
-        (false, _) | (true, None) => true,
+    match (pipeline::is_msiexec(&command.exe), machine_product) {
+        (false, _) => true,
+        // A broker-route msiexec is always the ProductCode form with a per-machine-only product.
+        (true, None) => false,
         (true, Some(code)) => pipeline::machine_only_code(code, sources.reg, sources.sys),
     }
 }

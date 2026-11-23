@@ -1274,10 +1274,22 @@ fn command_loads_admin_only(
         // client-chosen file (it runs the cached package). Everything else is undetermined: `cmd`
         // without `/d` or running another host, an interpreter or more than one
         // program, and a load path that is missing from the arguments (review M3-R2 M2).
-        return file_name_lower(&command.exe) == "msiexec.exe"
+        return is_msiexec(&command.exe)
             && machine_product.is_some_and(|code| msiexec_names_only(&command.args, code));
     };
+    // msiexec with a package path takes the ProductCode from the package and still resolves its
+    // registration per-user first (a `Transforms` value in the user's key included), so an admin-only
+    // file is not enough: msiexec is broker-route only in the ProductCode form above (Fable review P1).
+    if is_msiexec(&command.exe) {
+        return false;
+    }
     is_absolute_path(&load) && fs.is_admin_only_executable(&load) == Ok(true)
+}
+
+/// Whether `exe` is Windows Installer's `msiexec.exe` (by file name, as Windows reads it: trailing dots
+/// and spaces dropped). The route and the broker's last check use this one predicate.
+pub fn is_msiexec(exe: &str) -> bool {
+    file_name_lower(exe) == "msiexec.exe"
 }
 
 /// The entry's ProductCode when it is [`machine_only_code`]; `None` when the entry names none.
@@ -1335,6 +1347,9 @@ pub fn machine_only_code(code: &str, reg: &dyn RegistrySource, sys: &dyn SystemS
     sids.iter().all(|sid| {
         [
             format!(r"HKU\{sid}\Software\Microsoft\Installer\Products\{packed}"),
+            // The machine registration is under HKLM\SOFTWARE\Classes; a per-user Classes key would
+            // shadow it in the merged HKCR view (cheap to rule out, Fable review).
+            format!(r"HKU\{sid}\Software\Classes\Installer\Products\{packed}"),
             format!(
                 r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\Managed\{sid}\Installer\Products\{packed}"
             ),
@@ -3194,6 +3209,7 @@ mod tests {
             .file(r"C:\Program Files\App\uninstall.vbs", 1)
             .file(r"C:\Program Files\App\uninstall.jar", 1)
             .file(r"C:\Program Files\App\vendor.dll", 1)
+            .file(r"C:\Program Files\App\vendor.msi", 1)
             .file(r"C:\Program Files\Python312\python.exe", 1)
             .file(r"C:\Program Files\Python312\python3.12.exe", 1)
             .file(r"C:\Program Files\nodejs\node.exe", 1)
@@ -3897,6 +3913,14 @@ mod tests {
                 "{exe} {args}"
             );
         }
+        // msiexec with a package path is medium even when the package is admin-only (Fable review P1).
+        assert_eq!(
+            shell_route(
+                r"C:\Windows\System32\msiexec.exe",
+                r#"/x "C:\Program Files\App\vendor.msi" /qn"#
+            ),
+            purge_rpc::methods::Route::Medium
+        );
         // Under a Program Files-like folder the same commands are broker-route.
         for (exe, args) in [
             (r"C:\Program Files\App\unins000.exe", "/S"),
