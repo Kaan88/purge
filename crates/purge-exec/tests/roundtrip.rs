@@ -566,6 +566,7 @@ fn conflicts_are_reported_and_never_forced_and_the_other_items_proceed() {
                 op: op_of(&read, "c-expired"),
                 class: RetentionClass::Quarantine,
                 bytes: 7,
+                early: false,
             })
             .unwrap();
     }

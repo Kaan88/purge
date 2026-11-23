@@ -17,7 +17,7 @@
   ],
   "$defs": {
     "ExpiringItem": {
-      "description": "One entry past retention.",
+      "description": "One entry past retention, or (asked for with `include_not_due`) a quarantined item before it.",
       "type": "object",
       "properties": {
         "app": {
@@ -31,11 +31,15 @@
           "minimum": 0
         },
         "class": {
-          "description": "Which retention class expired.",
+          "description": "Which retention class it is of. An entry that is not due is always `Quarantine`.",
           "$ref": "#/$defs/RetentionClass"
         },
+        "due": {
+          "description": "Whether the retention has ended (or an earlier delete of the entry was left unfinished). An\nentry that is not due can still be put back until it is deleted; deleting it is a \"Delete now\".",
+          "type": "boolean"
+        },
         "expired": {
-          "description": "When it expired.",
+          "description": "When its retention ends: in the past for a due entry, in the future for one that is not due.",
           "$ref": "#/$defs/FileTime"
         },
         "expiry_id": {
@@ -64,6 +68,7 @@
         "app",
         "class",
         "expired",
+        "due",
         "files",
         "bytes",
         "user_data"

@@ -585,6 +585,21 @@
         "dst"
       ]
     },
+    "Deleted": {
+      "description": "How the kept data of a history item was deleted.",
+      "oneOf": [
+        {
+          "description": "After its retention ended, confirmed in the purge prompt.",
+          "type": "string",
+          "const": "expired"
+        },
+        {
+          "description": "Before its retention ended, because the user asked for it (\"Delete now\") and confirmed it.",
+          "type": "string",
+          "const": "early"
+        }
+      ]
+    },
     "FailCode": {
       "description": "What kind of failure ended an item.",
       "oneOf": [
@@ -639,6 +654,17 @@
           "anyOf": [
             {
               "$ref": "#/$defs/Alert"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "deleted": {
+          "description": "What it kept (the quarantined item, or its backup) was deleted for good, and how; it cannot be\nput back. Absent while the kept data is there.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Deleted"
             },
             {
               "type": "null"

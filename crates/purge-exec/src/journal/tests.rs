@@ -201,6 +201,7 @@ fn sample_journal(dir: &TempDir) -> Vec<u8> {
         op: OpId(3),
         class: RetentionClass::Quarantine,
         bytes: 10,
+        early: false,
     })
     .unwrap();
     drop(w);
@@ -432,6 +433,7 @@ fn undo_is_refused_after_expiry_and_expiry_during_an_undo() {
         op: OpId(n),
         class,
         bytes: 1,
+        early: false,
     };
     w.expire(expire(1, RetentionClass::Quarantine)).unwrap();
     assert_eq!(
@@ -733,7 +735,8 @@ fn writer_refuses_rule_breaks_and_writes_nothing() {
             at: FileTime(1),
             op: OpId(1),
             class: RetentionClass::Quarantine,
-            bytes: 1
+            bytes: 1,
+            early: false,
         })),
         Violation::ExpireBeforeFinish(OpId(1))
     );
@@ -863,7 +866,13 @@ fn undo_and_reconcile_rules() {
         op: OpId(1),
         class: RetentionClass::Backup,
         bytes: 1,
+        early: false,
     };
+    // Only a quarantined item is deleted before its retention ends: never a backup.
+    assert_eq!(
+        refused(w.expire(Expire { early: true, ..exp })),
+        Violation::EarlyExpireNotQuarantine(OpId(1))
+    );
     w.expire(exp).unwrap();
     assert_eq!(refused(w.expire(exp)), Violation::DuplicateExpire(OpId(1)));
 
@@ -1792,6 +1801,7 @@ fn a_held_item_is_retried_under_a_durable_retry_intent() {
         op: OpId(1),
         class: RetentionClass::Quarantine,
         bytes: 0,
+        early: false,
     };
     assert_eq!(refused(w.expire(expire)), Violation::RetryInFlight(OpId(1)));
     let tokenless = Reconcile {
@@ -2085,6 +2095,7 @@ fn the_index_mark_finds_a_journal_cut_at_a_line_boundary() {
         op: OpId(1),
         class: RetentionClass::Quarantine,
         bytes: 1,
+        early: false,
     })
     .unwrap();
     let later = w.state().mark();

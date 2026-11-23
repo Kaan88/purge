@@ -14,6 +14,8 @@ public sealed partial class VaultView : UserControl
 {
     private readonly VaultViewModel _vm;
     private string _rowsKey = "";
+    private string _itemsKey = "";
+    private List<VaultBatch> _rows = [];
     private bool _cancelShown;
 
     public VaultView()
@@ -49,13 +51,26 @@ public sealed partial class VaultView : UserControl
 
     private void Render()
     {
-        var key = string.Join("|", _vm.Batches.Select(b => $"{b.Id}:{b.State}:{b.Detail}")) + "#" +
+        // The summary is in the key: a "Delete now" of some items changes a cleanup's bytes and nothing else.
+        var key = string.Join("|", _vm.Batches.Select(b => $"{b.Id}:{b.State}:{b.Detail}:{b.Summary}")) + "#" +
                   string.Join("|", _vm.Volumes.Select(v => $"{v.Root}:{v.Used}:{v.Cap}"));
         if (key != _rowsKey)
         {
             _rowsKey = key;
-            Batches.ItemsSource = _vm.Batches.Select(b => new VaultBatch(b)).ToList();
+            _rows = _vm.Batches.Select(b => new VaultBatch(b)).ToList();
+            Batches.ItemsSource = _rows;
             Volumes.ItemsSource = _vm.Volumes.Select(v => new VaultVolume(v)).ToList();
+        }
+        // While a broker action runs (its prompt may be open), every row action is disabled.
+        foreach (var row in _rows) row.CanAct = !_vm.Busy;
+        var itemsKey = _vm.ItemsFor is null ? ""
+            : $"{_vm.ItemsFor}:{_vm.Busy}:" + string.Join("|", _vm.Items.Select(i => i.ExpiryId));
+        if (itemsKey != _itemsKey)
+        {
+            _itemsKey = itemsKey;
+            ItemsPanel.Visibility = _vm.ItemsFor is null ? Visibility.Collapsed : Visibility.Visible;
+            ItemsTitle.Text = _vm.ItemsFor is null ? "" : $"In quarantine from {_vm.ItemsName}";
+            Items.ItemsSource = _vm.Items.Select(i => new VaultItem(i, !_vm.Busy)).ToList();
         }
         Totals.Text = _vm.Phase == VaultPhase.Ready ? _vm.Totals : "";
         var expired = _vm.ExpiredBatches.ToList();
@@ -113,6 +128,24 @@ public sealed partial class VaultView : UserControl
     }
 
     private void OnReviewExpired(object sender, RoutedEventArgs e) => _ = _vm.ReviewExpiredAsync();
+
+    // "Delete now": no confirmation of the page's own. The broker's prompt names every item and is the gate.
+    private void OnDeleteNow(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is VaultBatch b) _ = _vm.DeleteNowAsync(b.Id);
+    }
+
+    private void OnChooseItems(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is VaultBatch b) _ = _vm.ShowItemsAsync(b.Id);
+    }
+
+    private void OnDeleteItemNow(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is VaultItem i) _ = _vm.DeleteItemNowAsync(i.ExpiryId);
+    }
+
+    private void OnCloseItems(object sender, RoutedEventArgs e) => _vm.CloseItems();
 
     private void OnDetails(object sender, RoutedEventArgs e) => MainWindow.Instance.Navigate("history");
 

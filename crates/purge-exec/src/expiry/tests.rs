@@ -2108,6 +2108,7 @@ fn an_unfinished_backup_purge_is_continued_without_a_second_record() {
         op: OpId(1),
         class: RetentionClass::Backup,
         bytes: 6,
+        early: false,
     })
     .unwrap();
     drop(w);
@@ -2209,4 +2210,318 @@ fn a_crash_in_the_middle_of_the_walk_is_finished_by_the_next_run() {
     assert_eq!(snapshot(&target), before);
     assert_eq!(expire_records(&built.session).len(), 1);
     assert_deletes_inside(&fx.quarantine_of(built.session.id()));
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Deleting a quarantined item before its retention ends
+// ---------------------------------------------------------------------------------------------------
+
+/// A consent naming `ids` and allowing each of them before its retention ends.
+fn early(ids: &[ExpiryId]) -> PurgeConsent {
+    let mut consent = all(ids);
+    for id in ids {
+        consent.allow_early(id.clone());
+    }
+    consent
+}
+
+/// The `early` mark of each `expire` record of the session, by op, in journal order.
+fn early_marks(session: &SessionDir) -> Vec<(OpId, bool)> {
+    journal::read(session)
+        .unwrap()
+        .records
+        .iter()
+        .filter_map(|record| match record {
+            purge_model::exec::journal::Record::Expire(e) => Some((e.op, e.early)),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn an_item_before_its_retention_is_listed_apart_and_deleted_only_with_an_early_consent() {
+    let fx = Fx::new("early");
+    let item = fx.scratch.dir(r"src\item");
+    fx.scratch.file(r"src\item\a.txt", b"0123456789");
+    fx.scratch.file(r"src\item\sub\b.txt", b"01234");
+    let other = fx.scratch.file(r"src\other.txt", b"keep me");
+    let built = build(&fx, at_day(0), &[app(item), app(other)], false, true);
+    let mut index = SessionIndex::default();
+    index.upsert(summary(&built, 1_000_000));
+    fx.roots.write_index(&index).unwrap();
+    let outside = canary(&fx.scratch, "canary");
+    let before = snapshot(&outside);
+    let now = at_day(3);
+
+    // Not due: nothing is proposed, and both items are listed apart with the id a request can name.
+    let listing = expiring(&fx.roots, now).unwrap();
+    assert!(listing.problems.is_empty(), "{:?}", listing.problems);
+    assert!(listing.items.is_empty() && listing.backups.is_empty() && listing.held.is_empty());
+    let listed: Vec<&ExpiryId> = listing.not_due.iter().map(|i| &i.id).collect();
+    assert_eq!(listed, [&built.ids[0], &built.ids[1]]);
+    for item in &listing.not_due {
+        assert_eq!(item.expires, at_day(30));
+        assert!(!item.user_data && !item.unfinished);
+    }
+
+    // Naming the item is not enough before its retention ends.
+    let report = purge(&fx.roots, &built.ids[..1], &all(&built.ids[..1]), now).unwrap();
+    assert_eq!(
+        outcome_of(&report, &built.ids[0]),
+        &PurgeOutcome::Excluded(Exclusion::NotExpired {
+            expires: at_day(30)
+        })
+    );
+    // An early mark for an item the consent does not name counts for nothing, and the request is
+    // refused whole.
+    let mut unnamed = PurgeConsent::default();
+    unnamed.allow_early(built.ids[0].clone());
+    assert!(!unnamed.allows_early(&built.ids[0]));
+    assert_eq!(
+        purge(&fx.roots, &built.ids[..1], &unnamed, now).unwrap_err(),
+        PurgeError::NotConsented(vec![built.ids[0].clone()])
+    );
+    // An early mark for one item does not reach the other.
+    let mut one = all(&built.ids);
+    one.allow_early(built.ids[0].clone());
+    let report = purge(&fx.roots, &built.ids[1..], &one, now).unwrap();
+    assert!(
+        matches!(
+            outcome_of(&report, &built.ids[1]),
+            PurgeOutcome::Excluded(Exclusion::NotExpired { .. })
+        ),
+        "{report:?}"
+    );
+    assert!(exists(&built.quarantined[0]) && exists(&built.quarantined[1]));
+    assert!(expire_records(&built.session).is_empty());
+    assert_eq!(
+        assert_deletes_inside(&fx.quarantine_of(built.session.id())),
+        0
+    );
+
+    // With the early consent the item goes, by the same walk; the record says it was asked for.
+    let report = purge(&fx.roots, &built.ids[..1], &early(&built.ids[..1]), now).unwrap();
+    assert_eq!(report.items[0].outcome, PurgeOutcome::Purged, "{report:?}");
+    assert!(report.items[0].expire_recorded);
+    assert!(report.alerts.is_empty());
+    assert!(!exists(&built.quarantined[0]));
+    assert!(exists(&built.quarantined[1]), "the item not named stays");
+    assert!(assert_deletes_inside(&fx.quarantine_of(built.session.id())) > 0);
+    assert_eq!(snapshot(&outside), before);
+    assert_eq!(early_marks(&built.session), [(OpId(1), true)]);
+    let state = journal::read(&built.session).unwrap().state;
+    let op = state.op(OpId(1)).unwrap();
+    assert_eq!(op.expired, [RetentionClass::Quarantine]);
+    assert!(op.deleted_early);
+    assert!(!state.op(OpId(2)).unwrap().deleted_early);
+
+    // The index loses the bytes; the class is not purged while the other item is kept.
+    assert_eq!(report.index, IndexUpdate::Updated);
+    let s = fx.roots.read_index().unwrap().sessions[0].clone();
+    assert_eq!(s.backup_bytes, 1_000_000 - built.bytes[0]);
+    assert!(s.purged.is_empty());
+
+    // Deleted is deleted: it is listed nowhere, and asking again changes nothing.
+    let listing = expiring(&fx.roots, now).unwrap();
+    assert!(listing.items.is_empty());
+    let listed: Vec<&ExpiryId> = listing.not_due.iter().map(|i| &i.id).collect();
+    assert_eq!(listed, [&built.ids[1]]);
+    let report = purge(&fx.roots, &built.ids[..1], &early(&built.ids[..1]), now).unwrap();
+    assert_eq!(report.items[0].outcome, PurgeOutcome::AlreadyGone);
+    assert!(!report.items[0].expire_recorded);
+    assert_eq!(early_marks(&built.session), [(OpId(1), true)]);
+
+    // The journal refuses an undo of the op from now on, as after an expiry.
+    let mut w = JournalWriter::open_append(&built.session).unwrap();
+    assert!(w.undo_intent(OpId(1)).is_err());
+    drop(w);
+
+    // An item deleted once it is due carries no early mark, with or without the early consent.
+    let report = purge(
+        &fx.roots,
+        &built.ids[1..],
+        &early(&built.ids[1..]),
+        at_day(30),
+    )
+    .unwrap();
+    assert_eq!(report.items[0].outcome, PurgeOutcome::Purged, "{report:?}");
+    assert_eq!(
+        early_marks(&built.session),
+        [(OpId(1), true), (OpId(2), false)]
+    );
+    let s = fx.roots.read_index().unwrap().sessions[0].clone();
+    assert_eq!(s.purged, [RetentionClass::Quarantine]);
+}
+
+#[test]
+fn an_early_delete_of_user_data_needs_its_own_confirmation() {
+    let fx = Fx::new("early-userdata");
+    fx.scratch.file(r"src\saves\slot1.sav", b"progress");
+    let settings = fx.scratch.file(r"src\settings.ini", b"[x]");
+    let built = build(
+        &fx,
+        at_day(0),
+        &[
+            Planned {
+                source: fx.scratch.path(r"src\saves"),
+                category: "UserData",
+            },
+            app(settings),
+        ],
+        false,
+        true,
+    );
+    let now = at_day(1);
+    let listing = expiring(&fx.roots, now).unwrap();
+    let flags: Vec<bool> = listing.not_due.iter().map(|i| i.user_data).collect();
+    assert_eq!(flags, [true, false]);
+
+    // Named and allowed early, but not confirmed one by one: the user data stays.
+    let report = purge(&fx.roots, &built.ids, &early(&built.ids), now).unwrap();
+    assert_eq!(
+        outcome_of(&report, &built.ids[0]),
+        &PurgeOutcome::Excluded(Exclusion::UserDataNotConfirmed)
+    );
+    assert_eq!(outcome_of(&report, &built.ids[1]), &PurgeOutcome::Purged);
+    assert!(exists(&built.quarantined[0]) && !exists(&built.quarantined[1]));
+
+    // Confirmed, but not allowed early: it stays as well.
+    let mut consent = all(&built.ids[..1]);
+    consent.confirm_user_data(built.ids[0].clone());
+    let report = purge(&fx.roots, &built.ids[..1], &consent, now).unwrap();
+    assert!(
+        matches!(
+            outcome_of(&report, &built.ids[0]),
+            PurgeOutcome::Excluded(Exclusion::NotExpired { .. })
+        ),
+        "{report:?}"
+    );
+    assert!(exists(&built.quarantined[0]));
+
+    // Both: it goes.
+    consent.allow_early(built.ids[0].clone());
+    let report = purge(&fx.roots, &built.ids[..1], &consent, now).unwrap();
+    assert_eq!(outcome_of(&report, &built.ids[0]), &PurgeOutcome::Purged);
+    assert!(!exists(&built.quarantined[0]));
+    assert_eq!(
+        early_marks(&built.session),
+        [(OpId(2), true), (OpId(1), true)]
+    );
+    assert_deletes_inside(&fx.quarantine_of(built.session.id()));
+}
+
+#[test]
+fn backups_are_never_deleted_before_their_class_is_due_whatever_the_consent_allows() {
+    let fx = Fx::new("early-backups");
+    let b = build_backups(&fx, at_day(0), true, true);
+    // Before the quarantine's retention ends, after it, and on the last day before the backups' own.
+    for now in [at_day(2), at_day(31), at_day(179)] {
+        let listing = expiring(&fx.roots, now).unwrap();
+        assert!(
+            listing.backups.is_empty() && listing.not_due.is_empty(),
+            "{listing:?}"
+        );
+        let mut consent = naming_files(&b);
+        for id in &b.ids {
+            consent.allow_early(id.clone());
+            consent.confirm_user_data(id.clone());
+        }
+        let report = purge(&fx.roots, &b.ids, &consent, now).unwrap();
+        for id in &b.ids {
+            assert_eq!(
+                outcome_of(&report, id),
+                &PurgeOutcome::Excluded(Exclusion::NotExpired {
+                    expires: at_day(180)
+                }),
+                "{report:?}"
+            );
+        }
+        assert_eq!(report.index, IndexUpdate::NotNeeded);
+    }
+    for file in &b.files {
+        assert!(backup_exists(&b, file), "{file}");
+    }
+    assert!(expire_records(&b.session).is_empty());
+}
+
+#[test]
+fn an_early_delete_leaves_the_backups_of_the_session_and_held_sessions_alone() {
+    let fx = Fx::new("early-mixed");
+    let a = fx.scratch.file(r"src\a.txt", b"aaa");
+    // One quarantined item and one registry op with a backup reference, in one session.
+    let built = build(&fx, at_day(0), &[app(a)], true, true);
+    let now = at_day(4);
+    let listing = expiring(&fx.roots, now).unwrap();
+    assert_eq!(listing.not_due.len(), 1, "only the quarantined item");
+    let report = purge(&fx.roots, &built.ids[..1], &early(&built.ids[..1]), now).unwrap();
+    assert_eq!(report.items[0].outcome, PurgeOutcome::Purged, "{report:?}");
+    // Only the quarantine class of the one op is recorded; the backup op has no record and its class
+    // is not due.
+    assert_eq!(
+        expire_records(&built.session),
+        [(OpId(1), RetentionClass::Quarantine)]
+    );
+    let listing = expiring(&fx.roots, now).unwrap();
+    assert!(
+        listing.backups.is_empty() && listing.due.is_empty(),
+        "{listing:?}"
+    );
+
+    // A session being undone is held before its retention ends too: not listed, not deleted.
+    let c = fx.scratch.file(r"src\c.txt", b"ccc");
+    let held = build(&fx, at_day(0), &[app(c)], false, true);
+    let mut w = JournalWriter::open_append(&held.session).unwrap();
+    let _token = w.undo_intent(OpId(1)).unwrap();
+    drop(w);
+    let listing = expiring(&fx.roots, now).unwrap();
+    assert!(
+        listing.not_due.is_empty() && listing.held.is_empty(),
+        "{listing:?}"
+    );
+    let report = purge(&fx.roots, &held.ids, &early(&held.ids), now).unwrap();
+    assert_eq!(
+        outcome_of(&report, &held.ids[0]),
+        &PurgeOutcome::Excluded(Exclusion::Held(HoldReason::SessionUndoInProgress)),
+        "{report:?}"
+    );
+    assert!(exists(&held.quarantined[0]));
+    assert!(expire_records(&held.session).is_empty());
+}
+
+#[test]
+fn an_early_delete_stopped_half_way_is_continued_as_an_unfinished_item() {
+    let fx = Fx::new("early-resume");
+    let item = fx.scratch.dir(r"src\item");
+    fx.scratch.file(r"src\item\a.txt", b"a");
+    fx.scratch.file(r"src\item\m-locked.txt", b"locked");
+    let built = build(&fx, at_day(0), &[app(item)], false, true);
+    let locked_path = format!(r"{}\m-locked.txt", built.quarantined[0]);
+    let holder = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0x1)
+        .open(ext(&locked_path))
+        .unwrap();
+    let now = at_day(2);
+    let report = purge(&fx.roots, &built.ids, &early(&built.ids), now).unwrap();
+    assert!(
+        matches!(
+            outcome_of(&report, &built.ids[0]),
+            PurgeOutcome::Failed(Failure::Walk(_))
+        ),
+        "{report:?}"
+    );
+    assert_eq!(early_marks(&built.session), [(OpId(1), true)]);
+    drop(holder);
+
+    // The record is written: the item is due until it is gone, and a plain consent continues it (the
+    // decision is in the journal; nothing of it can be put back any more).
+    let listing = expiring(&fx.roots, now).unwrap();
+    assert!(listing.not_due.is_empty());
+    assert_eq!(listing.items.len(), 1);
+    assert!(listing.items[0].unfinished);
+    let report = purge(&fx.roots, &built.ids, &all(&built.ids), now).unwrap();
+    assert_eq!(report.items[0].outcome, PurgeOutcome::Purged, "{report:?}");
+    assert!(!report.items[0].expire_recorded, "no second expire record");
+    assert_eq!(early_marks(&built.session), [(OpId(1), true)]);
+    assert!(!exists(&built.quarantined[0]));
 }

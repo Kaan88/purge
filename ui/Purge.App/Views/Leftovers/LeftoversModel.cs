@@ -771,7 +771,7 @@ public sealed class LeftoversViewModel : INotifyPropertyChanged
             Undo = undo;
             UndoConflictLines.Clear();
             foreach (var conflict in undo.Conflicts)
-                UndoConflictLines.Add($"{conflict.DisplayName}: {conflict.Conflict.Kind}");
+                UndoConflictLines.Add(ReconcileAlert.Text(conflict));
             foreach (var alert in undo.Alerts)
                 UndoConflictLines.Add(AlertText(alert));
             UndoTitle = undo.Outcome == Outcome.UndoConflicts ? "Put back, with conflicts" : "Put back";

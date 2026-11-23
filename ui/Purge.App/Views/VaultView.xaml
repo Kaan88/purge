@@ -3,7 +3,9 @@
      Use and real cap per drive, days left per cleanup, put back, and delete what is past retention. Data:
      history.index (medium engine); "Put back" is undo.run and "Review and delete" quarantine.expiring and
      quarantine.purge on the broker, each through the broker's security prompt. Expiry only proposes
-     (ENGINE_PLAN.md §7.8); there is no "Empty quarantine" in M3 (design 7a page table). -->
+     (ENGINE_PLAN.md §7.8); there is no "Empty quarantine" in M3 (design 7a page table). "Delete now" (a whole
+     cleanup, or one item of the list "Choose items" reads from the broker) is the same two calls before the
+     retention ends; the broker's prompt says so and is the confirmation (DECISIONS 2026-11-23). -->
 <UserControl
     x:Class="Purge.App.Views.VaultView"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -46,7 +48,48 @@
             </ItemsControl.ItemTemplate>
         </ItemsControl>
 
-        <StackPanel x:Name="InfoBarHost" Grid.Row="2" Spacing="6" />
+        <StackPanel Grid.Row="2" Spacing="10">
+            <StackPanel x:Name="InfoBarHost" Spacing="6" />
+
+            <!-- The quarantined items of one cleanup, as the broker listed them, each with its own "Delete now". -->
+            <Border x:Name="ItemsPanel" Style="{StaticResource Card}" Visibility="Collapsed">
+                <Grid>
+                    <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                    <Grid Padding="16,10" ColumnSpacing="12">
+                        <Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                        <StackPanel>
+                            <TextBlock x:Name="ItemsTitle" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                            <TextBlock Style="{StaticResource SmallSecondary}" TextWrapping="Wrap"
+                                       Text="Deleting an item here is for good: it cannot be undone, and Undo can no longer put it back. Purge asks in its security prompt first." />
+                        </StackPanel>
+                        <Button Grid.Column="1" Content="Close" Style="{StaticResource SubtleButton}" Click="OnCloseItems" VerticalAlignment="Center"
+                                AutomationProperties.Name="Close the item list" />
+                    </Grid>
+                    <ListView x:Name="Items" Grid.Row="1" SelectionMode="None" MaxHeight="232" Padding="0,0,0,8"
+                              AutomationProperties.Name="Quarantined items of the cleanup">
+                        <ListView.ItemContainerStyle>
+                            <Style TargetType="ListViewItem">
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                <Setter Property="Padding" Value="16,0" />
+                            </Style>
+                        </ListView.ItemContainerStyle>
+                        <ListView.ItemTemplate>
+                            <DataTemplate x:DataType="local:VaultItem">
+                                <Grid MinHeight="48" ColumnSpacing="14" AutomationProperties.Name="{x:Bind Path}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Text="{x:Bind Path}" FontSize="13" TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{x:Bind Path}" />
+                                        <TextBlock Text="{x:Bind Detail}" Style="{StaticResource SmallSecondary}" TextTrimming="CharacterEllipsis" />
+                                    </StackPanel>
+                                    <Button Grid.Column="1" Content="Delete now…" Click="OnDeleteItemNow" IsEnabled="{x:Bind CanAct}"
+                                            VerticalAlignment="Center" AutomationProperties.Name="{x:Bind DeleteLabel}" />
+                                </Grid>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+                </Grid>
+            </Border>
+        </StackPanel>
 
         <Border Grid.Row="3" Style="{StaticResource Card}">
             <Grid>
@@ -69,7 +112,7 @@
                             <Grid Height="64" ColumnSpacing="14" AutomationProperties.Name="{x:Bind Name}">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="Auto" /><ColumnDefinition /><ColumnDefinition Width="150" />
-                                    <ColumnDefinition Width="72" /><ColumnDefinition Width="180" />
+                                    <ColumnDefinition Width="72" /><ColumnDefinition Width="Auto" MinWidth="180" />
                                 </Grid.ColumnDefinitions>
                                 <Border Width="32" Height="32" CornerRadius="7" Background="{x:Bind TileBrush}">
                                     <TextBlock Text="{x:Bind Initial}" Foreground="White" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center" />
@@ -103,7 +146,15 @@
                                 </Grid>
                                 <StackPanel Grid.Column="4" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center" HorizontalAlignment="Right">
                                     <Button Content="Put back…" Click="OnRestore" Visibility="{x:Bind HeldVisibility}"
-                                            AutomationProperties.Name="Put back" />
+                                            IsEnabled="{x:Bind CanAct, Mode=OneWay}" AutomationProperties.Name="Put back" />
+                                    <!-- Before the retention ends too: the broker's prompt names every item and says it is for good. -->
+                                    <Button Content="Delete now…" Click="OnDeleteNow" Visibility="{x:Bind DeleteVisibility}"
+                                            IsEnabled="{x:Bind CanAct, Mode=OneWay}" AutomationProperties.Name="Delete the files of this cleanup now"
+                                            ToolTipService.ToolTip="Delete this cleanup's quarantined files for good, without waiting for the retention to end" />
+                                    <Button Content="Choose items…" Style="{StaticResource SubtleButton}" Click="OnChooseItems"
+                                            Visibility="{x:Bind DeleteVisibility}" IsEnabled="{x:Bind CanAct, Mode=OneWay}"
+                                            AutomationProperties.Name="Choose items to delete now"
+                                            ToolTipService.ToolTip="List this cleanup's quarantined items and delete single ones" />
                                     <Button Content="Details" Style="{StaticResource SubtleButton}" Click="OnDetails" />
                                 </StackPanel>
                             </Grid>

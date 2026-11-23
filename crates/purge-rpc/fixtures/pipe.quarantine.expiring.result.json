@@ -4,6 +4,7 @@
       "app": "Git",
       "bytes": 345000000,
       "class": "Quarantine",
+      "due": true,
       "expired": 134102673020000000,
       "expiry_id": "e-0e0e000000000007",
       "files": [

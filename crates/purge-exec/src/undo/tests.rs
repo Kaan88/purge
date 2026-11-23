@@ -81,6 +81,7 @@ fn op_state(op: u32, exec_op: ExecOp, outcome: Option<ItemOutcome>) -> OpState {
         undo: UndoState::NotStarted,
         undo_attempts: 0,
         expired: Vec::new(),
+        deleted_early: false,
         retry_in_flight: false,
     }
 }

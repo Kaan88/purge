@@ -14,9 +14,43 @@ public sealed partial class VaultVolume(VaultVolumeModel v)
     public string Tip { get; } = $"{v.Root} {Math.Round(v.Percent).ToString(CultureInfo.CurrentCulture)} % of its quarantine limit";
 }
 
-/// <summary>One cleanup that holds something (board 16): what is held, and how long it can still be put back.</summary>
-public sealed partial class VaultBatch(VaultBatchModel model)
+/// <summary>
+/// One quarantined item of the cleanup "Choose items…" opened: where it was, its size and days left, and its own
+/// "Delete now" (by the broker's id; the broker's prompt is the confirmation).
+/// </summary>
+public sealed partial class VaultItem(VaultItemModel model, bool canAct)
 {
+    public string ExpiryId { get; } = model.ExpiryId;
+    public string Path { get; } = model.Path;
+    public string Detail { get; } = model.Detail;
+    public string DeleteLabel { get; } = "Delete " + model.Path + " now";
+
+    /// <summary>False while a broker action runs.</summary>
+    public bool CanAct { get; } = canAct;
+}
+
+/// <summary>One cleanup that holds something (board 16): what is held, and how long it can still be put back.</summary>
+public sealed partial class VaultBatch(VaultBatchModel model) : System.ComponentModel.INotifyPropertyChanged
+{
+    private bool _canAct = true;
+
+    public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+
+    /// <summary>False while a broker action runs: the row's actions are disabled, not just ignored.</summary>
+    public bool CanAct
+    {
+        get => _canAct;
+        set
+        {
+            if (_canAct == value) return;
+            _canAct = value;
+            PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(CanAct)));
+        }
+    }
+
+    /// <summary>"Delete now" is offered while the cleanup still has files in quarantine; backups are not deleted early.</summary>
+    public Visibility DeleteVisibility => Model.FilesPurged ? Visibility.Collapsed : Visibility.Visible;
+
     public VaultBatchModel Model { get; } = model;
     public string Id => Model.Id;
     public string Name => Model.Name;

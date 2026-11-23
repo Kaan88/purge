@@ -162,7 +162,10 @@ public sealed class HistoryEntryModel(HistoryItem item)
         _ => "File",
     };
 
-    public string OutcomeText { get; } = item.Undone ? "Put back" : item.Outcome.Kind switch
+    public string OutcomeText { get; } = item.Undone ? "Put back"
+        : item.Deleted is Deleted.Early ? "Deleted from quarantine at your request · cannot be put back"
+        : item.Deleted is Deleted.Expired ? "Deleted after its retention ended · cannot be put back"
+        : item.Outcome.Kind switch
     {
         "Done" => "Moved to quarantine",
         "Vanished" => "Already gone",
@@ -179,8 +182,14 @@ public sealed class HistoryEntryModel(HistoryItem item)
 
     public bool HasAlert => AlertText is not null;
 
-    /// <summary>Only an item that changed something and is not back yet can be ticked for "Restore selected".</summary>
-    public bool Selectable { get; } = !item.Undone && item.Outcome.Kind is "Done" or "PendingReboot";
+    /// <summary>What Purge kept of the item was deleted for good (after its retention, or earlier at the user's request).</summary>
+    public bool IsDeleted { get; } = item.Deleted is not null;
+
+    /// <summary>
+    /// Only an item that changed something, is not back yet and still has its kept data can be ticked for "Restore
+    /// selected": a deleted one cannot be put back.
+    /// </summary>
+    public bool Selectable { get; } = !item.Undone && item.Deleted is null && item.Outcome.Kind is "Done" or "PendingReboot";
 
     public bool Checked { get; set; }
 }
@@ -393,7 +402,7 @@ public sealed class HistoryViewModel
             var undo = await broker.UndoAsync(session.Id, ops, progress, ct);
             changed = true;
             foreach (var conflict in undo.Conflicts)
-                RestoreLines.Add($"{conflict.DisplayName}: {conflict.Conflict.Kind}");
+                RestoreLines.Add(ReconcileAlert.Text(conflict));
             foreach (var alert in undo.Alerts)
                 RestoreLines.Add(ReconcileAlert.Text(alert));
             RestoreTitle = undo.Outcome switch
