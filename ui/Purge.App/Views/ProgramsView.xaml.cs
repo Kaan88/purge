@@ -114,6 +114,34 @@ public sealed partial class ProgramsView : UserControl
         MainWindow.Instance.BenchReached("names_visible");
     }
 
+    /// <summary>
+    /// Bench only, called at the end of the window constructor: <c>first_row</c> fires in the pre-layout of the page
+    /// (<c>MainWindow.PreMeasurePrograms</c>), before the window is shown, so it no longer says the first frame has rows.
+    /// <c>first_row_live</c> is the first layout pass after the constructor (the live layout <c>Activate()</c> starts)
+    /// that finds a realized row container in the list.
+    /// </summary>
+    public void WatchLiveRows()
+    {
+        if (LaunchMarkers.Enabled) ProgramList.LayoutUpdated += OnLiveLayout;
+    }
+
+    private void OnLiveLayout(object? sender, object e)
+    {
+        if (RealizedRows() == 0) return;
+        ProgramList.LayoutUpdated -= OnLiveLayout;
+        LaunchMarkers.Mark("first_row_live");
+    }
+
+    /// <summary>Bench only, at <c>first_tick</c>: <c>rows_at_tick</c>, the number of realized row containers (a count, not a time).</summary>
+    public void RecordRowsAtTick()
+    {
+        if (LaunchMarkers.Enabled) LaunchMarkers.Record("rows_at_tick", RealizedRows());
+    }
+
+    /// <summary>Row containers of the list that have been laid out.</summary>
+    private int RealizedRows() =>
+        ProgramList.ItemsPanelRoot is { } panel ? panel.Children.Count(c => c.ActualSize.Y > 0) : 0;
+
     /// <summary>The icon atlas file: the user's, or a bench run's own (<c>PURGE_BENCH_ICON_ATLAS</c>, bench only).</summary>
     private static string? BenchAtlasFile() =>
         LaunchMarkers.Enabled && Environment.GetEnvironmentVariable("PURGE_BENCH_ICON_ATLAS") is { Length: > 0 } file ? file : null;
@@ -199,7 +227,9 @@ public sealed partial class ProgramsView : UserControl
     public void OnFirstTick()
     {
         _firstTickDone = true;
-        // The ListView default container transitions, left out of the first frame (see the XAML).
+        // The ListView default container transitions, left out of the first frame (see the XAML). The items panel
+        // (ItemsStackPanel) takes them from the ListView, not from its own ChildrenTransitions, which stay empty here
+        // and on fa3ba36 alike; screen captures after a tab switch show the same ~600 ms row animation as fa3ba36.
         ProgramList.ItemContainerTransitions =
         [
             new AddDeleteThemeTransition(),

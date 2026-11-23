@@ -62,6 +62,7 @@ public sealed partial class MainWindow : Window
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
         LaunchMarkers.Mark("w_titlebar");
+        _programs.WatchLiveRows();
         // A list reply that came in during that wait still makes the first frame.
         if (!loaded)
         {
@@ -78,6 +79,7 @@ public sealed partial class MainWindow : Window
 
     private void OnStartup(StartupResult data)
     {
+        // Prepared may still be running on the engine reply thread; then Load builds the rows on this thread.
         _programs.Load(data, Program.Prepared is { IsCompletedSuccessfully: true } prepared ? prepared.Result : null);
         // The "Administrator" chip shows only when the UI itself runs elevated (7a delta 2); the token is read
         // off the UI thread, so it also holds when the engine is not used.
@@ -134,6 +136,7 @@ public sealed partial class MainWindow : Window
         _firstTickSeen = true;
         CompositionTarget.Rendering -= OnFirstRendering;
         LaunchMarkers.Mark("first_tick");
+        _programs.RecordRowsAtTick();
 
         // Approximate "first presented frame": the next DWM composition after the first tick has been committed.
         // The precise number comes from Dwm-Core present events in WPR (§9.2 (a)).
@@ -311,9 +314,10 @@ public sealed partial class MainWindow : Window
 
     /// <summary>
     /// Lays out the Programs page once at the size it will get, while the title bar call below still has to wait
-    /// for composition (M3 launch perf): templates are applied and the first screenful of list containers is
-    /// built now instead of after Activate(). The live layout after Activate() measures again; a size that is
-    /// slightly off only means it does more of that work itself.
+    /// for composition (M3 launch perf): templates are applied now instead of after Activate(). The list realizes
+    /// only one row container here (a diagnostic build counted 1 at the end of the constructor); the live layout
+    /// after Activate() realizes the first screenful and measures the page again, so a size that is slightly off
+    /// only means it does more of that work itself.
     /// </summary>
     private void PreMeasurePrograms()
     {

@@ -25,7 +25,9 @@ once the first frame has been presented. The markers, in launch order:
 | `programs_enter`, `programs_xaml` | `ProgramsView` constructor, before and after `InitializeComponent`. |
 | `programs_ctor` | `ProgramsView` built and attached. |
 | `rows_set` | `ItemsSource`/selection prepared (before `Activate()` when the reply is in). When the reply comes in only during the title bar wait, it is marked after `w_titlebar`. |
-| `first_row` | First list container realized (`ContainerContentChanging`). Since the pre-layout of the Programs page (see *Launch path*) this comes before `w_titlebar` and `Activate()` when the reply was in at `rows_set`. |
+| `first_row` | First list container realized (`ContainerContentChanging`). Since the pre-layout of the Programs page (see *Launch path*) this comes before `w_titlebar` and `Activate()` when the reply was in at `rows_set`, so it no longer shows that the first frame has rows (see `first_row_live`). |
+| `first_row_live` | The first layout pass after the `MainWindow` constructor (the live layout `Activate()` starts, not the pre-layout) that finds a realized row container in the list. Reported, no gate. |
+| `rows_at_tick` | A count, not a time: the row containers with a height in the list's items panel at `first_tick`. In the app's line only; `cargo xtask bench-launch` does not read it. |
 | `w_titlebar` | `ExtendsContentIntoTitleBar` and `SetTitleBar` done. Since branch `m3-launch-perf` this is the last step of the `MainWindow` constructor, after `rows_set`, not after `w_backdrop`. |
 | `first_tick` | First `CompositionTarget.Rendering` tick. |
 | `presented` | After `DwmFlush()` on the dispatcher thread, i.e. the next committed frame after `first_tick`. |
@@ -109,12 +111,35 @@ Intel HD 530 + GTX 960M) with extra markers in builds that were not committed:
 - So the `MainWindow` constructor now builds the Programs page, loads the rows and lays the page out once
   (`PreMeasurePrograms`) before that call, all inside the wait, and only then extends the title bar; the
   window is still not shown before `Activate()`. What is left after the wait is `Activate()`, the live
-  layout of the whole window and the first render.
+  layout of the whole window and the first render. The pre-layout applies the templates but realizes only
+  one row container (counted at the end of the constructor in a diagnostic build); the live layout
+  realizes the first screenful.
+- Rows in the first frame: `first_row` now fires in that pre-layout, so the stub's "rows before it in
+  every run" check no longer shows much. `first_row_live` and `rows_at_tick` (report only) do: in an
+  interleaved stub run against the previous commit (n=14, run d71f7587) `first_row_live` came before
+  `first_tick` (p50 421 ms vs 424 ms) and `presented` in 14 of 14 launches, and 15 rows were realized at
+  `first_tick` in every launch. A screen capture of a launch (`Graphics.CopyFromScreen` of the window
+  rectangle polled from the moment the window is visible) shows the window black until the first frame
+  with content, and that frame already has the header, the tabs and the first screenful of rows (no tab
+  counts, sizes or details pane yet; they come after the first tick). In that capture the content
+  appeared 70-90 ms after the `presented` marker; a GDI screen copy takes about 20 ms and the window
+  open animation runs at the same time, so this is not a measure of `presented`.
 - The rows of the first list are built and sorted on the thread that read the `programs.list` reply
   (`ProgramsView.Prepare`, the same filter and sort as `Refresh`), so a real engine's reply that comes in
   during the wait costs the UI thread almost nothing after it.
 - The program `ListView` has no container transitions until `OnFirstTick`, which restores the ListView
-  defaults.
+  defaults. Checked at run time with screen captures of the list after a tab switch: the rows animate for
+  about 600 ms with the same frame-by-frame curve as fa3ba36, and without the restore they snap in one
+  frame. The items panel's own `ChildrenTransitions` is empty both here and on fa3ba36; the
+  `ItemsStackPanel` takes the transitions from the ListView, so that count is not the thing to check.
+- The title bar theme (`AppWindow.TitleBar.PreferredTheme`) is now set before `ExtendsContentIntoTitleBar`.
+  With `--theme light` and `--theme dark` (system theme dark) the caption buttons' glyphs are the same as on
+  fa3ba36: black on light, white on dark (screen captures of the button area).
+- Measurement noise: two copies of the same build, interleaved (A/A, run c970ae85), differed by about
+  12-14 ms of paired p50 difference on the VM-loaded host. A per-commit difference at or below that is not
+  shown to be a gain on its own. The interleaved figures in this section and in DECISIONS come from a
+  development driver (`ab.ps1`) that takes interpolated percentiles; `cargo xtask bench-launch` and the
+  gates use nearest rank.
 - Without `ExtendsContentIntoTitleBar` at all (the system caption; a design change, not made) `Activate()`
   and part of the layout run inside the wait: in an interleaved run on a loaded host this was 93 ms
   earlier on `first_tick` and `presented` than the extended title bar with the changes above.

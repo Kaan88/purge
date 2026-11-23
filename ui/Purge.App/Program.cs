@@ -57,7 +57,11 @@ public static class Program
             listReply: () => LaunchMarkers.Mark("list_reply"));
         Startup = _link.Startup;
         // The rows are built and sorted on the thread that read the reply, not on the UI thread (M3 launch perf).
-        // The first culture-aware sort also loads ICU there.
+        // ExecuteSynchronously: Prepare runs on the engine reply thread (the pool thread that completes Startup), or
+        // here in Main when the reply is already in, before or while the window is built; the first culture-aware
+        // sort also loads ICU there. When the window takes the reply before Prepared has finished,
+        // MainWindow.OnStartup passes no prepared list and the UI thread builds the rows itself (ProgramsView.Load),
+        // as before this change.
         Prepared = Startup.ContinueWith(t => Views.ProgramsView.Prepare(t.Result.Inventory), CancellationToken.None,
             TaskContinuationOptions.OnlyOnRanToCompletion | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
 

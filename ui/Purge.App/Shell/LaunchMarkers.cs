@@ -39,7 +39,7 @@ public static partial class LaunchMarkers
     }
 
     /// <summary>Records <paramref name="name"/> at an earlier marker's time (<c>names_visible</c> when the rows were in the
-    /// first presented frame).</summary>
+    /// first presented frame), or a value that is not a time (<c>rows_at_tick</c>, a count).</summary>
     public static void Record(string name, double ms)
     {
         if (!Enabled) return;

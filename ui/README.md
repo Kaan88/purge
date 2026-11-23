@@ -78,8 +78,9 @@ Development switches:
 
 Launch markers (milliseconds since process creation): `module_init`, `main`, `engine_ready`, `list_reply`,
 `on_launched`, `window_ctor`, `w_backdrop`, `w_icon`, `w_size`, `programs_enter`, `programs_xaml`,
-`programs_ctor`, `rows_set`, `first_row`, `w_titlebar`, `first_tick`, `presented` (the title bar goes last in
-the window constructor; `docs/M3_BENCH.md`, *Launch path*).
+`programs_ctor`, `rows_set`, `first_row`, `w_titlebar`, `first_row_live`, `first_tick`, `presented` (the title
+bar goes last in the window constructor; `docs/M3_BENCH.md`, *Launch path*), and `rows_at_tick` (a count of
+realized rows at `first_tick`, not a time).
 They show in Settings when present, and append one line per launch to the file named by `PURGE_BENCH_OUT`
 (only that file turns them on). The bench itself is `docs/M3_BENCH.md`.
 
