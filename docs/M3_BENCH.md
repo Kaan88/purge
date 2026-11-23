@@ -70,7 +70,7 @@ grid), built with the same flavour as `Purge.App` (unpackaged, self-contained, N
 |---|---|---|
 | First Rendering tick vs the bare control | control p50 + 60 ms | 1.3 / 9.2 |
 | First Rendering tick, absolute guard | 360 ms p50, 420 ms p90 | 1.3 |
-| Names visible (presented frame with rows), stub | 400 ms p50, 460 ms p90 on `presented`, rows before it in every run | 1.3 |
+| Names visible (presented frame with rows), stub | 400 ms p50, 460 ms p90 on `presented`, rows (`first_row_live`) before it in every run | 1.3 |
 | Names visible (presented frame with rows), real engine and ARP data (`--real-engine`) | 400 ms p50, 460 ms p90 on `names_visible` | 1.3 / M3 9.1 |
 | Icons visible, warm icon cache (`--real-engine`) | 1 s p50 on `icons_visible`; the cold cache (launch 1) is reported | M3 9.1 |
 | S3 page open, 2,000-item fixture (`--s3-open`) | reported, no gate yet | M3 9.1 |
@@ -115,7 +115,8 @@ Intel HD 530 + GTX 960M) with extra markers in builds that were not committed:
   one row container (counted at the end of the constructor in a diagnostic build); the live layout
   realizes the first screenful.
 - Rows in the first frame: `first_row` now fires in that pre-layout, so the stub's "rows before it in
-  every run" check no longer shows much. `first_row_live` and `rows_at_tick` (report only) do: in an
+  every run" check reads `first_row_live` instead (`first_row` only for builds without the marker;
+  coordinator 2026-11-23). `first_row_live` and `rows_at_tick` (report only) show it: in an
   interleaved stub run against the previous commit (n=14, run d71f7587) `first_row_live` came before
   `first_tick` (p50 421 ms vs 424 ms) and `presented` in 14 of 14 launches, and 15 rows were realized at
   `first_tick` in every launch. A screen capture of a launch (`Graphics.CopyFromScreen` of the window

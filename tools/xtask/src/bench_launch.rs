@@ -643,8 +643,12 @@ fn warm(o: &Opts, tmp: &Path) -> Result<bool> {
     );
     gates.push(g);
     ok &= p;
+    // Rows in the presented frame: the live layout's first row (`first_row_live`) when the build marks it. `first_row`
+    // alone also fires in the constructor's pre-measure (m3-launch-perf) and proves nothing about the frame; it is
+    // only the fallback for builds older than the marker.
     let rows_in_frame = purge.runs.iter().all(|m| {
-        m.get("first_row")
+        m.get("first_row_live")
+            .or_else(|| m.get("first_row"))
             .zip(m.get("presented"))
             .is_some_and(|(r, p)| r <= p)
     });
