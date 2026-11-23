@@ -93,9 +93,6 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    /// <summary>The page the window's bar belongs to; null while no bar shows.</summary>
-    private string? _barPage;
-
     /// <summary>
     /// Explains the Windows admin prompt the first time; false when the user chose "Not now". <paramref name="readOnly"/>:
     /// the action only reads Purge's records (History's check for interrupted cleanups, "Show items"), so the words
@@ -103,40 +100,6 @@ public sealed partial class MainWindow : Window
     /// </summary>
     public Task<bool> ConfirmFirstElevationAsync(bool readOnly = false) =>
         ElevationPrompts.ConfirmFirstElevationAsync(Root.XamlRoot, Root.ActualTheme, readOnly);
-
-    /// <summary>
-    /// Shows the bar for a Windows prompt that did not lead to the broker: "You cancelled the Windows prompt", or "Not
-    /// started" when the user chose "Not now" at the explanation (<paramref name="declinedExplanation"/>, carried by
-    /// the route's own launch result). Only the Programs page's leftovers check uses it; the Uninstall, History and
-    /// Quarantine pages say it in their own bars. The bar sits in the layout above the page (it never covers the
-    /// page's title or buttons) and goes when the user goes to another page.
-    /// </summary>
-    public void ShowAdminPromptCancelled(bool declinedExplanation, Action? tryAgain = null)
-    {
-        ClearWindowBar();
-        var bar = ElevationPrompts.CancelledBar(Root.ActualTheme, declinedExplanation, tryAgain);
-        // Collapse first and take the bar out of the tree on a later turn: removing an element inside its own
-        // event, while focus may be on its close button, is a pattern WinUI handles badly.
-        bar.Closed += (_, _) =>
-        {
-            WindowBarHost.Visibility = Visibility.Collapsed;
-            _barPage = null;
-            DispatcherQueue.TryEnqueue(() =>
-            {
-                if (_barPage is null) WindowBarHost.Children.Clear();
-            });
-        };
-        WindowBarHost.Children.Add(bar);
-        WindowBarHost.Visibility = Visibility.Visible;
-        _barPage = CurrentPage;
-    }
-
-    private void ClearWindowBar()
-    {
-        _barPage = null;
-        WindowBarHost.Visibility = Visibility.Collapsed;
-        WindowBarHost.Children.Clear();
-    }
 
     /// <summary>
     /// The rail's badges follow real state: the Uninstall pipeline shows one while an uninstall runs, and Leftovers
@@ -350,8 +313,6 @@ public sealed partial class MainWindow : Window
     {
         var leftLeftovers = CurrentPage == "leftovers" && key != "leftovers";
         var view = ViewFor(key);
-        // The window's bar belongs to the page it was shown on.
-        if (_barPage is not null && _barPage != key) ClearWindowBar();
         PageHost.Child = view;
         foreach (var (button, selection, pill) in _rail)
         {

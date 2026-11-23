@@ -185,21 +185,13 @@
                 </StackPanel>
             </Grid>
 
-            <!-- Content card on the Mica backdrop. The window's bar (a cancelled admin prompt of the Programs page's
-                 check) sits above the page in the layout, never over it, and belongs to the page it was shown on
-                 (MainWindow.ShowAdminPromptCancelled). -->
+            <!-- Content card on the Mica backdrop; the page goes in PageHost. There is no window-level bar: each page
+                 says a cancelled or declined admin prompt in its own bar, inside its layout. -->
             <Border x:Name="ContentCard" Grid.Column="1"
                     Background="{ThemeResource LayerFillColorDefaultBrush}"
                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                     BorderThickness="1,1,0,0" CornerRadius="8,0,0,0">
-                <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="*" />
-                    </Grid.RowDefinitions>
-                    <StackPanel x:Name="WindowBarHost" Margin="28,12,28,0" Spacing="8" Visibility="Collapsed" />
-                    <Border x:Name="PageHost" Grid.Row="1" />
-                </Grid>
+                <Border x:Name="PageHost" />
             </Border>
         </Grid>
     </Grid>

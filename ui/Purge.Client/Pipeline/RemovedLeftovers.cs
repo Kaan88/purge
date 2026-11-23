@@ -325,7 +325,11 @@ public sealed class RemovedLeftoversController
         switch (launch.State)
         {
             case UninstallLaunchState.Cancelled:
-                // The shell's cancelled bar says it (error 1223); the program keeps its button for another try.
+                // The page's own bar says it (error 1223, or "Not now"); the program keeps its button for another try.
+                Notice = new RemovedNotice(UninstallNoticeKind.Info, "Not checked: administrator permission was not given.",
+                    launch.DeclinedExplanation
+                        ? "You chose Not now, so Purge did not ask Windows. Nothing was changed."
+                        : "The Windows prompt was cancelled. Nothing was changed.");
                 AdminPromptCancelled?.Invoke(launch.DeclinedExplanation);
                 break;
             case UninstallLaunchState.NotAdministrator:

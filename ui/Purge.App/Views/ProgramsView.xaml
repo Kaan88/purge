@@ -243,8 +243,12 @@
                          inventory.changes. Loaded on the first tick, and only when there is something to show. A program
                          without a stored fingerprint is listed with no leftover count; "Check for leftovers" needs the broker. -->
                     <StackPanel x:Name="Attention" x:Load="False" Grid.Row="1" Spacing="2" Margin="0,0,0,4">
-                        <TextBlock x:Name="AttentionHeader" Margin="12,4,0,2" FontSize="11" CharacterSpacing="50" FontWeight="SemiBold"
-                                   Foreground="{ThemeResource SystemFillColorCautionBrush}" />
+                        <StackPanel Orientation="Horizontal" Spacing="8" Margin="12,4,0,2">
+                            <FontIcon Glyph="&#xE7BA;" FontSize="12" VerticalAlignment="Center"
+                                      Foreground="{ThemeResource SystemFillColorCautionBrush}" />
+                            <TextBlock x:Name="AttentionHeader" FontSize="11" CharacterSpacing="50" FontWeight="SemiBold" VerticalAlignment="Center"
+                                       Foreground="{ThemeResource SystemFillColorCautionBrush}" />
+                        </StackPanel>
                         <ItemsControl x:Name="AttentionList">
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate x:DataType="local:RemovedRow">
@@ -343,7 +347,8 @@
             </Border>
 
             <!-- Details card (hidden on a narrow page; the toolbar's Uninstall still acts on the ticked programs). -->
-            <Border x:Name="DetailsCard" Grid.Column="1" Style="{StaticResource Card}" VerticalAlignment="Top">
+            <!-- Opacity 0 until a program is shown: the empty card drew as a stray line (light theme). -->
+            <Border x:Name="DetailsCard" Grid.Column="1" Style="{StaticResource Card}" VerticalAlignment="Top" Opacity="0">
                 <ScrollViewer x:Name="Details" x:Load="False" Padding="18" Visibility="Collapsed">
                     <StackPanel Spacing="12">
                         <Grid ColumnSpacing="12">

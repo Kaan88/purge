@@ -280,7 +280,7 @@ public sealed partial class ProgramsView : UserControl
             new EntranceThemeTransition { IsStaggeringEnabled = false },
         ];
         UpdateTabCounts();
-        FindName(nameof(Commands));
+        LoadCommands();
         PlainCommands.Visibility = Visibility.Collapsed;
         UpdateCommandState();
         FindName(nameof(SearchBox));
@@ -457,7 +457,8 @@ public sealed partial class ProgramsView : UserControl
             UpdateSummary();
             return;
         }
-        AttentionHeader.Text = "\uE7BA  " + group.Header(Program.Engine.IsLive);
+        // The warning glyph is a FontIcon beside this text (in the text font it drew as an empty box).
+        AttentionHeader.Text = group.Header(Program.Engine.IsLive);
         var old = _removedRows.ToDictionary(r => r.ProgramId, StringComparer.Ordinal);
         _removedRows = group.Shown.Select(p => old.TryGetValue(p.ProgramId, out var kept) ? kept : new RemovedRow(p)).ToList();
         AttentionList.ItemsSource = _removedRows;
@@ -511,8 +512,7 @@ public sealed partial class ProgramsView : UserControl
     {
         var controller = new RemovedLeftoversController(id => FingerprintStore.MayHaveRecord(id), LaunchStoredAsync);
         controller.Changed += () => DispatcherQueue.TryEnqueue(RenderRemoved);
-        controller.AdminPromptCancelled += declined =>
-            DispatcherQueue.TryEnqueue(() => MainWindow.Instance.ShowAdminPromptCancelled(declined));
+        // A cancelled or declined admin prompt comes back as the controller's Notice, shown in this page's bar.
         controller.Completed += outcome => DispatcherQueue.TryEnqueue(() => OpenStoredScan(outcome));
         return controller;
     }
@@ -1055,10 +1055,12 @@ public sealed partial class ProgramsView : UserControl
         if (row is null)
         {
             if (Details is not null) Details.Visibility = Visibility.Collapsed;
+            DetailsCard.Opacity = 0;
             return;
         }
         FindName(nameof(Details));
         Details.Visibility = Visibility.Visible;
+        DetailsCard.Opacity = 1;
         UpdateCommandState();
         var e = row.Entry;
         // The list rows carry no uninstaller, folder or product code: programs.get brings them, once per row.
@@ -1076,7 +1078,8 @@ public sealed partial class ProgramsView : UserControl
                 : row.KindText + (e.QuietUninstallString is not null || e.InstallerKind == InstallerKind.Msi ? " · quiet mode available" : "");
         DLocationText.Text = reading ? "Reading…" : e.InstallLocation ?? "Not recorded";
         ToolTipService.SetToolTip(DLocation, e.InstallLocation);
-        DLocation.IsEnabled = e.InstallLocation is not null;
+        // Kept enabled: disabling the link while it has keyboard focus (the details load while the user tabs through
+        // the pane) is a classic WinUI focus crash, and RunCommand("open-folder") already says when there is no folder.
         DInstalled.Text = Join(" · ", row.InstalledText, "for " + row.ScopeText);
         ShowDetailsSize(row);
         DPlatform.Text = row.BitsText;
@@ -1125,6 +1128,42 @@ public sealed partial class ProgramsView : UserControl
 
     private void OnCommand(object sender, RoutedEventArgs e) => RunCommand((sender as FrameworkElement)?.Tag as string ?? "");
 
+    private bool _commandsHooked;
+
+    /// <summary>
+    /// Loads the CommandBar (deferred past the first frame) and names its "…" button. The CommandBar's own tooltip
+    /// for that button flips to "See less" while the menu is open; it reads "More actions" at all times instead,
+    /// set again after each open and close because the CommandBar resets it then.
+    /// </summary>
+    private void LoadCommands()
+    {
+        FindName(nameof(Commands));
+        if (_commandsHooked || Commands is null) return;
+        _commandsHooked = true;
+        Commands.Loaded += (_, _) => NameMoreButton();
+        Commands.Opened += (_, _) => DispatcherQueue.TryEnqueue(NameMoreButton);
+        Commands.Closed += (_, _) => DispatcherQueue.TryEnqueue(NameMoreButton);
+    }
+
+    private void NameMoreButton()
+    {
+        if (FindChild(Commands, "MoreButton") is not Button more) return;
+        ToolTipService.SetToolTip(more, "More actions");
+        AutomationProperties.SetName(more, "More actions");
+    }
+
+    private static DependencyObject? FindChild(DependencyObject parent, string name)
+    {
+        var count = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChildrenCount(parent);
+        for (var i = 0; i < count; i++)
+        {
+            var child = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChild(parent, i);
+            if (child is FrameworkElement { Name: var n } && n == name) return child;
+            if (FindChild(child, name) is { } found) return found;
+        }
+        return null;
+    }
+
     /// <summary>
     /// Runs a program command. Buttons and the command box both come here, so a typed command takes exactly the
     /// steps its button takes. Force remove, Modify and Remove entry are not offered in M3 (design 10).
@@ -1135,7 +1174,7 @@ public sealed partial class ProgramsView : UserControl
         {
             case "more-pending":
                 // Clicked before the first tick finished: load the CommandBar now and open its overflow.
-                FindName(nameof(Commands));
+                LoadCommands();
                 PlainCommands.Visibility = Visibility.Collapsed;
                 Commands.IsOpen = true;
                 return;

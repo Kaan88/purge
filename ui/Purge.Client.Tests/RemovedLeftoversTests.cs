@@ -229,7 +229,8 @@ public sealed class RemovedLeftoversTests
         Assert.False(completed);
         Assert.Equal(RemovedCheckState.Record, controller.StateOf(Program));
         Assert.False(controller.IsBusy);
-        Assert.Null(controller.Notice); // the shell's bar says it; no second bar
+        // The page's own bar says it (the window has no bar for it any more).
+        Assert.Equal("Not checked: administrator permission was not given.", controller.Notice?.Title);
     }
 
     [Fact]
@@ -243,7 +244,7 @@ public sealed class RemovedLeftoversTests
         await controller.CheckAsync(Program, "Git").WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.True(declined);
-        Assert.Null(controller.Notice);
+        Assert.StartsWith("You chose Not now", controller.Notice?.Message);
     }
 
     [Fact]

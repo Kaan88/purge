@@ -51,35 +51,4 @@ public static class ElevationPrompts
         Explained = true;
         return true;
     }
-
-    /// <summary>
-    /// The bar for a Windows prompt that did not lead to the broker: cancelled at Windows (1223), or not shown because
-    /// the user chose "Not now" at the explanation (<paramref name="declinedExplanation"/>). <paramref name="tryAgain"/>
-    /// adds a "Try again" button.
-    /// </summary>
-    public static InfoBar CancelledBar(ElementTheme theme, bool declinedExplanation, Action? tryAgain = null)
-    {
-        var bar = new InfoBar
-        {
-            Severity = InfoBarSeverity.Informational,
-            Title = declinedExplanation ? "Not started." : "You cancelled the Windows prompt.",
-            Message = declinedExplanation
-                ? "You chose Not now, so Purge did not ask Windows for administrator permission. Nothing was changed."
-                : "Nothing was changed. This needs administrator permission.",
-            IsOpen = true,
-            IsClosable = true,
-            RequestedTheme = theme,
-        };
-        if (tryAgain is not null)
-        {
-            var retry = new Button { Content = "Try again" };
-            retry.Click += (_, _) =>
-            {
-                bar.IsOpen = false;
-                tryAgain();
-            };
-            bar.ActionButton = retry;
-        }
-        return bar;
-    }
 }
