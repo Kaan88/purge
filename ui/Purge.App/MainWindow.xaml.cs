@@ -53,6 +53,7 @@ public sealed partial class MainWindow : Window
 
         if (Program.Options.Page is { } page) Navigate(page);
         if (loaded) LaunchMarkers.Mark("rows_set");
+        PreMeasurePrograms();
 
         // The title bar goes last (M3 launch perf): the first ExtendsContentIntoTitleBar call waits until the
         // window's composition is ready (about 200 ms after start on the bench laptop, the same wait the bare
@@ -304,6 +305,47 @@ public sealed partial class MainWindow : Window
         AppWindow.MoveAndResize(new RectInt32(
             area.X + (area.Width - size.Width) / 2, area.Y + (area.Height - size.Height) / 2, size.Width, size.Height));
     }
+
+    /// <summary>Width of the rail column and height of the title bar row in MainWindow.xaml (plus the card's 1 px border).</summary>
+    private const double RailWidth = 232, TitleBarHeight = 48, CardBorder = 1;
+
+    /// <summary>
+    /// Lays out the Programs page once at the size it will get, while the title bar call below still has to wait
+    /// for composition (M3 launch perf): templates are applied and the first screenful of list containers is
+    /// built now instead of after Activate(). The live layout after Activate() measures again; a size that is
+    /// slightly off only means it does more of that work itself.
+    /// </summary>
+    private void PreMeasurePrograms()
+    {
+        if (ContentCard.Child != _programs) return;
+        var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+        var dpi = GetDpiForWindow(hwnd);
+        if (dpi == 0 || !GetClientRect(hwnd, out var client)) return;
+        var scale = dpi / 96.0;
+        // The client area does not include the system caption yet; the extended title bar takes it over.
+        var caption = GetSystemMetricsForDpi(SmCyCaption, dpi) + GetSystemMetricsForDpi(SmCySizeFrame, dpi)
+                      + GetSystemMetricsForDpi(SmCxPaddedBorder, dpi);
+        var width = (client.Right - client.Left) / scale - RailWidth - CardBorder;
+        var height = (client.Bottom - client.Top + caption) / scale - TitleBarHeight - CardBorder;
+        if (width <= 0 || height <= 0) return;
+        _programs.Measure(new Windows.Foundation.Size(width, height));
+        _programs.Arrange(new Windows.Foundation.Rect(0, 0, width, height));
+    }
+
+    private const int SmCyCaption = 4, SmCySizeFrame = 33, SmCxPaddedBorder = 92;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct Rect32
+    {
+        public int Left, Top, Right, Bottom;
+    }
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetClientRect(nint hwnd, out Rect32 rect);
+
+    [LibraryImport("user32.dll")]
+    private static partial int GetSystemMetricsForDpi(int index, uint dpi);
 
     [LibraryImport("user32.dll")]
     private static partial uint GetDpiForWindow(nint hwnd);
