@@ -134,11 +134,14 @@ struct Chain {
 ///
 /// A key that has values is read when it is entered: its values are what a walk asks for next, and
 /// they also say whether the key is a link (`Key::link_target_with_values`), so the key is not asked
-/// for `SymbolicLinkValue` by name as well. The values and the subkey names are read up to the counts
-/// the key reported when it was entered (`Key::values_counted`, `Key::subkey_names_counted`), without
-/// the extra call that only ends an enumeration. For a key nobody changes while it is read this is
-/// what the reads by path give; a value or subkey added between the count and the read is left out,
-/// where a read by path may or may not see it.
+/// for `SymbolicLinkValue` by name as well. The values are read up to the count the key reported when
+/// it was entered (`Key::values_counted`), without the extra call that only ends an enumeration:
+/// values are enumerated in the order they were added, so a value added between the count and the
+/// read is left out (a read by path may or may not see it) and no counted value is lost. The subkey
+/// names are always enumerated to the end of the list (`Key::subkey_names_after`; the count only
+/// sizes the buffers): subkeys are enumerated sorted by name, so stopping at the count would lose a
+/// subkey that was there all along whenever another one is created before it meanwhile. For a key
+/// nobody changes while it is read both are what the reads by path give.
 ///
 /// Only a whole component that is spelled exactly the same is reused, and only as an ancestor: the key
 /// itself is always opened anew, for reading. When an open below a kept key fails, the key is opened
@@ -296,7 +299,7 @@ impl KeyWalker for LiveWalker<'_> {
     fn subkeys(&mut self) -> SourceResult<Vec<String>> {
         let k = self.current()?;
         match &self.info {
-            Some(info) => k.subkey_names_counted(info),
+            Some(info) => k.subkey_names_after(info),
             None => k.subkey_names(),
         }
         .map_err(map_win32)

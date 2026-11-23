@@ -7,7 +7,8 @@
 //! 1. machine facts: Windows edition and build, the interactive user, the environment, the guard facts;
 //!    then the two M1b indexes: the ownership index of `purge-index` (only for an MSI or Burn entry)
 //!    and the system-object index (services, tasks, firewall rules), which a second thread reads
-//!    while steps 1 to 6 run (it depends on the machine alone and is first used in step 7);
+//!    while steps 1 to 6 run (it depends on the machine alone and is first used in step 7; with a
+//!    source meter installed, `PURGE_TIMING`, step 7 reads it, so each phase counts its own reads);
 //! 2. the Inno Setup uninstall log, when the entry has one ([`crate::inno_map`]);
 //! 3. the identity (`purge-identity`): names, vendors, tokens, proposed main exes; then the MSI facts
 //!    ([`crate::msi`]) of an MSI entry, or the Burn facts ([`crate::burn`]) of a bundle and the MSI
@@ -434,7 +435,10 @@ pub fn harvest_report_with(
             &own_shared
         }
     };
-    if shared.sysobj_built() {
+    // With a source meter installed (`PURGE_TIMING`) nothing is read on a second thread: every
+    // phase line then counts its own reads and no others, as in `ScanExt::build`, so the phase
+    // lines of a harvest and of a scan compare.
+    if shared.sysobj_built() || purge_source::metered::installed().is_some() {
         return harvest_report_shared(entry, inventory, sources, baseline, kb, shared, None);
     }
     // The system-object index (services, tasks, firewall rules) is read from the machine alone and

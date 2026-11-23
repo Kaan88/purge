@@ -480,7 +480,7 @@ impl Key {
     /// Direct subkeys with their last write times (`RegEnumKeyExW`), in registry order.
     pub fn subkeys(&self) -> Result<Vec<SubkeyEntry>, Win32Error> {
         let info = self.info()?;
-        self.subkeys_with_capacity(info.max_subkey_name_len as usize + 1, None)
+        self.subkeys_with_capacity(info.max_subkey_name_len as usize + 1, info.n_subkeys)
     }
 
     /// Direct subkey names.
@@ -489,35 +489,33 @@ impl Key {
     }
 
     /// [`Key::subkey_names`] for a caller that already holds this key's [`Key::info`]: `info` gives the
-    /// size of the name buffer (which grows if a longer name turns up) and the number of subkeys to
-    /// read. The enumeration stops after the `info.n_subkeys` subkeys `info` counted: one call per
-    /// subkey, without the last call that only reports the end of the list. On a key nobody changes
-    /// between [`Key::info`] and this call the names are those of [`Key::subkey_names`]; a subkey
-    /// created in between is not read (it was not there when the key was counted), and a list that
-    /// got shorter ends where it ends.
-    pub fn subkey_names_counted(&self, info: &KeyInfo) -> Result<Vec<String>, Win32Error> {
+    /// size of the name buffer (which grows if a longer name turns up) and the room to reserve for
+    /// the list, nothing else, so the names are the same. The enumeration always runs until the
+    /// registry reports the end of the list. The count in `info` must not end it: subkeys are
+    /// enumerated sorted by name, so a subkey created after `info` was taken moves every later one up
+    /// by an index, and a read that stopped at the count would lose the last subkey that was there
+    /// all along, with everything below it. (Values are enumerated in the order they were added,
+    /// which is why [`Key::values_counted`] may stop at its count.)
+    pub fn subkey_names_after(&self, info: &KeyInfo) -> Result<Vec<String>, Win32Error> {
         Ok(self
-            .subkeys_with_capacity(info.max_subkey_name_len as usize + 1, Some(info.n_subkeys))?
+            .subkeys_with_capacity(info.max_subkey_name_len as usize + 1, info.n_subkeys)?
             .into_iter()
             .map(|e| e.name)
             .collect())
     }
 
-    /// Enumeration with an explicit starting name buffer (in UTF-16 units); grows on `ERROR_MORE_DATA`.
-    /// With a `limit` the enumeration stops after that many subkeys instead of asking for one more
-    /// to be told there is none.
+    /// Enumeration with an explicit starting name buffer (in UTF-16 units), which grows on
+    /// `ERROR_MORE_DATA`. `expected` only reserves room for the result; the enumeration ends when the
+    /// registry says there are no more subkeys.
     fn subkeys_with_capacity(
         &self,
         name_cap: usize,
-        limit: Option<u32>,
+        expected: u32,
     ) -> Result<Vec<SubkeyEntry>, Win32Error> {
         let mut name = vec![0u16; name_cap.max(1)];
-        let mut out = Vec::with_capacity(limit.map_or(0, |n| n.min(1024) as usize));
+        let mut out = Vec::with_capacity(expected.min(1024) as usize);
         let mut index = 0u32;
         loop {
-            if limit.is_some_and(|n| index >= n) {
-                return Ok(out);
-            }
             let mut len = name.len() as u32;
             let mut ft = FILETIME {
                 dwLowDateTime: 0,
@@ -568,7 +566,10 @@ impl Key {
     /// `info.n_values` values `info` counted and stops there, one call per value, without the last
     /// call that only reports the end of the list. On a key nobody changes between [`Key::info`] and
     /// this call the values are the same; a value added in between is not read (it was not there
-    /// when the key was counted), and a list that got shorter ends where it ends.
+    /// when the key was counted), and a list that got shorter ends where it ends. Stopping at the
+    /// count loses no value that was counted, because a key's values are enumerated in the order
+    /// they were added: a new value goes to the end of the list and moves no other. Subkeys are
+    /// enumerated sorted by name, so they are never read up to a count ([`Key::subkey_names_after`]).
     pub fn values_counted(&self, info: &KeyInfo) -> Result<Vec<RegValue>, Win32Error> {
         self.values_limited(Some(info.n_values))
     }
@@ -615,8 +616,9 @@ impl Key {
                 if !too_small || offered * 8 >= MAX_QUERY_BYTES {
                     break Err(status);
                 }
-                // As `nt_query` grows: to what the call asks for, and at least sixteenfold.
-                let want = (needed as usize).max(offered * 8 * 16).min(MAX_QUERY_BYTES);
+                // As `nt_query` grows: to what the call asks for, and at least to twice the bytes
+                // offered (`offered` counts 8-byte words, so twice the bytes are `offered * 16`).
+                let want = (needed as usize).max(offered * 16).min(MAX_QUERY_BYTES);
                 offered = want.div_ceil(8);
                 if buf.len() < offered {
                     buf.resize(offered, 0);
@@ -1089,7 +1091,7 @@ mod tests {
 
         let un = Key::open(RegRoot::Hklm, UNINSTALL, RegView::K64).unwrap();
         assert_eq!(
-            un.subkeys_with_capacity(1, None).unwrap(),
+            un.subkeys_with_capacity(1, 0).unwrap(),
             un.subkeys().unwrap()
         );
     }
@@ -1503,7 +1505,7 @@ mod tests {
             assert_eq!(values, k.values().unwrap(), "{name}");
             assert_eq!(values.len(), info.n_values as usize, "{name}");
             assert_eq!(
-                k.subkey_names_counted(&info).unwrap(),
+                k.subkey_names_after(&info).unwrap(),
                 k.subkey_names().unwrap(),
                 "{name}"
             );
@@ -1523,17 +1525,53 @@ mod tests {
             );
         }
 
-        // A count that is too small ends the read early; one that is too large ends where the
-        // list ends.
+        // A value count that is too small ends the read early; one that is too large ends where the
+        // list ends. The subkey count ends nothing, too small or too large.
         let k = Key::open(RegRoot::Hku, &s.path("Plain"), RegView::K64).unwrap();
         let mut info = k.info().unwrap();
         let all = k.values().unwrap();
         info.n_values = 2;
+        info.n_subkeys = 0;
         assert_eq!(k.values_counted(&info).unwrap(), all[..2]);
+        assert_eq!(k.subkey_names_after(&info).unwrap(), ["Sub"]);
         info.n_values = 50;
         info.n_subkeys = 50;
         assert_eq!(k.values_counted(&info).unwrap(), all);
-        assert_eq!(k.subkey_names_counted(&info).unwrap(), ["Sub"]);
+        assert_eq!(k.subkey_names_after(&info).unwrap(), ["Sub"]);
+    }
+
+    /// A subkey created between a key's count and the read of its subkeys costs no subkey that was
+    /// there before. Subkeys are enumerated sorted by name, so one that sorts first moves the others
+    /// up by an index: a read that stopped at the old count would return `a`, `m` and lose `z`.
+    /// A value added after the count is the other case: values keep the order they were added in,
+    /// so the counted read returns exactly the values that were counted.
+    #[test]
+    fn a_subkey_added_after_the_count_costs_no_earlier_subkey() {
+        let s = Scratch::new();
+        let parent = s.create("P");
+        parent.set("first", REG_SZ, &[0x41, 0]);
+        parent.set("second", REG_SZ, &[0x42, 0]);
+        drop(s.create(r"P\m"));
+        drop(s.create(r"P\z"));
+        let k = Key::open(RegRoot::Hku, &s.path("P"), RegView::K64).unwrap();
+        let info = k.info().unwrap();
+        assert_eq!((info.n_subkeys, info.n_values), (2, 2));
+        let counted_values = k.values().unwrap();
+
+        // After the count: a subkey that sorts before both, and a value.
+        drop(s.create(r"P\a"));
+        parent.set("added", REG_SZ, &[0x43, 0]);
+
+        let names = k.subkey_names_after(&info).unwrap();
+        for original in ["m", "z"] {
+            assert!(
+                names.iter().any(|n| n == original),
+                "{original} in {names:?}"
+            );
+        }
+        assert_eq!(names, ["a", "m", "z"]);
+        assert_eq!(names, k.subkey_names().unwrap());
+        assert_eq!(k.values_counted(&info).unwrap(), counted_values);
     }
 
     /// The predefined roots are pseudo-handles that the NT calls refuse; their values are still read

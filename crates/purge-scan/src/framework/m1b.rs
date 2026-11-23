@@ -105,6 +105,10 @@ struct ResidueLog {
     answers: BTreeMap<(String, String), (String, ResidueWhy)>,
 }
 
+/// The reader threads of the ownership index while the reference walk runs beside it
+/// ([`ScanExt::build`]).
+const INDEX_THREADS_BESIDE_WALK: usize = 2;
+
 /// Writes a `PURGE_TIMING` phase line when a source meter is installed (the format of
 /// `purge_index::ownership`).
 struct Phase {
@@ -208,7 +212,10 @@ impl ScanExt {
     /// The walk and the two indexes read different things and share nothing, so the indexes are built
     /// on a second thread while the walk runs; each gives what it gives alone. With a source meter
     /// installed (`PURGE_TIMING`) they run one after the other, so that each phase line counts its
-    /// own reads; so they do when the system refuses the thread.
+    /// own reads; so they do when the system refuses the thread. Beside the walk, which reads on up
+    /// to eight threads of its own, the ownership index reads on [`INDEX_THREADS_BESIDE_WALK`]
+    /// threads instead of its default eight: the registry serves more readers hardly faster, and
+    /// the index gives the same result on any number of threads.
     #[allow(clippy::too_many_arguments)]
     pub fn build(
         reg: &dyn RegistrySource,
@@ -234,7 +241,7 @@ impl ScanExt {
             phase.end();
             found
         };
-        let indexes = || {
+        let indexes = |threads: usize| {
             let ownership = OwnershipIndex::build_with_limits(
                 &OwnershipInput {
                     reg,
@@ -243,7 +250,7 @@ impl ScanExt {
                     products: inventory,
                     msi_only,
                     cache,
-                    threads: 0,
+                    threads,
                 },
                 limits,
             );
@@ -255,10 +262,11 @@ impl ScanExt {
         let ((hits, complete), (ownership, sysobj)) =
             if purge_source::metered::installed().is_some() {
                 let found = walk();
-                (found, indexes())
+                (found, indexes(0))
             } else {
                 std::thread::scope(|scope| {
-                    match std::thread::Builder::new().spawn_scoped(scope, indexes) {
+                    let beside = || indexes(INDEX_THREADS_BESIDE_WALK);
+                    match std::thread::Builder::new().spawn_scoped(scope, beside) {
                         Ok(worker) => {
                             let found = walk();
                             match worker.join() {
@@ -268,7 +276,7 @@ impl ScanExt {
                         }
                         Err(_) => {
                             let found = walk();
-                            (found, indexes())
+                            (found, indexes(0))
                         }
                     }
                 })
