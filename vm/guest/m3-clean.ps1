@@ -350,6 +350,8 @@ function Get-Percentile([double[]]$Values, [double]$P) {
 
 switch ($Phase) {
     'pre' {
+        # The display never sleeps: VBoxManage screenshotpng fails (E_FAIL) while the guest display is off.
+        $null = & powercfg.exe /change monitor-timeout-ac 0 2>&1
         $setup = Get-Setup
         $cv = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
         $pol = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -ErrorAction SilentlyContinue

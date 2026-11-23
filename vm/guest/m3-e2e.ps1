@@ -35,7 +35,7 @@
 #>
 param(
     [Parameter(Mandatory)]
-    [ValidateSet('setup', 'prepare', 'ui-start', 'ui-uninstall', 'ui-await-confirm', 'ui-confirm', 'consent-wait', 'consent-approve',
+    [ValidateSet('setup', 'prepare', 'ui-start', 'ui-uninstall', 'uac-front', 'ui-await-confirm', 'ui-confirm', 'consent-wait', 'consent-approve',
                  'ui-wait-scan', 'capture-post', 'ui-move', 'ui-wait-result', 'capture-exec', 'ui-undo', 'ui-wait-undone',
                  'capture-undo', 'fail-check', 'finish')]
     [string] $Phase,
@@ -115,6 +115,26 @@ function Get-BrokerPid {
 }
 
 function Test-ConsentUp { @(Get-Process -Name consent -ErrorAction SilentlyContinue).Count -gt 0 }
+
+# The foreground window's process and whether the secure desktop is the input desktop (OpenInputDesktop from this
+# high-integrity agent fails with error 5 while the Winlogon desktop is the input desktop; vm\truth\m3-rig-uac.md).
+Add-Type -Namespace E2e -Name Fg -MemberDefinition @'
+[DllImport("user32.dll")] public static extern System.IntPtr GetForegroundWindow();
+[DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(System.IntPtr h, out uint pid);
+[DllImport("user32.dll", SetLastError = true)] public static extern System.IntPtr OpenInputDesktop(uint flags, bool inherit, uint access);
+[DllImport("user32.dll")] public static extern bool CloseDesktop(System.IntPtr h);
+'@
+function Get-E2eForeground {
+    $h = [E2e.Fg]::GetForegroundWindow(); $fpid = [uint32]0
+    $null = [E2e.Fg]::GetWindowThreadProcessId($h, [ref]$fpid)
+    $p = Get-Process -Id $fpid -ErrorAction SilentlyContinue
+    "$(if ($p) { $p.ProcessName } else { 'none' }):$fpid"
+}
+function Test-E2eSecureDesktop {
+    $d = [E2e.Fg]::OpenInputDesktop(0, $false, 0x0100)
+    if ($d -eq [IntPtr]::Zero) { return ([Runtime.InteropServices.Marshal]::GetLastWin32Error() -eq 5) }
+    $null = [E2e.Fg]::CloseDesktop($d); $false
+}
 
 # (Get-E2eTargetKey and Compare-E2eSets live in m3-e2e-ui.ps1, which the scorer and the self-test load too.)
 
@@ -247,6 +267,8 @@ $st = Read-State
 switch ($Phase) {
     'setup' {
         $rec = [ordered]@{ t = (NowIso); build = $null; install = @(); uac = (Get-UacValues); edge = $null; telemetry = $null }
+        # The display never sleeps: VBoxManage screenshotpng fails (E_FAIL) while the guest display is off.
+        $null = & powercfg.exe /change monitor-timeout-ac 0 2>&1
         $fw = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319'
         $wpf = Join-Path $fw 'WPF'
         Remove-Item -LiteralPath $Exe -Force -ErrorAction SilentlyContinue
@@ -373,6 +395,9 @@ switch ($Phase) {
             $script:continued = $null
             $name = "$($st.program.name)"
             $watch = Watch-E2eWindow $win {
+                # Continue is pressed by the host with a real key (rig-m3.ps1): Windows shows the UAC prompt of a
+                # process that had no real input only as a flashing taskbar button (e2e-20261123-034653, 02u-uac-3).
+                if ($script:continued -eq 'Focus') { return 'continue-focused' }
                 if (Test-ConsentUp) { return 'uac' }
                 if (Find-E2eDialogButton $win 'Uninstall') { return 'confirm' }
                 $t = Get-E2eTexts $win
@@ -383,14 +408,45 @@ switch ($Phase) {
             } 240 -Each {
                 if (-not $script:continued) {
                     $c = Find-E2eDialogButton $win 'Continue'
-                    if ($c) { $script:continued = Invoke-E2eElement $c; Set-StateValue $st 't_continue' (NowIso) }
+                    if ($c) {
+                        $rec.fg_before_focus = Get-E2eForeground
+                        try { $c.SetFocus(); $script:continued = 'Focus' } catch { $script:continued = Invoke-E2eElement $c }
+                        $rec.fg_after_focus = Get-E2eForeground
+                        Set-StateValue $st 't_continue' (NowIso)
+                    }
                 }
             }
             $rec.state = $watch.state; $rec.continue = $script:continued; $rec.seen = $watch.seen
-            $rec.ok = ($watch.state -in 'uac', 'confirm')
+            $rec.ok = ($watch.state -in 'uac', 'confirm', 'continue-focused')
         } else { $rec.detail = 'UninstallButton not found or not enabled' }
         Save-State $st; Save-Step $rec 'ui-uninstall'
-        "M3E UI-UNINSTALL $App ok=$($rec.ok) state=$($rec.state) continue=$($rec.continue) uac=$(if ($rec.state -eq 'uac') { 'up' } else { 'none' })"
+        "M3E UI-UNINSTALL $App ok=$($rec.ok) state=$($rec.state) continue=$($rec.continue) uac=$(if ($rec.state -eq 'uac') { 'up' } elseif ($rec.state -eq 'continue-focused') { 'after-key' } else { 'none' }) fg_before=$($rec.fg_before_focus) fg_after=$($rec.fg_after_focus)"
+    }
+
+    'uac-front' {
+        # Is the UAC prompt on the secure desktop? If it only sits on the taskbar (Windows does that when the asking
+        # app was not the foreground app), press its taskbar button the way a user would, and check again.
+        $rec = New-E2eStep "uac-front-$Step"
+        $rec.consent = Test-ConsentUp
+        $rec.fg = Get-E2eForeground
+        $rec.secure_before = Test-E2eSecureDesktop
+        $rec.invoked = $null; $rec.buttons = @()
+        if ($rec.consent -and -not $rec.secure_before) {
+            $root = [System.Windows.Automation.AutomationElement]::RootElement
+            $trayCond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ClassNameProperty, 'Shell_TrayWnd')
+            $tray = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, $trayCond)
+            if ($tray) {
+                $btnCond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button)
+                $btns = @($tray.FindAll([System.Windows.Automation.TreeScope]::Descendants, $btnCond))
+                $rec.buttons = @($btns | ForEach-Object { "$($_.Current.Name)" })
+                $uac = $btns | Where-Object { "$($_.Current.Name)" -match 'User Account Control|consent' } | Select-Object -First 1
+                if ($uac) { $rec.invoked = Invoke-E2eElement $uac; Start-Sleep -Seconds 4 }
+            }
+        }
+        $rec.secure_after = Test-E2eSecureDesktop
+        $rec.ok = [bool]($rec.consent -and $rec.secure_after)
+        Save-Step $rec "uac-front-$Step"
+        "M3E UAC-FRONT $App ok=$($rec.ok) consent=$($rec.consent) fg=$($rec.fg) secure_before=$($rec.secure_before) invoked=$($rec.invoked) secure_after=$($rec.secure_after) buttons=$(@($rec.buttons) -join '|' -replace '\s', '_')"
     }
 
     'ui-await-confirm' {
@@ -512,7 +568,20 @@ switch ($Phase) {
             Write-JsonFile $runRec (Join-Path $RD 'run.json') 12
             # The rig CLI scan of the same machine state (the UI's broker scanned it a moment ago; nothing ran since).
             $plan = Join-Path $RD 'plan-purge.json'
-            $a = 'scan --fp ' + (ConvertTo-EngineArg (Join-Path $RD 'fp.json')) + ' --mode ' + $st.mode + ' --app ' + $App + ' -o ' + (ConvertTo-EngineArg $plan)
+            # The fingerprint the broker stored with the uninstall window (C:\ProgramData\Purge\fp\fp-<sha256 of
+            # the program id>.json, bins\purge-broker\src\uninstall.rs); the rig's own fp.json has no window, and
+            # --mode post refuses it. Copied first so the scan reads a rig-owned file.
+            $fp = Join-Path $RD 'fp.json'
+            if ("$($st.mode)" -eq 'post') {
+                $sha = [Security.Cryptography.SHA256]::Create()
+                $hash = -join ($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes("$($st.program.program_id)")) | ForEach-Object { $_.ToString('x2') })
+                $src = Join-Path $env:ProgramData "Purge\fp\fp-$hash.json"
+                if (-not (Test-Path -LiteralPath $src)) { throw "no broker fingerprint at $src" }
+                $fp = Join-Path $RD 'fp-broker.json'
+                Copy-Item -LiteralPath $src -Destination $fp -Force
+                $rec.fp = $src
+            }
+            $a = 'scan --fp ' + (ConvertTo-EngineArg $fp) + ' --mode ' + $st.mode + ' --app ' + $App + ' -o ' + (ConvertTo-EngineArg $plan)
             $r = Invoke-Engine -Exe $st.engine -Arguments $a -TimeoutSec 900
             if ($r.exit -ne 0 -or -not (Test-Path -LiteralPath $plan)) { throw "rig CLI scan exited $($r.exit)" }
             # The preselected set: every item the plan ticks (preselected, not Blocked), as the review page ticks it;
@@ -680,6 +749,16 @@ switch ($Phase) {
         $since = $(if ($st.t0) { [datetime]$st.t0 } else { (Get-Date).AddHours(-3) })
         try { $null = & C:\cr\guest\broker-timings.ps1 -Out (Join-Path $AD 'timings.jsonl') -Since $since } catch { $rec.detail = "broker-timings: $($_.Exception.Message)"; Log "!! $($rec.detail)" }
         $rec.brokers_alive = @(Get-Process -Name 'purge-broker' -ErrorAction SilentlyContinue | ForEach-Object { $_.Id })
+        # Every other "Purge" Application event (warnings, errors) and the crash records of Purge processes, for
+        # a broker that ended early.
+        try {
+            $utc = $since.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+            $ev = @(Get-WinEvent -LogName Application -FilterXPath "*[System[TimeCreated[@SystemTime>='$utc']]]" -ErrorAction SilentlyContinue |
+                Where-Object { ($_.ProviderName -eq 'Purge' -and $_.Id -ne 100) -or ($_.ProviderName -in @('Application Error', 'Windows Error Reporting', '.NET Runtime') -and "$($_.Message)" -match 'purge') } |
+                Sort-Object RecordId | ForEach-Object { [ordered]@{ t = $_.TimeCreated.ToString('o'); provider = $_.ProviderName; id = $_.Id; level = $_.LevelDisplayName; message = "$($_.Message)" } })
+            Write-JsonFile $ev (Join-Path $AD 'app-events.json') 6
+            $rec.app_events = $ev.Count
+        } catch { Log "!! app events: $($_.Exception.Message)" }
         Unregister-ScheduledTask -TaskName $UiTask -Confirm:$false -ErrorAction SilentlyContinue
         Get-ProcList | Where-Object { $_.path -and $_.path -ieq $UiExe } | ForEach-Object { Stop-Process -Id $_.pid -Force -ErrorAction SilentlyContinue }
         $steps = [ordered]@{}

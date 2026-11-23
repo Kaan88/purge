@@ -259,6 +259,16 @@ static partial class M3Sec {
         return found;
     }
 
+    static IntPtr FirstVisibleButton(IntPtr dlg) {
+        IntPtr found = IntPtr.Zero;
+        EnumChildWindows(dlg, (c, l) => {
+            var cls = new StringBuilder(64); GetClassName(c, cls, 64);
+            if (cls.ToString() == "Button" && IsWindowVisible(c)) { found = c; return false; }
+            return true;
+        }, IntPtr.Zero);
+        return found;
+    }
+
     static string Focus(IntPtr hwnd) {
         if (GetForegroundWindow() == hwnd) return "already";
         uint pid; uint fgThread = GetWindowThreadProcessId(GetForegroundWindow(), out pid), me = GetCurrentThreadId();
@@ -649,10 +659,27 @@ static partial class M3Sec {
         IntPtr h = WaitDialog(pid, I(spec, "wait_ms", 15000), 100);
         rec["found"] = h != IntPtr.Zero;
         if (h != IntPtr.Zero) {
-            if (B(spec, "tick", false)) { SendMessage(h, TDM_CLICK_VERIFICATION, (IntPtr)1, IntPtr.Zero); rec["ticked"] = true; }
+            // TDM_CLICK_VERIFICATION on a page without a verification box crashed the broker inside comctl32
+            // (0xc0000005, e2e-20261123-063603 app-events.json): tick only when the page shows a check box.
+            bool hasBox = false;
+            try {
+                hasBox = AutomationElement.FromHandle(h).FindFirst(TreeScope.Descendants,
+                    new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.CheckBox)) != null;
+            } catch (Exception e) { rec["box_error"] = e.Message; }
+            rec["has_verification"] = hasBox;
+            rec["ticked"] = false;
+            if (B(spec, "tick", false) && hasBox) { SendMessage(h, TDM_CLICK_VERIFICATION, (IntPtr)1, IntPtr.Zero); rec["ticked"] = true; }
             Thread.Sleep(I(spec, "arm_wait_ms", 1600));
             int id = I(spec, "button", ID_PRIMARY);
             IntPtr c = Child(h, id);
+            rec["button_by"] = "id";
+            if (c == IntPtr.Zero && id == ID_PRIMARY) {
+                // On Windows 11 24H2 the TaskDialog's buttons can report control id 0 (dialog-run.json,
+                // e2e-20261123-062157); the primary is then the first visible Button, ahead of Cancel.
+                c = FirstVisibleButton(h);
+                rec["button_by"] = c != IntPtr.Zero ? "first-visible" : "none";
+            }
+            if (c != IntPtr.Zero) { var t = new StringBuilder(256); GetWindowText(c, t, 256); rec["button_text"] = t.ToString(); }
             rec["button_enabled"] = c != IntPtr.Zero && IsWindowEnabled(c);
             SendMessage(h, TDM_CLICK_BUTTON, (IntPtr)id, IntPtr.Zero);
             rec["pressed"] = id;
@@ -775,7 +802,8 @@ static partial class M3Sec {
             var sei = new SHELLEXECUTEINFO();
             sei.cbSize = Marshal.SizeOf(typeof(SHELLEXECUTEINFO));
             sei.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC;
-            sei.hwnd = owner; sei.lpVerb = "runas"; sei.lpFile = broker; sei.lpParameters = args;
+            // No owner window, as BrokerLauncher (DECISIONS 2026-11-23 "UAC prompt owner").
+            sei.hwnd = IntPtr.Zero; sei.lpVerb = "runas"; sei.lpFile = broker; sei.lpParameters = args;
             sei.lpDirectory = Path.GetDirectoryName(broker); sei.nShow = 1;
             bool ok = ShellExecuteEx(ref sei);
             int err = ok ? 0 : Marshal.GetLastWin32Error();

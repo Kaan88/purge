@@ -89,6 +89,9 @@ $M3Vm = 'Inbound-Win11-Test'
 $M3Snap = 'm3-uac-on'
 . (Join-Path $PSScriptRoot 'rig.ps1') -VmName $M3Vm
 
+# Seconds between consent.exe appearing and the first key: the secure desktop must be the input desktop first.
+$M3UacSettleSec = 6
+
 # Set 1 scancodes (make, break) sent with controlvm keyboardputscancode.
 $M3Keys = [ordered]@{
     'alt-y'      = @('38', '15', '95', 'b8')
@@ -97,6 +100,7 @@ $M3Keys = [ordered]@{
     'left-enter' = @('e0', '4b', 'e0', 'cb', '1c', '9c')
     'enter'      = @('1c', '9c')
     'tab'        = @('0f', '8f')
+    'space'      = @('39', 'b9')
 }
 
 $script:M3Lock = $null
@@ -452,6 +456,10 @@ function Invoke-M3SecConsent {
 # A secure-desktop answer from the host: screenshot, keys, screenshot; the next key only when $Pending says the prompt
 # is still up. Returns the keys sent.
 function Send-M3SecAnswer([string]$Tag, [string[]]$Keys, [scriptblock]$Pending) {
+    # Wait for the secure desktop before any key (see Invoke-M3E2eUac).
+    $d = (Get-Date).AddSeconds(10)
+    while (-not (& $Pending) -and (Get-Date) -lt $d) { Start-Sleep -Seconds 1 }
+    Start-Sleep -Seconds $M3UacSettleSec
     Save-M3SecShot "$Tag-1-prompt"
     $sent = @()
     $i = 2
@@ -587,19 +595,31 @@ function Invoke-M3E2ePhase([string]$Phase, [string]$App, [string]$Step = '', [in
 
 function Save-M3E2eShot([string]$Name) {
     $f = Join-Path $script:E2eDir "$Name.png"
-    $r = Invoke-VBox @('controlvm', $M3Vm, 'screenshotpng', $f)
-    $ok = ($r.code -eq 0 -and (Test-Path -LiteralPath $f))
+    # VBoxManage screenshotpng fails with E_FAIL (TakeScreenShotToArray) while the guest display is off; the setup
+    # phase turns the display timeout off. Plain retries only: a key here could land while a UAC prompt starts.
+    for ($try = 1; $try -le 3; $try++) {
+        $r = Invoke-VBox @('controlvm', $M3Vm, 'screenshotpng', $f)
+        $ok = ($r.code -eq 0 -and (Test-Path -LiteralPath $f))
+        if ($ok) { break }
+        Start-Sleep -Seconds 2
+    }
     if ($ok) { Write-RigLog "  screenshot $Name.png ($((Get-Item $f).Length) bytes)" } else { Write-RigLog "  !! screenshot $Name failed: $($r.out -join ' ')" }
     [void]$script:E2eShots.Add([ordered]@{ name = $Name; file = $(if ($ok) { "$Name.png" }); bytes = $(if ($ok) { (Get-Item $f).Length } else { 0 }); t = (Get-Date).ToString('o') })
 }
 
 # The UAC prompt on the secure desktop, when one is up: screenshot, Alt+Y (Left+Enter only while it is still up),
 # screenshot. Returns the keys sent (empty when no prompt was up).
-function Invoke-M3E2eUac([string]$Tag) {
+function Invoke-M3E2eUac([string]$Tag, [string]$App = '', [string]$Step = '') {
     $sent = @()
     $d = (Get-Date).AddSeconds(10)
     while (-not (Test-M3ConsentUp) -and (Get-Date) -lt $d) { Start-Sleep -Seconds 1 }
     if (-not (Test-M3ConsentUp)) { return $sent }
+    # consent.exe exists before the secure desktop is the input desktop. Keys sent in that window reach the normal
+    # desktop, and Windows then shows the prompt only as a flashing taskbar button (e2e-20261123-053530, 02u-uac-3).
+    # The spike (vm\truth\m3-rig-uac.md) answered only after the secure desktop was up.
+    Start-Sleep -Seconds $M3UacSettleSec
+    # Secure desktop up? If the prompt only sits on the taskbar, the guest presses its taskbar button (uac-front).
+    if ($App) { $null = Invoke-M3E2ePhase 'uac-front' $App $Step -TimeoutSec 120 }
     Save-M3E2eShot "$Tag-1-prompt"
     $i = 2
     foreach ($k in 'alt-y', 'left-enter') {
@@ -656,7 +676,12 @@ function Invoke-M3E2eApp($AppDef, [bool]$Undo, [string]$Base) {
         Save-M3E2eShot '01-programs-row'
         $l = Invoke-M3E2ePhase 'ui-uninstall' $id -TimeoutSec 900
         Save-M3E2eShot '02-uninstall-clicked'
-        $rec.uac_keys.run = @(Invoke-M3E2eUac '02u-uac')
+        if ((Get-M3E2eField $l 'state') -eq 'continue-focused') {
+            # A real key on the focused Continue button, so Windows puts the UAC prompt in front (see m3-e2e.ps1).
+            $null = Send-M3Keys 'space'
+            $rec.uac_keys.continue = 'space'
+        }
+        $rec.uac_keys.run = @(Invoke-M3E2eUac '02u-uac' $id 'run')
         $null = Invoke-M3E2ePhase 'ui-await-confirm' $id -WaitSec 300 -TimeoutSec 900
         Save-M3E2eShot '03-confirm'
         $l = Invoke-M3E2ePhase 'ui-confirm' $id -TimeoutSec 600
@@ -677,7 +702,7 @@ function Invoke-M3E2eApp($AppDef, [bool]$Undo, [string]$Base) {
             if ($state -eq 'review') {
                 $null = Invoke-M3E2ePhase 'ui-move' $id -TimeoutSec 1200
                 Save-M3E2eShot '07-move-waiting'
-                $rec.uac_keys.plan = @(Invoke-M3E2eUac '07u-uac')
+                $rec.uac_keys.plan = @(Invoke-M3E2eUac '07u-uac' $id 'plan')
                 $null = Invoke-M3E2ePhase 'consent-wait' $id 'plan' -WaitSec 300 -TimeoutSec 900
                 Save-M3E2eShot '08-consent-plan'
                 $null = Invoke-M3E2ePhase 'consent-approve' $id 'plan' -TimeoutSec 600
@@ -687,7 +712,7 @@ function Invoke-M3E2eApp($AppDef, [bool]$Undo, [string]$Base) {
                 if ($Undo) {
                     $null = Invoke-M3E2ePhase 'ui-undo' $id -TimeoutSec 900
                     Save-M3E2eShot '10-undo-waiting'
-                    $rec.uac_keys.undo = @(Invoke-M3E2eUac '10u-uac')
+                    $rec.uac_keys.undo = @(Invoke-M3E2eUac '10u-uac' $id 'undo')
                     $null = Invoke-M3E2ePhase 'consent-wait' $id 'undo' -WaitSec 300 -TimeoutSec 900
                     Save-M3E2eShot '11-consent-undo'
                     $null = Invoke-M3E2ePhase 'consent-approve' $id 'undo' -TimeoutSec 600

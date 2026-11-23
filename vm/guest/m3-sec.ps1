@@ -469,6 +469,8 @@ function Get-InputDesk([string]$Path) { $null = Invoke-Sec @('inputdesk', $Path)
 Log "== phase $Phase$(if ($Tag) { " tag=$Tag" })$(if ($Method) { " method=$Method" })"
 switch ($Phase) {
     'build' {
+        # The display never sleeps: VBoxManage screenshotpng fails (E_FAIL) while the guest display is off.
+        $null = & powercfg.exe /change monitor-timeout-ac 0 2>&1
         $fw = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319'
         $wpf = Join-Path $fw 'WPF'
         Remove-Item -LiteralPath $Exe -Force -ErrorAction SilentlyContinue
