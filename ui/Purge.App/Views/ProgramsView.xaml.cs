@@ -654,14 +654,22 @@ public sealed partial class ProgramsView : UserControl
         }).ToList();
     }
 
-    /// <summary>Puts <paramref name="list"/> (filtered and sorted) in the list and keeps or picks the current row.</summary>
+    /// <summary>
+    /// Puts <paramref name="list"/> (filtered and sorted) in the list and keeps the ticked rows that are still in it
+    /// (by program id: a reload makes new row objects). Nothing is picked for the user: on the first show, or when
+    /// the ticked rows left the list, nothing is selected and the details pane stays closed (user feedback: opening
+    /// the app or sorting always selected the top entry).
+    /// </summary>
     private void Show(List<ProgramRow> list)
     {
+        var ticked = ProgramList.SelectedItems.OfType<ProgramRow>().Select(r => r.Entry.ProgramId).ToHashSet();
+        if (_current is not null) ticked.Add(_current.Entry.ProgramId);
         _refreshing = true;
         ProgramList.ItemsSource = list;
+        foreach (var row in list.Where(r => ticked.Contains(r.Entry.ProgramId)))
+            ProgramList.SelectedItems.Add(row);
         var keep = _current is null ? null : list.FirstOrDefault(r => r.Entry.ProgramId == _current.Entry.ProgramId);
-        if (keep is null && list.Count > 0) keep = list[0];
-        if (keep is not null) ProgramList.SelectedItem = keep;
+        keep ??= ProgramList.SelectedItems.Count > 0 ? ProgramList.SelectedItems[^1] as ProgramRow : null;
         _refreshing = false;
 
         _current = keep;
@@ -781,6 +789,7 @@ public sealed partial class ProgramsView : UserControl
         var n = ProgramList.SelectedItems.Count;
         SelectedCount.Text = n == 0 ? "" : $"{n} selected";
         UninstallLabel.Text = n > 1 ? $"Uninstall {n}" : "Uninstall";
+        UpdateCommandState();
     }
 
     /// <summary>
@@ -793,8 +802,10 @@ public sealed partial class ProgramsView : UserControl
         var engine = Program.Engine;
         var can = engine.CanChangePc && !CheckRunning;
         var hint = can ? null : CommandHint(engine);
-        UninstallButton.IsEnabled = can;
-        ToolTipService.SetToolTip(UninstallButton, hint);
+        // The toolbar button needs a program; the details pane's button only shows with one.
+        var picked = _current is not null;
+        UninstallButton.IsEnabled = can && picked;
+        ToolTipService.SetToolTip(UninstallButton, hint ?? (picked ? null : "Select a program to uninstall."));
         if (DUninstallButton is not null)
         {
             DUninstallButton.IsEnabled = can;
@@ -959,6 +970,9 @@ public sealed partial class ProgramsView : UserControl
                 return;
             case "uninstall" when Program.Engine.CanChangePc && _current is { } row:
                 MainWindow.Instance.OpenUninstall().Begin(new UninstallTarget(row.Entry.ProgramId, row.Name));
+                return;
+            case "uninstall" when Program.Engine.CanChangePc:
+                ShowNotice("Select a program to uninstall first.", InfoBarSeverity.Informational);
                 return;
         }
         ShowNotice(UninstallHint(Program.Engine));
