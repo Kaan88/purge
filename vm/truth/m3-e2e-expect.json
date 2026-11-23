@@ -17,7 +17,9 @@
     "first_progress_ms": 100,
     "harvest_apps": ["vscode", "vscode-user"]
   },
-  "undo_apps": ["npp"],
+  "undo_apps": ["execapp"],
+  "undo_about": "execapp (not npp): design 11.2's undo should restore a service and a task; npp's plan preselected nothing in e2e-20261123-173417 (4 Likely items, 0 preselected), and an undo app with nothing preselected fails both undo rows",
+  "empty_plan": "nothing preselected (vm/RIG.md section 17): when the rig CLI plan preselects nothing, ui-move checks that MoveButton is there and not enabled (state skip-empty), the host skips the plan consent and the result wait, and capture-exec checks that no session exists, that the executed set (empty) equals the CLI preselected set (empty) and that execdiff over the window has collateral 0; Move enabled there fails",
   "not_here": "G7's second half (a broker-route program refused by the medium engine, and the reverse) is not a UI flow: the UI never offers the wrong route. It is the wrong_route rows of the engine and broker tests and a rig row of its own.",
   "apps": [
     { "id": "vscode", "kind": "app", "label": "vscode", "route": "broker", "name_match": "^Microsoft Visual Studio Code$" },

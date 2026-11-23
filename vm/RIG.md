@@ -732,6 +732,17 @@ after each restore of an offline snapshot. The snapshot keeps 3D on, so the next
 are not changed. It is off by default, and it is ignored for a live (saved-state) snapshot. The Inbound campaign
 scripts pass it. The guest just uses the WDDM driver without 3D; the rig needs no 3D.
 
+**Boot flake (2026-11-23).** About 1 boot of `rig-base` in 345 never shows the agent (m3-e2e `e2e-20261123-173417`,
+`vscode-user`: `agent.alive` not visible after 300 s). `Wait-Agent` logs the `guestcontrol stat` error each time it
+changes (no Guest Additions yet, no logged-on user, the file missing) and names the last one in its timeout, whose text
+now says what the three missing parts can be and that this is the rare flake. `Restore-Base` (all rigs) retries such a
+boot once (`-BootTries`, default 2; only Wait-Agent's "agent.alive not visible" and "did not run the ping job" are
+retried, any other error throws at once): after each failed boot `Save-BootDiag` writes
+`boot-<snapshot>-boot<k>-<stamp>.png` (screenshotpng), `-guestproperty.txt` (`guestproperty enumerate`) and
+`-VBox.log` (a shared-read copy of the VM's log) into `-DiagDir` (m3-e2e: the app's evidence folder; default
+`vm\runs\boot-diag`), then powers off, restores and boots again; a second failure throws, naming the folder. Rig
+self-test "boot:": the logged stat error and the hint, one retry that passes, two failures, no retry for another error.
+
 ## 10. win-unit: workspace tests on real Windows (`vm/win-unit.sh`, 2026-11-14)
 
 What it is for: the Rust test binaries are cross-built on the Linux host (cargo-xwin, x86_64-pc-windows-msvc,
@@ -2255,7 +2266,14 @@ installers: the host cache files are pushed with their manifest and checked by S
 the vendor URL; the installer's hash and signature are recorded), `execapp` (the M1b executor app `PurgeExecApp` of
 `m1b-exec.ps1` with the service `svc-full` and the task `task-simple` of `truth\m1b-exec-cases.json`; its uninstaller is
 `m3sec.exe fixture-uninstall PurgeExecApp`, which deletes only the ARP key and `app.exe`, so the service, the task and
-the folder are the leftovers), `msi1603`, `msi3010` (below). Undo through the UI: `npp` by default (`-UndoApps`).
+the folder are the leftovers), `msi1603`, `msi3010` (below). Undo through the UI: `execapp` by default
+(`-UndoApps`; expectations `undo_apps`). It was `npp` until 2026-11-23: npp's plan in `e2e-20261123-173417` had 4
+Likely items and none preselected, so there was nothing to undo; design 11.2's undo should restore a service and a
+task, which only `execapp` has. **Open point**: in that run execapp's CLI plan preselected 2 of 8 items (the CLSID
+`InprocServer32` default value and `uninst.exe`); the service `PurgeExecSvcA`, its `ImagePath` and `Parameters\Paths`
+segment, the task `\PurgeExecApp\Simple Update`, the CLSID key and the folder were offered unticked, so an undo of the
+preselected set restores a value and a file, not the service or the task. An undo app needs items preselected: the
+scorer fails both undo rows of an undo app with nothing preselected.
 
 **MSI fixtures.** The repo has no WiX and no MSI fixture, so `m3-e2e-msi.ps1` writes both packages with the Windows
 Installer automation interface (database in create mode, SQL `CREATE TABLE` / `INSERT`, summary stream `x64;1033`,
@@ -2296,6 +2314,44 @@ uninstallers: `fail-check` (ARP entry, fixture key, new sessions, quarantine lis
 every step record; the rigtool run directory copied in as `run\`; zipped and pulled to `<evidence>\<app>\guest\`). A
 phase that throws still gets `finish` and the pull; the scorer fails the missing rows.
 
+Rig fixes after the chain run `e2e-20261123-173417` (2026-11-23):
+
+- **Fail fast.** After `prepare`, every host step of the app flow, the window and the undo branch is an
+  `Invoke-M3E2eStep`: the phase, its screenshot (taken either way, it shows the failed state), then a throw when the
+  result line is not a success (`Test-M3E2eStepLine`: `consent-wait` `found=True`, `ui-wait-result` `state=result`
+  (null run `declined`), `ui-wait-undone` `state=undone`, every other phase `ok=True`; no line or `M3E REFUSED` is a
+  failure). No step that depends on a failed one runs (that run lost 36 + 30 minutes waiting out npp's consent, result
+  and undo timeouts after Move was never pressed); the catch records `host.json` `error` and `failed_step`, and the
+  finally still runs `finish` and the pull. `setup`, `prepare`, `ui-wait-scan` (its state picks the branch),
+  `fail-check` and `finish` stay plain phases.
+- **Nothing preselected.** When `capture-post`'s rig CLI plan preselects nothing (`cli.preselected_n` 0), `ui-move`
+  does not press Move: it reads `MoveButton` four times over 3 s and answers `state=skip-empty ok=True` only when the
+  button is there and never enabled (the UI ticked nothing either; `move-enabled` or `no-move` otherwise, and a null run
+  refuses the path, `empty-null`: it has no consent to cancel). The host then skips the plan UAC check, the plan
+  consent and the result wait (`host.json empty_plan`; shots up to `07-move-waiting`) and runs `capture-exec`, which
+  requires no new session, writes `run\executed.json` with no items (state `Empty`), compares it with the CLI's empty
+  preselected set and runs `rigtool execdiff` over the window against the rig's own empty journal and report
+  (`New-E2eEmptyExecDocs`: session `rig-empty-<app>`, a header and a commit of zero items, `empty-journal.jsonl` /
+  `empty-report.json`), so collateral 0 still holds. An undo app is not undone on this path (`undo_skipped`).
+- **Uninstaller watcher.** The uninstaller processes and their integrity (G7) are polled by a detached elevated
+  PowerShell (`m3-e2e.ps1 -Phase watch-uninstallers`, `Start-E2eWatcher`), started in `ui-uninstall` before
+  `UninstallButton` is invoked and checked again in `ui-confirm` before the confirm press; it rewrites
+  `uninstallers-watch.json` whenever its list grows (log `watch.log`). `ui-wait-scan` polls itself only while no
+  watcher runs, then stops it (stop file, 20 s, kill) and merges its records first (`Merge-E2eUninstallers`); `finish`
+  stops one that is still running. Before, the scan's own polling started after the uninstall consent, and npp's
+  2-second uninstaller was never seen.
+- **Approval time.** `consent-approve` sets `t_approved_<step>` (and `consent-cancel` `t_cancelled_<step>`) only when
+  m3sec found the dialog and pressed a button (`pressed=True` on the result line); `gone=` is printed only for a dialog
+  that was found.
+- **MSI smoke.** When the run drives `msi1603` or `msi3010`, the chain first spends one boot of the base snapshot on
+  `Invoke-M3E2eMsiSmoke`: guest phase `msi-smoke` (app `msi-smoke`, its own folder) builds both packages and installs
+  each with `msiexec /i /qn /L*v`; a package passes with exit 0 and its ARP entry (`M3E MSI-SMOKE msi-smoke ok=...
+  msi1603=ok:0 msi3010=fail:1603`). A failing package's app is not booted: `host.json` records `error` ("msi smoke:
+  msiexec /i of the msi1603 fixture exited 1603 ...") and `failed_step msi-smoke`, and the scorer's evidence row shows
+  it. Evidence `<evidence>\msi-smoke\` (host.json, jobs, guest\ with `step-msi-smoke.json` and the MSI logs); summary
+  `msi_smoke`. (The Media-table bug made `/i` exit 1603; prepare caught it, but two boots later and only in host.json.)
+- **Boot flake**: `Restore-Base` retries a boot whose agent never shows, with diagnostics in the app's folder (section 9).
+
 **UAC and the consent dialog.** (Ruling 2026-11-22: approving the broker's consent dialogs with the elevated
 `m3sec press` is accepted: a high-integrity click is what the user's click is.) Design 11.2 runs `m3-e2e` UAC-silent; section 13 found `rig-base` at the Windows
 defaults (5/1/1). The flow works either way: whenever `consent.exe` is up after a step that can start the broker, the
@@ -2328,6 +2384,24 @@ the product gone, nothing executed, the G12 scan rows. Plus: one UAC value for t
 passing evidence directory (UAC silent, and UAC on answered by scancode) passes, empty / missing fail, and 34 single
 defects each fail (among them a collateral item, missing timings, a 1603 shown as success, a 3010 without its bar, a
 set mismatch, danger, a failing fidelity row, the medium-route uninstaller at high).
+
+Scorer additions (2026-11-23): the evidence row names `host.json` `error` / `failed_step` (a failed boot, a step that
+failed fast, the MSI smoke). **App events** (every app, `guest\app-events.json` from `finish`: "Purge" events other
+than id 100, and Application Error / Windows Error Reporting / .NET Runtime events naming Purge): row `<app> app
+events: no crash of a Purge process` fails on a crash (`Application Error` 1000 whose faulting application is
+`Purge.exe` or `purge-*.exe`, `.NET Runtime` 1026 of Purge, a WER report `APPCRASH`, `BEX`, `BEX64`, `MoAppCrash` or
+`CLR20r3` with P1 Purge.exe / purge-*.exe) and on a missing file; any other such event (the WER `RADAR_PRE_LEAK_64` of
+Purge.exe that npp's long wait produced, a hang, Purge's own warnings) passes as a **warning row** (`warn` true, printed
+`WARN`), never a gate failure. **Nothing preselected**: with `ui-move` `skip-empty`, the UI row is `review, nothing
+preselected, Move disabled` (CLI `preselected_n` 0, Move present and `move_enabled` false, no plan consent or result
+step), the set row passes with both sides empty only on this path (`capture-exec` `empty`; elsewhere both sides must be
+non-empty, as before), `no session (nothing preselected)` replaces `session committed` (report state `Empty`, no new
+session), collateral and danger are scored as always; Move enabled there (`move-enabled`) fails the UI row; an undo app
+with nothing preselected fails both undo rows. Self-test: 99 checks; new defects (Move enabled with nothing
+preselected, the empty path with Move recorded enabled, with CLI items, with a session, without the empty capture,
+with collateral, with a plan consent after it; the undo app empty; a WER APPCRASH of Purge.exe, an Application Error
+1000 of purge-broker.exe, app-events.json missing) and passes (npp on the empty path; a RADAR_PRE_LEAK_64 warning row;
+the host error in the evidence row).
 
 **Not settled without a VM run**: whether WinUI exposes the x:Name ids (`ProgramList`, `MoveButton`, ...) and the
 ContentDialog part `PrimaryButton` as UI Automation ids (the driver falls back to the button name, never to

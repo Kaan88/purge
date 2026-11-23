@@ -256,9 +256,60 @@ function Wait-VmState([string[]]$States, [int]$TimeoutSec = 120) {
 # Powers the VM off, restores the snapshot, starts it headless and waits for the agent. A live snapshot
 # comes back in state 'saved' with the agent already running; an offline one needs autologon and the
 # PurgeRigAgent logon task (up to $AgentTimeoutSec).
+#
+# Boot flake (vm\RIG.md section 9, "Boot flake"): about 1 boot in 345 of rig-base never shows the agent (m3-e2e
+# e2e-20261123-173417, vscode-user). When Wait-Agent fails, the boot's diagnostics go to -DiagDir (default
+# vm\runs\boot-diag): a screenshot, `guestproperty enumerate` and a copy of VBox.log, then the whole restore and boot
+# run once more (-BootTries, default 2). A second failure saves them again and throws, naming the folder.
 function Restore-Base {
     param([string]$Snapshot = 'rig-base', [int]$AgentTimeoutSec = 300, [string]$ExecutionEngine = $env:RIG_VM_EXECUTION_ENGINE,
-          [switch]$No3D = ($env:RIG_VM_NO_3D -eq '1'))
+          [switch]$No3D = ($env:RIG_VM_NO_3D -eq '1'), [string]$DiagDir = '', [int]$BootTries = 2)
+    for ($boot = 1; $boot -le [Math]::Max(1, $BootTries); $boot++) {
+        try {
+            Restore-BaseOnce -Snapshot $Snapshot -AgentTimeoutSec $AgentTimeoutSec -ExecutionEngine $ExecutionEngine -No3D:$No3D
+            return
+        } catch {
+            $why = $_.Exception.Message
+            # Only the agent never showing up is retried (Wait-Agent's two messages); anything else is no flake.
+            if ($why -notmatch '^agent(\.alive not visible| did not run the ping job)') { throw }
+            $dir = Save-BootDiag -Dir $DiagDir -Tag "$Snapshot-boot$boot"
+            if ($boot -ge [Math]::Max(1, $BootTries)) { throw "$why; boot tried $boot time(s), diagnostics in $dir" }
+            Write-RigLog "  !! boot $boot of $Snapshot failed ($why); diagnostics in $dir; restoring and booting once more"
+        }
+    }
+}
+
+# A failed boot's diagnostics into $Dir (default vm\runs\boot-diag): boot-<tag>-<stamp>.png (screenshotpng),
+# -guestproperty.txt (guestproperty enumerate: the Guest Additions' and the logged-on user's properties, or their
+# absence) and -VBox.log (the VM's log of this boot). Never throws; returns the folder.
+function Save-BootDiag([string]$Dir = '', [string]$Tag = 'boot') {
+    if (-not $Dir) { $Dir = Join-Path $script:RunsDir 'boot-diag' }
+    try {
+        New-Item -ItemType Directory -Force $Dir | Out-Null
+        $base = Join-Path $Dir ("boot-$($Tag -replace '[^\w.-]', '_')-" + (Get-Date -Format 'yyyyMMdd-HHmmss'))
+        $saved = @()
+        $r = Invoke-VBox @('controlvm', $script:VmName, 'screenshotpng', "$base.png")
+        if ($r.code -eq 0 -and (Test-Path -LiteralPath "$base.png")) { $saved += 'screenshot' } else { Write-RigLog "  boot diag: screenshot failed: $($r.out -join ' ')" }
+        $g = Invoke-VBox @('guestproperty', 'enumerate', $script:VmName)
+        [IO.File]::WriteAllLines("$base-guestproperty.txt", [string[]]@("exit $($g.code)") + @($g.out))
+        $saved += 'guestproperty'
+        $info = Invoke-VBox @('showvminfo', $script:VmName, '--machinereadable')
+        $cfg = (ConvertFrom-MachineReadable $info.out)['CfgFile']
+        $log = $(if ($cfg) { Join-Path (Join-Path (Split-Path -Parent ($cfg -replace '\\\\', '\')) 'Logs') 'VBox.log' } else { $null })
+        if ($log -and (Test-Path -LiteralPath $log)) {
+            # VirtualBox keeps the log open; read it shared and write a copy.
+            $fs = [IO.File]::Open($log, 'Open', 'Read', 'ReadWrite')
+            try { $out = [IO.File]::Create("$base-VBox.log"); try { $fs.CopyTo($out) } finally { $out.Dispose() } } finally { $fs.Dispose() }
+            $saved += 'VBox.log'
+        } else { Write-RigLog "  boot diag: no VBox.log at '$log'" }
+        Write-RigLog "  boot diag ($Tag): $($saved -join ', ') -> $base*"
+    } catch { Write-RigLog "  boot diag ($Tag) failed: $($_.Exception.Message)" }
+    $Dir
+}
+
+# One restore and boot (Restore-Base's body before the retry).
+function Restore-BaseOnce {
+    param([string]$Snapshot = 'rig-base', [int]$AgentTimeoutSec = 300, [string]$ExecutionEngine = '', [switch]$No3D)
     $st = Get-VmState
     Write-RigLog "restore $Snapshot (VM state: $st)"
     if (@('running', 'paused', 'stuck', 'starting', 'stopping', 'saving', 'restoring', 'livesnapshotting', 'teleporting') -contains $st) {
@@ -303,11 +354,24 @@ function Wait-Agent {
     param([int]$TimeoutSec = 300)
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     $seen = $false
+    $last = ''; $tries = 0
     while (-not $seen -and (Get-Date) -lt $deadline) {
         $r = Invoke-Guest @('stat', 'C:\cr\jobs\agent.alive')
-        if ($r.code -eq 0) { $seen = $true } else { Start-Sleep -Seconds 5 }
+        $tries++
+        if ($r.code -eq 0) { $seen = $true }
+        else {
+            # The stat error says which part is missing (no Guest Additions yet, no logged-on user, the file not
+            # there); logged when it changes, and named in the timeout.
+            $err = "exit $($r.code): $((@($r.out) -join ' ').Trim())"
+            if ($err -ne $last) { Write-RigLog "  agent.alive not visible yet (stat $err)"; $last = $err }
+            Start-Sleep -Seconds 5
+        }
     }
-    if (-not $seen) { throw "agent.alive not visible within $TimeoutSec s (guest additions, autologon or PurgeRigAgent task?)" }
+    if (-not $seen) {
+        throw ("agent.alive not visible within $TimeoutSec s ($tries stats; last: $(if ($last) { $last } else { 'none' })). The guest never showed " +
+               'the rig agent: the Guest Additions, the autologon of the rig user or the PurgeRigAgent logon task did not come up. ' +
+               'A rare boot flake of rig-base (about 1 boot in 345); Restore-Base saves a screenshot, the guest properties and VBox.log and boots once more')
+    }
     $alive = (Invoke-GuestCmd 'type C:\cr\jobs\agent.alive').out -join ' '
     Write-RigLog "  agent.alive: $($alive.Trim())"
     if ($alive -match 'admin=False') { throw 'the agent is running but not elevated' }

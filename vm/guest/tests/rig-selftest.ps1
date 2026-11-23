@@ -1965,7 +1965,7 @@ function Invoke-M2Script([string]$Script, [string]$Arguments = '', [int]$Timeout
     Check 'm3-e2e: -Apps keeps the named apps in list order' ((@(Get-M3E2eApps -ExpectFile $expect -Only @('msi1603', 'npp') | ForEach-Object { $_.id }) -join ',') -eq 'npp,msi1603')
     $threw = $false; try { $null = Get-M3E2eApps -ExpectFile $expect -Only @('nope') } catch { $threw = $true }
     Check 'm3-e2e: an unknown -Apps name throws' $threw
-    Check 'm3-e2e: undo apps default to the expectations (npp)' ((@(Get-M3E2eUndoApps -ExpectFile $expect) -join ',') -eq 'npp')
+    Check 'm3-e2e: undo apps default to the expectations (execapp: service + task restore)' ((@(Get-M3E2eUndoApps -ExpectFile $expect) -join ',') -eq 'execapp')
     $threw = $false; try { $null = Get-M3E2eUndoApps -ExpectFile $expect -Override @('msi1603') } catch { $threw = $true }
     Check 'm3-e2e: a failing uninstaller cannot be an undo app' $threw
     Check 'm3-e2e: phase job text' ((New-M3E2ePhaseText 'consent-wait' 'npp' 'plan' 300) -eq "& 'C:\cr\guest\m3-e2e.ps1' -Phase 'consent-wait' -App 'npp' -Step 'plan' -WaitSec 300")
@@ -1974,15 +1974,62 @@ function Invoke-M2Script([string]$Script, [string]$Arguments = '', [int]$Timeout
     # The host's screenshot list and the scorer's required list agree for every app, with and without undo.
     $sc = & { . (Join-Path $Vm 'truth\m3-e2e-score.ps1'); ${function:Get-E2eShotNames} }
     $diff = @()
-    foreach ($a in $x.apps) { foreach ($u in $true, $false) { if ((@(Get-M3E2eShotNames $a $u) -join ',') -ne (@(& $sc $a $u) -join ',')) { $diff += "$($a.id)/$u" } } }
-    Check 'm3-e2e: host screenshot names == scorer required names' ($diff.Count -eq 0) ($diff -join ', ')
+    foreach ($a in $x.apps) { foreach ($u in $true, $false) { foreach ($e in $true, $false) { if ((@(Get-M3E2eShotNames $a $u $e) -join ',') -ne (@(& $sc $a $u $e) -join ',')) { $diff += "$($a.id)/$u/$e" } } } }
+    Check 'm3-e2e: host screenshot names == scorer required names (with and without undo, nothing preselected)' ($diff.Count -eq 0) ($diff -join ', ')
+    Check 'm3-e2e: nothing preselected ends the shots at 07-move-waiting, undo or not' ((@(Get-M3E2eShotNames ($x.apps | Where-Object { $_.id -eq 'npp' }) $true $true) -join ',') -eq '01-programs-row,02-uninstall-clicked,03-confirm,04-consent-run,05-run-approved,06-scan-done,07-move-waiting')
     Check 'm3-e2e: broker-route apps have the consent shots, a failing one the failure shot' ((@(Get-M3E2eShotNames ($x.apps | Where-Object { $_.id -eq 'msi1603' }) $false) -join ',') -eq '01-programs-row,02-uninstall-clicked,03-confirm,04-consent-run,05-run-approved,06-scan-done,07-failure')
     # Every phase the host calls exists in the guest script's phase set.
     $guestText = [IO.File]::ReadAllText((Join-Path $Guest 'm3-e2e.ps1'))
     $hostText = [IO.File]::ReadAllText((Join-Path $Vm 'rig-m3.ps1'))
-    $called = @([regex]::Matches($hostText, "Invoke-M3E2ePhase '([a-z-]+)'") | ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique)
+    $called = @([regex]::Matches($hostText, "Invoke-M3E2e(?:Phase|Step) '([a-z-]+)'") | ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique)
     $missing = @($called | Where-Object { $guestText -notmatch ("(?m)^\s+'" + [regex]::Escape($_) + "' \{") })
     Check 'm3-e2e: every phase the host calls has a guest branch' ($called.Count -ge 15 -and $missing.Count -eq 0) "called $($called.Count); missing: $($missing -join ', ')"
+}
+
+# ------------------------- m3-e2e rig fixes of 2026-11-23 (RIG.md section 17): empty plan docs, the watcher merge
+& {
+    . (Join-Path $Guest 'm3-e2e-ui.ps1')
+    $ErrorActionPreference = 'Stop'
+    $d = New-E2eEmptyExecDocs 'npp' ([uint64]134399194953885068)
+    $lines = @($d.journal -split "`n" | Where-Object { $_ })
+    $h = $lines[0] | ConvertFrom-Json; $c = $lines[1] | ConvertFrom-Json; $r = $d.report | ConvertFrom-Json
+    Check 'm3-e2e empty plan: the rig journal is a header and a commit of zero items, session rig-empty-<app>' ($lines.Count -eq 2 -and $h.rec -ceq 'header' -and $h.schema -ceq 'purge.journal/1' -and
+        $h.session -ceq 'rig-empty-npp' -and [int]$h.items -eq 0 -and @($h.volumes).Count -eq 0 -and $c.rec -ceq 'commit' -and [int]$c.counts.done -eq 0 -and $d.journal.EndsWith("`n")) $d.journal
+    Check 'm3-e2e empty plan: the rig report is Committed, no items, the same session and hashes' ($r.schema -ceq 'purge.exec/1' -and $r.state -ceq 'Committed' -and @($r.items).Count -eq 0 -and
+        $r.session -ceq $h.session -and $r.plan_hash -ceq $h.plan_hash -and $r.selection_hash -ceq $h.selection_hash -and $r.restore_point.kind -ceq 'NotRequested' -and $d.report -match '"items":\s*\[\s*\]')
+    $threw = $false; try { $null = New-E2eEmptyExecDocs "npp'; x" 1 } catch { $threw = $true }
+    Check 'm3-e2e empty plan: a bad app name is refused' $threw
+    $m = @(Merge-E2eUninstallers @([pscustomobject]@{ pid = 10; name = 'unins000.exe'; il = 'high' }) @([pscustomobject]@{ pid = 10; name = 'unins000.exe'; il = 'unknown(5)' }, [pscustomobject]@{ pid = 11; name = '_iu14D2N.tmp'; il = 'high' }))
+    Check 'm3-e2e watcher: the watcher''s record of a pid wins, the scan''s other pids are added' ($m.Count -eq 2 -and $m[0].il -ceq 'high' -and $m[1].pid -eq 11)
+    Check 'm3-e2e watcher: nothing seen is an empty list' (@(Merge-E2eUninstallers $null @()).Count -eq 0)
+}
+
+# ------------------------------------------- rig.ps1 boot flake: Wait-Agent's stat error, Restore-Base retries once
+& {
+    . (Join-Path $Vm 'rig.ps1')
+    $ErrorActionPreference = 'Stop'
+    $script:log = New-Object System.Collections.ArrayList
+    function Write-RigLog([string]$Message) { [void]$script:log.Add($Message) }
+    function Invoke-Guest([string[]]$Sub) { [pscustomobject]@{ code = 1; out = @('VBoxManage.exe: error: The guest execution service is not ready (yet)') } }
+    function Start-Sleep { param([int]$Seconds, [int]$Milliseconds) }
+    $msg = $null; try { Wait-Agent -TimeoutSec 1 } catch { $msg = $_.Exception.Message }
+    Check 'boot: Wait-Agent logs the stat error once and names it in the timeout, with the reworded hint' ($msg -match '^agent\.alive not visible within 1 s \(\d+ stats; last: exit 1: VBoxManage\.exe: error: The guest execution service is not ready \(yet\)\)' -and
+        $msg -match 'rare boot flake' -and @($script:log | Where-Object { $_ -like '*agent.alive not visible yet (stat exit 1: *' }).Count -eq 1) $msg
+    # Restore-Base: a boot whose agent never shows is retried once, with diagnostics each time; other errors are not.
+    $script:boots = 0; $script:diags = New-Object System.Collections.ArrayList; $script:failBoots = 1; $script:otherError = $false
+    function Restore-BaseOnce { param([string]$Snapshot, [int]$AgentTimeoutSec, [string]$ExecutionEngine, [switch]$No3D)
+        $script:boots++
+        if ($script:otherError) { throw 'snapshot restore rig-base failed' }
+        if ($script:boots -le $script:failBoots) { throw 'agent.alive not visible within 300 s (x)' } }
+    function Save-BootDiag([string]$Dir = '', [string]$Tag = 'boot') { [void]$script:diags.Add("$Dir|$Tag"); 'D:\diag' }
+    Restore-Base -Snapshot 'rig-base' -DiagDir 'D:\ev\vscode-user'
+    Check 'boot: one failed boot is retried and passes; its diagnostics go to -DiagDir' ($script:boots -eq 2 -and @($script:diags).Count -eq 1 -and $script:diags[0] -ceq 'D:\ev\vscode-user|rig-base-boot1') ("boots $script:boots; diags $($script:diags -join ', ')")
+    $script:boots = 0; $script:diags.Clear(); $script:failBoots = 5
+    $msg = $null; try { Restore-Base -Snapshot 'rig-base' } catch { $msg = $_.Exception.Message }
+    Check 'boot: two failed boots throw, naming the tries and the diagnostics, diagnostics saved twice' ($script:boots -eq 2 -and @($script:diags).Count -eq 2 -and $msg -match 'boot tried 2 time\(s\), diagnostics in D:\\diag$') $msg
+    $script:boots = 0; $script:diags.Clear(); $script:otherError = $true
+    $msg = $null; try { Restore-Base -Snapshot 'rig-base' } catch { $msg = $_.Exception.Message }
+    Check 'boot: an error that is no agent timeout is not retried' ($script:boots -eq 1 -and @($script:diags).Count -eq 0 -and $msg -ceq 'snapshot restore rig-base failed') $msg
 }
 
 # ------------------------------------- m3-e2e ambient set: null runs, one window, the build (RIG.md section 17.1)
@@ -2022,21 +2069,81 @@ function Invoke-M2Script([string]$Script, [string]$Arguments = '', [int]$Timeout
     $win = [regex]::Match($hostText, '(?s)\nfunction Invoke-M3E2eWindow\(.*?\n\}')
     $outside = $hostText.Remove($win.Index, $win.Length)
     Check 'm3-e2e window: one Invoke-M3E2eWindow call, right after capture-post on the review page' ($win.Success -and ([regex]::Matches($hostText, '(?m)^\s+Invoke-M3E2eWindow ').Count -eq 1) -and
-        $hostText -match "Invoke-M3E2ePhase 'capture-post' \`$id -TimeoutSec 5400\r?\n\s+if \(\`$state -eq 'review'\) \{\r?\n\s+Invoke-M3E2eWindow \`$id \`$rec \`$isNull\r?\n")
+        $hostText -match "Invoke-M3E2eStep 'capture-post' \`$id -TimeoutSec 5400\r?\n\s+if \(\`$state -eq 'review'\) \{\r?\n\s+Invoke-M3E2eWindow \`$id \`$rec \`$isNull\r?\n")
     Check 'm3-e2e window: snap B (capture-exec), the plan approval and the cancel only inside the window' (
-        $win.Value -match "Invoke-M3E2ePhase 'capture-exec'" -and $outside -notmatch "Invoke-M3E2ePhase 'capture-exec'" -and $outside -notmatch "'consent-approve' \`$\w+ 'plan'" -and
-        $outside -notmatch "Invoke-M3E2ePhase 'consent-cancel'" -and @([regex]::Matches($win.Value, '\$IsNull')).Count -eq 2)
+        $win.Value -match "Invoke-M3E2eStep 'capture-exec'" -and $outside -notmatch "Invoke-M3E2e(Phase|Step) 'capture-exec'" -and $outside -notmatch "'consent-approve' \`$\w+ 'plan'" -and
+        $outside -notmatch "Invoke-M3E2e(Phase|Step) 'consent-cancel'" -and @([regex]::Matches($win.Value, '\$IsNull')).Count -eq 2)
     $script:trace = New-Object System.Collections.ArrayList
     $M3.null_wait = 10
-    function Invoke-M3E2ePhase([string]$Phase, [string]$App, [string]$Step = '', [int]$WaitSec = 0, [int]$TimeoutSec = 900, [string]$AmbientSha = '') { [void]$script:trace.Add("phase:$Phase$(if ($Step) { ":$Step" })$(if ($WaitSec) { " wait=$WaitSec" })"); 'M3E X' }
+    # The stub answers every phase with a success line (fail fast needs one); $script:stubLines overrides a phase.
+    $script:stubLines = @{}
+    function Invoke-M3E2ePhase([string]$Phase, [string]$App, [string]$Step = '', [int]$WaitSec = 0, [int]$TimeoutSec = 900, [string]$AmbientSha = '') {
+        [void]$script:trace.Add("phase:$Phase$(if ($Step) { ":$Step" })$(if ($WaitSec) { " wait=$WaitSec" })")
+        $k = "$Phase$(if ($Step) { ":$Step" })"
+        if ($script:stubLines.ContainsKey($k)) { return $script:stubLines[$k] }
+        "M3E X $App ok=True found=True state=$(if ($Phase -eq 'ui-wait-result') { if ($script:E2eNull) { 'declined' } else { 'result' } } elseif ($Phase -eq 'ui-wait-undone') { 'undone' } else { 'prompt' })"
+    }
     function Save-M3E2eShot([string]$Name) { [void]$script:trace.Add("shot:$Name") }
     function Invoke-M3E2eUac([string]$Tag, [string]$App = '', [string]$Step = '') { [void]$script:trace.Add("uac:$Tag"); @() }
+    $script:E2eNull = $false
     $r1 = [ordered]@{ uac_keys = [ordered]@{} }; Invoke-M3E2eWindow 'vscode' $r1 $false; $gate = @($script:trace); $script:trace.Clear()
-    $r2 = [ordered]@{ uac_keys = [ordered]@{} }; Invoke-M3E2eWindow 'vscode' $r2 $true; $nul = @($script:trace)
+    $script:E2eNull = $true
+    $r2 = [ordered]@{ uac_keys = [ordered]@{} }; Invoke-M3E2eWindow 'vscode' $r2 $true; $nul = @($script:trace); $script:trace.Clear()
+    $script:E2eNull = $false
     $gi = [array]::IndexOf($gate, 'phase:consent-approve:plan'); $ni = [array]::IndexOf($nul, 'phase:consent-cancel:plan wait=10')
     $same = ($gi -ge 0 -and $gi -eq $ni -and $gate.Count -eq $nul.Count)
     if ($same) { for ($i = 0; $i -lt $gate.Count; $i++) { if ($i -ne $gi -and $gate[$i] -cne $nul[$i]) { $same = $false } } }
     Check 'm3-e2e window: gate and null traces are equal but for approve / cancel (+ null wait)' ($same -and $gate[-1] -ceq 'phase:capture-exec' -and $gate[0] -ceq 'phase:ui-move') "gate: $($gate -join ' '); null: $($nul -join ' ')"
+
+    # Nothing preselected: ui-move answers skip-empty; the window goes straight to capture-exec (no plan UAC check,
+    # consent, approval or result wait) and the record says so.
+    $script:stubLines = @{ 'ui-move' = 'M3E UI-MOVE npp ok=True state=skip-empty footer= enabled=False' }
+    $r3 = [ordered]@{ uac_keys = [ordered]@{} }; Invoke-M3E2eWindow 'npp' $r3 $false; $emp = @($script:trace); $script:trace.Clear()
+    Check 'm3-e2e window: nothing preselected skips the plan consent and the result wait' ((($emp -join ' ') -ceq 'phase:ui-move shot:07-move-waiting phase:capture-exec') -and $r3.empty_plan -eq $true) ($emp -join ' ')
+    # Fail fast: a failed step throws (after its screenshot); nothing after it runs.
+    $script:stubLines = @{ 'consent-wait:plan' = 'M3E DIALOG npp plan found=False broker=4708 footer= primary= il=' }
+    $threw = $null
+    try { Invoke-M3E2eWindow 'npp' ([ordered]@{ uac_keys = [ordered]@{} }) $false } catch { $threw = $_.Exception.Message }
+    $ff = @($script:trace); $script:trace.Clear()
+    Check 'm3-e2e fail fast: a plan dialog not found ends the window (no approve, result wait or capture-exec)' ($threw -like 'step consent-wait-plan failed: M3E DIALOG*' -and
+        (($ff -join ' ') -ceq 'phase:ui-move shot:07-move-waiting uac:07u-uac phase:consent-wait:plan wait=300 shot:08-consent-plan') -and $script:E2eFailedStep -ceq 'consent-wait-plan') "$threw / $($ff -join ' ')"
+    $script:stubLines = @{ 'ui-move' = 'M3E UI-MOVE npp ok=False state=no-move footer= code=' }
+    $threw = $null
+    try { Invoke-M3E2eWindow 'npp' ([ordered]@{ uac_keys = [ordered]@{} }) $false } catch { $threw = $_.Exception.Message }
+    $ff = @($script:trace); $script:trace.Clear()
+    Check 'm3-e2e fail fast: Move not pressed ends the window after its screenshot' ($threw -like 'step ui-move failed:*' -and (($ff -join ' ') -ceq 'phase:ui-move shot:07-move-waiting')) "$threw / $($ff -join ' ')"
+    $script:stubLines = @{}
+    # Test-M3E2eStepLine: what counts as a success line per phase.
+    $sl = @(
+        @('ui-start', 'M3E UI-START npp ok=True ui_pid=1 row=name scrolls=0', $false, $true), @('ui-start', 'M3E UI-START npp ok=False ui_pid=1', $false, $false),
+        @('consent-wait', 'M3E DIALOG npp run found=True broker=1', $false, $true), @('consent-wait', 'M3E DIALOG npp run found=False broker=', $false, $false),
+        @('consent-approve', 'M3E APPROVE npp plan ok=False broker=4708 pressed=False enabled= gone=', $false, $false),
+        @('ui-wait-result', 'M3E RESULT npp state=result title=Moved_2', $false, $true), @('ui-wait-result', 'M3E RESULT npp state= title=', $false, $false),
+        @('ui-wait-result', 'M3E RESULT vscode state=declined title=', $true, $true), @('ui-wait-result', 'M3E RESULT vscode state=result title=x', $true, $false),
+        @('ui-wait-undone', 'M3E UNDONE npp state=undone title=Put_back', $false, $true), @('capture-exec', 'M3E REFUSED npp phase=capture-exec null=True prepared_null=False', $false, $false),
+        @('ui-move', '', $false, $false), @('ui-move', 'M3 UI-MOVE ok=True', $false, $false), @('ui-move', 'M3E UI-MOVE npp ok=True state=skip-empty', $false, $true))
+    $bad = @($sl | Where-Object { (Test-M3E2eStepLine $_[0] $_[1] $_[2]) -ne $_[3] } | ForEach-Object { "$($_[0]): $($_[1])" })
+    Check "m3-e2e fail fast: Test-M3E2eStepLine on $($sl.Count) lines" ($bad.Count -eq 0) ($bad -join ' | ')
+    # The host's app flow and undo branch use only fail-fast steps after prepare (and the scan's own state logic).
+    $appFn = [regex]::Match($hostText, '(?s)\nfunction Invoke-M3E2eApp\(.*?\n\}').Value
+    $plain = @([regex]::Matches($appFn, "Invoke-M3E2ePhase '([a-z-]+)'") | ForEach-Object { $_.Groups[1].Value })
+    Check 'm3-e2e fail fast: Invoke-M3E2eApp calls Invoke-M3E2ePhase only for setup, prepare, the scan, fail-check and finish' ((($plain | Sort-Object -Unique) -join ',') -ceq 'fail-check,finish,prepare,setup,ui-wait-scan') ($plain -join ',')
+    Check 'm3-e2e fail fast: the undo steps fail fast and are skipped for an empty plan' ($appFn -match "(?s)if \(\`$Undo -and \`$rec\.empty_plan\) \{.*undo_skipped.*\} elseif \(\`$Undo\) \{\s+\`$null = Invoke-M3E2eStep 'ui-undo'" -and $appFn -match "Invoke-M3E2eStep 'capture-undo'")
+    Check 'm3-e2e fail fast: the catch records the failed step; finish and the pull stay in finally' ($appFn -match 'rec\.failed_step = \$script:E2eFailedStep' -and $appFn -match "(?s)\} finally \{.*Invoke-M3E2ePhase 'finish'")
+
+    # MSI smoke: which fixtures a smoke line lets through.
+    $fx = @((Get-Content -LiteralPath $expect -Raw | ConvertFrom-Json).apps | Where-Object { $_.kind -like 'fail-*' })
+    $sk = Get-M3E2eMsiSmokeSkips $fx 'M3E MSI-SMOKE msi-smoke ok=True msi1603=ok:0 msi3010=ok:0'
+    Check 'm3-e2e msi smoke: both ok -> no skip' ($sk.Count -eq 0)
+    $sk = Get-M3E2eMsiSmokeSkips $fx 'M3E MSI-SMOKE msi-smoke ok=False msi1603=fail:1603 msi3010=ok:0'
+    Check 'm3-e2e msi smoke: a failing package skips its app only, naming the exit code' ($sk.Count -eq 1 -and "$($sk['msi1603'])" -match 'msiexec /i of the msi1603 fixture exited 1603')
+    $sk = Get-M3E2eMsiSmokeSkips $fx ''
+    Check 'm3-e2e msi smoke: no line skips both (fail-closed)' ($sk.Count -eq 2 -and "$($sk['msi3010'])" -match 'no result')
+    $sk = Get-M3E2eMsiSmokeSkips $fx 'M3E MSI-SMOKE msi-smoke ok=False msi1603=ok:0 msi3010=fail:'
+    Check 'm3-e2e msi smoke: a package that could not be built skips its app' ($sk.Count -eq 1 -and "$($sk['msi3010'])" -match 'could not be built')
+    Check 'm3-e2e msi smoke: a run without an MSI fixture has no smoke' ($null -eq (Invoke-M3E2eMsiSmoke @((Get-Content -LiteralPath $expect -Raw | ConvertFrom-Json).apps | Where-Object { $_.id -eq 'npp' }) 'rig-base'))
+    $e2eFn = [regex]::Match($hostText, '(?s)\nfunction Invoke-M3E2e \{.*?\n\}').Value
+    Check 'm3-e2e msi smoke: the chain runs it before the first app and passes each skip reason' ($e2eFn -match '(?s)\$smoke = Invoke-M3E2eMsiSmoke \$apps \$base.*foreach \(\$a in \$apps\).*-SkipReason \$skip')
 
     # The guest side of a null run.
     $g = [IO.File]::ReadAllText((Join-Path $Guest 'm3-e2e.ps1'))
@@ -2045,7 +2152,25 @@ function Invoke-M2Script([string]$Script, [string]$Arguments = '', [int]$Timeout
         $cancel.Value -match 'tick = \$false; button = 2;' -and $cancel.Value -match "Save-Step \`$nw 'null-wait'" -and $cancel.Value -match "if \(-not \`$NullRun -or \`$Step -ne 'plan'\)")
     Check 'm3-e2e guest: a null run never approves the plan or undo, never mixes with a gate run' (
         $g -match "if \(\`$NullRun -and \`$Step -ne 'run'\) \{ `"M3E REFUSED" -and $g -match "\[bool\]\`$st\.null_run -ne \[bool\]\`$NullRun" -and $g -match 'null_run = \[bool\]\$NullRun \}')
+    # The empty path, the watcher, t_approved and the MSI smoke on the guest side.
+    $mv = [regex]::Match($g, "(?s)\n    'ui-move' \{.*?\n    \}")
+    Check 'm3-e2e guest: ui-move with nothing preselected checks Move present and not enabled, skip-empty only then; a null run refuses it' ($mv.Success -and
+        $mv.Value -match '(?s)if \(\$pre -eq 0\) \{.*Wait-E2eElement \{ Find-E2eById \$win ''MoveButton'' \} 60\r?\n' -and $mv.Value -match "elseif \(\`$rec\.move_enabled -ne \`$false\) \{ \`$rec\.state = 'move-enabled'" -and
+        $mv.Value -match "else \{ \`$rec\.state = 'skip-empty'; \`$rec\.ok = \`$true; Set-StateValue \`$st 'empty_plan' \`$true \}" -and $mv.Value -match "if \(\`$NullRun\) \{ \`$rec\.state = 'empty-null'")
+    $ap = [regex]::Match($g, "(?s)\n    'consent-approve' \{.*?\n    \}")
+    Check 'm3-e2e guest: t_approved_<step> only when m3sec found the dialog and pressed' ($ap.Success -and $ap.Value -match 'if \(\$rec\.pressed\) \{ Set-StateValue \$st "t_approved_\$Step"' -and
+        @([regex]::Matches($ap.Value, 't_approved_')).Count -eq 1 -and $ap.Value -match 'press\.found -eq \$true')
+    $un = [regex]::Match($g, "(?s)\n    'ui-uninstall' \{.*?\n    \}").Value
+    $cf = [regex]::Match($g, "(?s)\n    'ui-confirm' \{.*?\n    \}").Value
+    $ws = [regex]::Match($g, "(?s)\n    'ui-wait-scan' \{.*?\n    \}").Value
+    Check 'm3-e2e guest: the uninstaller watcher starts before Uninstall and before the confirm press; the scan stops and merges it' (
+        $un -match '(?s)Start-E2eWatcher \$st\r?\n\s+\$rec\.invoked = Invoke-E2eElement \$w\.el' -and $cf -match '(?s)Start-E2eWatcher \$st\r?\n\s+\$rec\.invoked = Invoke-E2eElement \$btn' -and
+        $ws -match 'Stop-E2eWatcher \$st' -and $ws -match 'Merge-E2eUninstallers' -and $g -match "(?s)'finish' \{.*Stop-E2eWatcher")
+    $sm = [regex]::Match($g, "(?s)\n    'msi-smoke' \{.*?\n    \}").Value
+    Check 'm3-e2e guest: msi-smoke installs both packages with msiexec /i and wants exit 0 and the ARP entry' ($sm -match "foreach \(\`$v in '1603', '3010'\)" -and $sm -match "'/i `"'" -and $sm -match '\$r\.ok = \(\$r\.exit -eq 0 -and \$r\.arp\)' -and $sm -match 'M3E MSI-SMOKE')
     $cx = [regex]::Match($g, "(?s)\n    'capture-exec' \{.*?\n    \}")
+    Check 'm3-e2e guest: an empty capture-exec refuses a session, runs execdiff on the rig''s empty journal, compares empty with empty' ($cx.Success -and
+        $cx.Value -match "(?s)elseif \(\`$st\.empty_plan -eq \`$true\) \{.*throw `"nothing was preselected, but a session was made.*New-E2eEmptyExecDocs.*Invoke-M2Execdiff.*Compare-E2eSets @\(\`$st\.cli\.preselected_keys\) @\(\).*report_state = 'Empty'")
     Check 'm3-e2e guest: a null capture-exec takes snap B and deep B, refuses a session, keeps the pair, runs no execdiff' ($cx.Success -and
         $cx.Value -match "(?s)Invoke-M2Snap \(Join-Path \`$W 'snap-b\.tsv\.gz'\).*Invoke-M2Deep.*if \(\`$NullRun\) \{.*throw `"a null run made a session.*snap-\`$s\.tsv\.gz.*\} else \{.*Invoke-M2Execdiff")
     Check 'm3-e2e guest: setup records the declared and the guest hash of the set; a gate run without it fails setup' (
@@ -2251,6 +2376,16 @@ exit 0
             [int]$c1.authorised.ambient -eq 3 -and [int]$c1.authorised.'broker-exit' -eq 2 -and [int]$c1.authorised.store -ge 2 -and "$($g1.doc.inputs.ambient)" -eq $realSet) "exit $($g1.exit); $(if ($c1) { ConvertTo-Json $c1 -Compress -Depth 4 }); collateral $(if ($g1.doc) { ConvertTo-Json @($g1.doc.collateral) -Compress -Depth 4 })"
         $g2 = & $runExec (@(& $churnFor 3) + @($gateAfter | Select-Object -Skip @($churn).Count)) 'extra'
         Check 'm3-e2e ambient (real rigtool): a change the null runs never saw stays collateral' ($g2.exit -ne 0 -and $g2.doc -and [int]$g2.doc.counts.collateral -eq 1 -and "$(@($g2.doc.collateral)[0].path)" -match 'OTHER\.EXE') "exit $($g2.exit)"
+        # Nothing preselected: the rig's empty journal and report (New-E2eEmptyExecDocs, as the guest's capture-exec
+        # writes them) load in execdiff; the window's churn is ambient, a change the null runs never saw collateral.
+        . (Join-Path $Guest 'm3-e2e-ui.ps1')
+        $ed = New-E2eEmptyExecDocs 'npp' ([uint64]134399194953885068)
+        [IO.File]::WriteAllText($jl, $ed.journal, (New-Object System.Text.UTF8Encoding($false))); [IO.File]::WriteAllText($rp, $ed.report, (New-Object System.Text.UTF8Encoding($false)))
+        $e1 = & $runExec ($churn + @((& $mkD 'C:\ProgramData\Purge' 2), (& $mkD 'C:\ProgramData\Purge\sessions' 2), (& $mkF 'C:\ProgramData\Purge\sessions\writer.lock' 0 2)) + @($gateBase | Select-Object -Skip @($snapBase).Count)) 'empty'
+        Check 'm3-e2e empty plan (real rigtool): execdiff reads the rig''s empty journal and report; churn ambient, collateral 0, no inconsistency' ($e1.exit -eq 0 -and $e1.doc -and
+            [int]$e1.doc.counts.collateral -eq 0 -and [int]$e1.doc.counts.inconsistencies -eq 0 -and "$($e1.doc.session)" -ceq 'rig-empty-npp' -and "$($e1.doc.journal_state)" -ceq 'committed') "exit $($e1.exit); $(if ($e1.doc) { ConvertTo-Json $e1.doc.counts -Compress -Depth 4 })"
+        $e2 = & $runExec (@(& $churnFor 3) + @((& $mkD 'C:\ProgramData\Purge' 2), (& $mkD 'C:\ProgramData\Purge\sessions' 2), (& $mkF 'C:\ProgramData\Purge\sessions\writer.lock' 0 2)) + @($gateBase | Select-Object -Skip @($snapBase).Count)) 'empty-extra'
+        Check 'm3-e2e empty plan (real rigtool): with the empty journal, a change the null runs never saw is collateral' ($e2.exit -ne 0 -and $e2.doc -and [int]$e2.doc.counts.collateral -eq 1) "exit $($e2.exit)"
         $script:RunsDir = $rd; $M3.ambient = $out
     } else { Write-Host "skip m3-e2e ambient real-rigtool checks (no $real; cargo build --release in vm\rigtool)" }
     Remove-Item Env:\RIG_RIGTOOL
