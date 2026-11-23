@@ -97,7 +97,10 @@ public sealed partial class MainWindow : Window
     /// <summary>Explains the Windows admin prompt the first time; false when the user chose "Not now".</summary>
     public Task<bool> ConfirmFirstElevationAsync() => ElevationPrompts.ConfirmFirstElevationAsync(Root.XamlRoot, Root.ActualTheme);
 
-    /// <summary>Shows the "You cancelled the admin prompt" bar over the top of the page (built on first use).</summary>
+    /// <summary>
+    /// Shows the bar for a Windows prompt that did not lead to the broker over the top of the page (built on first
+    /// use): "You cancelled the Windows prompt", or "Not started" when the user chose "Not now" at the explanation.
+    /// </summary>
     public void ShowAdminPromptCancelled(Action? tryAgain = null)
     {
         if (_barHost is null && ContentCard.Parent is Grid grid)
@@ -108,7 +111,7 @@ public sealed partial class MainWindow : Window
         }
         if (_barHost is null) return;
         _barHost.Children.Clear();
-        var bar = ElevationPrompts.CancelledBar(Root.ActualTheme, tryAgain);
+        var bar = ElevationPrompts.CancelledBar(Root.ActualTheme, ElevationPrompts.DeclinedExplanation, tryAgain);
         bar.Closed += (s, _) => _barHost.Children.Remove(s);
         _barHost.Children.Add(bar);
     }

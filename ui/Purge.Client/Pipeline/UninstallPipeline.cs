@@ -510,9 +510,10 @@ public sealed class UninstallController : IAsyncDisposable
                 _broker = launch.Broker;
                 return true;
             case UninstallLaunchState.Cancelled:
-                SetStep(UninstallStep.Record, StepState.Failed, "The admin prompt was cancelled");
-                AddNotice(new UninstallNotice(UninstallNoticeKind.Info, "You cancelled the admin prompt.",
-                    "Nothing was changed. Removing programs for all users needs administrator permission."));
+                // "Not now" at the explanation and No at the Windows prompt both end here: the words fit either.
+                SetStep(UninstallStep.Record, StepState.Failed, "Administrator permission was not given");
+                AddNotice(new UninstallNotice(UninstallNoticeKind.Info, "Administrator permission was not given.",
+                    "Nothing was changed. Uninstalling needs administrator permission."));
                 AdminPromptCancelled?.Invoke();
                 return false;
             case UninstallLaunchState.NotAdministrator:

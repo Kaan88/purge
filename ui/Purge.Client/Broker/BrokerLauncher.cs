@@ -237,7 +237,7 @@ public static partial class BrokerLauncher
     {
         if (error == ErrorCancelled)
             return BrokerLaunchResult.Failed(BrokerLaunchStatus.Cancelled,
-                "You cancelled the admin prompt. Nothing was changed.");
+                "You cancelled the Windows prompt. Nothing was changed.");
         return BrokerLaunchResult.Failed(BrokerLaunchStatus.CannotStart,
             "The administrator part could not start. " + new Win32Exception(error).Message, error);
     }

@@ -215,7 +215,7 @@ public sealed class RemovedLeftoversTests
     public async Task A_cancelled_prompt_shows_the_cancelled_bar_and_keeps_the_button()
     {
         var controller = new RemovedLeftoversController(_ => true, _ => Task.FromResult(
-            new StoredLeftoversLaunch(UninstallLaunchState.Cancelled, null, "You cancelled the admin prompt. Nothing was changed.")));
+            new StoredLeftoversLaunch(UninstallLaunchState.Cancelled, null, "You cancelled the Windows prompt. Nothing was changed.")));
         var cancelled = 0;
         controller.AdminPromptCancelled += () => cancelled++;
         var completed = false;
