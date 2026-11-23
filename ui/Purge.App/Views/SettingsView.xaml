@@ -327,7 +327,7 @@
                         </Border>
                         <StackPanel Grid.Column="1" VerticalAlignment="Center">
                             <TextBlock x:Name="PreviewTitle" FontWeight="SemiBold" TextWrapping="Wrap" />
-                            <TextBlock Text="Sample scan (no real scan yet)" Style="{StaticResource SmallSecondary}" />
+                            <TextBlock Text="Preview on a sample list, not a scan of this PC" Style="{StaticResource SmallSecondary}" />
                         </StackPanel>
                     </Grid>
                     <!-- Stacked bar: selected / left to decide / protected. The rows below say the same in words. -->

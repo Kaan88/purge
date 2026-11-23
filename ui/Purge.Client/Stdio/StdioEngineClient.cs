@@ -29,7 +29,9 @@ public sealed class EngineLinkException(string message) : Exception(message);
 /// </summary>
 public sealed class StdioEngineClient : IEngineClient
 {
-    private const string NeedsBroker = "This build only lists programs. Scanning and removing arrive with the Purge security prompt.";
+    // Scan, exec, undo, recovery and the quarantine status are broker calls (Purge.Client.Broker); Purge.App never
+    // asks the medium engine for them, so reaching one of these is a bug, reported as one.
+    private const string NeedsBroker = "Internal error: this request goes to the administrator part, not to the engine.";
 
     private readonly Stream _input;
     private readonly Stream _output;

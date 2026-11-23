@@ -278,7 +278,7 @@ public sealed class ProgramsPageTests
         // The engine is live, so the Uninstall click is enabled: it starts the broker, not the sample preview.
         Assert.True(client.CanChangePc);
         var scan = await Assert.ThrowsAsync<InvalidOperationException>(() => client.ScanAsync("x", "x", ScanKind.ScanOnly));
-        Assert.Contains("only lists programs", scan.Message);
+        Assert.StartsWith("Internal error", scan.Message, StringComparison.Ordinal);
     }
 
     // ---- icons ---------------------------------------------------------------------------------------------
