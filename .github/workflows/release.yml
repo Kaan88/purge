@@ -230,7 +230,13 @@ jobs:
             if ($t) { throw "the tag v$v already exists ($t): gh would release that commit, not $env:GITHUB_SHA" }
           }
           # Never --draft and never --prerelease: Hub's releases/latest skips both (COMPLIANCE.md 2).
-          $ghArgs = @('release', 'create', "v$v", '--title', "Purge $v", '--notes-file', "dist/release-notes-$v.md", '--latest')
+          # The stage (alpha, beta; empty for a final release) only names the release; the version stays
+          # X.Y.Z because Hub's releases/latest skips pre-releases. One word in install/release-stage.txt.
+          $stage = ''
+          if (Test-Path install/release-stage.txt) { $stage = (Get-Content install/release-stage.txt -TotalCount 1).Trim() }
+          if ($stage -and $stage -notmatch '^[a-z]+$') { throw "bad stage '$stage' in install/release-stage.txt (one lower-case word)" }
+          $title = if ($stage) { "Purge $v ($stage)" } else { "Purge $v" }
+          $ghArgs = @('release', 'create', "v$v", '--title', $title, '--notes-file', "dist/release-notes-$v.md", '--latest')
           if ($env:GITHUB_REF_TYPE -eq 'tag') { $ghArgs += '--verify-tag' } else { $ghArgs += @('--target', $env:GITHUB_SHA) }
           $ghArgs += @("dist/Purge-Setup-$v.exe", "dist/release-notes-$v.md", 'dist/hub.txt')
           gh @ghArgs

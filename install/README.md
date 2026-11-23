@@ -414,3 +414,8 @@ VM gate G0 (`-Mode m2-install`, run by the rig, elevated in the guest):
 - the installed `purge-broker.exe`, started with `--pipe`/`--parent`, passes its start checks (the
   layout and DACLs above are exactly what `bins/purge-broker/src/start.rs` accepts), and `-Uninstall`
   removes the Program Files tree, the shortcut and the source, leaving the data root.
+
+### Release stage
+`install/release-stage.txt` holds one lower-case word, the stage the release workflow puts in the release title
+("Purge 0.1.2 (alpha)"): `alpha` now, `beta` when the beta starts, and an empty file for final releases. The
+version itself stays `X.Y.Z` (Hub's `releases/latest` skips pre-releases, so a `-beta` version would never reach it).
