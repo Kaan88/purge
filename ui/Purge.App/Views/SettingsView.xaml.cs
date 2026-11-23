@@ -15,7 +15,7 @@ public sealed partial class SettingsView : UserControl
     private readonly ObservableCollection<string> _protected =
         [@"D:\Projects", @"%USERPROFILE%\Documents", @"HKCU\Software\Mozilla\Thunderbird"];
 
-    // The preview counts over the same sample the Leftovers page shows (no real scan exists yet).
+    // The preview counts over the same sample the Leftovers page shows offline: a preview, not a scan of this PC.
     private readonly List<LeftoverItemModel> _sample = LeftoversSample.Items().Where(r => r.Band != Band.Weak).ToList();
     private SafetyPreset? _hover;
 

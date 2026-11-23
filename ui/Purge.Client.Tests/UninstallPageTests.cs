@@ -116,7 +116,7 @@ public sealed class UninstallPageTests
     public async Task A_cancelled_uac_changes_nothing_and_shows_the_cancelled_bar()
     {
         var controller = Controller(new UninstallLaunch(UninstallLaunchState.Cancelled, null,
-            "You cancelled the admin prompt. Nothing was changed."), new ScriptedMedium());
+            "You cancelled the Windows prompt. Nothing was changed."), new ScriptedMedium());
         var cancelled = false;
         controller.AdminPromptCancelled += () => cancelled = true;
 
@@ -126,7 +126,8 @@ public sealed class UninstallPageTests
         Assert.Equal(UninstallLaunchState.Cancelled, controller.LaunchState);
         var notice = Assert.Single(controller.Notices);
         Assert.Equal(UninstallNoticeKind.Info, notice.Kind);
-        Assert.Contains("cancelled", notice.Title, StringComparison.OrdinalIgnoreCase);
+        // "Not now" at the explanation ends here too, so the words do not claim a cancelled Windows prompt.
+        Assert.Equal("Administrator permission was not given.", notice.Title);
         Assert.Null(controller.Command);
         Assert.Null(controller.CompletedOutcome);
     }

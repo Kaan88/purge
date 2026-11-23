@@ -98,7 +98,10 @@ They show in Settings when present, and append one line per launch to the file n
   start raw and take `programs.patch` (installer, MSI, Burn, AppX, system component, unnamed, parent key), `size.ready`,
   `icon.batch` (cache first, `IconLoader`, viewport first, placeholder tile on any failure) and `programs.get` (details pane) in place.
   The "removed outside Purge" group comes from `inventory.changes`, asked before `programs.list` because the engine stores the new list
-  when a list ends. Uninstall starts the Uninstall pipeline (S2); Force remove, Modify and Remove entry are not offered.
+  when a list ends. A removed program gets "Check for leftovers" only when `FingerprintStore.MayHaveRecord` finds the broker's
+  fingerprint name in `%ProgramData%\Purge\fp` (a lookup by name, nothing read); the click starts the broker, asks
+  `leftovers.stored`, scans from the stored fingerprint and opens the Leftovers page on that scan (`RemovedLeftoversController`,
+  tested in `RemovedLeftoversTests`; DECISIONS 2026-11-23 "Removed outside Purge"). Uninstall starts the Uninstall pipeline (S2); Force remove, Modify and Remove entry are not offered.
   List rules are in `Purge.Client/Model/ProgramRules.cs`, tested in `ProgramsPageTests`.
 - Uninstall pipeline (M3-UI-S2): the Uninstall click calls `MainWindow.OpenUninstall()` and starts
   `UninstallController`. It asks for the Windows prompt once (the first-elevation explanation comes first), starts

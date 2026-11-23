@@ -4,7 +4,9 @@ using Microsoft.UI.Text;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media.Animation;
+using Purge.App.Shell;
 using Purge.Client;
+using Purge.Client.Broker;
 using Purge.Client.Model;
 using Purge.Client.Pipeline;
 
@@ -21,18 +23,52 @@ public sealed partial class ExpectLine(ForecastLineKind? kind, string text, stri
     public Visibility UnknownVisibility => kind is null ? Visibility.Visible : Visibility.Collapsed;
 }
 
-/// <summary>A program the stored list had and the registry no longer has ("removed outside Purge", 7a delta 5).</summary>
-public sealed partial class RemovedRow(Purge.Client.Rpc.ProgramRef program, bool canCheck, string checkHint)
+/// <summary>
+/// A program the stored list had and the registry no longer has ("removed outside Purge", 7a delta 5). Only a program
+/// Purge recorded gets "Check for leftovers"; without a record no leftover count is claimed and no scan is offered.
+/// </summary>
+public sealed partial class RemovedRow(Purge.Client.Rpc.ProgramRef program) : System.ComponentModel.INotifyPropertyChanged
 {
+    public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+
     public string ProgramId { get; } = program.ProgramId;
     public string Name { get; } = program.Name;
     public string Initial { get; } = program.Name.Length > 0 && char.IsLetterOrDigit(program.Name[0]) ? char.ToUpperInvariant(program.Name[0]).ToString() : "?";
 
-    /// <summary>No stored fingerprint exists for it, so no leftover count is claimed.</summary>
-    public string Detail => "Not installed any more. Removed outside Purge, so there is no record of what it left.";
+    public string Detail { get; private set; } = "";
+    public string ButtonText { get; private set; } = "Check for leftovers";
+    public Visibility ButtonVisibility { get; private set; } = Visibility.Collapsed;
+    public bool CanCheck { get; private set; }
+    public string? CheckHint { get; private set; }
 
-    public bool CanCheck { get; } = canCheck;
-    public string CheckHint { get; } = checkHint;
+    /// <summary>
+    /// Draws the row from the controller's state of it. <paramref name="otherBusy"/>: another row's check or the
+    /// Uninstall pipeline is running, so this row's button waits (one broker at a time).
+    /// </summary>
+    public void Show(RemovedCheckState state, bool otherBusy, string? progress, bool canChangePc, string disabledHint)
+    {
+        Detail = state switch
+        {
+            RemovedCheckState.NoRecord => "Removed outside Purge. Purge did not record what this program installed, so it cannot tell which leftovers are its own.",
+            RemovedCheckState.Starting => "Removed outside Purge. Purge is asking for administrator permission…",
+            RemovedCheckState.Checking => "Removed outside Purge. Reading Purge's record of it…",
+            RemovedCheckState.Scanning => "Looking for what it left" + (progress is { Length: > 0 } p ? " · " + p : "…"),
+            _ => "Removed outside Purge. Purge recorded it before, so it can look for what it left.",
+        };
+        var running = state is RemovedCheckState.Checking or RemovedCheckState.Scanning;
+        ButtonVisibility = state == RemovedCheckState.NoRecord ? Visibility.Collapsed : Visibility.Visible;
+        ButtonText = running ? "Stop" : "Check for leftovers";
+        CanCheck = running || (state == RemovedCheckState.Record && canChangePc && !otherBusy);
+        CheckHint = running
+            ? "Stops the check; nothing is changed"
+            : !canChangePc
+                ? disabledHint
+                : otherBusy
+                    ? "Waits until the running check or uninstall has finished"
+                    : "Asks for administrator permission, then looks for what it left on the PC";
+        foreach (var name in new[] { nameof(Detail), nameof(ButtonText), nameof(ButtonVisibility), nameof(CanCheck), nameof(CheckHint) })
+            PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
+    }
 }
 
 public sealed partial class ProgramsView : UserControl
@@ -376,19 +412,128 @@ public sealed partial class ProgramsView : UserControl
         _changesShown = true;
         var changes = await asked;
         if (changes is null || changes.Disappeared.Count == 0) return;
-        var can = Program.Engine.CanChangePc;
-        var hint = can ? "Looks for what it left on the PC" : "Needs the Purge security prompt, which this build doesn't have yet";
+        var shown = changes.Disappeared.Take(MaxRemovedShown).ToList();
+        var removed = _removed ??= NewRemovedController();
+        // Which of them Purge may have a fingerprint for: a file-system lookup by name, no prompt (FingerprintStore).
+        await Task.Run(() => removed.Classify(shown.Select(p => p.ProgramId)));
         FindName(nameof(Attention));
         var live = Program.Engine.IsLive;
         var more = changes.Disappeared.Count - MaxRemovedShown;
         AttentionHeader.Text = "\uE7BA  REMOVED OUTSIDE PURGE · " + changes.Disappeared.Count.ToString(CultureInfo.CurrentCulture)
                                + (more > 0 ? $" (showing {MaxRemovedShown})" : "") + (live ? "" : "   SAMPLE DATA");
-        AttentionList.ItemsSource = changes.Disappeared.Take(MaxRemovedShown).Select(p => new RemovedRow(p, can, hint)).ToList();
+        _removedRows = shown.Select(p => new RemovedRow(p)).ToList();
+        AttentionList.ItemsSource = _removedRows;
+        RenderRemoved();
         UpdateSummary();
     }
 
-    private void OnCheckRemoved(object sender, RoutedEventArgs e) =>
-        ShowNotice("Checking a removed program for leftovers needs the Purge security prompt, which this build doesn't have yet.");
+    private RemovedLeftoversController? _removed;
+    private List<RemovedRow> _removedRows = [];
+    private RemovedNotice? _removedNoticeShown;
+
+    private RemovedLeftoversController NewRemovedController()
+    {
+        var controller = new RemovedLeftoversController(id => FingerprintStore.MayHaveRecord(id), LaunchStoredAsync);
+        controller.Changed += () => DispatcherQueue.TryEnqueue(RenderRemoved);
+        controller.AdminPromptCancelled += () => DispatcherQueue.TryEnqueue(() => MainWindow.Instance.ShowAdminPromptCancelled());
+        controller.Completed += outcome => DispatcherQueue.TryEnqueue(() => OpenStoredScan(outcome));
+        return controller;
+    }
+
+    /// <summary>Starts the elevated broker for a check, as the Uninstall pipeline does (first-elevation explanation, then UAC).</summary>
+    private static async Task<StoredLeftoversLaunch> LaunchStoredAsync(CancellationToken ct)
+    {
+        try
+        {
+            if (!await MainWindow.Instance.ConfirmFirstElevationAsync())
+                return new StoredLeftoversLaunch(UninstallLaunchState.Cancelled, null, "");
+            var result = await BrokerLauncher.LaunchAsync(BrokerLauncher.PathBesideApp(), ct);
+            var exitCode = result.ExitCode is { } code ? (uint)code : (uint?)null;
+            return result.Status switch
+            {
+                BrokerLaunchStatus.Started when result.Session is { } session =>
+                    new StoredLeftoversLaunch(UninstallLaunchState.Started, new StoredLeftoversClient(session), ""),
+                BrokerLaunchStatus.Cancelled => new StoredLeftoversLaunch(UninstallLaunchState.Cancelled, null, result.Message),
+                BrokerLaunchStatus.NotAdministrator =>
+                    new StoredLeftoversLaunch(UninstallLaunchState.NotAdministrator, null, result.Message),
+                BrokerLaunchStatus.TimedOut or BrokerLaunchStatus.ServerCheckFailed =>
+                    new StoredLeftoversLaunch(UninstallLaunchState.Failed, null, result.Message),
+                _ => new StoredLeftoversLaunch(UninstallLaunchState.CannotStart, null, result.Message, exitCode),
+            };
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception e) when (e is not OutOfMemoryException)
+        {
+            return new StoredLeftoversLaunch(UninstallLaunchState.CannotStart, null, e.Message);
+        }
+    }
+
+    /// <summary>
+    /// The scan from the stored fingerprint, on the Leftovers page, which takes the broker link (the S3 hand-off).
+    /// While that page applies another change its link is not replaced: this scan's broker is ended and a bar says so.
+    /// </summary>
+    private void OpenStoredScan(StoredScanOutcome outcome)
+    {
+        if (outcome.Session is not { } session) return;
+        var request = new LeftoversRequest(outcome.ProgramId, outcome.ProgramName, SessionId: "",
+            outcome.Scan.ScanId, outcome.Scan.Mode, Purge.Client.Rpc.RestorePoint.HighRisk, Quiet: false, session);
+        if (LeftoversNavigator.TryShow(request)) return;
+        _ = session.DisposeAsync().AsTask();
+        ShowNotice($"The Leftovers page is still applying another change, so the leftovers of {outcome.ProgramName} "
+                   + "were not opened. Nothing was changed; check again when it has finished.");
+    }
+
+    /// <summary>The Uninstall pipeline started or finished a step: the removed rows' buttons follow it.</summary>
+    public void OnUninstallBusyChanged() => RenderRemoved();
+
+    private void RenderRemoved()
+    {
+        UpdateCommandState();
+        if (_removed is not { } removed) return;
+        var busy = removed.IsBusy;
+        var active = removed.ActiveProgram;
+        var engine = Program.Engine;
+        // One broker at a time: while the Uninstall pipeline runs a step, no check starts.
+        var uninstallBusy = MainWindow.Instance.UninstallBusy;
+        foreach (var row in _removedRows)
+        {
+            var mine = active == row.ProgramId;
+            row.Show(removed.StateOf(row.ProgramId), (busy && !mine) || uninstallBusy, mine ? removed.ProgressText : null,
+                engine.CanChangePc, UninstallHint(engine));
+        }
+        if (removed.Notice is { } notice && !ReferenceEquals(notice, _removedNoticeShown))
+        {
+            _removedNoticeShown = notice;
+            ShowNotice(notice.Title + " " + notice.Message, notice.Kind switch
+            {
+                UninstallNoticeKind.Info => InfoBarSeverity.Informational,
+                UninstallNoticeKind.Warning => InfoBarSeverity.Warning,
+                _ => InfoBarSeverity.Error,
+            });
+        }
+    }
+
+    private void OnCheckRemoved(object sender, RoutedEventArgs e)
+    {
+        if (_removed is not { } removed || sender is not FrameworkElement { Tag: string id }) return;
+        if (removed.IsBusy)
+        {
+            // The running row's button reads Stop; the others are disabled meanwhile.
+            if (removed.ActiveProgram == id) removed.Cancel();
+            return;
+        }
+        if (MainWindow.Instance.UninstallBusy)
+        {
+            ShowNotice("An uninstall is running. Check for leftovers when it has finished.");
+            return;
+        }
+        var name = _removedRows.FirstOrDefault(r => r.ProgramId == id)?.Name ?? "";
+        _ = removed.CheckAsync(id, name);
+        UpdateCommandState();
+    }
 
     /// <summary>
     /// Asks for expected leftovers in small batches, in list order, so the visible rows fill first. Until a
@@ -618,20 +763,29 @@ public sealed partial class ProgramsView : UserControl
 
     /// <summary>
     /// Uninstall asks for the broker on the click; until the engine is live the buttons are disabled and the tooltip
-    /// says why. Sample data has no engine to ask at all.
+    /// says why. Sample data has no engine to ask at all. While a removed program's leftovers check runs, Uninstall
+    /// waits too (one broker at a time).
     /// </summary>
     private void UpdateCommandState()
     {
         var engine = Program.Engine;
-        var can = engine.CanChangePc;
+        var can = engine.CanChangePc && !CheckRunning;
+        var hint = can ? null : CommandHint(engine);
         UninstallButton.IsEnabled = can;
-        ToolTipService.SetToolTip(UninstallButton, can ? null : UninstallHint(engine));
+        ToolTipService.SetToolTip(UninstallButton, hint);
         if (DUninstallButton is not null)
         {
             DUninstallButton.IsEnabled = can;
-            ToolTipService.SetToolTip(DUninstallButton, can ? null : UninstallHint(engine));
+            ToolTipService.SetToolTip(DUninstallButton, hint);
         }
     }
+
+    /// <summary>True while a removed program's leftovers check runs.</summary>
+    private bool CheckRunning => _removed?.IsBusy == true;
+
+    private string CommandHint(IEngineClient engine) => engine.CanChangePc && CheckRunning
+        ? "A leftovers check is running. Uninstall when it has finished."
+        : UninstallHint(engine);
 
     private static string UninstallHint(IEngineClient engine) => engine.IsLive
         ? "The engine is not usable, so an uninstaller cannot be routed."
@@ -778,6 +932,9 @@ public sealed partial class ProgramsView : UserControl
             case "refresh" when Program.Engine.IsLive:
                 _ = ReloadAsync();
                 return;
+            case "uninstall" when Program.Engine.CanChangePc && CheckRunning:
+                ShowNotice(CommandHint(Program.Engine));
+                return;
             case "uninstall" when Program.Engine.CanChangePc && _current is { } row:
                 MainWindow.Instance.OpenUninstall().Begin(new UninstallTarget(row.Entry.ProgramId, row.Name));
                 return;
@@ -803,13 +960,13 @@ public sealed partial class ProgramsView : UserControl
     /// <summary>Shows why the engine could not be used (startup).</summary>
     public void ShowEngineNotice(string message) => ShowNotice(message);
 
-    private void ShowNotice(string message)
+    private void ShowNotice(string message, InfoBarSeverity severity = InfoBarSeverity.Warning)
     {
         foreach (var child in InfoBarHost.Children.OfType<InfoBar>().Where(b => b.Tag is "notice").ToList())
             InfoBarHost.Children.Remove(child);
         var bar = new InfoBar
         {
-            Severity = InfoBarSeverity.Warning, Message = message, IsOpen = true, IsClosable = true, Tag = "notice",
+            Severity = severity, Message = message, IsOpen = true, IsClosable = true, Tag = "notice",
         };
         // Pin to the window theme: code-made InfoBars otherwise take the warning/info fill from the app theme
         // (Windows setting), not from Settings → Appearance.

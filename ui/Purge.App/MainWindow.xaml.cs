@@ -97,7 +97,10 @@ public sealed partial class MainWindow : Window
     /// <summary>Explains the Windows admin prompt the first time; false when the user chose "Not now".</summary>
     public Task<bool> ConfirmFirstElevationAsync() => ElevationPrompts.ConfirmFirstElevationAsync(Root.XamlRoot, Root.ActualTheme);
 
-    /// <summary>Shows the "You cancelled the admin prompt" bar over the top of the page (built on first use).</summary>
+    /// <summary>
+    /// Shows the bar for a Windows prompt that did not lead to the broker over the top of the page (built on first
+    /// use): "You cancelled the Windows prompt", or "Not started" when the user chose "Not now" at the explanation.
+    /// </summary>
     public void ShowAdminPromptCancelled(Action? tryAgain = null)
     {
         if (_barHost is null && ContentCard.Parent is Grid grid)
@@ -108,7 +111,7 @@ public sealed partial class MainWindow : Window
         }
         if (_barHost is null) return;
         _barHost.Children.Clear();
-        var bar = ElevationPrompts.CancelledBar(Root.ActualTheme, tryAgain);
+        var bar = ElevationPrompts.CancelledBar(Root.ActualTheme, ElevationPrompts.DeclinedExplanation, tryAgain);
         bar.Closed += (s, _) => _barHost.Children.Remove(s);
         _barHost.Children.Add(bar);
     }
@@ -119,6 +122,12 @@ public sealed partial class MainWindow : Window
         Navigate("leftovers");
         return (LeftoversView)_views["leftovers"];
     }
+
+    /// <summary>True while the Leftovers page (if built) applies a change over its broker link.</summary>
+    public bool LeftoversChanging => _views.TryGetValue("leftovers", out var view) && view is LeftoversView { IsChanging: true };
+
+    /// <summary>True while the Uninstall pipeline (if built) runs a step; the removed-program check waits meanwhile.</summary>
+    public bool UninstallBusy => _views.TryGetValue("queue", out var view) && view is UninstallView { IsBusy: true };
 
     /// <summary>S2, built on first use; the Uninstall click on Programs starts its pipeline.</summary>
     public UninstallView OpenUninstall()

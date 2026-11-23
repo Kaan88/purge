@@ -202,10 +202,13 @@ public sealed class LeftoversPageTests
         Assert.Equal("A1B2-C3D4", vm.Code);
         Assert.Contains("Nothing has been moved", vm.WaitingDetail);
         Assert.Contains("Confirm in the Purge security prompt", vm.WaitingTitle);
+        // The shell must not hand this page another broker link now (LeftoversNavigator.TryShow).
+        Assert.True(vm.IsChanging);
 
         gate.SetResult();
         await move;
         Assert.Equal(LeftoversPhase.Result, vm.Phase);
+        Assert.False(vm.IsChanging);
         Assert.Equal(1, broker.ExecuteCalls);
     }
 
