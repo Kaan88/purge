@@ -53,6 +53,9 @@ function Get-E2eMsiTables([string]$Variant) {
         Feature                = '`Feature` CHAR(38) NOT NULL, `Feature_Parent` CHAR(38), `Title` CHAR(64) LOCALIZABLE, `Description` CHAR(255) LOCALIZABLE, `Display` SHORT, `Level` SHORT NOT NULL, `Directory_` CHAR(72), `Attributes` SHORT NOT NULL PRIMARY KEY `Feature`'
         FeatureComponents      = '`Feature_` CHAR(38) NOT NULL, `Component_` CHAR(72) NOT NULL PRIMARY KEY `Feature_`, `Component_`'
         Registry               = '`Registry` CHAR(72) NOT NULL, `Root` SHORT NOT NULL, `Key` CHAR(255) NOT NULL LOCALIZABLE, `Name` CHAR(255) LOCALIZABLE, `Value` LONGCHAR LOCALIZABLE, `Component_` CHAR(72) NOT NULL PRIMARY KEY `Registry`'
+        # RegisterProduct queries Media; without the table it fails with error 2228 and msiexec /i exits 1603
+        # (M3 e2e chain e2e-20261123-173417). One empty disk: the package carries no files.
+        Media                  = '`DiskId` SHORT NOT NULL, `LastSequence` LONG NOT NULL, `DiskPrompt` CHAR(64) LOCALIZABLE, `Cabinet` CHAR(255), `VolumeLabel` CHAR(32), `Source` CHAR(72) PRIMARY KEY `DiskId`'
         CustomAction           = '`Action` CHAR(72) NOT NULL, `Type` SHORT NOT NULL, `Source` CHAR(72), `Target` CHAR(255) PRIMARY KEY `Action`'
         InstallExecuteSequence = '`Action` CHAR(72) NOT NULL, `Condition` CHAR(255), `Sequence` SHORT PRIMARY KEY `Action`'
     }
@@ -68,6 +71,7 @@ function Get-E2eMsiTables([string]$Variant) {
         FeatureComponents = @(, @('Main', 'MainReg'))
         # Root 2 = HKLM.
         Registry = @(@('RegMain', 2, "SOFTWARE\PurgeE2eMsi\$Variant", 'Installed', '1', 'MainReg'), @('RegName', 2, "SOFTWARE\PurgeE2eMsi\$Variant", 'Fixture', $v.name, 'MainReg'))
+        Media = @(, @(1, 0, $null, $null, $null, $null))
         CustomAction = @()
         InstallExecuteSequence = @(
             @('CostInitialize', $null, 800), @('CostFinalize', $null, 1000), @('InstallValidate', $null, 1400), @('InstallInitialize', $null, 1500),
@@ -130,7 +134,7 @@ function Read-E2eMsi([string]$Path) {
     $ErrorActionPreference = 'Stop'
     $inst = New-Object -ComObject WindowsInstaller.Installer
     $db = $null
-    $out = [ordered]@{ sequence = [ordered]@{}; custom = [ordered]@{}; property = [ordered]@{}; template = $null }
+    $out = [ordered]@{ sequence = [ordered]@{}; custom = [ordered]@{}; property = [ordered]@{}; media = @(); template = $null }
     try {
         $db = Invoke-E2eMsiCom $inst 'OpenDatabase' 'InvokeMethod' @($Path, 0)
         $read = {
@@ -151,6 +155,7 @@ function Read-E2eMsi([string]$Path) {
         foreach ($r in (& $read 'SELECT `Action`, `Condition`, `Sequence` FROM `InstallExecuteSequence`' 3)) { $out.sequence[$r[0]] = @($r[1], $r[2]) }
         foreach ($r in (& $read 'SELECT `Action`, `Type`, `Target` FROM `CustomAction`' 3)) { $out.custom[$r[0]] = @($r[1], $r[2]) }
         foreach ($r in (& $read 'SELECT `Property`, `Value` FROM `Property`' 2)) { $out.property[$r[0]] = $r[1] }
+        foreach ($r in (& $read 'SELECT `DiskId`, `LastSequence` FROM `Media`' 2)) { $out.media += , @($r[0], $r[1]) }
         $si = Invoke-E2eMsiCom $db 'SummaryInformation' 'GetProperty' @(0)
         try { $out.template = Invoke-E2eMsiCom $si 'Property' 'GetProperty' @(7) } finally { $null = [Runtime.InteropServices.Marshal]::FinalReleaseComObject($si) }
     } finally {

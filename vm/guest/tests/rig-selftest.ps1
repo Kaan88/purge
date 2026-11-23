@@ -2351,10 +2351,11 @@ exit 0
         $b = Read-E2eMsi $r.path
         $seq = $b.sequence
         $base = ($b.property.ALLUSERS -eq '1' -and $b.property.REBOOT -eq 'ReallySuppress' -and $b.template -eq 'x64;1033' -and $b.property.ProductCode -eq $r.product -and
-                 [int]$seq['InstallInitialize'][1] -eq 1500 -and [int]$seq['InstallFinalize'][1] -eq 6600 -and $seq.Contains('RegisterProduct') -and $seq.Contains('RemoveRegistryValues'))
+                 [int]$seq['InstallInitialize'][1] -eq 1500 -and [int]$seq['InstallFinalize'][1] -eq 6600 -and $seq.Contains('RegisterProduct') -and $seq.Contains('RemoveRegistryValues') -and
+                 @($b.media).Count -eq 1 -and [int]$b.media[0][0] -eq 1)
         if ($v -eq '1603') {
             $ok = ($base -and $b.custom['PurgeE2eFail'][0] -eq '19' -and $seq['PurgeE2eFail'][0] -eq 'REMOVE="ALL"' -and [int]$seq['PurgeE2eFail'][1] -gt 1500 -and -not $seq.Contains('ScheduleReboot'))
-            Check 'm3-e2e-msi: 1603 fixture (type 19 on REMOVE="ALL" after InstallInitialize)' $ok
+            Check 'm3-e2e-msi: 1603 fixture (Media disk 1; type 19 on REMOVE="ALL" after InstallInitialize)' $ok
         } else {
             $ok = ($base -and $seq['ScheduleReboot'][0] -eq 'REMOVE="ALL"' -and [int]$seq['ScheduleReboot'][1] -lt 6600 -and $b.custom.Count -eq 0)
             Check 'm3-e2e-msi: 3010 fixture (ScheduleReboot on REMOVE="ALL", REBOOT=ReallySuppress)' $ok
