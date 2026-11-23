@@ -3,6 +3,7 @@ using System.Globalization;
 using Microsoft.UI.Text;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media.Animation;
 using Purge.Client;
 using Purge.Client.Model;
 using Purge.Client.Pipeline;
@@ -172,6 +173,14 @@ public sealed partial class ProgramsView : UserControl
     public void OnFirstTick()
     {
         _firstTickDone = true;
+        // The ListView default container transitions, left out of the first frame (see the XAML).
+        ProgramList.ItemContainerTransitions =
+        [
+            new AddDeleteThemeTransition(),
+            new ContentThemeTransition(),
+            new ReorderThemeTransition(),
+            new EntranceThemeTransition { IsStaggeringEnabled = false },
+        ];
         UpdateTabCounts();
         FindName(nameof(Commands));
         PlainCommands.Visibility = Visibility.Collapsed;
