@@ -133,7 +133,7 @@ dependencies = [
 
 [[package]]
 name = "purge-broker"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "purge-engine",
  "purge-exec",
@@ -153,7 +153,7 @@ dependencies = [
 
 [[package]]
 name = "purge-engine"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "purge-exec",
@@ -177,7 +177,7 @@ dependencies = [
 
 [[package]]
 name = "purge-exec"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "purge-guard",
  "purge-index",
@@ -193,7 +193,7 @@ dependencies = [
 
 [[package]]
 name = "purge-guard"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "flate2",
  "purge-model",
@@ -203,7 +203,7 @@ dependencies = [
 
 [[package]]
 name = "purge-harvest"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "crc32fast",
  "purge-guard",
@@ -220,7 +220,7 @@ dependencies = [
 
 [[package]]
 name = "purge-identity"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "purge-inventory",
  "purge-model",
@@ -233,7 +233,7 @@ dependencies = [
 
 [[package]]
 name = "purge-index"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "flate2",
  "purge-guard",
@@ -248,7 +248,7 @@ dependencies = [
 
 [[package]]
 name = "purge-inventory"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "purge-model",
  "purge-source",
@@ -260,7 +260,7 @@ dependencies = [
 
 [[package]]
 name = "purge-kb"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "purge-guard",
  "purge-model",
@@ -270,7 +270,7 @@ dependencies = [
 
 [[package]]
 name = "purge-mcp"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "purge-model",
  "purge-rpc",
@@ -278,7 +278,7 @@ dependencies = [
 
 [[package]]
 name = "purge-model"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "schemars",
  "serde",
@@ -288,7 +288,7 @@ dependencies = [
 
 [[package]]
 name = "purge-plan"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "purge-guard",
  "purge-model",
@@ -300,7 +300,7 @@ dependencies = [
 
 [[package]]
 name = "purge-policy"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "purge-guard",
  "purge-model",
@@ -308,7 +308,7 @@ dependencies = [
 
 [[package]]
 name = "purge-rpc"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "purge-model",
  "schemars",
@@ -318,7 +318,7 @@ dependencies = [
 
 [[package]]
 name = "purge-scan"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "purge-guard",
  "purge-identity",
@@ -330,7 +330,7 @@ dependencies = [
 
 [[package]]
 name = "purge-source"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "flate2",
  "purge-model",
@@ -342,7 +342,7 @@ dependencies = [
 
 [[package]]
 name = "purge-win"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "thiserror",
  "windows",
@@ -688,7 +688,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "purge-engine",
