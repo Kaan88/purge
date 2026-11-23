@@ -8,8 +8,9 @@
 #
 # workflow_dispatch with publish=false (the default) builds and checks everything and publishes
 # nothing: the files are kept as a workflow artifact. With publish=true it creates the tag v<version>
-# at the commit it ran on, and only from the default branch (main); a tag run needs the tagged commit
-# to be on main. So a release is always a commit that is on main.
+# at the commit it ran on, and only from the default branch (main), and fails when that tag already
+# exists; a tag run needs the tagged commit to be on main. So a release is always a commit that is on
+# main. Only X.Y.Z is published: a version X.Y.Z-pre is built and checked, never released.
 #
 # Hardening: the version input reaches the scripts only through the environment and is checked
 # against a pattern before use; no cache action (a release builds from a clean runner, and no
@@ -72,17 +73,21 @@ jobs:
           git fetch --no-tags origin "+refs/heads/${env:DEFAULT_BRANCH}:refs/remotes/origin/${env:DEFAULT_BRANCH}"
           if ($LASTEXITCODE) { throw "fetching $env:DEFAULT_BRANCH failed" }
           git merge-base --is-ancestor HEAD "refs/remotes/origin/$env:DEFAULT_BRANCH"
-          if ($LASTEXITCODE) { throw "$env:GITHUB_SHA is not on $env:DEFAULT_BRANCH: a release is cut only from $env:DEFAULT_BRANCH" }
+          if ($LASTEXITCODE) { throw "$env:GITHUB_SHA is not on ${env:DEFAULT_BRANCH}: a release is cut only from $env:DEFAULT_BRANCH" }
 
       - name: Version (tag = Cargo.toml = Cargo.lock)
         id: v
         shell: pwsh
         env:
           INPUT_VERSION: ${{ inputs.version }}
+          PUBLISHING: ${{ github.event_name == 'push' || inputs.publish }}
         run: |
           if ($env:GITHUB_REF_TYPE -eq 'tag') { $v = $env:GITHUB_REF_NAME -replace '^v', '' } else { $v = "$env:INPUT_VERSION" }
           if ($v -eq '') { $v = (& ./install/inno/check-version.ps1) }
           if ($v -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$') { throw "bad version '$v'" }
+          # A published release is always the latest one Hub offers to everyone (never --prerelease,
+          # which Hub skips), so X.Y.Z-pre is built and checked but never published.
+          if ($env:PUBLISHING -eq 'true' -and $v.Contains('-')) { throw "v$v is a pre-release version: Purge publishes only X.Y.Z (Hub would offer it to everyone as the latest)" }
           # Fails when Cargo.toml says another version or Cargo.lock was not updated after a bump.
           $global:LASTEXITCODE = 0
           & ./install/inno/check-version.ps1 -Expect $v
@@ -90,6 +95,17 @@ jobs:
           "version=$v" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
           # The later steps read the checked version from the environment, never pasted into a script.
           "PURGE_VERSION=$v" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      # A manual publish creates the tag at this commit (gh release create --target). An existing tag
+      # v<version> (say, left behind when its release was deleted) would be used as it is, whatever
+      # commit it points at, so it fails here, before the build, and again right before the release.
+      - name: Tag is new (manual publish)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish && github.ref_type != 'tag' }}
+        shell: pwsh
+        run: |
+          $t = git ls-remote --tags origin "refs/tags/v$env:PURGE_VERSION"
+          if ($LASTEXITCODE) { throw 'git ls-remote failed' }
+          if ($t) { throw "the tag v$env:PURGE_VERSION already exists ($t): delete it, or push the tag to release that commit" }
 
       - name: Rust toolchain (rust-toolchain.toml)
         shell: pwsh
@@ -208,6 +224,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $v = $env:PURGE_VERSION
+          if ($env:GITHUB_REF_TYPE -ne 'tag') {
+            $t = git ls-remote --tags origin "refs/tags/v$v"
+            if ($LASTEXITCODE) { throw 'git ls-remote failed' }
+            if ($t) { throw "the tag v$v already exists ($t): gh would release that commit, not $env:GITHUB_SHA" }
+          }
           # Never --draft and never --prerelease: Hub's releases/latest skips both (COMPLIANCE.md 2).
           $ghArgs = @('release', 'create', "v$v", '--title', "Purge $v", '--notes-file', "dist/release-notes-$v.md", '--latest')
           if ($env:GITHUB_REF_TYPE -eq 'tag') { $ghArgs += '--verify-tag' } else { $ghArgs += @('--target', $env:GITHUB_SHA) }

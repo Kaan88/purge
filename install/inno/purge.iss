@@ -114,6 +114,9 @@ UninstallDisplayIcon={app}\Purge.exe
 ; anything else that holds a file (a silent setup lets it close those without asking).
 CloseApplications=yes
 RestartApplications=no
+; Always write %TEMP%\Setup Log <date> #<n>.txt (Hub's arguments have no /LOG): a silent run reports a
+; failed post-install step only there and through its exit code.
+SetupLogging=yes
 VersionInfoVersion={#AppVersionNumeric}
 VersionInfoCompany=Purge
 VersionInfoDescription={#AppName} Setup
@@ -146,7 +149,8 @@ Name: "{commonprograms}\Purge"; Filename: "{app}\Purge.exe"; WorkingDir: "{app}"
 Name: "{commondesktop}\Purge"; Filename: "{app}\Purge.exe"; WorkingDir: "{app}"; IconFilename: "{app}\Purge.exe"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\Purge.exe"; Description: "Launch {#AppName}"; Flags: nowait postinstall skipifsilent runasoriginaluser
+; Not offered after a failed post-install step: the tree did not pass its own check.
+Filename: "{app}\Purge.exe"; Description: "Launch {#AppName}"; Flags: nowait postinstall skipifsilent runasoriginaluser; Check: PostInstallSucceeded
 
 [UninstallDelete]
 ; Inno removes the files it installed; this also removes anything Purge left in its own directory and
@@ -164,6 +168,11 @@ type
 
 var
   ScriptLog: String;
+  { Set by FailSetup. The post-install step runs after Inno has copied the files and written the
+    uninstall entry, and Inno cannot undo that from ssPostInstall (an exception there is logged and
+    swallowed, and the setup still ends with exit code 0), so a failure is reported through the exit
+    code instead: GetCustomSetupExitCode below. }
+  PostInstallFailed: Boolean;
 
 function InitializeSetup: Boolean;
 begin
@@ -214,9 +223,35 @@ begin
       'install.ps1 exited with code ' + IntToStr(ExitCode) + '. The end of its log (' + ScriptLog + '):' +
       CrLf + CrLf + Tail,
       mbCriticalError, MB_OK, IDOK);
-  { Abort in ssPostInstall rolls the setup back: the files the setup copied are removed again and
-    nothing half-installed is left registered in "Installed apps". }
-  Abort;
+  { No rollback: the new files and the uninstall entry (with the new DisplayVersion) stay. The setup
+    exits with code 9 instead of 0 (GetCustomSetupExitCode), so Hub and any other caller see a failed
+    install, and the Finished page says so. Running the setup again repeats the step. }
+  PostInstallFailed := True;
+end;
+
+function PostInstallSucceeded: Boolean;
+begin
+  Result := not PostInstallFailed;
+end;
+
+{ Inno's own exit codes are 0 to 8; it calls this only when the setup would otherwise exit with 0. }
+function GetCustomSetupExitCode: Integer;
+begin
+  if PostInstallFailed then
+    Result := 9
+  else
+    Result := 0;
+end;
+
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  if (CurPageID = wpFinished) and PostInstallFailed then
+  begin
+    WizardForm.FinishedLabel.Caption :=
+      'Setup copied Purge''s files, but its post-install step failed, so Purge is not ready to use. ' +
+      'Run Setup again; if it fails again, the setup log (%TEMP%\Setup Log*.txt) says why.';
+    WizardForm.AdjustLabelHeight(WizardForm.FinishedLabel);
+  end;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
@@ -416,7 +451,8 @@ end;
 { Hub (COMPLIANCE.md section 4) asks Purge's window to close and never ends a process; the broker and
   the engine have no window. So the setup stops Purge itself before it replaces a file. A non-empty
   result stops the setup on the Preparing page, before any change; a silent setup then exits with
-  code 7.
+  code 7. With /VERYSILENT alone Inno first shows the message in a suppressible box; Hub's arguments
+  include /SUPPRESSMSGBOXES, so its run shows nothing.
   - The install folder is fixed (Program Files\Purge; the broker refuses a folder a non-administrator
     could write). DisableDirPage does not stop a /DIR on the command line, so a setup run for another
     folder is refused here, before it copies, re-protects or stops anything.
