@@ -1,9 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- S5: settings (board "17 Safety dial settings"). One question up front, "How careful should Purge be?", with three
-     presets and a live preview of what each pre-selects; everything else sits in expanders under "More options".
-     Presets change only which boxes start ticked in the UI. They never touch the engine's guard or deny lists, and
-     none of them ticks user data (S19). Controls are sample-only except Appearance, the preset, "Pre-select user data"
-    . -->
+<!-- S5: settings. Alpha rule: nothing on screen may pretend (DECISIONS 2026-11-24). The board's safety dial (three
+     presets, a live preview, "Pre-select user data") and the planned options (scan after uninstalling, weak matches,
+     protected locations, quiet mode, restore point, closing running apps, always start as administrator, knowledge
+     packs, licenses) changed nothing in the app, so they are not shown. What is left either works (Theme, Open
+     quarantine) or states a fact of this version (what Purge ticks for you, how long the quarantine keeps things,
+     the versions). -->
 <UserControl
     x:Class="Purge.App.Views.SettingsView"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -15,7 +16,7 @@
         </Style>
         <Style x:Key="RowHint" TargetType="TextBlock" BasedOn="{StaticResource SmallSecondary}">
             <Setter Property="TextWrapping" Value="Wrap" />
-            <Setter Property="MaxWidth" Value="560" />
+            <Setter Property="MaxWidth" Value="640" />
             <Setter Property="HorizontalAlignment" Value="Left" />
         </Style>
         <Style x:Key="ExpanderHost" TargetType="Expander">
@@ -23,341 +24,72 @@
             <Setter Property="HorizontalContentAlignment" Value="Stretch" />
             <Setter Property="Margin" Value="0,0,0,4" />
         </Style>
-        <Style x:Key="PresetCount" TargetType="TextBlock" BasedOn="{StaticResource SmallSecondary}">
-            <Setter Property="Margin" Value="0,6,0,0" />
-        </Style>
-        <Style x:Key="SubRow" TargetType="Grid">
-            <Setter Property="Padding" Value="0,10" />
-            <Setter Property="ColumnSpacing" Value="16" />
+        <Style x:Key="FactLine" TargetType="TextBlock" BasedOn="{StaticResource Body13}">
+            <Setter Property="TextWrapping" Value="Wrap" />
         </Style>
     </UserControl.Resources>
 
-    <ScrollViewer>
-        <Grid Padding="28,20,28,32" ColumnSpacing="24" MaxWidth="1180" HorizontalAlignment="Left">
-            <Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="300" /></Grid.ColumnDefinitions>
+    <ScrollViewer AutomationProperties.Name="Settings">
+        <StackPanel Padding="28,20,28,32" Spacing="4" MaxWidth="860" HorizontalAlignment="Left">
+            <TextBlock Text="Settings" Style="{StaticResource TitleTextBlockStyle}" Margin="0,0,0,12" />
 
-            <StackPanel Spacing="4">
-                <TextBlock Text="Settings" Style="{StaticResource TitleTextBlockStyle}" Margin="0,0,0,12" />
-
-                <TextBlock Text="How careful should Purge be?" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,8" />
-                <!-- Three cards; the RadioButton dot carries the state, so it reads in high contrast too. The accent
-                     outline is a second Border toggled from code (no brush lookups in code under AOT). -->
-                <Grid ColumnSpacing="12">
-                    <Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition /><ColumnDefinition /></Grid.ColumnDefinitions>
-
-                    <Grid x:Name="CardCautious" Tag="Cautious" PointerEntered="OnPresetHover" PointerExited="OnPresetLeave">
-                        <Border Style="{StaticResource Card}" />
-                        <Border x:Name="OnCautious" CornerRadius="8" BorderThickness="2" Visibility="Collapsed"
-                                BorderBrush="{ThemeResource AccentFillColorDefaultBrush}" Background="{ThemeResource SubtleFillColorSecondaryBrush}" />
-                        <RadioButton x:Name="PresetCautious" GroupName="Preset" Tag="Cautious" Checked="OnPresetChecked"
-                                     Padding="8,0,0,0" Margin="16,14,16,14" VerticalAlignment="Top" HorizontalAlignment="Stretch"
-                                     AutomationProperties.Name="Cautious">
-                            <StackPanel>
-                                <TextBlock Text="Cautious" FontWeight="SemiBold" />
-                                <TextBlock Text="Selects nothing for you. You tick every item." Style="{StaticResource SmallSecondary}" />
-                                <TextBlock x:Name="CountCautious" Style="{StaticResource PresetCount}" />
-                            </StackPanel>
-                        </RadioButton>
-                    </Grid>
-
-                    <Grid x:Name="CardBalanced" Grid.Column="1" Tag="Balanced" PointerEntered="OnPresetHover" PointerExited="OnPresetLeave">
-                        <Border Style="{StaticResource Card}" />
-                        <Border x:Name="OnBalanced" CornerRadius="8" BorderThickness="2" Visibility="Collapsed"
-                                BorderBrush="{ThemeResource AccentFillColorDefaultBrush}" Background="{ThemeResource SubtleFillColorSecondaryBrush}" />
-                        <RadioButton x:Name="PresetBalanced" GroupName="Preset" Tag="Balanced" Checked="OnPresetChecked"
-                                     Padding="8,0,0,0" Margin="16,14,16,14" VerticalAlignment="Top" HorizontalAlignment="Stretch"
-                                     AutomationProperties.Name="Balanced">
-                            <StackPanel>
-                                <TextBlock><Run Text="Balanced" FontWeight="SemiBold" /><Run Text="  " /><Run Text="Default" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" /></TextBlock>
-                                <TextBlock Text="Selects Safe items. User data stays unticked." Style="{StaticResource SmallSecondary}" />
-                                <TextBlock x:Name="CountBalanced" Style="{StaticResource PresetCount}" />
-                            </StackPanel>
-                        </RadioButton>
-                    </Grid>
-
-                    <Grid x:Name="CardThorough" Grid.Column="2" Tag="Thorough" PointerEntered="OnPresetHover" PointerExited="OnPresetLeave">
-                        <Border Style="{StaticResource Card}" />
-                        <Border x:Name="OnThorough" CornerRadius="8" BorderThickness="2" Visibility="Collapsed"
-                                BorderBrush="{ThemeResource AccentFillColorDefaultBrush}" Background="{ThemeResource SubtleFillColorSecondaryBrush}" />
-                        <RadioButton x:Name="PresetThorough" GroupName="Preset" Tag="Thorough" Checked="OnPresetChecked"
-                                     Padding="8,0,0,0" Margin="16,14,16,14" VerticalAlignment="Top" HorizontalAlignment="Stretch"
-                                     AutomationProperties.Name="Thorough">
-                            <StackPanel>
-                                <TextBlock Text="Thorough" FontWeight="SemiBold" />
-                                <TextBlock Text="Also selects Likely items that hold no user data." Style="{StaticResource SmallSecondary}" />
-                                <TextBlock x:Name="CountThorough" Style="{StaticResource PresetCount}" />
-                            </StackPanel>
-                        </RadioButton>
-                    </Grid>
-                </Grid>
-                <TextBlock Margin="0,8,0,0" Style="{StaticResource SmallSecondary}">
-                    <Run Text="&#xE72E;" FontFamily="Segoe Fluent Icons" /><Run Text="  Protected items are never selectable in any preset. User data is only selected if you turn that on yourself." />
-                </TextBlock>
-
-                <TextBlock Text="More options" Style="{StaticResource SettingHeading}" Margin="0,22,0,6" />
-
-                <!-- Leftovers -->
-                <Expander Style="{StaticResource ExpanderHost}" AutomationProperties.Name="Leftovers">
-                    <Expander.Header>
-                        <Grid ColumnSpacing="16" Padding="0,10">
-                            <Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                            <StackPanel>
-                                <TextBlock Text="Leftovers" Style="{StaticResource RowTitle}" />
-                                <TextBlock Text="What is shown and what is ticked" Style="{StaticResource RowHint}" />
-                            </StackPanel>
-                            <TextBlock Grid.Column="1" Text="Scan automatically" VerticalAlignment="Center" Style="{StaticResource SmallSecondary}" />
-                        </Grid>
-                    </Expander.Header>
-                    <StackPanel>
-                        <Grid Style="{StaticResource SubRow}">
-                            <Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                            <StackPanel VerticalAlignment="Center">
-                                <TextBlock Text="After uninstalling" Style="{StaticResource RowTitle}" />
-                                <TextBlock Text="Runs once Purge has checked the program is really gone" Style="{StaticResource RowHint}" />
-                            </StackPanel>
-                            <ComboBox Grid.Column="1" MinWidth="200" SelectedIndex="0" VerticalAlignment="Center" AutomationProperties.Name="After uninstalling">
-                                <ComboBoxItem Content="Scan automatically" />
-                                <ComboBoxItem Content="Ask" />
-                                <ComboBoxItem Content="Don't scan" />
-                            </ComboBox>
-                        </Grid>
-                        <Border Style="{StaticResource Divider}" />
-                        <Grid Style="{StaticResource SubRow}">
-                            <Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                            <StackPanel VerticalAlignment="Center">
-                                <TextBlock Style="{StaticResource RowTitle}"><Run Text="&#xE77B;" FontFamily="Segoe Fluent Icons" FontSize="13" /><Run Text="  Pre-select user data" /></TextBlock>
-                                <TextBlock Text="Profiles, saves and documents. Not recommended. No preset turns this on." Style="{StaticResource RowHint}" />
-                            </StackPanel>
-                            <ToggleSwitch x:Name="UserDataSwitch" Grid.Column="1" OnContent="" OffContent="" MinWidth="0"
-                                          Toggled="OnUserDataToggled" AutomationProperties.Name="Pre-select user data" />
-                        </Grid>
-                        <Border Style="{StaticResource Divider}" />
-                        <Grid Style="{StaticResource SubRow}">
-                            <Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                            <StackPanel VerticalAlignment="Center">
-                                <TextBlock Text="Show weak matches" Style="{StaticResource RowTitle}" />
-                                <TextBlock Text="Items that only match by name. Never ticked for you." Style="{StaticResource RowHint}" />
-                            </StackPanel>
-                            <ToggleSwitch Grid.Column="1" OnContent="" OffContent="" MinWidth="0" AutomationProperties.Name="Show weak matches" />
-                        </Grid>
-                        <Border Style="{StaticResource Divider}" />
-                        <StackPanel Padding="0,10" Spacing="4">
-                            <Grid ColumnSpacing="16">
-                                <Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                                <StackPanel>
-                                    <TextBlock Text="Protected locations" Style="{StaticResource RowTitle}" />
-                                    <TextBlock Text="Purge never suggests anything inside these. Windows folders and other installed programs are always protected." Style="{StaticResource RowHint}" />
-                                </StackPanel>
-                                <Border Grid.Column="1" Style="{StaticResource Chip}" VerticalAlignment="Center">
-                                    <TextBlock x:Name="ProtectedCount" Text="3 of yours" Style="{StaticResource ChipText}" />
-                                </Border>
-                            </Grid>
-                            <ItemsControl x:Name="ProtectedList">
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate x:DataType="x:String">
-                                        <Grid Padding="0,2">
-                                            <TextBlock Text="{x:Bind}" Style="{StaticResource Mono}" VerticalAlignment="Center" />
-                                            <Button Content="Remove" Style="{StaticResource SubtleButton}" HorizontalAlignment="Right"
-                                                    Tag="{x:Bind}" Click="OnRemoveProtected" />
-                                        </Grid>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                            <Button Content="Add folder or key…" Margin="0,6,0,0" />
-                        </StackPanel>
-                    </StackPanel>
-                </Expander>
-
-                <!-- Uninstall -->
-                <Expander Style="{StaticResource ExpanderHost}" AutomationProperties.Name="Uninstall">
-                    <Expander.Header>
-                        <Grid ColumnSpacing="16" Padding="0,10">
-                            <Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                            <StackPanel>
-                                <TextBlock Text="Uninstall" Style="{StaticResource RowTitle}" />
-                                <TextBlock Text="Quiet mode, restore points, running apps" Style="{StaticResource RowHint}" />
-                            </StackPanel>
-                            <TextBlock Grid.Column="1" Text="Quiet mode on" VerticalAlignment="Center" Style="{StaticResource SmallSecondary}" />
-                        </Grid>
-                    </Expander.Header>
-                    <StackPanel>
-                        <Grid Style="{StaticResource SubRow}">
-                            <Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                            <StackPanel VerticalAlignment="Center">
-                                <TextBlock Text="Prefer quiet uninstall" Style="{StaticResource RowTitle}" />
-                                <TextBlock Text="MSI, Inno Setup, NSIS and Burn installers. The exact command is shown before it runs." Style="{StaticResource RowHint}" />
-                            </StackPanel>
-                            <ToggleSwitch Grid.Column="1" IsOn="True" OnContent="" OffContent="" MinWidth="0" AutomationProperties.Name="Prefer quiet uninstall" />
-                        </Grid>
-                        <Border Style="{StaticResource Divider}" />
-                        <Grid Style="{StaticResource SubRow}">
-                            <Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                            <StackPanel VerticalAlignment="Center">
-                                <TextBlock Text="Restore point" Style="{StaticResource RowTitle}" />
-                                <TextBlock Text="High-risk: drivers, services, shell extensions. Windows allows one every 24 hours." Style="{StaticResource RowHint}" />
-                            </StackPanel>
-                            <ComboBox Grid.Column="1" MinWidth="200" SelectedIndex="0" VerticalAlignment="Center" AutomationProperties.Name="Restore point">
-                                <ComboBoxItem Content="High-risk only" />
-                                <ComboBoxItem Content="Always" />
-                                <ComboBoxItem Content="Off" />
-                            </ComboBox>
-                        </Grid>
-                        <Border Style="{StaticResource Divider}" />
-                        <Grid Style="{StaticResource SubRow}">
-                            <Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                            <StackPanel VerticalAlignment="Center">
-                                <TextBlock Text="Close running apps without asking" Style="{StaticResource RowTitle}" />
-                                <TextBlock Text="Otherwise Purge lists the processes holding the program's files first" Style="{StaticResource RowHint}" />
-                            </StackPanel>
-                            <ToggleSwitch Grid.Column="1" OnContent="" OffContent="" MinWidth="0" AutomationProperties.Name="Close running apps without asking" />
-                        </Grid>
-                    </StackPanel>
-                </Expander>
-
-                <!-- Quarantine: the plan's retention (ENGINE_PLAN.md §7.8), shown rather than chosen in this preview. -->
-                <Expander Style="{StaticResource ExpanderHost}" AutomationProperties.Name="Quarantine">
-                    <Expander.Header>
-                        <Grid ColumnSpacing="16" Padding="0,10">
-                            <Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                            <StackPanel>
-                                <TextBlock Text="Quarantine" Style="{StaticResource RowTitle}" />
-                                <TextBlock Text="How long removed items wait" Style="{StaticResource RowHint}" />
-                            </StackPanel>
-                            <TextBlock Grid.Column="1" Text="30 days · 10 GB" VerticalAlignment="Center" Style="{StaticResource SmallSecondary}" />
-                        </Grid>
-                    </Expander.Header>
-                    <StackPanel>
-                        <Grid Style="{StaticResource SubRow}">
-                            <Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                            <StackPanel VerticalAlignment="Center">
-                                <TextBlock Text="How long things are kept" Style="{StaticResource RowTitle}" />
-                                <TextBlock Text="Files 30 days. Registry, service and task backups 180 days. The history of what happened, 1 year." Style="{StaticResource RowHint}" />
-                            </StackPanel>
-                        </Grid>
-                        <Border Style="{StaticResource Divider}" />
-                        <Grid Style="{StaticResource SubRow}">
-                            <Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                            <StackPanel VerticalAlignment="Center">
-                                <TextBlock Text="When something expires" Style="{StaticResource RowTitle}" />
-                                <TextBlock Text="Purge offers to delete it and asks first. Nothing is deleted on its own, and user data is listed one item at a time. Size limit per drive: 10 GB or 5 % of the drive, whichever is smaller." Style="{StaticResource RowHint}" />
-                            </StackPanel>
-                            <Button Grid.Column="1" Content="Open quarantine" VerticalAlignment="Center" Tag="vault" Click="OnOpenPage" />
-                        </Grid>
-                    </StackPanel>
-                </Expander>
-
-                <!-- Startup and permissions -->
-                <Expander Style="{StaticResource ExpanderHost}" AutomationProperties.Name="Startup and permissions">
-                    <Expander.Header>
-                        <Grid ColumnSpacing="16" Padding="0,10">
-                            <Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                            <StackPanel>
-                                <TextBlock Text="Startup and permissions" Style="{StaticResource RowTitle}" />
-                                <TextBlock Text="Admin prompt behaviour" Style="{StaticResource RowHint}" />
-                            </StackPanel>
-                            <TextBlock Grid.Column="1" Text="Ask when needed" VerticalAlignment="Center" Style="{StaticResource SmallSecondary}" />
-                        </Grid>
-                    </Expander.Header>
-                    <Grid Style="{StaticResource SubRow}">
-                        <Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                        <StackPanel VerticalAlignment="Center">
-                            <TextBlock Text="Always start as administrator" Style="{StaticResource RowTitle}" />
-                            <TextBlock Style="{StaticResource RowHint}"
-                                       Text="Shows the admin prompt every time Purge opens, and dragging files in from Explorer stops working. Off: Purge asks only when you uninstall, clean or undo." />
-                        </StackPanel>
-                        <ToggleSwitch Grid.Column="1" OnContent="" OffContent="" MinWidth="0" AutomationProperties.Name="Always start as administrator" />
-                    </Grid>
-                </Expander>
-
-                <!-- Knowledge packs -->
-                <Border Style="{StaticResource SettingCard}" Margin="0,0,0,4">
-                    <Grid ColumnSpacing="16">
-                        <Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                        <StackPanel VerticalAlignment="Center">
-                            <TextBlock Text="Knowledge packs" Style="{StaticResource RowTitle}" />
-                            <TextBlock Text="Extra facts about specific apps (Mozilla, Python, VS Code…). They can find more, but never pre-select anything on their own." Style="{StaticResource RowHint}" />
-                        </StackPanel>
-                        <Border Grid.Column="1" Style="{StaticResource ChipSuccess}" VerticalAlignment="Center">
-                            <TextBlock Style="{StaticResource ChipTextPrimary}"><Run Text="&#xE73E;" FontFamily="Segoe Fluent Icons" FontSize="10" /><Run Text=" 24 active" /></TextBlock>
-                        </Border>
-                    </Grid>
-                </Border>
-
-                <!-- Appearance (not in the board; needed to check both themes) -->
-                <Border Style="{StaticResource SettingCard}" Margin="0,0,0,4">
-                    <Grid ColumnSpacing="16">
-                        <Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                        <StackPanel VerticalAlignment="Center">
-                            <TextBlock Text="Theme" Style="{StaticResource RowTitle}" />
-                            <TextBlock Text="Light, dark, or follow Windows" Style="{StaticResource RowHint}" />
-                        </StackPanel>
-                        <ComboBox x:Name="ThemeChoice" Grid.Column="1" MinWidth="200" VerticalAlignment="Center"
-                                  SelectionChanged="OnThemeChanged" AutomationProperties.Name="Theme">
-                            <ComboBoxItem Content="Use Windows setting" />
-                            <ComboBoxItem Content="Light" />
-                            <ComboBoxItem Content="Dark" />
-                        </ComboBox>
-                    </Grid>
-                </Border>
-
-                <!-- About -->
-                <Border Style="{StaticResource SettingCard}" Margin="0,0,0,4">
-                    <Grid ColumnSpacing="16">
-                        <Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                        <StackPanel VerticalAlignment="Center" Spacing="2">
-                            <TextBlock x:Name="AboutLine" Style="{StaticResource RowTitle}" />
-                            <TextBlock x:Name="LastStart" Style="{StaticResource RowHint}" />
-                        </StackPanel>
-                        <HyperlinkButton Grid.Column="1" Content="Licenses" VerticalAlignment="Center" />
-                    </Grid>
-                </Border>
-                <Expander Header="Launch markers (this start)" Style="{StaticResource ExpanderHost}">
-                    <TextBlock x:Name="Markers" Style="{StaticResource Mono}" IsTextSelectionEnabled="True" />
-                </Expander>
-            </StackPanel>
-
-            <!-- Live preview: what the hovered (else the chosen) preset would tick in a leftover review. -->
-            <Border Grid.Column="1" Style="{StaticResource Card}" Padding="16" Margin="0,60,0,0" VerticalAlignment="Top">
-                <StackPanel Spacing="10">
-                    <TextBlock Text="LIVE PREVIEW" FontSize="11" CharacterSpacing="50" Style="{StaticResource SecondaryText}" />
-                    <Grid ColumnSpacing="10">
-                        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition /></Grid.ColumnDefinitions>
-                        <Border x:Name="PreviewTile" Width="32" Height="32" CornerRadius="7">
-                            <TextBlock Text="F" Foreground="White" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                        </Border>
-                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                            <TextBlock x:Name="PreviewTitle" FontWeight="SemiBold" TextWrapping="Wrap" />
-                            <TextBlock Text="Preview on a sample list, not a scan of this PC" Style="{StaticResource SmallSecondary}" />
-                        </StackPanel>
-                    </Grid>
-                    <!-- Stacked bar: selected / left to decide / protected. The rows below say the same in words. -->
-                    <Grid Height="8" CornerRadius="4" ColumnSpacing="2">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition x:Name="PvSelCol" /><ColumnDefinition x:Name="PvLeftCol" /><ColumnDefinition x:Name="PvProtCol" />
-                        </Grid.ColumnDefinitions>
-                        <Border Background="{ThemeResource AccentFillColorDefaultBrush}" />
-                        <Border Grid.Column="1" Background="{ThemeResource ControlStrongFillColorDisabledBrush}" />
-                        <Border Grid.Column="2" Background="{ThemeResource ControlStrongFillColorDefaultBrush}" />
-                    </Grid>
-                    <Grid RowSpacing="6" ColumnSpacing="8">
-                        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                        <Grid.RowDefinitions><RowDefinition /><RowDefinition /><RowDefinition /></Grid.RowDefinitions>
-                        <FontIcon Glyph="&#xE73A;" FontSize="14" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
-                        <TextBlock Grid.Column="1" Text="Selected for you" FontSize="13" />
-                        <TextBlock x:Name="PvSelected" Grid.Column="2" FontSize="13" FontWeight="SemiBold" />
-                        <FontIcon Grid.Row="1" Glyph="&#xE739;" FontSize="14" />
-                        <TextBlock Grid.Row="1" Grid.Column="1" Text="Left for you to decide" FontSize="13" />
-                        <TextBlock x:Name="PvLeft" Grid.Row="1" Grid.Column="2" FontSize="13" FontWeight="SemiBold" />
-                        <FontIcon Grid.Row="2" Glyph="&#xE72E;" FontSize="14" />
-                        <TextBlock Grid.Row="2" Grid.Column="1" Text="Protected" FontSize="13" />
-                        <TextBlock x:Name="PvProtected" Grid.Row="2" Grid.Column="2" FontSize="13" FontWeight="SemiBold" />
-                    </Grid>
-                    <TextBlock x:Name="PvUserData" Style="{StaticResource SmallSecondary}" />
-                    <Border Style="{StaticResource Divider}" />
-                    <TextBlock Text="Changing a preset does not touch anything already in quarantine, and never changes what the engine is allowed to remove."
-                               Style="{StaticResource SmallSecondary}" />
+            <!-- What the leftovers review ticks for you: the broker's rule, stated, not chosen. -->
+            <Border Style="{StaticResource SettingCard}" Margin="0,0,0,4">
+                <StackPanel Spacing="8">
+                    <TextBlock Text="What Purge ticks for you" Style="{StaticResource RowTitle}" FontWeight="SemiBold" />
+                    <TextBlock Style="{StaticResource FactLine}"
+                               Text="After an uninstall, Purge ticks only leftovers it rates Safe. Likely items and weak matches wait for your own tick, and Protected items can never be ticked." />
+                    <TextBlock Style="{StaticResource FactLine}"
+                               Text="When the uninstaller failed or Purge could not check that the program is gone, the scan is a forced one and nothing is ticked." />
+                    <TextBlock Style="{StaticResource FactLine}"
+                               Text="You see the whole list and confirm it in Purge's security prompt before anything moves. Everything moved can be put back from History &amp; undo." />
                 </StackPanel>
             </Border>
-        </Grid>
+
+            <!-- Quarantine: the plan's retention (ENGINE_PLAN.md §7.8), stated rather than chosen. -->
+            <Border Style="{StaticResource SettingCard}" Margin="0,0,0,4">
+                <Grid ColumnSpacing="16">
+                    <Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                    <StackPanel VerticalAlignment="Center" Spacing="2">
+                        <TextBlock Text="Quarantine" Style="{StaticResource RowTitle}" />
+                        <TextBlock Style="{StaticResource RowHint}"
+                                   Text="Files are kept 30 days; registry, service and task backups 180 days. When something expires, Purge offers to delete it and asks first; nothing is deleted on its own." />
+                    </StackPanel>
+                    <Button Grid.Column="1" Content="Open quarantine" VerticalAlignment="Center" Tag="vault" Click="OnOpenPage" />
+                </Grid>
+            </Border>
+
+            <!-- Appearance (not in the board; needed to check both themes) -->
+            <Border Style="{StaticResource SettingCard}" Margin="0,0,0,4">
+                <Grid ColumnSpacing="16">
+                    <Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock Text="Theme" Style="{StaticResource RowTitle}" />
+                        <TextBlock Text="Light, dark, or follow Windows" Style="{StaticResource RowHint}" />
+                    </StackPanel>
+                    <ComboBox x:Name="ThemeChoice" Grid.Column="1" MinWidth="200" VerticalAlignment="Center"
+                              SelectionChanged="OnThemeChanged" AutomationProperties.Name="Theme">
+                        <ComboBoxItem Content="Use Windows setting" />
+                        <ComboBoxItem Content="Light" />
+                        <ComboBoxItem Content="Dark" />
+                    </ComboBox>
+                </Grid>
+            </Border>
+
+            <!-- About -->
+            <Border Style="{StaticResource SettingCard}" Margin="0,0,0,4">
+                <StackPanel VerticalAlignment="Center" Spacing="2">
+                    <TextBlock x:Name="AboutLine" Style="{StaticResource RowTitle}" IsTextSelectionEnabled="True" />
+                    <TextBlock Style="{StaticResource RowHint}"
+                               Text="Leftover scanners include code ported from Bulk Crap Uninstaller (Apache-2.0)." />
+                </StackPanel>
+            </Border>
+
+            <!-- Diagnostic builds only (DEBUG): the launch markers of this start. -->
+            <Expander x:Name="MarkersExpander" Header="Launch markers (this start)" Style="{StaticResource ExpanderHost}"
+                      Visibility="Collapsed">
+                <TextBlock x:Name="Markers" Style="{StaticResource Mono}" IsTextSelectionEnabled="True" />
+            </Expander>
+        </StackPanel>
     </ScrollViewer>
 </UserControl>

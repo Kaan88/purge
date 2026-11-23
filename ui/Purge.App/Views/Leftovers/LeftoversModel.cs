@@ -93,6 +93,39 @@ public sealed class LeftoverItemModel
 
     public string SizeText => SizeBytes is { } bytes ? FormatSize(bytes) : "";
 
+    /// <summary>What the item is and what it belongs to, in words (the detail pane's "Kind" line).</summary>
+    public string KindText => $"{KindWords(Kind)} · {CategoryWords(Category)}";
+
+    private static string KindWords(RpcItemKind kind) => kind switch
+    {
+        RpcItemKind.File => "File",
+        RpcItemKind.Folder => "Folder",
+        RpcItemKind.RegistryKey => "Registry key",
+        RpcItemKind.RegistryValue => "Registry value",
+        RpcItemKind.RegistryData => "Registry data",
+        RpcItemKind.Service => "Service",
+        RpcItemKind.Task => "Scheduled task",
+        RpcItemKind.FirewallRule => "Firewall rule",
+        RpcItemKind.Package => "App package",
+        _ => "Item",
+    };
+
+    private static string CategoryWords(RpcCategory category) => category switch
+    {
+        RpcCategory.AppFiles => "the program's files",
+        RpcCategory.AppData => "the program's settings and data",
+        RpcCategory.UserData => "your own data",
+        RpcCategory.Cache => "a cache",
+        RpcCategory.Registration => "the program's registration",
+        RpcCategory.Association => "a file type or link association",
+        RpcCategory.ShellCom => "Explorer and COM registration",
+        RpcCategory.Startup => "something that starts with Windows",
+        RpcCategory.System => "a system setting",
+        RpcCategory.Privacy => "usage traces",
+        RpcCategory.Package => "an app package",
+        _ => "other",
+    };
+
     public string Why =>
         Blockers.Count > 0 ? Blockers[0]
         : Warnings.Count > 0 ? Warnings[0].Message
@@ -227,6 +260,12 @@ public sealed class LeftoversViewModel : INotifyPropertyChanged
     public UndoResult? Undo { get; private set; }
     public string ProgramName { get; private set; } = "";
 
+    /// <summary>True for the sample rows of <c>--sample</c>: there is no broker, so nothing can be moved.</summary>
+    public bool IsSample { get; private set; }
+
+    /// <summary>True when the scan is a forced one (the broker ticks nothing for you then).</summary>
+    public bool IsForced => Scan?.Mode == ScanMode.Forced;
+
     /// <summary>The code the broker's dialog shows in its footer; null until the plan exists.</summary>
     public string? Code { get; private set; }
 
@@ -319,7 +358,37 @@ public sealed class LeftoversViewModel : INotifyPropertyChanged
     public bool IsChanging => Phase == LeftoversPhase.Waiting;
 
     public bool CanUndo => Phase == LeftoversPhase.Result && Result is { Session.Length: > 0 } result
-                           && (result.Counts.Done > 0 || result.Counts.Vanished > 0);
+                           && (result.Counts.Done > 0 || result.Counts.Vanished > 0)
+                           // Everything the run changed was a file that is now deleted for good: nothing to offer.
+                           && !(DeletedAfter(result) && !ChangedMoreThanItDeleted(result));
+
+    /// <summary>The delete step of the result deleted something for good ("deleted" or "partial").</summary>
+    private static bool DeletedAfter(ExecResult result) => result.DeleteAfter is { Purged: > 0 };
+
+    /// <summary>
+    /// The run did more than move the items that were then deleted: registry, service or task changes, or moved
+    /// items that are still in quarantine. Those can still be undone.
+    /// </summary>
+    private static bool ChangedMoreThanItDeleted(ExecResult result) =>
+        result.DeleteAfter is { } step && (step.Kept > 0 || result.Counts.Done > step.Purged);
+
+    /// <summary>
+    /// The undo button of the result page. After a delete step that deleted something it never reads "Put back
+    /// all" (review M1): what was deleted cannot come back, so it names what still can.
+    /// </summary>
+    public string UndoText => Result is { DeleteAfter: { Purged: > 0 } step }
+        ? step.Kept > 0 ? "Put back what is still in quarantine…" : "Undo registry changes…"
+        : "Put back all";
+
+    /// <summary>
+    /// The undo button opens History & undo instead of running <c>undo.run</c> from this page: after a delete step
+    /// that deleted something (History shows item by item what can still be put back), and whenever this page's
+    /// broker link has ended (a finished cleanup ends the broker; History starts a new one).
+    /// </summary>
+    public bool UndoOpensHistory => Result is { } result && (DeletedAfter(result) || !_broker.IsLive);
+
+    /// <summary>The line the footer shows instead of its one-prompt hint while <see cref="DeleteAfter"/> is ticked.</summary>
+    public const string TwoPromptsHint = "You'll confirm twice in the Purge security prompt: the move, then the delete";
 
     public bool CanRetryHeld => Phase == LeftoversPhase.Result && Result is { Held.Count: > 0 };
 
@@ -328,6 +397,9 @@ public sealed class LeftoversViewModel : INotifyPropertyChanged
     /// <summary>The rows the list shows: group filters, weak matches, collapsed groups handled by the view.</summary>
     public List<LeftoverItemModel> VisibleItems(LeftoverGroup group) =>
         group.Items.Where(item => ShowWeak || !item.IsWeak).ToList();
+
+    /// <summary>The weak matches of a group that the list hides while weak matches are hidden.</summary>
+    public int HiddenCount(LeftoverGroup group) => ShowWeak ? 0 : group.Items.Count(item => item.IsWeak);
 
     /// <summary>The groups with at least one visible row.</summary>
     public List<LeftoverGroup> VisibleGroups() =>
@@ -853,6 +925,14 @@ public sealed class LeftoversViewModel : INotifyPropertyChanged
     public async Task UndoAllAsync(CancellationToken ct = default)
     {
         if (_busy || Result is not { Session.Length: > 0 } result) return;
+        if (UndoOpensHistory)
+        {
+            // Nothing is sent over a link that has ended, and nothing deleted is promised back: History decides.
+            Error = null;
+            Info = "Open History & undo to put back what this cleanup still holds.";
+            Notify();
+            return;
+        }
         _busy = true;
         Error = null;
         Info = null;
@@ -860,7 +940,7 @@ public sealed class LeftoversViewModel : INotifyPropertyChanged
         Code = null;
         Attention.Clear();
         Phase = LeftoversPhase.Waiting;
-        WaitingTitle = "Confirm the restore in the Purge security prompt.";
+        WaitingTitle = "Confirm putting it back in the Purge security prompt.";
         WaitingDetail = "Nothing has been put back yet.";
         Notify();
         try
@@ -893,7 +973,7 @@ public sealed class LeftoversViewModel : INotifyPropertyChanged
         catch (BrokerLinkException)
         {
             Phase = LeftoversPhase.Interrupted;
-            Error = "The administrator part ended during the restore. Purge cannot tell what was put back; " +
+            Error = "The administrator part ended while putting things back. Purge cannot tell what was put back; " +
                     "check History & undo.";
         }
         catch (BrokerRpcException ex)
@@ -961,6 +1041,7 @@ public sealed class LeftoversViewModel : INotifyPropertyChanged
     public void LoadSample(string name = "Mozilla Firefox", int count = 0)
     {
         ProgramName = name;
+        IsSample = true;
         Items.Clear();
         Items.AddRange(count > 0 ? LeftoversSample.Fixture(count) : LeftoversSample.Items());
         Scan = new ScanResult { ScanId = "sample", Mode = ScanMode.Forced };

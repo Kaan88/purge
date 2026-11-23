@@ -1,5 +1,6 @@
 using System.Globalization;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Purge.App.Shell;
@@ -26,10 +27,14 @@ public sealed partial class LeftoversView : UserControl, ILeftoversPage
     private BrokerSession? _ownedBroker;
     private bool _explaining;
 
+    /// <summary>The empty page's words: where an uninstall starts, and where a program removed without Purge is checked.</summary>
+    private const string NoScanText =
+        "Start an uninstall on the Programs page; Purge shows this page after the uninstaller has run. A program removed "
+        + "without Purge can be checked from Programs, under \"Removed outside Purge\".";
+
     public LeftoversView()
     {
         InitializeComponent();
-        AppTile.Background = ProgramRow.TileFor("Mozilla");
         if (!Program.Engine.IsLive)
         {
             Use(new LeftoversViewModel(new OfflineBroker()));
@@ -49,10 +54,12 @@ public sealed partial class LeftoversView : UserControl, ILeftoversPage
         }
         else
         {
-            ShowEmpty("No scan yet",
-                "Start an uninstall, or check a program for what it left behind. Purge shows this page after the uninstaller has run.");
+            ShowEmpty("No scan yet", NoScanText);
         }
     }
+
+    /// <summary>The items of a scan that wait for review here (the rail's badge); 0 outside the review.</summary>
+    public int WaitingForReview => _vm is { Phase: LeftoversPhase.Review } vm ? vm.Items.Count : 0;
 
     /// <summary>The page's state, for the shell and the tests.</summary>
     public LeftoversViewModel? ViewModel => _vm;
@@ -86,7 +93,7 @@ public sealed partial class LeftoversView : UserControl, ILeftoversPage
                 "The scan cannot be shown because its broker link is gone. Start the uninstall again from the Uninstall pipeline page.");
             return;
         }
-        var broker = new LeftoversBroker(request.Broker.Rpc);
+        var broker = new LeftoversBroker(request.Broker.Rpc) { AllowForeground = request.Broker.AllowForeground };
         Use(new LeftoversViewModel(broker, request.Broker.AllowForeground, CurrentUserSid()));
         _ = _vm!.ShowRequestAsync(request);
     }
@@ -126,13 +133,21 @@ public sealed partial class LeftoversView : UserControl, ILeftoversPage
             _wasChanging = IsChanging;
             MainWindow.Instance.OnLeftoversChangingChanged();
         }
+        MainWindow.Instance.UpdateBadges();
         if (_vm is not { } vm) return;
         var name = vm.ProgramName.Length > 0 ? vm.ProgramName : _request?.ProgramName ?? "";
         TitleText.Text = name.Length > 0 ? $"Leftovers of {name}" : "Leftovers";
-        AppInitial.Text = name.Length > 0 ? name[..1].ToUpperInvariant() : "?";
+        // The program's tile only when there is a program; no placeholder letter on the empty page.
+        AppTile.Visibility = Vis(name.Length > 0 && vm.Phase != LeftoversPhase.Empty);
+        if (name.Length > 0)
+        {
+            AppInitial.Text = name[..1].ToUpperInvariant();
+            AppTile.Background = ProgramRow.TileFor(name);
+        }
         SubtitleText.Text = Subtitle(vm);
 
         var review = vm.Phase == LeftoversPhase.Review;
+        ListButtons.Visibility = Vis(review);
         ReviewPanel.Visibility = Vis(review);
         Footer.Visibility = Vis(review);
         WaitingPanel.Visibility = Vis(vm.Phase == LeftoversPhase.Waiting);
@@ -153,7 +168,7 @@ public sealed partial class LeftoversView : UserControl, ILeftoversPage
         LeftoversPhase.Scanning => vm.ScanProgress.Length > 0 ? "Scanning: " + vm.ScanProgress : "Scanning…",
         LeftoversPhase.Waiting => "Waiting for the security prompt",
         LeftoversPhase.Result => "The result is in · restorable from History & undo",
-        LeftoversPhase.Undone => "Restored",
+        LeftoversPhase.Undone => "Put back",
         LeftoversPhase.Interrupted => "Interrupted · check History & undo",
         LeftoversPhase.Review => vm.Scan is { } scan
             ? $"{scan.Mode switch { ScanMode.Post => "Post-uninstall scan", ScanMode.Forced => "Forced scan", _ => "Stored-fingerprint scan" }} · " +
@@ -168,7 +183,7 @@ public sealed partial class LeftoversView : UserControl, ILeftoversPage
         var rows = new List<LeftoversRow>();
         foreach (var group in vm.VisibleGroups())
         {
-            rows.Add(LeftoversRow.ForGroup(group));
+            rows.Add(LeftoversRow.ForGroup(group, vm.HiddenCount(group)));
             if (!group.Expanded) continue;
             foreach (var item in vm.VisibleItems(group)) rows.Add(LeftoversRow.ForItem(item));
         }
@@ -179,14 +194,30 @@ public sealed partial class LeftoversView : UserControl, ILeftoversPage
             if (again is not null) Items.SelectedItem = again;
         }
         UpdateCounts(vm);
-        MoveButton.IsEnabled = vm.CanMove;
-        MoveText.Text = vm.MoveText;
-        DeleteAfterBox.Content = LeftoversViewModel.DeleteAfterText;
-        DeleteAfterBox.IsChecked = vm.DeleteAfter;
-        ToolTipService.SetToolTip(DeleteAfterBox, LeftoversViewModel.DeleteAfterHelp);
+        UpdateMove(vm);
         ExpandButton.Content = vm.Groups.Any(g => !g.Expanded) ? "Expand all" : "Collapse all";
         WeakButton.Content = vm.ShowWeak ? $"Hide weak matches ({vm.WeakCount})" : $"Show weak matches ({vm.WeakCount})";
         WeakButton.Visibility = Vis(vm.WeakCount > 0);
+    }
+
+    /// <summary>
+    /// The Move button. Sample data has no broker, so nothing can be moved: the button stays off and the footer says
+    /// why in words (a disabled button shows no tooltip).
+    /// </summary>
+    private void UpdateMove(LeftoversViewModel vm)
+    {
+        MoveButton.IsEnabled = vm.CanMove && !vm.IsSample;
+        MoveText.Text = vm.MoveText;
+        // "Delete instead of keeping in quarantine": a request only, off by default (DECISIONS 2026-11-24).
+        DeleteAfterBox.Content = LeftoversViewModel.DeleteAfterText;
+        DeleteAfterBox.IsChecked = vm.DeleteAfter;
+        DeleteAfterBox.IsEnabled = !vm.IsSample;
+        ToolTipService.SetToolTip(DeleteAfterBox, LeftoversViewModel.DeleteAfterHelp);
+        FooterHint.Text = vm.IsSample
+            ? "Sample data: nothing can be moved"
+            : vm.DeleteAfter ? LeftoversViewModel.TwoPromptsHint
+            : "You'll confirm in the Purge security prompt";
+        ToolTipService.SetToolTip(MoveButton, vm.IsSample ? "Sample data: nothing can be moved." : null);
     }
 
     private void UpdateCounts(LeftoversViewModel vm)
@@ -246,6 +277,14 @@ public sealed partial class LeftoversView : UserControl, ILeftoversPage
         }
         if (vm.RescanMessage is { Length: > 0 } rescan)
             AddInfoBar(InfoBarSeverity.Success, "Scanned again.", rescan);
+        if (vm.Phase == LeftoversPhase.Review && vm.IsSample)
+            AddInfoBar(InfoBarSeverity.Informational, "Sample data.",
+                "This list is an example, not a scan of this PC. Nothing can be moved from it.");
+        // A forced scan ticks nothing on purpose (engine rule): say so, so the empty ticks do not read as a fault.
+        else if (vm.Phase == LeftoversPhase.Review && vm.IsForced)
+            AddInfoBar(InfoBarSeverity.Informational, "Nothing is ticked for you.",
+                "The uninstaller failed or Purge could not check that the program is gone, so this is a forced scan: "
+                + "Purge ticks nothing, not even Safe items. Tick what you want moved.");
         ShowHeldBar();
     }
 
@@ -260,6 +299,7 @@ public sealed partial class LeftoversView : UserControl, ILeftoversPage
     /// </summary>
     private void ShowHeldBar()
     {
+        ShowQueueBar();
         if (_heldBar is not null) InfoBarHost.Children.Remove(_heldBar);
         _heldBar = null;
         if (_vm is null || MainWindow.Instance.HeldScanProgram is not { } name) return;
@@ -285,6 +325,35 @@ public sealed partial class LeftoversView : UserControl, ILeftoversPage
         }
         InfoBarHost.Children.Insert(0, bar);
         _heldBar = bar;
+    }
+
+    private InfoBar? _queueBar;
+
+    /// <summary>
+    /// "Uninstall N" queued more programs: a line says which comes next and takes the user back to the Uninstall page,
+    /// where it starts.
+    /// </summary>
+    private void ShowQueueBar()
+    {
+        if (_queueBar is not null) InfoBarHost.Children.Remove(_queueBar);
+        _queueBar = null;
+        if (_vm is null || MainWindow.Instance.HeldScanProgram is not null) return;
+        if (UninstallView.Built?.QueuedNext is not { } next) return;
+        var bar = new InfoBar
+        {
+            Severity = InfoBarSeverity.Informational,
+            Title = "Next to uninstall: " + next + ".",
+            Message = "Finish here first if you like. It starts from the Uninstall page when you choose.",
+            IsOpen = true,
+            IsClosable = true,
+            RequestedTheme = MainWindow.Instance.ActualTheme,
+        };
+        var go = new Button { Content = "Go to Uninstall" };
+        go.Click += (_, _) => MainWindow.Instance.OpenUninstall();
+        bar.ActionButton = go;
+        bar.Closed += (s, _) => InfoBarHost.Children.Remove(s);
+        InfoBarHost.Children.Insert(0, bar);
+        _queueBar = bar;
     }
 
     private InfoBar AddInfoBar(InfoBarSeverity severity, string title, string message)
@@ -320,6 +389,7 @@ public sealed partial class LeftoversView : UserControl, ILeftoversPage
         FailedHost.Visibility = Vis(vm.FailedLines.Count > 0);
         FailedList.ItemsSource = vm.FailedLines;
         UndoAllButton.Visibility = Vis(vm.CanUndo);
+        UndoAllButton.Content = vm.UndoText;
         RetryHeldButton.Visibility = Vis(vm.CanRetryHeld);
         ResultIcon.Glyph = vm.Result?.Outcome == Outcome.Complete ? "\uE73E" : "\uE7BA";
         ResultIcon.Foreground = vm.Result?.Outcome == Outcome.Complete ? Explicit : Warning;
@@ -340,6 +410,8 @@ public sealed partial class LeftoversView : UserControl, ILeftoversPage
         ResultPanel.Visibility = Visibility.Collapsed;
         UndonePanel.Visibility = Visibility.Collapsed;
         EmptyPanel.Visibility = Visibility.Visible;
+        ListButtons.Visibility = Visibility.Collapsed;
+        AppTile.Visibility = Visibility.Collapsed;
         EmptyTitle.Text = title;
         EmptyText.Text = text;
     }
@@ -347,6 +419,8 @@ public sealed partial class LeftoversView : UserControl, ILeftoversPage
     private void ShowDetail(LeftoversRow row)
     {
         if (row.Item is not { } item) return;
+        DNone.Visibility = Visibility.Collapsed;
+        DBody.Visibility = Visibility.Visible;
         DTitle.Text = item.Label is { } label ? label.Title : "";
         DTitle.Visibility = Vis(item.Label is not null);
         DPath.Text = item.DisplayName;
@@ -376,7 +450,7 @@ public sealed partial class LeftoversView : UserControl, ILeftoversPage
             ? "Purge never removes it"
             : item.Refused ? "Cannot be quarantined: " + item.RefusalReason
             : "Moved to quarantine, restorable from History & undo";
-        DFoundBy.Text = $"{item.Category} · {item.Kind}";
+        DFoundBy.Text = item.KindText;
         DOwner.Text = item.OwnerProgram is { Length: > 0 } owner ? "Shared with " + owner + "." : "";
         DOwner.Visibility = Vis(item.OwnerProgram is { Length: > 0 });
     }
@@ -415,9 +489,23 @@ public sealed partial class LeftoversView : UserControl, ILeftoversPage
         _vm?.SetChecked(item, on);
         row.Checked = on;
         RefreshGroupRows(item.GroupName);
-        if (_vm is not null) UpdateCounts(_vm);
-        MoveButton.IsEnabled = _vm?.CanMove == true;
-        MoveText.Text = _vm?.MoveText ?? "";
+        if (_vm is not null)
+        {
+            UpdateCounts(_vm);
+            UpdateMove(_vm);
+        }
+        // The row's spoken name carries its tick state.
+        if (Items.ContainerFromItem(row) is ListViewItem container) AutomationProperties.SetName(container, row.ToString());
+    }
+
+    /// <summary>
+    /// Names each row container for screen readers (otherwise it reads the class name): group and count, or item,
+    /// rating and tick state.
+    /// </summary>
+    private void OnContainerContentChanging(ListViewBase sender, ContainerContentChangingEventArgs args)
+    {
+        if (args.InRecycleQueue) return;
+        if (args.Item is LeftoversRow row) AutomationProperties.SetName(args.ItemContainer, row.ToString());
     }
 
     /// <summary>Updates the one group header a tick belongs to, without rebuilding 2,000 rows.</summary>
@@ -467,7 +555,7 @@ public sealed partial class LeftoversView : UserControl, ILeftoversPage
     {
         if (_vm is null) return;
         _vm.DeleteAfter = DeleteAfterBox.IsChecked == true;
-        MoveText.Text = _vm.MoveText;
+        UpdateMove(_vm);
     }
 
     private async void OnMove(object sender, RoutedEventArgs e)
@@ -480,6 +568,12 @@ public sealed partial class LeftoversView : UserControl, ILeftoversPage
     private async void OnUndoAll(object sender, RoutedEventArgs e)
     {
         if (_vm is null) return;
+        if (_vm.UndoOpensHistory)
+        {
+            // After a delete step, or when this page's broker has ended: History shows what can still be put back.
+            MainWindow.Instance.Navigate("history");
+            return;
+        }
         UndoAllButton.IsEnabled = false;
         try { await _vm.UndoAllAsync(); }
         finally { UndoAllButton.IsEnabled = true; }

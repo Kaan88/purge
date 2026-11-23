@@ -515,7 +515,7 @@ pub struct ProgramParams {
     pub program_id: ProgramId,
 }
 
-/// `{program_ids[]}`: `programs.sizes`, `uninstall.prepare`, `leftovers.stored`.
+/// `{program_ids[]}`: `programs.sizes`, `inventory.forget`, `uninstall.prepare`, `leftovers.stored`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ProgramsParams {
@@ -1573,6 +1573,7 @@ call_set!(
         ProgramsIcons(IconsParams) -> Started,
         ProgramsSizes(ProgramsParams) -> Started,
         InventoryChanges(NoParams) -> InventoryChanges,
+        InventoryForget(ProgramsParams) -> Started,
         HistoryIndex(NoParams) -> HistoryIndex,
         UninstallRoute(ProgramParams) -> RouteInfo,
         UninstallRunUser(RunUserParams) -> RunUserResult,

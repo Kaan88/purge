@@ -35,7 +35,7 @@ public sealed class HistoryPageTests
         Assert.Equal(["20251116T080000Z-0000000000000001", GitSession], vm.Sessions.Select(s => s.Id));
         var restored = vm.Sessions[0];
         Assert.Equal("Git", restored.Name);
-        Assert.Equal("Restored", restored.State);
+        Assert.Equal("Put back", restored.State);
         Assert.False(restored.Held);
         var git = vm.Sessions[1];
         Assert.Equal("HKLM|64|Git_is1", git.Name);

@@ -138,7 +138,8 @@
                         <Border x:Name="PillQueue" Style="{StaticResource RailPill}" />
                         <FontIcon Grid.Column="1" Glyph="&#xE8FD;" FontSize="16" />
                         <TextBlock Grid.Column="2" Text="Uninstall pipeline" VerticalAlignment="Center" />
-                        <Border Grid.Column="3" Margin="0,0,10,0" Style="{StaticResource ChipAccent}"><TextBlock Style="{StaticResource ChipTextOnAccent}" Text="3" /></Border>
+                        <!-- Shown only while an uninstall runs (MainWindow.UpdateBadges). -->
+                        <Border x:Name="QueueBadge" Grid.Column="3" Margin="0,0,10,0" Style="{StaticResource ChipAccent}" Visibility="Collapsed"><TextBlock x:Name="QueueBadgeText" Style="{StaticResource ChipTextOnAccent}" /></Border>
                     </Grid>
                 </Button>
                 <Button x:Name="NavLeftovers" Style="{StaticResource RailButton}" Tag="leftovers" AutomationProperties.Name="Leftovers" Click="OnRailClick">
@@ -148,7 +149,8 @@
                         <Border x:Name="PillLeftovers" Style="{StaticResource RailPill}" />
                         <FontIcon Grid.Column="1" Glyph="&#xE71F;" FontSize="16" />
                         <TextBlock Grid.Column="2" Text="Leftovers" VerticalAlignment="Center" />
-                        <Border Grid.Column="3" Margin="0,0,10,0" Style="{StaticResource ChipAccent}"><TextBlock Style="{StaticResource ChipTextOnAccent}" Text="12" /></Border>
+                        <!-- Shown only while a scan's items wait for review on the Leftovers page (MainWindow.UpdateBadges). -->
+                        <Border x:Name="LeftoversBadge" Grid.Column="3" Margin="0,0,10,0" Style="{StaticResource ChipAccent}" Visibility="Collapsed"><TextBlock x:Name="LeftoversBadgeText" Style="{StaticResource ChipTextOnAccent}" /></Border>
                     </Grid>
                 </Button>
                 <Button x:Name="NavHistory" Style="{StaticResource RailButton}" Tag="history" AutomationProperties.Name="History &amp; undo" Click="OnRailClick">
@@ -160,13 +162,13 @@
                         <TextBlock Grid.Column="2" Text="History &amp; undo" VerticalAlignment="Center" />
                     </Grid>
                 </Button>
-                <Button x:Name="NavVault" Style="{StaticResource RailButton}" Tag="vault" AutomationProperties.Name="Quarantine vault" Click="OnRailClick">
+                <Button x:Name="NavVault" Style="{StaticResource RailButton}" Tag="vault" AutomationProperties.Name="Quarantine" Click="OnRailClick">
                     <Grid ColumnSpacing="12" Height="36">
                         <Grid.ColumnDefinitions><ColumnDefinition Width="3" /><ColumnDefinition Width="Auto" /><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                         <Border x:Name="SelVault" Style="{StaticResource RailSelection}" />
                         <Border x:Name="PillVault" Style="{StaticResource RailPill}" />
                         <FontIcon Grid.Column="1" Glyph="&#xE7B8;" FontSize="16" />
-                        <TextBlock Grid.Column="2" Text="Quarantine vault" VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="2" Text="Quarantine" VerticalAlignment="Center" />
                     </Grid>
                 </Button>
                 </StackPanel>
@@ -183,11 +185,14 @@
                 </StackPanel>
             </Grid>
 
-            <!-- Content card on the Mica backdrop. -->
+            <!-- Content card on the Mica backdrop; the page goes in PageHost. There is no window-level bar: each page
+                 says a cancelled or declined admin prompt in its own bar, inside its layout. -->
             <Border x:Name="ContentCard" Grid.Column="1"
                     Background="{ThemeResource LayerFillColorDefaultBrush}"
                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                    BorderThickness="1,1,0,0" CornerRadius="8,0,0,0" />
+                    BorderThickness="1,1,0,0" CornerRadius="8,0,0,0">
+                <Border x:Name="PageHost" />
+            </Border>
         </Grid>
     </Grid>
 </Window>

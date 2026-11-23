@@ -62,6 +62,14 @@ public sealed class LeftoversBroker : ILeftoversBroker
 {
     private readonly BrokerRpcClient _rpc;
     private IProgress<Progress>? _progress;
+    private volatile bool _deleteAfter;
+
+    /// <summary>
+    /// Lets the broker's dialogs come to the foreground (<c>AllowSetForegroundWindow</c> for the broker). While a
+    /// request with <c>delete_after</c> runs it is called for every <c>exec.progress</c>, on the reader thread, so
+    /// the permission for the second dialog is given before the broker shows it and does not wait for the UI thread.
+    /// </summary>
+    public Action? AllowForeground { get; set; }
 
     public LeftoversBroker(BrokerRpcClient rpc)
     {
@@ -123,8 +131,16 @@ public sealed class LeftoversBroker : ILeftoversBroker
         CancellationToken ct)
     {
         var parameters = new PlanExecuteParams { PlanId = planId, RestorePoint = restorePoint, DeleteAfter = true };
-        return await WithProgress(progress, () => _rpc.CallAsync("plan.execute", parameters,
-            RpcJsonContext.Default.PlanExecuteParams, RpcJsonContext.Default.ExecResult, ct)).ConfigureAwait(false);
+        _deleteAfter = true;
+        try
+        {
+            return await WithProgress(progress, () => _rpc.CallAsync("plan.execute", parameters,
+                RpcJsonContext.Default.PlanExecuteParams, RpcJsonContext.Default.ExecResult, ct)).ConfigureAwait(false);
+        }
+        finally
+        {
+            _deleteAfter = false;
+        }
     }
 
     public async Task<UndoResult> UndoAsync(string session, IProgress<Progress>? progress, CancellationToken ct)
@@ -158,6 +174,11 @@ public sealed class LeftoversBroker : ILeftoversBroker
     {
         switch (notification.Method)
         {
+            case "exec.progress" when _deleteAfter:
+                // Before anything else, and never allowed to fail the notification.
+                try { AllowForeground?.Invoke(); }
+                catch (Exception e) when (e is not OutOfMemoryException) { }
+                goto case "scan.progress";
             case "scan.progress":
             case "exec.progress":
             case "undo.progress":

@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
@@ -47,7 +48,7 @@ public sealed partial class MainWindow : Window
         _programs = new ProgramsView();
         LaunchMarkers.Mark("programs_ctor");
         _views["programs"] = _programs;
-        ContentCard.Child = _programs;
+        PageHost.Child = _programs;
         var loaded = Program.Startup.IsCompletedSuccessfully;
         if (loaded) OnStartup(Program.Startup.Result);
 
@@ -92,29 +93,31 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private StackPanel? _barHost;
-
-    /// <summary>Explains the Windows admin prompt the first time; false when the user chose "Not now".</summary>
-    public Task<bool> ConfirmFirstElevationAsync() => ElevationPrompts.ConfirmFirstElevationAsync(Root.XamlRoot, Root.ActualTheme);
+    /// <summary>
+    /// Explains the Windows admin prompt the first time; false when the user chose "Not now". <paramref name="readOnly"/>:
+    /// the action only reads Purge's records (History's check for interrupted cleanups, "Show items"), so the words
+    /// do not speak of moving or removing anything.
+    /// </summary>
+    public Task<bool> ConfirmFirstElevationAsync(bool readOnly = false) =>
+        ElevationPrompts.ConfirmFirstElevationAsync(Root.XamlRoot, Root.ActualTheme, readOnly);
 
     /// <summary>
-    /// Shows the bar for a Windows prompt that did not lead to the broker over the top of the page (built on first
-    /// use): "You cancelled the Windows prompt", or "Not started" when the user chose "Not now" at the explanation
-    /// (<paramref name="declinedExplanation"/>, carried by the route's own launch result).
+    /// The rail's badges follow real state: the Uninstall pipeline shows one while an uninstall runs, and Leftovers
+    /// shows how many items of a scan wait for review there. With nothing to count, no badge shows.
     /// </summary>
-    public void ShowAdminPromptCancelled(bool declinedExplanation, Action? tryAgain = null)
+    public void UpdateBadges()
     {
-        if (_barHost is null && ContentCard.Parent is Grid grid)
-        {
-            _barHost = new StackPanel { VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(16, 12, 16, 0), Spacing = 8 };
-            Grid.SetColumn(_barHost, 1);
-            grid.Children.Add(_barHost);
-        }
-        if (_barHost is null) return;
-        _barHost.Children.Clear();
-        var bar = ElevationPrompts.CancelledBar(Root.ActualTheme, declinedExplanation, tryAgain);
-        bar.Closed += (s, _) => _barHost.Children.Remove(s);
-        _barHost.Children.Add(bar);
+        var running = _views.TryGetValue("queue", out var queue) && queue is UninstallView { IsBusy: true };
+        QueueBadge.Visibility = running ? Visibility.Visible : Visibility.Collapsed;
+        QueueBadgeText.Text = running ? "1" : "";
+        AutomationProperties.SetName(NavQueue, running ? "Uninstall pipeline, 1 running" : "Uninstall pipeline");
+
+        var waiting = _views.TryGetValue("leftovers", out var leftovers) && leftovers is LeftoversView page
+            ? page.WaitingForReview
+            : 0;
+        LeftoversBadge.Visibility = waiting > 0 ? Visibility.Visible : Visibility.Collapsed;
+        LeftoversBadgeText.Text = waiting > 0 ? waiting.ToString(System.Globalization.CultureInfo.CurrentCulture) : "";
+        AutomationProperties.SetName(NavLeftovers, waiting > 0 ? $"Leftovers, {LeftoversBadgeText.Text} to review" : "Leftovers");
     }
 
     /// <summary>The S3 review page (built on first use); the Uninstall pipeline hands it the scan.</summary>
@@ -282,7 +285,7 @@ public sealed partial class MainWindow : Window
     public ProgramsView Programs => _programs;
 
     /// <summary>The view shown in the content card.</summary>
-    public UIElement? CurrentView => ContentCard.Child;
+    public UIElement? CurrentView => PageHost.Child;
 
     /// <summary>The page shown, by rail key.</summary>
     public string CurrentPage { get; private set; } = "programs";
@@ -310,7 +313,7 @@ public sealed partial class MainWindow : Window
     {
         var leftLeftovers = CurrentPage == "leftovers" && key != "leftovers";
         var view = ViewFor(key);
-        ContentCard.Child = view;
+        PageHost.Child = view;
         foreach (var (button, selection, pill) in _rail)
         {
             var visibility = button.Tag as string == key ? Visibility.Visible : Visibility.Collapsed;
@@ -345,7 +348,7 @@ public sealed partial class MainWindow : Window
     public void ApplyTheme(ElementTheme theme)
     {
         Root.RequestedTheme = theme;
-        if (ContentCard?.Child is { } current) PinInfoBars(current);
+        if (PageHost?.Child is { } current) PinInfoBars(current);
         AppWindow.TitleBar.PreferredTheme = theme switch
         {
             ElementTheme.Light => TitleBarTheme.Light,
@@ -359,6 +362,12 @@ public sealed partial class MainWindow : Window
     {
         var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
         var scale = GetDpiForWindow(hwnd) / 96.0;
+        // Below 760 x 520 the Programs page cannot lay out its tabs, tools and a readable Name column.
+        if (AppWindow.Presenter is OverlappedPresenter presenter)
+        {
+            presenter.PreferredMinimumWidth = (int)(760 * scale);
+            presenter.PreferredMinimumHeight = (int)(520 * scale);
+        }
         var size = new SizeInt32((int)(width * scale), (int)(height * scale));
         var area = DisplayArea.GetFromWindowId(AppWindow.Id, DisplayAreaFallback.Primary).WorkArea;
         size.Width = Math.Min(size.Width, area.Width);
@@ -379,7 +388,7 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private void PreMeasurePrograms()
     {
-        if (ContentCard.Child != _programs) return;
+        if (PageHost.Child != _programs) return;
         var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
         var dpi = GetDpiForWindow(hwnd);
         if (dpi == 0 || !GetClientRect(hwnd, out var client)) return;

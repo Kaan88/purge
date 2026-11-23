@@ -289,6 +289,13 @@ public sealed class UninstallController : IAsyncDisposable
     public event Action<UninstallOutcome>? Completed;
 
     /// <summary>
+    /// Raised when the uninstaller ran and the broker checked the program, before the leftover scan. The flag is true
+    /// when the uninstaller succeeded and the broker confirmed the program gone: Purge removed it, so the Programs page
+    /// drops it and the engine forgets it (it is never "removed outside Purge"). Either way the list is read again.
+    /// </summary>
+    public event Action<UninstallTarget, bool>? RunEnded;
+
+    /// <summary>
     /// Raised when the user said No at the Windows prompt, or "Not now" at Purge's explanation (the argument is true
     /// then); the page shows the cancelled bar.
     /// </summary>
@@ -532,10 +539,14 @@ public sealed class UninstallController : IAsyncDisposable
                 _broker = launch.Broker;
                 return true;
             case UninstallLaunchState.Cancelled:
-                // "Not now" at the explanation and No at the Windows prompt both end here: the words fit either.
-                SetStep(UninstallStep.Record, StepState.Failed, "Administrator permission was not given");
+                // "Not now" at the explanation and No at the Windows prompt both end here: the words fit either. It is
+                // a choice, not a failure: the step stays "not started" (no red cross), and the bar offers to try again.
+                SetStep(UninstallStep.Record, StepState.Pending, "Not started: administrator permission was not given");
                 AddNotice(new UninstallNotice(UninstallNoticeKind.Info, "Administrator permission was not given.",
-                    "Nothing was changed. Uninstalling needs administrator permission."));
+                    launch.DeclinedExplanation
+                        ? "Not started: you chose Not now, so Purge did not ask Windows. Nothing was changed."
+                        : "Not started: the Windows prompt was cancelled. Nothing was changed.",
+                    CanRetry: true));
                 AdminPromptCancelled?.Invoke(launch.DeclinedExplanation);
                 return false;
             case UninstallLaunchState.NotAdministrator:
@@ -715,6 +726,7 @@ public sealed class UninstallController : IAsyncDisposable
         // The engine's report travels with it, so a failed or cancelled run is forced even if it left nothing.
         var observed = await _broker!.ObservedAsync(_prepared!.SessionId, result.Outcome, ct).ConfigureAwait(false);
         var gone = observed.VerifyGone.Passed;
+        RunEnded?.Invoke(target, gone && !failed);
         SetStep(UninstallStep.CheckGone, gone ? StepState.Done : StepState.Warning,
             gone ? "Confirmed gone" : "Some parts remain");
         if (!gone)
@@ -733,6 +745,7 @@ public sealed class UninstallController : IAsyncDisposable
     private async Task CheckBrokerGoneAsync(RunResult result, CancellationToken ct)
     {
         var gone = result.VerifyGone.Passed;
+        RunEnded?.Invoke(Target!, gone);
         SetStep(UninstallStep.CheckGone, gone ? StepState.Done : StepState.Warning,
             gone ? "Confirmed gone" : "Some parts remain");
         if (!gone)

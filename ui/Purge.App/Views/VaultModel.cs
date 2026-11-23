@@ -318,7 +318,7 @@ public sealed class VaultViewModel
     public async Task RestoreAsync(string sessionId, CancellationToken ct = default)
     {
         if (_busy || Batches.FirstOrDefault(b => b.Id == sessionId) is not { } batch) return;
-        Begin("Confirm the restore in the Purge security prompt.");
+        Begin("Confirm putting it back in the Purge security prompt.");
         var changed = false;
         try
         {
@@ -350,7 +350,7 @@ public sealed class VaultViewModel
         {
             await DropBrokerAsync();
             changed = true;
-            ActionError = "The administrator part ended during the restore. Purge cannot tell what was put back; " +
+            ActionError = "The administrator part ended while putting things back. Purge cannot tell what was put back; " +
                           "the list is read again.";
         }
         catch (Exception e) when (e is not OutOfMemoryException and not OperationCanceledException)
@@ -629,6 +629,8 @@ public sealed class VaultViewModel
         {
             PromptCancelled = true;
             PromptDeclined = launch.DeclinedExplanation;
+            // The page's own answer to the click (the window's bar is not used here).
+            ActionInfo = "Not started: administrator permission was not given.";
         }
         else ActionError = launch.Message;
         return null;

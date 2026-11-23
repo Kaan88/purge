@@ -229,7 +229,8 @@ public sealed class RemovedLeftoversTests
         Assert.False(completed);
         Assert.Equal(RemovedCheckState.Record, controller.StateOf(Program));
         Assert.False(controller.IsBusy);
-        Assert.Null(controller.Notice); // the shell's bar says it; no second bar
+        // The page's own bar says it (the window has no bar for it any more).
+        Assert.Equal("Not checked: administrator permission was not given.", controller.Notice?.Title);
     }
 
     [Fact]
@@ -243,7 +244,7 @@ public sealed class RemovedLeftoversTests
         await controller.CheckAsync(Program, "Git").WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.True(declined);
-        Assert.Null(controller.Notice);
+        Assert.StartsWith("You chose Not now", controller.Notice?.Message);
     }
 
     [Fact]
@@ -382,6 +383,104 @@ public sealed class RemovedLeftoversTests
     }
 
     // ---- helpers --------------------------------------------------------------------------------------------
+
+    // ---- the group: rows leave it once dealt with ------------------------------------------------------------
+
+    private static List<ProgramRef> Refs(params string[] names) =>
+        names.Select(n => new ProgramRef { ProgramId = "HKLM|64|" + n, Name = n }).ToList();
+
+    [Fact]
+    public void The_header_counts_every_program_and_says_how_many_are_shown()
+    {
+        var group = new RemovedGroup(Refs("A", "B", "C", "D", "E", "F", "G"), _ => Task.CompletedTask);
+
+        Assert.Equal(7, group.Count);
+        Assert.Equal(RemovedGroup.MaxShown, group.Shown.Count);
+        Assert.Equal("REMOVED OUTSIDE PURGE · 7 (showing 5)", group.Header(live: true));
+        Assert.EndsWith("SAMPLE DATA", group.Header(live: false), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void An_acknowledged_program_leaves_the_group_the_next_moves_up_and_the_engine_forgets_it()
+    {
+        var forgotten = new List<string>();
+        var group = new RemovedGroup(Refs("A", "B", "C", "D", "E", "F"), ids =>
+        {
+            forgotten.AddRange(ids);
+            return Task.CompletedTask;
+        });
+
+        Assert.True(group.Acknowledge("HKLM|64|B"));
+
+        Assert.Equal(["HKLM|64|B"], forgotten);
+        Assert.Equal(5, group.Count);
+        Assert.False(group.Contains("HKLM|64|B"));
+        Assert.Equal(["A", "C", "D", "E", "F"], group.Shown.Select(p => p.Name));
+        Assert.Equal("REMOVED OUTSIDE PURGE · 5", group.Header(live: true));
+
+        // Not in the group (any more): nothing changes and the engine is not asked again.
+        Assert.False(group.Acknowledge("HKLM|64|B"));
+        Assert.Single(forgotten);
+    }
+
+    [Fact]
+    public void The_group_is_empty_once_every_program_is_dealt_with_even_when_the_engine_cannot_be_told()
+    {
+        var group = new RemovedGroup(Refs("A", "A", "B"), _ => throw new IOException("engine gone"));
+
+        Assert.Equal(2, group.Count); // a repeated id is one row
+        Assert.True(group.Acknowledge("HKLM|64|A"));
+        Assert.True(group.Acknowledge("HKLM|64|B"));
+        Assert.True(group.IsEmpty);
+        Assert.Empty(group.Shown);
+    }
+
+    [Fact]
+    public async Task A_finished_check_acknowledges_the_row_and_a_stopped_one_keeps_it()
+    {
+        var forgotten = new List<string>();
+        var group = new RemovedGroup(Refs("Git_is1", "Other"), ids =>
+        {
+            forgotten.AddRange(ids);
+            return Task.CompletedTask;
+        });
+        var held = new ScriptedStoredBroker { Stored = ["HKLM|64|Other"], HoldScan = true };
+        var done = new ScriptedStoredBroker { Stored = [Program] };
+        var next = new Queue<ScriptedStoredBroker>([held, done]);
+        var controller = new RemovedLeftoversController(_ => true, _ => Task.FromResult(Started(next.Dequeue())));
+        // The page acknowledges when the scan reached the Leftovers page (ProgramsView.OpenStoredScan).
+        controller.Completed += outcome => group.Acknowledge(outcome.ProgramId);
+
+        // Stopped mid-scan: the row stays, and while its check runs it cannot be dismissed.
+        var stopped = controller.CheckAsync("HKLM|64|Other", "Other");
+        await held.ScanStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.False(controller.CanDismiss("HKLM|64|Other"));
+        Assert.True(controller.CanDismiss(Program));
+        controller.Cancel();
+        await stopped.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(group.Contains("HKLM|64|Other"));
+        Assert.True(controller.CanDismiss("HKLM|64|Other"));
+
+        // Finished: the row leaves the group and the engine forgets it.
+        await controller.CheckAsync(Program, "Git").WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.False(group.Contains(Program));
+        Assert.Equal([Program], forgotten);
+        Assert.Equal(1, group.Count);
+    }
+
+    [Fact]
+    public async Task A_failed_check_keeps_the_row()
+    {
+        var group = new RemovedGroup(Refs("Git_is1"), _ => Task.CompletedTask);
+        var broker = new ScriptedStoredBroker { Stored = [Program], LinkDiesAtScan = true };
+        var controller = new RemovedLeftoversController(_ => true, _ => Task.FromResult(Started(broker)));
+        controller.Completed += outcome => group.Acknowledge(outcome.ProgramId);
+
+        await controller.CheckAsync(Program, "Git").WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.True(group.Contains(Program));
+        Assert.NotNull(controller.Notice);
+    }
 
     private static StoredLeftoversLaunch Started(IStoredLeftoversBroker broker) =>
         new(UninstallLaunchState.Started, broker, "");

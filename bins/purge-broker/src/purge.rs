@@ -55,9 +55,11 @@
 //! change it would undo and every file, says that Undo can then no longer restore those registry
 //! changes, and has its own confirmation code. Only its approval sets
 //! [`PurgeConsent::allow_early_backup`]; the "Delete now" approval of the files never does. Cancel
-//! keeps every such backup. When the request's "Delete now" dialog for the files was cancelled, the
-//! backup dialog is not asked at all: Cancel keeps every not-due entry of the request. The request
-//! itself still says nothing but ids; a client's checkbox is a request, never the consent.
+//! keeps every such backup. When the request named files that are not due and none of their "Delete
+//! now" dialogs was approved (the bulk dialog cancelled, or every user-data dialog of a request that
+//! had only those), the backup dialog is not asked at all: whoever kept every file is not asked to
+//! give up the registry undo. The request itself still says nothing but ids; a client's checkbox is
+//! a request, never the consent.
 //!
 //! # After a move: `plan.execute {delete_after}`
 //!
@@ -515,9 +517,11 @@ impl Purger {
         }
 
         // Backups before their retention ends, last and in a dialog kind of their own. Not asked at
-        // all when the "Delete now" dialog of the files was cancelled (Cancel keeps every not-due
-        // entry of the request). A view that cannot be built fails safe: those backups stay.
-        let files_declined = !now_bulk.is_empty() && !now_approved;
+        // all when the request named files that are not due and none of their "Delete now" dialogs
+        // was approved (the bulk one cancelled, or, for a request of user data only, every one of
+        // them): a user who kept every file is not then asked to give up the registry undo. A view
+        // that cannot be built fails safe: those backups stay.
+        let files_declined = !not_due.is_empty() && early.is_empty();
         let backups_approved = !files_declined
             && (backups_bulk.is_empty()
                 || view::view_delete_backups_now(&backups_bulk).is_ok_and(|page_view| {

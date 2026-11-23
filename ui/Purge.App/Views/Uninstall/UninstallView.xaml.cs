@@ -33,6 +33,7 @@ public sealed partial class UninstallView : UserControl
     ];
 
     private readonly UninstallController _controller;
+    private readonly UninstallQueue _queue = new();
     private readonly Dictionary<UninstallStep, StepRow> _rows = [];
     private bool _rendering;
     private bool _wasBusy;
@@ -69,11 +70,14 @@ public sealed partial class UninstallView : UserControl
         _controller.Changed += () => DispatcherQueue.TryEnqueue(Render);
         _controller.ConfirmationRequested += OnConfirmationRequested;
         _controller.Completed += OnCompleted;
-        _controller.AdminPromptCancelled += declined => DispatcherQueue.TryEnqueue(
-            () => MainWindow.Instance.ShowAdminPromptCancelled(declined));
+        _controller.RunEnded += (target, removed) => DispatcherQueue.TryEnqueue(
+            () => _ = MainWindow.Instance.Programs.OnUninstallRunEndedAsync(target.ProgramId, removed));
+        // A cancelled or declined admin prompt is said by this page's own bar (the controller's notice, with "Try
+        // again"), not by the window's bar as well.
 
         BuildStepper();
         BuildChoices();
+        Built = this;
         Render();
     }
 
@@ -134,10 +138,77 @@ public sealed partial class UninstallView : UserControl
     private static bool CheckRunning => MainWindow.Instance.CheckRunning;
 
     /// <summary>Starts the pipeline for a program chosen on the Programs page.</summary>
-    public void Begin(UninstallTarget target)
+    public void Begin(UninstallTarget target) => Begin([target]);
+
+    /// <summary>
+    /// Starts the pipeline for the programs ticked on the Programs page, one after another: the first now, each next
+    /// one when the user asks for it on this page ("Uninstall next" or "Skip"). Ignored while a step runs.
+    /// </summary>
+    public void Begin(IReadOnlyList<UninstallTarget> targets)
+    {
+        if (_controller.IsBusy) return;
+        if (_queue.Start(targets) is not { } first) return;
+        StartQueued(first);
+    }
+
+    /// <summary>The page once it is built (the window builds it on first use), for the Leftovers page's queue line.</summary>
+    public static UninstallView? Built { get; private set; }
+
+    /// <summary>The program the queue names after the current one, for the Leftovers page's line; null when none.</summary>
+    public string? QueuedNext => _queue.Next is { } next && !_controller.IsBusy
+        ? $"{(next.ProgramName.Length > 0 ? next.ProgramName : "The next program")} ({_queue.Position + 1} of {_queue.Count})"
+        : null;
+
+    private void StartQueued(UninstallTarget target)
     {
         ProgramTile.Background = ProgramRow.TileFor(target.ProgramName);
         _ = _controller.BeginAsync(target);
+        MainWindow.Instance.OnHeldScanChanged();
+        Render();
+    }
+
+    private void OnUninstallNext(object sender, RoutedEventArgs e)
+    {
+        if (!CanStartNext(out _)) return;
+        if (_queue.Advance() is { } next) StartQueued(next);
+    }
+
+    private void OnSkipNext(object sender, RoutedEventArgs e)
+    {
+        _queue.SkipNext();
+        MainWindow.Instance.OnHeldScanChanged();
+        Render();
+    }
+
+    /// <summary>The next queued program may start: no step runs, and no other broker user or held scan is in the way.</summary>
+    private bool CanStartNext(out string? why)
+    {
+        why = _controller.IsBusy ? "Waits until this program's step has finished."
+            : CheckRunning ? CheckRunningHint
+            : LeftoversNavigator.IsChanging ? "Waits until the Leftovers page has finished its change."
+            : _heldOutcome is not null ? "Waits until this program's scan has gone to the Leftovers page."
+            : null;
+        return why is null;
+    }
+
+    private void RenderQueue()
+    {
+        if (_queue.Next is not { } next || _controller.IsBusy)
+        {
+            NextCard.Visibility = Visibility.Collapsed;
+            return;
+        }
+        var name = next.ProgramName.Length > 0 ? next.ProgramName : "the next program";
+        NextCard.Visibility = Visibility.Visible;
+        NextText.Text = $"Next: {name} ({_queue.Position + 1} of {_queue.Count}).";
+        NextDetail.Text = "It gets its own confirmation, prompts and leftover scan. Review this program's leftovers first "
+                          + "if you like; the next one starts only when you choose.";
+        NextButton.Content = "Uninstall " + name;
+        AutomationProperties.SetName(NextButton, "Uninstall " + name);
+        var can = CanStartNext(out var why);
+        NextButton.IsEnabled = can;
+        ToolTipService.SetToolTip(NextButton, why);
+        AutomationProperties.SetName(SkipButton, "Skip " + name);
     }
 
     private async Task<UninstallLaunch> LaunchAsync(CancellationToken ct)
@@ -207,10 +278,21 @@ public sealed partial class UninstallView : UserControl
         RestorePointBox.Items.Add(new ComboBoxItem { Content = "Always" });
         RestorePointBox.SelectedIndex = (int)RestorePoint.HighRisk;
         QuietSwitch.IsOn = true;
-        QuietNote.Text = _controller.QuietAvailable
-            ? "Quiet mode skips the program's own dialogs. Purge never answers \"Keep my settings?\" for you."
-            : "This program names no quiet uninstaller, so its own dialogs will appear.";
+        QuietNote.Text = QuietNoteText(_controller);
     }
+
+    /// <summary>
+    /// Whether the program has a quiet uninstaller is known only once Purge has recorded it (its commands come with
+    /// the record); before that the note says so instead of claiming there is none.
+    /// </summary>
+    private static string QuietNoteText(UninstallController controller) =>
+        controller.Command is null
+            ? "Purge reads whether this program has a quiet uninstaller when it records it. Quiet mode is used when it has one."
+            : controller.QuietAvailable
+                ? "Quiet mode skips the program's own dialogs. Purge never answers \"Keep my settings?\" for you."
+                : "This program names no quiet uninstaller, so its own dialogs will appear.";
+
+    private void OnOpenPrograms(object sender, RoutedEventArgs e) => MainWindow.Instance.Navigate("programs");
 
     private void Render()
     {
@@ -220,7 +302,13 @@ public sealed partial class UninstallView : UserControl
         {
             var controller = _controller;
             var name = controller.Target?.ProgramName;
-            SubtitleText.Text = name is { Length: > 0 } ? name : "Nothing is running";
+            // The empty state only while no program was started; a queue always starts its first program, so a
+            // waiting queue's "Next" card (outside RunGrid) is never hidden by it.
+            var hasTarget = controller.Target is not null;
+            EmptyCard.Visibility = hasTarget ? Visibility.Collapsed : Visibility.Visible;
+            RunGrid.Visibility = hasTarget ? Visibility.Visible : Visibility.Collapsed;
+            SubtitleText.Text = (name is { Length: > 0 } ? name : "Nothing is running")
+                                + (hasTarget && _queue.PositionText is { } position ? " · " + position : "");
             ProgramNameText.Text = name is { Length: > 0 } ? name : "No program selected";
             ProgramInitial.Text = name is { Length: > 0 } ? name[..1].ToUpperInvariant() : "?";
             if (name is { Length: > 0 }) ProgramTile.Background = ProgramRow.TileFor(name);
@@ -233,7 +321,13 @@ public sealed partial class UninstallView : UserControl
                     ? (controller.StateOf(UninstallStep.Run) == StepState.Pending
                         ? $"Its uninstaller will run at {route.ToLowerInvariant()}."
                         : $"Its uninstaller ran at {route.ToLowerInvariant()}.")
-                    : "Purge is asking for administrator permission.";
+                    : controller.LaunchState == UninstallLaunchState.Cancelled
+                        ? "Not started: administrator permission was not given."
+                        : controller.IsBusy
+                            ? controller.LaunchState is null
+                                ? "Purge is asking for administrator permission."
+                                : "Purge is recording the program."
+                            : "Not started.";
 
             CommandText.Text = controller.SelectedCommand ?? "";
             CommandText.Visibility = controller.SelectedCommand is null ? Visibility.Collapsed : Visibility.Visible;
@@ -246,10 +340,13 @@ public sealed partial class UninstallView : UserControl
             RenderRunning();
             RenderChoices();
             RenderBars();
+            RenderQueue();
             if (controller.IsBusy != _wasBusy)
             {
                 _wasBusy = controller.IsBusy;
+                MainWindow.Instance.OnHeldScanChanged();
                 MainWindow.Instance.Programs.OnBrokerUsersChanged();
+                MainWindow.Instance.UpdateBadges();
             }
             FooterText.Text = controller.Target is null
                 ? controller.GuideText
@@ -279,7 +376,10 @@ public sealed partial class UninstallView : UserControl
             };
             row.Glyph.Text = glyph;
             row.Glyph.Foreground = brush;
-            row.Title.Foreground = state is StepState.Warning or StepState.Failed ? brush : null;
+            // A null Foreground is not "inherit" but no brush at all (the title went invisible): clear the local
+            // value so the theme's text brush applies again.
+            if (state is StepState.Warning or StepState.Failed) row.Title.Foreground = brush;
+            else row.Title.ClearValue(TextBlock.ForegroundProperty);
             var detail = _controller.DetailOf(step);
             row.Detail.Text = detail ?? "";
             row.Detail.Visibility = string.IsNullOrEmpty(detail) ? Visibility.Collapsed : Visibility.Visible;
@@ -305,13 +405,14 @@ public sealed partial class UninstallView : UserControl
         var controller = _controller;
         var checkRunning = CheckRunning;
         var hint = checkRunning ? CheckRunningHint : null;
+        // The switch shows only for a program with a quiet uninstaller: a disabled switch said nothing the note
+        // below does not, and before the program is recorded nobody knows yet.
+        QuietRow.Visibility = controller.QuietAvailable ? Visibility.Visible : Visibility.Collapsed;
         QuietSwitch.IsEnabled = controller.QuietAvailable && !controller.IsBusy && !checkRunning;
         ToolTipService.SetToolTip(QuietSwitch, hint);
         ToolTipService.SetToolTip(RestorePointBox, hint);
         if (QuietSwitch.IsOn != controller.Quiet) QuietSwitch.IsOn = controller.Quiet;
-        QuietNote.Text = controller.QuietAvailable
-            ? "Quiet mode skips the program's own dialogs. Purge never answers \"Keep my settings?\" for you."
-            : "This program names no quiet uninstaller, so its own dialogs will appear.";
+        QuietNote.Text = QuietNoteText(controller);
         RestorePointBox.IsEnabled = !controller.IsBusy && !checkRunning;
         var wanted = (int)controller.RestorePoint;
         if (RestorePointBox.SelectedIndex != wanted) RestorePointBox.SelectedIndex = wanted;
@@ -408,7 +509,9 @@ public sealed partial class UninstallView : UserControl
         if (notice.CanForce)
             actions.Children.Add(BrokerActionButton("Run forced cleanup", () => _ = _controller.ForceAsync()));
         if (notice.CanRetry)
-            actions.Children.Add(BrokerActionButton("Retry", () => _ = _controller.RetryAsync()));
+            // An informational bar's retry is a declined or cancelled admin prompt: nothing failed, so "Try again".
+            actions.Children.Add(BrokerActionButton(notice.Kind == UninstallNoticeKind.Info ? "Try again" : "Retry",
+                () => _ = _controller.RetryAsync()));
         if (notice.CanStartOver)
             actions.Children.Add(BrokerActionButton("Start over", () => _ = _controller.StartOverAsync()));
         if (actions.Children.Count > 0) bar.Content = actions;

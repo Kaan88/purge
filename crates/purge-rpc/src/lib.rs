@@ -417,6 +417,12 @@ mod api_tests {
                 }),
             );
             put("stdio.inventory.changes.params", none.clone());
+            put(
+                "stdio.inventory.forget.params",
+                v(ProgramsParams {
+                    program_ids: ne(vec![git()]),
+                }),
+            );
             put("stdio.history.index.params", none.clone());
             put(
                 "stdio.uninstall.route.params",
@@ -476,6 +482,7 @@ mod api_tests {
                     appeared: vec![],
                 }),
             );
+            put("stdio.inventory.forget.result", v(Started { count: 1 }));
             put(
                 "stdio.history.index.result",
                 v(HistoryIndex {

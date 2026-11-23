@@ -337,6 +337,66 @@ public sealed class LeftoversPageTests
         Assert.DoesNotContain("deleted for good", LeftoversViewModel.DescribeDeleteAfter(null));
     }
 
+    /// <summary>
+    /// Review M1: after a delete step that deleted something, the result page never offers "Put back all". Nothing
+    /// left to undo: no button. Registry changes left: "Undo registry changes…". Items still in quarantine: "Put
+    /// back what is still in quarantine…". Each opens History & undo; no <c>undo.run</c> goes out from this page.
+    /// </summary>
+    [Fact]
+    public async Task AfterADeleteStepTheUndoButtonNeverPromisesWhatWasDeleted()
+    {
+        async Task<(LeftoversViewModel, ScriptedBroker)> Moved(uint done, DeleteAfter? step)
+        {
+            var broker = new ScriptedBroker();
+            broker.Rows.Add(Row(1, pre: true));
+            var result = Complete(done, 0, "sess-1");
+            result.DeleteAfter = step;
+            broker.DeleteHook = (_, _) => Task.FromResult(result);
+            var vm = new LeftoversViewModel(broker);
+            await vm.ScanAsync("s-1", null, forced: false);
+            vm.DeleteAfter = true;
+            await vm.MoveAsync();
+            return (vm, broker);
+        }
+
+        // Two files moved, both deleted, nothing else changed: nothing to undo, no button.
+        var (all, _) = await Moved(2, new DeleteAfter { Outcome = DeleteAfterOutcome.Deleted, Purged = 2 });
+        Assert.False(all.CanUndo);
+
+        // Two files deleted and a registry change besides: the registry change can still be undone, from History.
+        var (registry, registryBroker) = await Moved(3, new DeleteAfter { Outcome = DeleteAfterOutcome.Deleted, Purged = 2 });
+        Assert.True(registry.CanUndo);
+        Assert.Equal("Undo registry changes…", registry.UndoText);
+        Assert.True(registry.UndoOpensHistory);
+        await registry.UndoAllAsync();
+        Assert.Equal(0, registryBroker.UndoCalls);
+        Assert.Equal(LeftoversPhase.Result, registry.Phase);
+        Assert.Null(registry.Error);
+        Assert.Equal("Open History & undo to put back what this cleanup still holds.", registry.Info);
+
+        // One deleted, one declined: what is still in quarantine can be put back, from History.
+        var (partial, partialBroker) = await Moved(2, new DeleteAfter { Outcome = DeleteAfterOutcome.Partial, Purged = 1, Kept = 1 });
+        Assert.True(partial.CanUndo);
+        Assert.Equal("Put back what is still in quarantine…", partial.UndoText);
+        Assert.True(partial.UndoOpensHistory);
+        await partial.UndoAllAsync();
+        Assert.Equal(0, partialBroker.UndoCalls);
+
+        // Nothing deleted (declined): everything is in quarantine, the button is the usual one.
+        var (declined, declinedBroker) = await Moved(2, new DeleteAfter { Outcome = DeleteAfterOutcome.Declined, Kept = 2 });
+        Assert.True(declined.CanUndo);
+        Assert.Equal("Put back all", declined.UndoText);
+        Assert.False(declined.UndoOpensHistory);
+
+        // A broker link that has ended never gets an undo sent into it, and no "ended while putting things back".
+        declinedBroker.IsLive = false;
+        Assert.True(declined.UndoOpensHistory);
+        await declined.UndoAllAsync();
+        Assert.Equal(0, declinedBroker.UndoCalls);
+        Assert.Equal(LeftoversPhase.Result, declined.Phase);
+        Assert.Null(declined.Error);
+    }
+
     [Fact]
     public async Task TheWaitingStateSaysWhenTheSecondPromptIsTheOneToConfirm()
     {
@@ -740,8 +800,13 @@ public sealed class LeftoversPageTests
             return DeleteHook(planId, progress);
         }
 
-        public Task<UndoResult> UndoAsync(string session, IProgress<Progress>? progress, CancellationToken ct) =>
-            Task.FromResult(new UndoResult { Outcome = Outcome.Complete, Conflicts = [] });
+        public int UndoCalls { get; private set; }
+
+        public Task<UndoResult> UndoAsync(string session, IProgress<Progress>? progress, CancellationToken ct)
+        {
+            UndoCalls++;
+            return Task.FromResult(new UndoResult { Outcome = Outcome.Complete, Conflicts = [] });
+        }
 
         public Task<OutcomeResult> RetryHeldAsync(string session, CancellationToken ct) =>
             Task.FromResult(new OutcomeResult { Outcome = Outcome.Complete });

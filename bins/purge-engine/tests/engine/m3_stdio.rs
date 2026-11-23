@@ -435,6 +435,79 @@ fn inventory_changes_compares_with_the_stored_list() {
 }
 
 #[test]
+fn inventory_forget_keeps_a_program_purge_dealt_with_out_of_the_changes() {
+    let fx = machine();
+    let store = scratch("forget-store");
+    let local = scratch("forget-local");
+    let mine = ProgramId::machine(View::K64, "Mine").unwrap();
+    let outside = ProgramId::machine(View::K64, "Outside").unwrap();
+    let alpha = ProgramId::machine(View::K64, "Alpha").unwrap();
+    let list = json!({
+        "schema": "purge.inventory-list/1",
+        "programs": [
+            {"program_id": mine.to_string(), "name": "Mine App"},
+            {"program_id": outside.to_string(), "name": "Outside App"},
+            {"program_id": alpha.to_string(), "name": "Alpha App"},
+        ],
+    });
+    std::fs::write(local.join("inventory.json"), list.to_string()).unwrap();
+
+    // Purge uninstalled "Mine" in this session: the UI forgets it.
+    let (lines, _) = run_requests(
+        &fx,
+        Some(&local),
+        &store,
+        &[
+            json!({"jsonrpc": "2.0", "id": 1, "method": "inventory.forget",
+                 "params": {"program_ids": [mine.to_string()]}}),
+        ],
+    );
+    assert_eq!(response(&lines, 1)["result"]["count"], 1);
+    // The stored file no longer lists it and marks it handled.
+    let mut stored: Value =
+        serde_json::from_str(&std::fs::read_to_string(local.join("inventory.json")).unwrap())
+            .unwrap();
+    assert!(
+        !stored["programs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["program_id"] == mine.to_string())
+    );
+    assert_eq!(stored["handled"], json!([mine.to_string()]));
+
+    // A list stored later from rows read before the registry key went still names it: the mark keeps
+    // it out of the next session's changes, while the genuine outside removal is still reported.
+    stored["programs"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"program_id": mine.to_string(), "name": "Mine App"}));
+    std::fs::write(local.join("inventory.json"), stored.to_string()).unwrap();
+    let (lines, _) = run_requests(
+        &fx,
+        Some(&local),
+        &store,
+        &[
+            json!({"jsonrpc": "2.0", "id": 1, "method": "inventory.changes"}),
+            json!({"jsonrpc": "2.0", "id": 2, "method": "programs.list"}),
+        ],
+    );
+    let disappeared: Vec<&str> = response(&lines, 1)["result"]["disappeared"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["program_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(disappeared, [outside.to_string()]);
+
+    // The list stores fresh rows and keeps the mark it still needed at the start of this session.
+    let stored: Value =
+        serde_json::from_str(&std::fs::read_to_string(local.join("inventory.json")).unwrap())
+            .unwrap();
+    assert_eq!(stored["handled"], json!([mine.to_string()]));
+}
+
+#[test]
 fn history_index_reads_sessions_and_the_cap_per_volume() {
     let fx = machine();
     let store = scratch("history-store");

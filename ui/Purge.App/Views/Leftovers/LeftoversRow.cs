@@ -21,9 +21,10 @@ public sealed partial class LeftoversRow : INotifyPropertyChanged
 {
     public event PropertyChangedEventHandler? PropertyChanged;
 
-    private LeftoversRow(LeftoverGroup group)
+    private LeftoversRow(LeftoverGroup group, int hidden)
     {
         Group = group;
+        Hidden = hidden;
     }
 
     private LeftoversRow(LeftoverItemModel item)
@@ -31,9 +32,26 @@ public sealed partial class LeftoversRow : INotifyPropertyChanged
         Item = item;
     }
 
-    public static LeftoversRow ForGroup(LeftoverGroup group) => new(group);
+    /// <summary>A group header; <paramref name="hidden"/> is how many of its rows the list hides (weak matches).</summary>
+    public static LeftoversRow ForGroup(LeftoverGroup group, int hidden = 0) => new(group, hidden);
 
     public static LeftoversRow ForItem(LeftoverItemModel item) => new(item);
+
+    /// <summary>The group's rows the list hides (weak matches while they are hidden).</summary>
+    public int Hidden { get; }
+
+    /// <summary>
+    /// What a screen reader says for the row (a ListViewItem reads its item's ToString): the group and its count, or
+    /// the item, its rating and whether it is ticked.
+    /// </summary>
+    public override string ToString()
+    {
+        if (Group is not null) return $"{GroupName}, {CountText}";
+        if (Item is not { } item) return "";
+        var band = item.IsProtected ? "Protected" : item.Band.ToString();
+        var state = !item.Selectable ? "cannot be ticked" : item.Checked ? "ticked" : "not ticked";
+        return $"{item.Title}, {band}{(item.IsUserData ? ", user data" : "")}, {state}";
+    }
 
     public LeftoverGroup? Group { get; }
     public LeftoverItemModel? Item { get; }
@@ -44,7 +62,11 @@ public sealed partial class LeftoversRow : INotifyPropertyChanged
 
     // ---- Group header -------------------------------------------------------------------------
 
-    public string CountText => Group is null ? "" : Group.Items.Count.ToString(System.Globalization.CultureInfo.CurrentCulture);
+    /// <summary>The rows the list shows under this header, and how many it hides (so "4" never heads 3 rows).</summary>
+    public string CountText => Group is null
+        ? ""
+        : (Group.Items.Count - Hidden).ToString(System.Globalization.CultureInfo.CurrentCulture)
+          + (Hidden > 0 ? $" ({Hidden.ToString(System.Globalization.CultureInfo.CurrentCulture)} hidden)" : "");
 
     public bool? GroupChecked
     {
@@ -74,7 +96,20 @@ public sealed partial class LeftoversRow : INotifyPropertyChanged
 
     public string Chevron => Group?.Expanded == false ? "\uE76C" : "\uE70D";
 
-    public Visibility GroupTickVisibility => Group?.CanTick == true ? Visibility.Visible : Visibility.Collapsed;
+    /// <summary>
+    /// Every list group with something tickable has a box, so the headers look alike; it is enabled only where the
+    /// group holds Safe items, because a group box ticks Safe items only (design 9.4).
+    /// </summary>
+    public Visibility GroupTickVisibility => Group is { IsSection: false } g && g.Items.Any(i => i.Selectable)
+        ? Visibility.Visible
+        : Visibility.Collapsed;
+
+    public bool GroupTickEnabled => Group?.CanTick == true;
+
+    /// <summary>Why a group box is disabled; null (no tooltip) when it is enabled.</summary>
+    public string? GroupTickTip => Group is not null && !Group.CanTick
+        ? "This group has no Safe items. A group box ticks Safe items only; tick these one at a time."
+        : null;
     public Visibility GroupVisibility => IsGroup ? Visibility.Visible : Visibility.Collapsed;
     public Visibility ItemVisibility => IsGroup ? Visibility.Collapsed : Visibility.Visible;
 

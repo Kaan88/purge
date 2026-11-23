@@ -1589,6 +1589,58 @@ fn a_cancelled_delete_now_of_the_files_asks_for_no_backup() {
     live.finish();
 }
 
+/// Review L4: a request whose files are all user data has no bulk "Delete now" dialog. When every
+/// one of its file dialogs is declined, the backups are not asked for either; when one is approved,
+/// they are.
+#[test]
+fn declining_every_user_data_file_dialog_asks_for_no_backup() {
+    let source = Arc::new(Scripted::new());
+    source.add_not_due(item(1, true));
+    source.add_not_due(item(2, true));
+    source.add_not_due_backup(backup(3, false));
+    let live = Live::start(source.clone());
+    live.open_session();
+    let ids = [1, 2, 3].map(|n| live.wire(&expiry(n)));
+
+    live.send_purge(2, &ids);
+    let (seen, _) = live.consent.next_dialog(0, SECS).expect("user data 1");
+    live.consent.answer(Outcome::Declined);
+    let (seen, _) = live.consent.next_dialog(seen, SECS).expect("user data 2");
+    live.consent.answer(Outcome::Declined);
+    assert!(
+        live.consent
+            .next_dialog(seen, Duration::from_millis(150))
+            .is_none(),
+        "every file was kept: no backup dialog"
+    );
+    let reply = live.client.reply();
+    assert_eq!(kind(&reply), "consent_declined", "{reply}");
+    assert_eq!(source.call_count(), 0);
+    assert_eq!(source.held_ids().len(), 3);
+
+    // One file approved: the backups are asked for, in their own dialog.
+    live.send_purge(3, &ids);
+    let (seen, _) = live.consent.next_dialog(seen, SECS).expect("user data 1");
+    live.consent.answer(Outcome::Approved);
+    let (seen, _) = live.consent.next_dialog(seen, SECS).expect("user data 2");
+    live.consent.answer(Outcome::Declined);
+    let (_, pages) = live
+        .consent
+        .next_dialog(seen, SECS)
+        .expect("the dialog of the backups opened");
+    assert_says_backups_now(&pages_text(&pages));
+    live.consent.answer(Outcome::Declined);
+    let reply = live.client.reply();
+    let result = result_of(&reply);
+    assert_eq!(
+        (result.purged, result.kept, result.purged_backups),
+        (1, 2, 0),
+        "{reply}"
+    );
+    assert_eq!(source.held_ids(), vec![expiry(2), expiry(3)]);
+    live.finish();
+}
+
 #[test]
 fn a_user_data_backup_that_is_not_due_gets_a_dialog_of_its_own() {
     let source = Arc::new(Scripted::new());

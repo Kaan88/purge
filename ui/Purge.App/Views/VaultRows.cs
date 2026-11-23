@@ -74,6 +74,9 @@ public sealed partial class VaultBatch(VaultBatchModel model) : System.Component
     public string DaysText => Model.DaysLeftShown.ToString(CultureInfo.CurrentCulture);
     public string DaysCaption => Model.DaysLeftShown == 1 ? "day" : "days";
 
+    /// <summary>What a screen reader says for the row (a list item reads its item's ToString, else the class name).</summary>
+    public override string ToString() => $"{Name}, {When}, {State}";
+
     // One chip per state; each has its own glyph so the state never rests on colour (board 21).
     public Visibility OkVisibility => !Model.Expired && !Model.Expiring && !Model.Partial ? Visibility.Visible : Visibility.Collapsed;
     public Visibility WarnVisibility => Model.Expired || Model.Expiring || Model.Partial ? Visibility.Visible : Visibility.Collapsed;

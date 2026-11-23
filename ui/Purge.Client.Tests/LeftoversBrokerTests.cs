@@ -114,7 +114,8 @@ public sealed class LeftoversBrokerTests
                    (asked ? ",\"delete_after\":{\"outcome\":\"partial\",\"purged\":1,\"kept\":1}" : "") + "}}");
         });
         await using var rpc = BrokerRpcClient.Over(peer.Client, ownsStream: true);
-        var broker = new LeftoversBroker(rpc);
+        var foreground = 0;
+        var broker = new LeftoversBroker(rpc) { AllowForeground = () => Interlocked.Increment(ref foreground) };
         var codes = new List<string>();
         broker.ConsentShown += shown => { lock (codes) codes.Add(shown.Code); };
         var phases = new List<string>();
@@ -122,6 +123,7 @@ public sealed class LeftoversBrokerTests
 
         var plain = await broker.ExecuteAsync("p-1", RestorePoint.Off, progress, CancellationToken.None);
         Assert.Null(plain.DeleteAfter);
+        Assert.Equal(0, foreground);
 
         var result = await broker.ExecuteThenDeleteAsync("p-2", RestorePoint.HighRisk, progress, CancellationToken.None);
         Assert.Equal(Outcome.Complete, result.Outcome);
@@ -129,6 +131,8 @@ public sealed class LeftoversBrokerTests
         Assert.Equal(DeleteAfterOutcome.Partial, result.DeleteAfter!.Outcome);
         Assert.Equal((1u, 1u), (result.DeleteAfter.Purged, result.DeleteAfter.Kept));
         Assert.Equal(["delete_after"], phases);
+        // The broker was allowed the foreground when its delete step was announced, from the reader thread.
+        Assert.Equal(1, foreground);
         Assert.Equal(["A1B2-C3D4", "A1B2-C3D4", "E5F6-A7B8"], codes);
 
         var requests = peer.Requests;

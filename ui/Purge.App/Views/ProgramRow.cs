@@ -88,9 +88,22 @@ public sealed partial class ProgramRow : INotifyPropertyChanged
         IsUnnamed = c.IsUnnamed;
         IsRecent = c.IsRecent;
         Indent = IsChild ? new Microsoft.UI.Xaml.Thickness(28, 0, 0, 0) : new Microsoft.UI.Xaml.Thickness(0);
-        NewTag = Installed is { } n && (_today - n).TotalDays <= 3 ? "new" : "";
+        NewTag = Installed is { } n && (_today - n).TotalDays <= 3 ? "  new" : "";
         SubLine = Publisher.Length > 0 ? $"{Publisher} · {KindChip}" : KindChip;
     }
+
+    /// <summary>The full name cell for its tooltip: names are trimmed in the list, and look-alike rows differ here.</summary>
+    public string FullText => Join(" ", Name, Version) + "\n" + Join(" · ", SubLine, BitsText, "for " + ScopeText);
+
+    private static string Join(string separator, params string?[] parts) =>
+        string.Join(separator, parts.Where(p => !string.IsNullOrEmpty(p)));
+
+    /// <summary>The list's column widths, shared by every row (they follow the list's width).</summary>
+    public ProgramColumns Columns => ProgramColumns.Shared;
+
+    /// <summary>What a screen reader says for the row (the list item's name): the program, not the type.</summary>
+    public override string ToString() =>
+        Name + (NewTag.Length > 0 ? ", new" : "") + (SubLine.Length > 0 ? ", " + SubLine : "");
 
     /// <summary>Takes what <c>programs.patch</c> or a later reading says about the program.</summary>
     public void Update(InventoryEntry entry)
@@ -226,4 +239,36 @@ public sealed partial class ProgramRow : INotifyPropertyChanged
     public string ScopeText => Entry.Scope == InstallScope.User ? "this user" : "all users";
 
     public static string FormatSize(long bytes) => ProgramRules.FormatSize(bytes);
+}
+
+/// <summary>
+/// The widths of the program list's optional columns, one instance for all rows: when the list gets narrow, Installed,
+/// then Expected leftovers, then Size go to zero (<see cref="ProgramRules.FitColumns"/>); Name always stays.
+/// </summary>
+public sealed partial class ProgramColumns : System.ComponentModel.INotifyPropertyChanged
+{
+    public static ProgramColumns Shared { get; } = new();
+
+    public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+
+    public Microsoft.UI.Xaml.GridLength SizeWidth { get; private set; } = new(100);
+    public Microsoft.UI.Xaml.GridLength LeftoversWidth { get; private set; } = new(150);
+    public Microsoft.UI.Xaml.GridLength InstalledWidth { get; private set; } = new(92);
+
+    /// <summary>What fits now.</summary>
+    public ProgramRules.ListColumns Fit { get; private set; } = new(true, true, true);
+
+    /// <summary>Takes the list's width; true when a column came or went.</summary>
+    public bool Apply(double listWidth)
+    {
+        var fit = ProgramRules.FitColumns(listWidth);
+        if (fit == Fit) return false;
+        Fit = fit;
+        SizeWidth = new(fit.Size ? 100 : 0);
+        LeftoversWidth = new(fit.Leftovers ? 150 : 0);
+        InstalledWidth = new(fit.Installed ? 92 : 0);
+        foreach (var name in new[] { nameof(SizeWidth), nameof(LeftoversWidth), nameof(InstalledWidth), nameof(Fit) })
+            PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
+        return true;
+    }
 }

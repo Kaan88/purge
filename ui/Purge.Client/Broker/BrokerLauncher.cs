@@ -235,8 +235,8 @@ public static partial class BrokerLauncher
     }
 
     /// <summary>
-    /// Maps a <c>ShellExecuteExW</c> failure. Error 1223 is the user saying No at the Windows prompt; the UI shows the
-    /// cancelled bar (<c>ElevationPrompts.CancelledBar</c>) and starts nothing.
+    /// Maps a <c>ShellExecuteExW</c> failure. Error 1223 is the user saying No at the Windows prompt; the page that asked
+    /// says so in its own bar and starts nothing.
     /// </summary>
     public static BrokerLaunchResult ClassifyShellFailure(int error)
     {

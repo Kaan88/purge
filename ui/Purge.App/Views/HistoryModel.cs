@@ -77,10 +77,10 @@ public sealed class HistorySessionModel
         (State, Chip) = s.State switch
         {
             SessionState.Open => ("Interrupted", HistoryChip.Caution),
-            SessionState.PartiallyUndone => ("Partly restored", HistoryChip.Caution),
-            SessionState.Undone => ("Restored", HistoryChip.Neutral),
+            SessionState.PartiallyUndone => ("Partly put back", HistoryChip.Caution),
+            SessionState.Undone => ("Put back", HistoryChip.Neutral),
             SessionState.Aborted => ("Rolled back", HistoryChip.Neutral),
-            _ when !Held => ("Nothing to restore", HistoryChip.Neutral),
+            _ when !Held => ("Nothing to put back", HistoryChip.Neutral),
             _ => ("Undoable", HistoryChip.Undoable),
         };
     }
@@ -351,7 +351,7 @@ public sealed class HistoryViewModel
         Begin("Reading the items of this cleanup…", "", clear);
         try
         {
-            if (await BrokerAsync(ct) is not { } broker) return;
+            if (await BrokerAsync(ct, readOnly: true) is not { } broker) return;
             var detail = await broker.GetAsync(session.Id, ct);
             if (Selected != session) return;
             Items = detail.Items.Select(i => new HistoryEntryModel(i)).ToList();
@@ -386,7 +386,7 @@ public sealed class HistoryViewModel
             ops = Items?.Where(i => i.Checked && i.Selectable).Select(i => i.Op).ToList();
             if (ops is not { Count: > 0 }) return;
         }
-        Begin("Confirm the restore in the Purge security prompt.", "Nothing has been put back yet.");
+        Begin("Confirm putting it back in the Purge security prompt.", "Nothing has been put back yet.");
         RestoreTitle = null;
         RestoreLines.Clear();
         var changed = false;
@@ -423,7 +423,7 @@ public sealed class HistoryViewModel
         }
         catch (BrokerRpcException e) when (e.Kind == "needs_recovery")
         {
-            ActionError = "An interrupted cleanup comes first. Finish or roll it back, then restore.";
+            ActionError = "An interrupted cleanup comes first. Finish or roll it back, then put back.";
             // The broker is up already: list the interrupted sessions now, without another prompt.
             changed = await ReadPendingAsync(ct);
         }
@@ -435,7 +435,7 @@ public sealed class HistoryViewModel
         {
             await DropBrokerAsync();
             changed = true;
-            ActionError = "The administrator part ended during the restore. Purge cannot tell what was put back; " +
+            ActionError = "The administrator part ended while putting things back. Purge cannot tell what was put back; " +
                           "the list below is read again.";
         }
         catch (Exception e) when (e is not OutOfMemoryException and not OperationCanceledException)
@@ -520,7 +520,12 @@ public sealed class HistoryViewModel
         var read = false;
         try
         {
-            if (await BrokerAsync(ct) is null) return;
+            if (await BrokerAsync(ct, readOnly: true) is null)
+            {
+                // Declined or cancelled: say the check did not happen, so the click is not left without an answer.
+                if (PromptCancelled) ActionInfo = "Not checked: administrator permission was not given.";
+                return;
+            }
             read = await ReadPendingAsync(ct);
             if (read && _pending.Count == 0) ActionInfo = "No cleanup was interrupted.";
         }
@@ -566,16 +571,25 @@ public sealed class HistoryViewModel
     /// <summary>Ends the broker this page started (the page is closing).</summary>
     public async Task CloseAsync() => await DropBrokerAsync();
 
-    private async Task<IHistoryBroker?> BrokerAsync(CancellationToken ct)
+    /// <summary>
+    /// True while the broker is started for an action that only reads (the check for interrupted cleanups, "Show
+    /// items"): the page's first-elevation explanation is then worded for a read.
+    /// </summary>
+    public bool LaunchIsReadOnly { get; private set; }
+
+    private async Task<IHistoryBroker?> BrokerAsync(CancellationToken ct, bool readOnly = false)
     {
         if (_broker is { IsLive: true } live) return live;
         await DropBrokerAsync();
+        LaunchIsReadOnly = readOnly;
         var launch = await _launch(ct);
         if (launch.Broker is { } broker) return _broker = broker;
         if (launch.Cancelled)
         {
             PromptCancelled = true;
             PromptDeclined = launch.DeclinedExplanation;
+            // The page's own answer to the click (the window's bar is not used here).
+            ActionInfo = "Not started: administrator permission was not given.";
         }
         else ActionError = launch.Message;
         return null;

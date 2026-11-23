@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "ProgramsParams",
-  "description": "`{program_ids[]}`: `programs.sizes`, `uninstall.prepare`, `leftovers.stored`.",
+  "description": "`{program_ids[]}`: `programs.sizes`, `inventory.forget`, `uninstall.prepare`, `leftovers.stored`.",
   "type": "object",
   "properties": {
     "program_ids": {
