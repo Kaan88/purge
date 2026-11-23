@@ -28,9 +28,6 @@ public sealed partial class MainWindow : Window
 
         SystemBackdrop = new MicaBackdrop();
         LaunchMarkers.Mark("w_backdrop");
-        ExtendsContentIntoTitleBar = true;
-        SetTitleBar(AppTitleBar);
-        LaunchMarkers.Mark("w_titlebar");
         var icon = Path.Combine(AppContext.BaseDirectory, "Assets", "Purge.ico");
         if (File.Exists(icon)) AppWindow.SetIcon(icon);
         LaunchMarkers.Mark("w_icon");
@@ -51,13 +48,26 @@ public sealed partial class MainWindow : Window
         LaunchMarkers.Mark("programs_ctor");
         _views["programs"] = _programs;
         ContentCard.Child = _programs;
-        if (Program.Startup.IsCompletedSuccessfully)
-            OnStartup(Program.Startup.Result);
-        else
-            _ = LoadWhenReadyAsync();
+        var loaded = Program.Startup.IsCompletedSuccessfully;
+        if (loaded) OnStartup(Program.Startup.Result);
 
         if (Program.Options.Page is { } page) Navigate(page);
-        LaunchMarkers.Mark("rows_set");
+        if (loaded) LaunchMarkers.Mark("rows_set");
+
+        // The title bar goes last (M3 launch perf): the first ExtendsContentIntoTitleBar call waits until the
+        // window's composition is ready (about 200 ms after start on the bench laptop, the same wait the bare
+        // control pays in its first frame). Everything above runs before that wait ends instead of after it.
+        // It is still before Activate(), so the window never shows the system caption.
+        ExtendsContentIntoTitleBar = true;
+        SetTitleBar(AppTitleBar);
+        LaunchMarkers.Mark("w_titlebar");
+        // A list reply that came in during that wait still makes the first frame.
+        if (!loaded)
+        {
+            if (Program.Startup.IsCompletedSuccessfully) OnStartup(Program.Startup.Result);
+            else _ = LoadWhenReadyAsync();
+            LaunchMarkers.Mark("rows_set");
+        }
         CompositionTarget.Rendering += OnFirstRendering;
         // No engine outlives the window: the client ends what it runs and closes its kill-on-close job.
         Closed += (_, _) => Program.Engine.DisposeAsync().AsTask().GetAwaiter().GetResult();
