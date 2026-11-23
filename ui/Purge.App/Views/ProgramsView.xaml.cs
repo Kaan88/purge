@@ -41,7 +41,10 @@ public sealed partial class RemovedRow(Purge.Client.Rpc.ProgramRef program) : Sy
     public bool CanCheck { get; private set; }
     public string? CheckHint { get; private set; }
 
-    /// <summary>Draws the row from the controller's state of it.</summary>
+    /// <summary>
+    /// Draws the row from the controller's state of it. <paramref name="otherBusy"/>: another row's check or the
+    /// Uninstall pipeline is running, so this row's button waits (one broker at a time).
+    /// </summary>
     public void Show(RemovedCheckState state, bool otherBusy, string? progress, bool canChangePc, string disabledHint)
     {
         Detail = state switch
@@ -58,9 +61,11 @@ public sealed partial class RemovedRow(Purge.Client.Rpc.ProgramRef program) : Sy
         CanCheck = running || (state == RemovedCheckState.Record && canChangePc && !otherBusy);
         CheckHint = running
             ? "Stops the check; nothing is changed"
-            : canChangePc
-                ? "Asks for administrator permission, then looks for what it left on the PC"
-                : disabledHint;
+            : !canChangePc
+                ? disabledHint
+                : otherBusy
+                    ? "Waits until the running check or uninstall has finished"
+                    : "Asks for administrator permission, then looks for what it left on the PC";
         foreach (var name in new[] { nameof(Detail), nameof(ButtonText), nameof(ButtonVisibility), nameof(CanCheck), nameof(CheckHint) })
             PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
     }
@@ -466,24 +471,37 @@ public sealed partial class ProgramsView : UserControl
         }
     }
 
-    /// <summary>The scan from the stored fingerprint, on the Leftovers page, which takes the broker link (the S3 hand-off).</summary>
-    private static void OpenStoredScan(StoredScanOutcome outcome)
+    /// <summary>
+    /// The scan from the stored fingerprint, on the Leftovers page, which takes the broker link (the S3 hand-off).
+    /// While that page applies another change its link is not replaced: this scan's broker is ended and a bar says so.
+    /// </summary>
+    private void OpenStoredScan(StoredScanOutcome outcome)
     {
-        if (outcome.Session is null) return;
-        LeftoversNavigator.Show(new LeftoversRequest(outcome.ProgramId, outcome.ProgramName, SessionId: "",
-            outcome.Scan.ScanId, outcome.Scan.Mode, Purge.Client.Rpc.RestorePoint.HighRisk, Quiet: false, outcome.Session));
+        if (outcome.Session is not { } session) return;
+        var request = new LeftoversRequest(outcome.ProgramId, outcome.ProgramName, SessionId: "",
+            outcome.Scan.ScanId, outcome.Scan.Mode, Purge.Client.Rpc.RestorePoint.HighRisk, Quiet: false, session);
+        if (LeftoversNavigator.TryShow(request)) return;
+        _ = session.DisposeAsync().AsTask();
+        ShowNotice($"The Leftovers page is still applying another change, so the leftovers of {outcome.ProgramName} "
+                   + "were not opened. Nothing was changed; check again when it has finished.");
     }
+
+    /// <summary>The Uninstall pipeline started or finished a step: the removed rows' buttons follow it.</summary>
+    public void OnUninstallBusyChanged() => RenderRemoved();
 
     private void RenderRemoved()
     {
+        UpdateCommandState();
         if (_removed is not { } removed) return;
         var busy = removed.IsBusy;
         var active = removed.ActiveProgram;
         var engine = Program.Engine;
+        // One broker at a time: while the Uninstall pipeline runs a step, no check starts.
+        var uninstallBusy = MainWindow.Instance.UninstallBusy;
         foreach (var row in _removedRows)
         {
             var mine = active == row.ProgramId;
-            row.Show(removed.StateOf(row.ProgramId), busy && !mine, mine ? removed.ProgressText : null,
+            row.Show(removed.StateOf(row.ProgramId), (busy && !mine) || uninstallBusy, mine ? removed.ProgressText : null,
                 engine.CanChangePc, UninstallHint(engine));
         }
         if (removed.Notice is { } notice && !ReferenceEquals(notice, _removedNoticeShown))
@@ -507,8 +525,14 @@ public sealed partial class ProgramsView : UserControl
             if (removed.ActiveProgram == id) removed.Cancel();
             return;
         }
+        if (MainWindow.Instance.UninstallBusy)
+        {
+            ShowNotice("An uninstall is running. Check for leftovers when it has finished.");
+            return;
+        }
         var name = _removedRows.FirstOrDefault(r => r.ProgramId == id)?.Name ?? "";
         _ = removed.CheckAsync(id, name);
+        UpdateCommandState();
     }
 
     /// <summary>
@@ -739,20 +763,29 @@ public sealed partial class ProgramsView : UserControl
 
     /// <summary>
     /// Uninstall asks for the broker on the click; until the engine is live the buttons are disabled and the tooltip
-    /// says why. Sample data has no engine to ask at all.
+    /// says why. Sample data has no engine to ask at all. While a removed program's leftovers check runs, Uninstall
+    /// waits too (one broker at a time).
     /// </summary>
     private void UpdateCommandState()
     {
         var engine = Program.Engine;
-        var can = engine.CanChangePc;
+        var can = engine.CanChangePc && !CheckRunning;
+        var hint = can ? null : CommandHint(engine);
         UninstallButton.IsEnabled = can;
-        ToolTipService.SetToolTip(UninstallButton, can ? null : UninstallHint(engine));
+        ToolTipService.SetToolTip(UninstallButton, hint);
         if (DUninstallButton is not null)
         {
             DUninstallButton.IsEnabled = can;
-            ToolTipService.SetToolTip(DUninstallButton, can ? null : UninstallHint(engine));
+            ToolTipService.SetToolTip(DUninstallButton, hint);
         }
     }
+
+    /// <summary>True while a removed program's leftovers check runs.</summary>
+    private bool CheckRunning => _removed?.IsBusy == true;
+
+    private string CommandHint(IEngineClient engine) => engine.CanChangePc && CheckRunning
+        ? "A leftovers check is running. Uninstall when it has finished."
+        : UninstallHint(engine);
 
     private static string UninstallHint(IEngineClient engine) => engine.IsLive
         ? "The engine is not usable, so an uninstaller cannot be routed."
@@ -898,6 +931,9 @@ public sealed partial class ProgramsView : UserControl
                 return;
             case "refresh" when Program.Engine.IsLive:
                 _ = ReloadAsync();
+                return;
+            case "uninstall" when Program.Engine.CanChangePc && CheckRunning:
+                ShowNotice(CommandHint(Program.Engine));
                 return;
             case "uninstall" when Program.Engine.CanChangePc && _current is { } row:
                 MainWindow.Instance.OpenUninstall().Begin(new UninstallTarget(row.Entry.ProgramId, row.Name));

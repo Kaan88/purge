@@ -258,6 +258,12 @@ public sealed class LeftoversViewModel : INotifyPropertyChanged
     public string MoveText => SelectedCount == 1 ? "Move 1 item to quarantine…" : $"Move {SelectedCount} items to quarantine…";
     public bool CanMove => Phase == LeftoversPhase.Review && SelectedCount > 0 && !_busy;
 
+    /// <summary>
+    /// True while a change is on its way (<c>plan.create</c>, <c>plan.execute</c>, undo or the retry of held items, or
+    /// the broker's dialog for one): the page's broker link must not be replaced then.
+    /// </summary>
+    public bool IsChanging => Phase == LeftoversPhase.Waiting;
+
     public bool CanUndo => Phase == LeftoversPhase.Result && Result is { Session.Length: > 0 } result
                            && (result.Counts.Done > 0 || result.Counts.Vanished > 0);
 

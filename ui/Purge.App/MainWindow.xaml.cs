@@ -120,6 +120,12 @@ public sealed partial class MainWindow : Window
         return (LeftoversView)_views["leftovers"];
     }
 
+    /// <summary>True while the Leftovers page (if built) applies a change over its broker link.</summary>
+    public bool LeftoversChanging => _views.TryGetValue("leftovers", out var view) && view is LeftoversView { IsChanging: true };
+
+    /// <summary>True while the Uninstall pipeline (if built) runs a step; the removed-program check waits meanwhile.</summary>
+    public bool UninstallBusy => _views.TryGetValue("queue", out var view) && view is UninstallView { IsBusy: true };
+
     /// <summary>S2, built on first use; the Uninstall click on Programs starts its pipeline.</summary>
     public UninstallView OpenUninstall()
     {

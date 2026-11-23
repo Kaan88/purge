@@ -57,13 +57,22 @@ public sealed partial class LeftoversView : UserControl, ILeftoversPage
     /// <summary>The page's state, for the shell and the tests.</summary>
     public LeftoversViewModel? ViewModel => _vm;
 
+    /// <summary>True while the page applies a change over its broker link (<see cref="LeftoversViewModel.IsChanging"/>).</summary>
+    public bool IsChanging => _vm?.IsChanging == true;
+
     /// <summary>
     /// S2's hand-off: the scan is already made, so this pages <c>scan.candidates</c> for it and takes the broker
     /// link (the caller no longer closes it). The page keeps <see cref="LeftoversRequest.RestorePoint"/> for
-    /// <c>plan.execute</c>.
+    /// <c>plan.execute</c>. While a change is on its way the request is refused (<see cref="LeftoversNavigator.TryShow"/>
+    /// checks first) and its new link is closed: ending the running change's link would leave its outcome unknown.
     /// </summary>
     public void Show(LeftoversRequest request)
     {
+        if (IsChanging && !ReferenceEquals(request.Broker, _ownedBroker))
+        {
+            if (request.Broker is { } refused) _ = refused.DisposeAsync().AsTask();
+            return;
+        }
         var previous = _ownedBroker;
         _ownedBroker = request.Broker;
         if (previous is not null && !ReferenceEquals(previous, request.Broker))

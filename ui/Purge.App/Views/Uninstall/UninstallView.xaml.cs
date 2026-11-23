@@ -35,6 +35,11 @@ public sealed partial class UninstallView : UserControl
     private readonly UninstallController _controller;
     private readonly Dictionary<UninstallStep, StepRow> _rows = [];
     private bool _rendering;
+    private bool _wasBusy;
+
+    // A scan that could not go to the Leftovers page because that page was applying another change. The controller
+    // keeps its broker meanwhile, and the bar's "Show leftovers" tries the hand-off again.
+    private UninstallOutcome? _heldOutcome;
 
     private sealed class StepRow(TextBlock glyph, TextBlock title, TextBlock detail)
     {
@@ -57,6 +62,9 @@ public sealed partial class UninstallView : UserControl
         BuildChoices();
         Render();
     }
+
+    /// <summary>True while the pipeline runs a step (the Programs page's removed-program check waits meanwhile).</summary>
+    public bool IsBusy => _controller.IsBusy;
 
     /// <summary>Starts the pipeline for a program chosen on the Programs page.</summary>
     public void Begin(UninstallTarget target)
@@ -171,6 +179,11 @@ public sealed partial class UninstallView : UserControl
             RenderRunning();
             RenderChoices();
             RenderBars();
+            if (controller.IsBusy != _wasBusy)
+            {
+                _wasBusy = controller.IsBusy;
+                MainWindow.Instance.Programs.OnUninstallBusyChanged();
+            }
             FooterText.Text = controller.Target is null
                 ? controller.GuideText
                 : controller.CurrentStep == UninstallStep.Ready
@@ -236,6 +249,17 @@ public sealed partial class UninstallView : UserControl
         BarsHost.Children.Clear();
         foreach (var notice in _controller.Notices)
             BarsHost.Children.Add(BuildBar(notice));
+        if (_heldOutcome is { } held && !ReferenceEquals(held, _controller.CompletedOutcome)) _heldOutcome = null;
+        if (_heldOutcome is { } waiting)
+        {
+            var bar = BuildBar(new UninstallNotice(UninstallNoticeKind.Warning, "The scan is ready.",
+                "The Leftovers page is still applying another change, so this scan waits here. Nothing was moved."));
+            var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 8, 0, 0) };
+            actions.Children.Add(ActionButton("Show leftovers", () => HandOff(waiting)));
+            bar.Content = actions;
+            bar.IsClosable = false;
+            BarsHost.Children.Add(bar);
+        }
     }
 
     private InfoBar BuildBar(UninstallNotice notice)
@@ -431,15 +455,35 @@ public sealed partial class UninstallView : UserControl
         }
     }
 
-    private void OnCompleted(UninstallOutcome outcome) => DispatcherQueue.TryEnqueue(() =>
+    private void OnCompleted(UninstallOutcome outcome) => DispatcherQueue.TryEnqueue(() => HandOff(outcome));
+
+    /// <summary>
+    /// Hands the scan and the live broker to the Leftovers page. While that page applies another change its link must
+    /// not be replaced, so the scan waits here (the controller keeps the broker) behind a "Show leftovers" bar.
+    /// </summary>
+    private void HandOff(UninstallOutcome outcome)
     {
+        if (!ReferenceEquals(outcome, _controller.CompletedOutcome))
+        {
+            // The pipeline started again meanwhile: this scan is no longer the one on the page.
+            _heldOutcome = null;
+            Render();
+            return;
+        }
+        if (LeftoversNavigator.IsChanging)
+        {
+            _heldOutcome = outcome;
+            Render();
+            return;
+        }
+        _heldOutcome = null;
         var broker = _controller.TakeBroker();
         var session = (broker as BrokerUninstallClient)?.TakeSession();
         if (broker is not null && session is null) _ = broker.DisposeAsync();
         var request = new LeftoversRequest(outcome.Target.ProgramId, outcome.Target.ProgramName, outcome.SessionId,
             outcome.ScanId, outcome.Mode, outcome.RestorePoint, outcome.Quiet, session);
-        LeftoversNavigator.Show(request);
+        if (!LeftoversNavigator.TryShow(request) && session is not null) _ = session.DisposeAsync().AsTask();
         if (broker is not null) _ = broker.DisposeAsync();
         Render();
-    });
+    }
 }
