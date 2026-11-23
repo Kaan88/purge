@@ -100,7 +100,8 @@ function Test-E2eAmbientProvenance($Set, $Sum) {
     foreach ($f in 'vm', 'snapshot') {
         if (-not (Has $p $f) -or -not (Has $Sum $f) -or "$($p.$f)" -cne "$($Sum.$f)") { $why += "$f '$(if (Has $p $f) { $p.$f })', the run's '$(if (Has $Sum $f) { $Sum.$f })'" }
     }
-    if (Has $Sum 'binaries') {
+    if (-not (Has $Sum 'binaries')) { $why += 'the run records no binaries (summary.json)' }
+    else {
         foreach ($f in 'engine_sha256', 'broker_sha256', 'ui_sha256') {
             $have = $(if (Has $p $f) { "$($p.$f)" } else { '' }); $want = $(if (Has $Sum.binaries $f) { "$($Sum.binaries.$f)" } else { '' })
             if (-not $want -or $have -cne $want) { $why += "$f $(if ($have) { $have.Substring(0, [Math]::Min(12, $have.Length)) } else { 'none' }), the run's $(if ($want) { $want.Substring(0, [Math]::Min(12, $want.Length)) } else { 'none' })" }
@@ -346,8 +347,8 @@ function Invoke-Score([string]$Ev, $X, [string[]]$Only = @(), [switch]$Quiet, [s
     # The ambient set (RIG.md section 17.1): the committed set of the run's VM; -AmbientFile naming another file scores,
     # but is not a gate score.
     $ambCommitted = Get-E2eAmbientPath $sum $TruthDir
-    $ambPath = $(if ($Ambient) { $Ambient } else { $ambCommitted })
-    $full = { param($p) if ($p) { try { [IO.Path]::GetFullPath($p) } catch { "$p" } } else { '' } }
+    $full = { param($p) if ($p) { try { $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($p) } catch { "$p" } } else { '' } }
+    $ambPath = & $full $(if ($Ambient) { $Ambient } else { $ambCommitted })
     $ambIsCommitted = [bool]($ambCommitted -and (& $full $ambPath) -ieq (& $full $ambCommitted))
     $ambSha = ''
     if ($ambPath -and (Test-Path -LiteralPath $ambPath -PathType Leaf)) { $ambSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $ambPath).Hash.ToLowerInvariant() }
@@ -574,7 +575,7 @@ function Invoke-SelfTest {
         Check '-AmbientFile naming another file: rows pass, not a gate score, the file recorded' ($oth.pass -and -not $oth.gate -and "$($oth.ambient.file)" -eq $cp -and $oth.ambient.committed -eq $false -and "$($oth.not_gate -join ' ')" -match 'AmbientFile')
         $nb = Join-Path $root 'no-binaries'
         New-PassEvidence $X $nb; Edit-E2eJson (Join-Path $nb 'summary.json') { param($d) $d.PSObject.Properties.Remove('binaries') }
-        Check 'a summary without binaries compares VM and snapshot only (passes)' (Invoke-Score $nb $X -Quiet -TruthDir $nb).pass
+        Check 'a summary without binaries is refused (provenance)' (-not (Invoke-Score $nb $X -Quiet -TruthDir $nb).pass)
         $empty = Join-Path $root 'empty'; New-Item -ItemType Directory -Force $empty | Out-Null
         Check 'empty evidence fails' (-not (Invoke-Score $empty $X -Quiet).pass)
         Check 'missing directory fails' (-not (Invoke-Score (Join-Path $root 'none') $X -Quiet).pass)

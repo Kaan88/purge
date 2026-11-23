@@ -1,4 +1,4 @@
-# Host self-test for the rig v2 scripts. Needs no VM: VBoxManage, the guest and Task Scheduler are
+﻿# Host self-test for the rig v2 scripts. Needs no VM: VBoxManage, the guest and Task Scheduler are
 # replaced by fakes (VBoxManage by a .cmd that only reports whether the password file exists). Nothing is
 # registered and nothing outside a temporary directory is written. Windows PowerShell 5.1:
 #   powershell.exe -NoProfile -ExecutionPolicy Bypass -File vm\guest\tests\rig-selftest.ps1

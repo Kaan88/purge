@@ -808,7 +808,20 @@ fn is_broker_exit(c: &Change) -> bool {
         return false;
     }
     let Some(name) = c.name.as_deref() else { return false };
-    let is_sid = |s: &str| s.len() > 4 && s.is_char_boundary(4) && s[..4].eq_ignore_ascii_case("S-1-");
+    let is_sid = |s: &str| {
+        s.len() > 4
+            && s.is_char_boundary(4)
+            && s[..4].eq_ignore_ascii_case("S-1-")
+            && s[4..].bytes().all(|b| b.is_ascii_digit() || b == b'-')
+    };
+    // The bam name is the NT device path of the image: `\Device\HarddiskVolume<n>` and then the path on the volume.
+    let bam_prefix_ok = |p: &str| {
+        const DEV: &str = r"\Device\HarddiskVolume";
+        p.len() > DEV.len()
+            && p.is_char_boundary(DEV.len())
+            && p[..DEV.len()].eq_ignore_ascii_case(DEV)
+            && p[DEV.len()..].bytes().all(|b| b.is_ascii_digit())
+    };
     if let Some(r) = system_cs_rest(&c.path) {
         let n = BROKER_BAM_SUFFIX.len();
         return r.len() == 5
@@ -816,7 +829,8 @@ fn is_broker_exit(c: &Change) -> bool {
             && is_sid(r[4])
             && name.len() > n
             && name.is_char_boundary(name.len() - n)
-            && name[name.len() - n..].eq_ignore_ascii_case(BROKER_BAM_SUFFIX);
+            && name[name.len() - n..].eq_ignore_ascii_case(BROKER_BAM_SUFFIX)
+            && bam_prefix_ok(&name[..name.len() - n]);
     }
     let s: Vec<&str> = c.path.split('\\').collect();
     s.len() == 9
@@ -2359,6 +2373,9 @@ mod tests {
             chgv('~', BAM, "\\Device\\HarddiskVolume3\\Program Files\\Purge\\purge-broker.exe.bak"),
             chgv('~', BAM, "\\Device\\HarddiskVolume3\\Program Files\\PurgeX\\purge-broker.exe"),
             chgv('~', BAM, "\\Program Files\\Purge\\purge-broker.exe"),
+            chgv('~', BAM, "\\Device\\HarddiskVolume4\\Users\\x\\Program Files\\Purge\\purge-broker.exe"),
+            chgv('~', BAM, "\\Device\\HarddiskVolume\\Program Files\\Purge\\purge-broker.exe"),
+            chgv('~', BAM, "\\Device\\Mup\\Program Files\\Purge\\purge-broker.exe"),
             chgv('~', PCA, "C:\\Windows\\System32\\cmd.exe"),
             chgv('~', PCA, "D:\\Program Files\\Purge\\purge-broker.exe"),
             chgv('~', PCA, "C:\\Program Files\\Purge\\purge-broker.exe.x"),
@@ -2373,6 +2390,8 @@ mod tests {
             chgv('~', &format!("{PCA}\\Sub"), "C:\\Program Files\\Purge\\purge-broker.exe"),
             chgv('~', &PCA.replace("HKU\\S-1-5-21-1", "HKLM"), "C:\\Program Files\\Purge\\purge-broker.exe"),
             chgv('~', &PCA.replace("S-1-5-21-1", "x"), "C:\\Program Files\\Purge\\purge-broker.exe"),
+            chgv('~', &PCA.replace("S-1-5-21-1", "S-1-5-21-1_Classes"), "C:\\Program Files\\Purge\\purge-broker.exe"),
+            chgv('~', "HKLM\\SYSTEM\\CurrentControlSet\\Services\\bam\\State\\UserSettings\\S-1-5-x", BAM_BROKER),
             // Keys and files are never covered (the key's LastWriteTime is the parent rule's).
             chgx('~', 'K', BAM, &["lwt 1->2"]),
             chgx('~', 'K', PCA, &["lwt 1->2", "n_values 1->2"]),
