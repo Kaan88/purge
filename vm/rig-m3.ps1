@@ -56,10 +56,20 @@
   -UacOn boots m3-uac-on instead and answers each UAC prompt from the host by scancode (Alt+Y, then Left+Enter), with
   screenshots. Evidence: E:\purge-build\gate-evidence\m3-e2e\<run>\ (run = -RunName or e2e-<stamp>): summary.json,
   rig-m3-<stamp>.log, and per app <app>\ (NN-<step>.png, jobs\*.log, host.json, guest\ = C:\cr\out\m3-e2e\<app>\).
+
+  The m3-e2e ambient set (vm\RIG.md section 17.1): the gate pushes its own set, built from null runs of the same flow,
+  never the M2 set, and refuses to start without it (-AmbientFile, default the VM's: Inbound truth\m3-e2e-ambient.json,
+  Purge-CleanPro truth\m3-e2e-ambient-cleanpro.json):
+
+    .\vm\rig-m3.ps1 -Mode m3-e2e-null -Count 6 -Engine ... -Broker ... -UiPublish ... [-Apps vscode] [-NullWaitSec 10]
+    #   -Count rounds per -Apps app (default vscode), each from a fresh restore: runs <prefix><k>-m3-e2e-<app> (-RunPrefix,
+    #   default en), the gate's flow with the plan consent cancelled and -NullWaitSec idle seconds in place of the
+    #   execution (the same window, Invoke-M3E2eWindow), then rigtool `ambient --m2 --added --null` over vm\runs\<run>\
+    .\vm\rig-m3.ps1 -Mode m3-e2e-ambient -Count 6 [-Apps vscode]    # host only: rebuild the file from those runs
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('all', 'snapshot', 'probe', 'm3-broker', 'm3-consent', 'm3-uac', 'm3-e2e')] [string] $Mode = 'all',
+    [ValidateSet('all', 'snapshot', 'probe', 'm3-broker', 'm3-consent', 'm3-uac', 'm3-e2e', 'm3-e2e-null', 'm3-e2e-ambient')] [string] $Mode = 'all',
     [string] $Evidence = '',
     [switch] $Rebuild,
     [string] $Engine = '',
@@ -71,20 +81,26 @@ param(
     [string[]] $Apps = @(),
     [string[]] $UndoApps = @(),
     [string] $RunName = '',
-    [switch] $UacOn
+    [switch] $UacOn,
+    # m3-e2e-null / m3-e2e-ambient: null rounds per app, the idle seconds in place of the execution, the null runs'
+    # name prefix (default en) and the ambient file written; m3-e2e: the ambient set pushed (default the VM's).
+    [int] $Count = 6,
+    [int] $NullWaitSec = 10,
+    [string] $RunPrefix = '',
+    [string] $AmbientFile = ''
 )
 $ErrorActionPreference = 'Stop'
 
-# rig.ps1 has parameters of its own (Mode, Engine, ...): ours are kept here first.
-if (-not $RunName) { $RunName = 'e2e-' + (Get-Date -Format 'yyyyMMdd-HHmmss') }
+# rig.ps1 has parameters of its own (Mode, Engine, RunPrefix, NullWaitSec, ...): ours are kept here first.
+if (-not $RunName) { $RunName = $(if ($Mode -eq 'm3-e2e-null') { 'null-' } else { 'e2e-' }) + (Get-Date -Format 'yyyyMMdd-HHmmss') }
 if ($RunName -notmatch '^[A-Za-z0-9_.-]+$') { throw "bad -RunName '$RunName'" }
 if (-not $Evidence) {
-    $Evidence = $(if ($Mode -eq 'm3-e2e') { "E:\purge-build\gate-evidence\m3-e2e\$RunName" } elseif ($Mode -like 'm3-*') { "E:\purge-build\gate-evidence\$Mode" } else { 'E:\purge-build\gate-evidence\m3-rig-uac' })
+    $Evidence = $(if ($Mode -eq 'm3-e2e') { "E:\purge-build\gate-evidence\m3-e2e\$RunName" } elseif ($Mode -eq 'm3-e2e-null') { "E:\purge-build\gate-evidence\m3-e2e-null\$RunName" } elseif ($Mode -like 'm3-*') { "E:\purge-build\gate-evidence\$Mode" } else { 'E:\purge-build\gate-evidence\m3-rig-uac' })
 }
 $M3 = [ordered]@{ mode = $Mode; evidence = $Evidence; rebuild = [bool]$Rebuild; engine = $Engine; broker = $Broker; ui = $UiPublish
                   cases = @($Cases | Where-Object { $_ }); base = $Base; std_keys = $StdUserKeys
                   apps = @($Apps | ForEach-Object { "$_" -split ',' } | Where-Object { $_ }); undo_apps = @($UndoApps | ForEach-Object { "$_" -split ',' } | Where-Object { $_ })
-                  run = $RunName; uac_on = [bool]$UacOn }
+                  run = $RunName; uac_on = [bool]$UacOn; count = $Count; null_wait = $NullWaitSec; prefix = $RunPrefix; ambient = $AmbientFile }
 $M3Vm = 'Inbound-Win11-Test'
 $M3Snap = 'm3-uac-on'
 . (Join-Path $PSScriptRoot 'rig.ps1') -VmName $M3Vm
@@ -534,6 +550,7 @@ $M3E2eExpect = Join-Path $script:RigDir 'truth\m3-e2e-expect.json'
 $script:E2eDir = $null
 $script:E2eShots = $null
 $script:E2eLines = $null
+$script:E2eNull = $false          # the app being driven is a null run (every guest phase gets -NullRun)
 
 # Pure: the apps of the expectations file, in its order; -Only keeps those named (an unknown name throws).
 function Get-M3E2eApps([string]$ExpectFile = $M3E2eExpect, [string[]]$Only = @()) {
@@ -559,13 +576,21 @@ function Get-M3E2eUndoApps([string]$ExpectFile = $M3E2eExpect, [string[]]$Overri
     $list
 }
 
-# Pure: the job text of one guest phase of m3-e2e.ps1.
-function New-M3E2ePhaseText([string]$Phase, [string]$App, [string]$Step = '', [int]$WaitSec = 0) {
+# Pure: the job text of one guest phase of m3-e2e.ps1. -NullRun: a phase of a null run (every phase of it carries the
+# switch; the guest refuses a phase whose null flag differs from its prepare's). -AmbientSha: the SHA-256 of the ambient
+# set the host pushed (setup records it beside the guest copy's own hash).
+function New-M3E2ePhaseText([string]$Phase, [string]$App, [string]$Step = '', [int]$WaitSec = 0, [switch]$NullRun, [string]$AmbientSha = '') {
     foreach ($v in $Phase, $App, $Step) { if ("$v" -notmatch '^[A-Za-z0-9_-]*$') { throw "bad phase argument '$v'" } }
     if (-not $Phase -or -not $App) { throw 'a phase and an app are needed' }
     $t = "& 'C:\cr\guest\m3-e2e.ps1' -Phase '$Phase' -App '$App'"
     if ($Step) { $t += " -Step '$Step'" }
     if ($WaitSec) { $t += " -WaitSec $WaitSec" }
+    if ($AmbientSha) {
+        if ($AmbientSha -cnotmatch '\A[0-9a-f]{64}\z') { throw "bad ambient SHA-256 '$AmbientSha'" }
+        if ($NullRun) { throw 'a null run pushes no ambient set' }
+        $t += " -AmbientSha '$AmbientSha'"
+    }
+    if ($NullRun) { $t += ' -NullRun' }
     $t
 }
 
@@ -581,11 +606,12 @@ function Get-M3E2eShotNames($AppDef, [bool]$Undo) {
     $n
 }
 
-function Invoke-M3E2ePhase([string]$Phase, [string]$App, [string]$Step = '', [int]$WaitSec = 0, [int]$TimeoutSec = 900) {
+function Invoke-M3E2ePhase([string]$Phase, [string]$App, [string]$Step = '', [int]$WaitSec = 0, [int]$TimeoutSec = 900, [string]$AmbientSha = '') {
     $name = "e2e-$Phase$(if ($Step) { "-$Step" })"
     $jobs = Join-Path $script:E2eDir 'jobs'
     New-Item -ItemType Directory -Force $jobs | Out-Null
-    $j = Invoke-GuestJob -Text (New-M3E2ePhaseText $Phase $App $Step $WaitSec) -Name "$App-$name" -TimeoutSec $TimeoutSec -LogCopy (Join-Path $jobs "$name-$(Get-Date -Format 'HHmmss').log")
+    $text = New-M3E2ePhaseText $Phase $App $Step $WaitSec -NullRun:([bool]$script:E2eNull) -AmbientSha $AmbientSha
+    $j = Invoke-GuestJob -Text $text -Name "$App-$name" -TimeoutSec $TimeoutSec -LogCopy (Join-Path $jobs "$name-$(Get-Date -Format 'HHmmss').log")
     $lines = @("$($j.log)" -split "`r?`n" | Where-Object { $_ -match '^M3E ' })
     foreach ($l in $lines) { Write-RigLog "  $l"; [void]$script:E2eLines.Add($l) }
     if (-not $j.done) { Write-RigLog "  !! phase $name did not finish within $TimeoutSec s"; $script:M3Fail = $true }
@@ -631,13 +657,18 @@ function Invoke-M3E2eUac([string]$Tag, [string]$App = '', [string]$Step = '') {
     $sent
 }
 
-function Push-M3E2eFiles($AppDef) {
+function Push-M3E2eFiles($AppDef, [bool]$IsNull = $false) {
     $engine = $(if ($M3.engine) { $M3.engine } else { Join-Path $script:RepoRoot 'target\release\purge-engine.exe' })
     $inst = @()
     if ("$($AppDef.kind)" -eq 'app') { $inst = @(Get-CachedRunFiles -Id "$($AppDef.id)") }
     Push-Tools -Engine $engine -Installers $inst
     Push-M2Install
-    $null = Push-M2Ambient
+    # The m3-e2e ambient set (Get-M2AmbientFile below returns it), never the M2 set; a null run pushes none.
+    if ($IsNull) { $null = Push-M2Ambient -None }
+    else {
+        if (-not $script:M3PushAmbient -or -not (Test-Path -LiteralPath $script:M3PushAmbient -PathType Leaf)) { throw 'no m3-e2e ambient set to push (RIG.md section 17.1)' }
+        if (-not (Push-M2Ambient)) { throw "the ambient set $script:M3PushAmbient was not pushed" }
+    }
     foreach ($d in 'C:\cr\m3e2e', 'C:\cr\out') { $null = Invoke-Guest @('mkdir', '--parents', $d) }
     $extra = @((Join-Path $script:RigDir 'guest\m3sec.cs'), (Join-Path $script:RigDir 'truth\m1b-exec-cases.json'))
     $r = Invoke-Guest (@('copyto', '--target-directory', 'C:\cr\guest\') + $extra)
@@ -653,22 +684,49 @@ function Push-M3E2eFiles($AppDef) {
 
 function Get-M3E2eField([string]$Line, [string]$Key) { Get-M3Field $Line $Key }
 
-# One app: one boot of the base snapshot, the whole flow through the UI, the evidence pulled to <evidence>\<app>\.
-function Invoke-M3E2eApp($AppDef, [bool]$Undo, [string]$Base) {
+# The exec window of a gate run and of its null run, one function for both (RIG.md section 17.1; as M1b's guest
+# Invoke-ExWindow): every step between snap A / deep A (the end of capture-post) and snap B / deep B (the start of
+# capture-exec), in the same order and with the same screenshots. The gate approves the plan consent, so the engine
+# executes; a null run cancels it (consent-cancel: the dialog's Cancel by the same m3sec press, then -NullWaitSec idle
+# seconds, the gate's execution time, as its null-wait step), so nothing is executed. Both then read the result page
+# and take snap B.
+function Invoke-M3E2eWindow([string]$Id, $Rec, [bool]$IsNull) {
+    $null = Invoke-M3E2ePhase 'ui-move' $Id -TimeoutSec 1200
+    Save-M3E2eShot '07-move-waiting'
+    $Rec.uac_keys.plan = @(Invoke-M3E2eUac '07u-uac' $Id 'plan')
+    $null = Invoke-M3E2ePhase 'consent-wait' $Id 'plan' -WaitSec 300 -TimeoutSec 900
+    Save-M3E2eShot '08-consent-plan'
+    if ($IsNull) { $null = Invoke-M3E2ePhase 'consent-cancel' $Id 'plan' -WaitSec $M3.null_wait -TimeoutSec 900 }
+    else { $null = Invoke-M3E2ePhase 'consent-approve' $Id 'plan' -TimeoutSec 600 }
+    $null = Invoke-M3E2ePhase 'ui-wait-result' $Id -WaitSec 1800 -TimeoutSec 2400
+    Save-M3E2eShot '09-result'
+    $null = Invoke-M3E2ePhase 'capture-exec' $Id -TimeoutSec 5400
+}
+
+# One app: one boot of the base snapshot, the whole flow through the UI, the evidence pulled to $Dir (default
+# <evidence>\<app>\). -NullRun <name>: a null run of that name (no ambient set, the plan consent cancelled; never undo).
+# -Ambient: the host record {file, sha256} of the ambient set a gate run pushes (host.json ambient; setup gets its hash).
+function Invoke-M3E2eApp($AppDef, [bool]$Undo, [string]$Base, [string]$Dir = '', [string]$NullRun = '', $Ambient = $null) {
     $id = "$($AppDef.id)"
-    $script:E2eDir = Join-Path $M3.evidence $id
+    $isNull = [bool]$NullRun
+    if ($isNull -and $Undo) { throw 'a null run is never undone' }
+    if ($isNull -and $Ambient) { throw 'a null run pushes no ambient set' }
+    if (-not $isNull -and -not $Ambient) { throw "gate app $id needs the m3-e2e ambient set" }
+    $script:E2eNull = $isNull
+    $script:E2eDir = $(if ($Dir) { $Dir } else { Join-Path $M3.evidence $id })
     New-Item -ItemType Directory -Force $script:E2eDir | Out-Null
     $script:E2eShots = New-Object System.Collections.ArrayList
     $script:E2eLines = New-Object System.Collections.ArrayList
     $rec = [ordered]@{ app = $id; kind = "$($AppDef.kind)"; undo = $Undo; base = $Base; started = (Get-Date).ToString('o'); ended = $null; error = $null
+                       null_run = $(if ($isNull) { $NullRun }); ambient = $Ambient
                        uac_keys = [ordered]@{}; shots = $script:E2eShots; lines = $script:E2eLines; pulled = $false }
-    Write-RigLog "m3-e2e app $id ($($AppDef.kind), route $($AppDef.route)$(if ($Undo) { ', undo' })) from $Base"
+    Write-RigLog "m3-e2e app $id ($($AppDef.kind), route $($AppDef.route)$(if ($Undo) { ', undo' })$(if ($isNull) { ", null run $NullRun, idle $($M3.null_wait) s" })) from $Base"
     $booted = $false
     try {
         Restore-Base -Snapshot $Base -No3D
         $booted = $true
-        Push-M3E2eFiles $AppDef
-        $l = Invoke-M3E2ePhase 'setup' $id -TimeoutSec 1200
+        Push-M3E2eFiles $AppDef $isNull
+        $l = Invoke-M3E2ePhase 'setup' $id -TimeoutSec 1200 -AmbientSha $(if ($Ambient) { "$($Ambient.sha256)" } else { '' })
         if ($l -notmatch '^M3E SETUP OK') { throw "setup failed: $l" }
         $l = Invoke-M3E2ePhase 'prepare' $id -TimeoutSec 5400
         if ((Get-M3E2eField $l 'ok') -ne 'True') { throw "prepare failed: $l" }
@@ -695,20 +753,13 @@ function Invoke-M3E2eApp($AppDef, [bool]$Undo, [string]$Base) {
         Save-M3E2eShot '06-scan-done'
         $state = Get-M3E2eField $l 'state'
         if ("$($AppDef.kind)" -like 'fail-*') {
+            if ($isNull) { throw 'a null run is for an executing app' }
             $null = Invoke-M3E2ePhase 'fail-check' $id -TimeoutSec 600
             Save-M3E2eShot '07-failure'
         } elseif ($state -in 'review', 'empty') {
             $null = Invoke-M3E2ePhase 'capture-post' $id -TimeoutSec 5400
             if ($state -eq 'review') {
-                $null = Invoke-M3E2ePhase 'ui-move' $id -TimeoutSec 1200
-                Save-M3E2eShot '07-move-waiting'
-                $rec.uac_keys.plan = @(Invoke-M3E2eUac '07u-uac' $id 'plan')
-                $null = Invoke-M3E2ePhase 'consent-wait' $id 'plan' -WaitSec 300 -TimeoutSec 900
-                Save-M3E2eShot '08-consent-plan'
-                $null = Invoke-M3E2ePhase 'consent-approve' $id 'plan' -TimeoutSec 600
-                $null = Invoke-M3E2ePhase 'ui-wait-result' $id -WaitSec 1800 -TimeoutSec 2400
-                Save-M3E2eShot '09-result'
-                $null = Invoke-M3E2ePhase 'capture-exec' $id -TimeoutSec 5400
+                Invoke-M3E2eWindow $id $rec $isNull
                 if ($Undo) {
                     $null = Invoke-M3E2ePhase 'ui-undo' $id -TimeoutSec 900
                     Save-M3E2eShot '10-undo-waiting'
@@ -720,7 +771,7 @@ function Invoke-M3E2eApp($AppDef, [bool]$Undo, [string]$Base) {
                     Save-M3E2eShot '12-undone'
                     $null = Invoke-M3E2ePhase 'capture-undo' $id -TimeoutSec 3600
                 }
-            }
+            } elseif ($isNull) { throw "a null run needs the review page (the scan ended '$state')" }
         } else { Write-RigLog "  !! $id`: the scan ended '$state'; nothing more to drive"; $script:M3Fail = $true }
     } catch {
         $rec.error = $_.Exception.Message
@@ -745,21 +796,29 @@ function Invoke-M3E2eApp($AppDef, [bool]$Undo, [string]$Base) {
         }
         $rec.ended = (Get-Date).ToString('o')
         [IO.File]::WriteAllText((Join-Path $script:E2eDir 'host.json'), (ConvertTo-Json $rec -Depth 8), (New-Object System.Text.UTF8Encoding($false)))
+        $script:E2eNull = $false
     }
     $rec
 }
 
 function Invoke-M3E2e {
+    Assert-M3E2eGateRunName $M3.run
     $ui = $(if ($M3.ui) { $M3.ui } else { Join-Path $script:RepoRoot 'target\ui-publish' })
     if (-not (Test-Path -LiteralPath (Join-Path $ui 'Purge.exe') -PathType Leaf)) { throw "m3-e2e needs the UI publish folder (-UiPublish; no Purge.exe in $ui)" }
     $base = $(if ($M3.base) { $M3.base } elseif ($M3.uac_on) { 'm3-uac-on' } else { 'rig-base' })
     if ($base -eq 'm3-uac-on' -and -not (Test-M3Snapshot)) { throw "snapshot $M3Snap missing (rig-m3.ps1 -Mode snapshot)" }
+    # The gate's ambient set (RIG.md section 17.1): built from this flow's null runs; no fallback to the M2 set.
+    $amb = Resolve-M3E2eAmbient
+    if (-not (Test-Path -LiteralPath $amb -PathType Leaf)) { throw "no m3-e2e ambient set $amb (run -Mode m3-e2e-null first, RIG.md section 17.1, or pass -AmbientFile)" }
+    $script:M3PushAmbient = $amb
+    $ambRec = [ordered]@{ file = $amb; sha256 = (Get-M3Sha256File $amb) }
+    Write-RigLog "  ambient set $amb (sha256 $($ambRec.sha256))"
     $apps = @(Get-M3E2eApps -Only $M3.apps)
     $undo = @(Get-M3E2eUndoApps -Override $M3.undo_apps)
     $sum = [ordered]@{ schema = 'purge.rig.m3e2e.summary/1'; run = $M3.run; vm = $M3Vm; snapshot = $base; uac_on = $M3.uac_on; started = $script:M3Started
-                       engine = $M3.engine; broker = $M3.broker; ui = $ui; apps_asked = @($apps | ForEach-Object { "$($_.id)" }); undo_apps = $undo; apps = @() }
+                       engine = $M3.engine; broker = $M3.broker; ui = $ui; ambient = $ambRec; apps_asked = @($apps | ForEach-Object { "$($_.id)" }); undo_apps = $undo; apps = @() }
     foreach ($a in $apps) {
-        $sum.apps += Invoke-M3E2eApp $a ($undo -contains "$($a.id)") $base
+        $sum.apps += Invoke-M3E2eApp $a ($undo -contains "$($a.id)") $base -Ambient $ambRec
         [IO.File]::WriteAllText((Join-Path $M3.evidence 'summary.json'), (ConvertTo-Json $sum -Depth 10), (New-Object System.Text.UTF8Encoding($false)))
     }
     $sum.ended = (Get-Date).ToString('o')
@@ -768,10 +827,258 @@ function Invoke-M3E2e {
     Write-RigLog "summary: $(Join-Path $M3.evidence 'summary.json'); score: powershell -File vm\truth\m3-e2e-score.ps1 -Evidence $($M3.evidence) -Collect"
 }
 
+# --------------------------------------------------------------- m3-e2e ambient set (RIG.md section 17.1)
+
+# Fixture names an m3-e2e ambient set must never hold: the rig's PurgeExec* objects (execapp), the MSI fixtures'
+# PurgeE2eMsi key and the engine's store C:\ProgramData\Purge (rig-m1b-exec.ps1 $XFixtureRx plus PurgeE2eMsi). An entry
+# on one of them would excuse a change Purge made to that very object. Case-insensitive; '\\+' also covers a pattern's
+# escaped backslashes. The scorer checks the committed file with the same expression (m3-e2e-score.ps1 $E2eFixtureRx).
+$M3E2eFixtureRx = '(?i)purgeexec|programdata\\+purge|purgee2emsi'
+# Distinct null runs a set must come from (m3-e2e-score.ps1 $E2eMinNullRuns is the same number).
+$M3E2eMinNullRuns = 6
+
+function Get-M3Sha256File([string]$Path) { (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant() }
+function Read-M3Json([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
+    try { [IO.File]::ReadAllText($Path).TrimStart([char]0xFEFF) | ConvertFrom-Json } catch { $null }
+}
+
+# The m3-e2e ambient set of a VM: Inbound truth\m3-e2e-ambient.json, Purge-CleanPro truth\m3-e2e-ambient-cleanpro.json
+# (another Windows build churns differently). Another VM has none.
+function Get-M3E2eAmbientFile([string]$Vm) {
+    $leaf = switch -CaseSensitive ($Vm) { 'Inbound-Win11-Test' { 'm3-e2e-ambient.json' } 'Purge-CleanPro' { 'm3-e2e-ambient-cleanpro.json' } default { $null } }
+    if (-not $leaf) { throw "no m3-e2e ambient set for VM '$Vm'" }
+    Join-Path $script:RigDir "truth\$leaf"
+}
+function Resolve-M3E2eAmbient { if ($M3.ambient) { $M3.ambient } else { Get-M3E2eAmbientFile $M3Vm } }
+
+# Push-M2Ambient (rig.ps1) pushes what Get-M2AmbientFile names: for this script the m3-e2e set a gate run resolved
+# (Invoke-M3E2e), never rig.ps1's M2 set; a null run pushes with -None and never reads it.
+$script:M3PushAmbient = $null
+function Get-M2AmbientFile([string]$Name = '') { $script:M3PushAmbient }
+
+# The run name of null round $K of app $App: <prefix><k>-m3-e2e-<app> (default prefix en: en1-m3-e2e-vscode).
+function Get-M3E2eNullRunName([int]$K, [string]$App, [string]$Prefix = '') {
+    if ($K -lt 1) { throw "bad null round $K" }
+    if (-not $Prefix) { $Prefix = 'en' }
+    $r = "$Prefix$K-m3-e2e-$App"
+    if ($r -cnotmatch '\A[a-z0-9][a-z0-9_.-]*\z') { throw "bad run name '$r'" }
+    $r
+}
+
+# True when $Name has the shape of a null run name (any prefix). A gate run's name never has it.
+function Test-M3E2eNullRunShape([string]$Name) { $Name -cmatch '[0-9]-m3-e2e-[a-z0-9][a-z0-9-]*\z' }
+function Assert-M3E2eGateRunName([string]$Name) {
+    if (Test-M3E2eNullRunShape $Name) { throw "run name '$Name' has the shape of a null run (<prefix><k>-m3-e2e-<app>); pick another -RunName" }
+}
+
+# The executing apps a null campaign runs (-Apps, default vscode): a failing uninstaller has no exec window.
+function Get-M3E2eNullApps([string]$ExpectFile = $M3E2eExpect, [string[]]$Only = @()) {
+    $only = @($Only | Where-Object { $_ })
+    if (-not $only.Count) { $only = @('vscode') }
+    $apps = @(Get-M3E2eApps -ExpectFile $ExpectFile -Only $only)
+    foreach ($a in $apps) { if ("$($a.kind)" -notin 'app', 'fixture') { throw "app '$($a.id)' executes nothing (kind $($a.kind)); no null run" } }
+    $apps
+}
+
+# The arguments of the host rigtool call that builds the set from null run dirs (added records too, as M1b).
+function Get-M3E2eAmbientArgs([string[]]$Dirs, [string]$Out) {
+    if (-not @($Dirs).Count) { throw 'no null run dirs' }
+    @('ambient', '--m2', '--added', '--null') + @($Dirs) + @('-o', $Out)
+}
+
+# Why run dir $Run (the host's run.json $Doc and the guest's e2e.json $E2e) is not a finished null run of app $App;
+# none: it is. Refused: a gate run (the plan consent approved, a session, an execdiff, an ambient set in the guest), a
+# run of another app or name, an unfinished run, one with a host error, and one whose window steps failed or are missing.
+function Test-M3E2eNullRunDoc($Doc, $E2e, [string]$Run, [string]$App) {
+    if (-not $Doc) { return @('no readable run.json') }
+    $why = @()
+    if ("$($Doc.schema)" -cne 'purge.rig.m3e2e.null/1') { $why += "schema '$($Doc.schema)'" }
+    if ("$($Doc.run)" -cne $Run) { $why += "run.json names run '$($Doc.run)'" }
+    if ("$($Doc.app)" -cne $App) { $why += "app '$($Doc.app)', want '$App'" }
+    if (-not ($Doc.PSObject.Properties['null_run'] -and $Doc.null_run -and $Doc.null_run.null -eq $true)) { $why += 'not a null run (null_run.null is not true)' }
+    if (-not "$($Doc.finished)") { $why += 'not finished' }
+    if ("$($Doc.error)") { $why += "host error: $($Doc.error)" }
+    if ($Doc.pulled -ne $true) { $why += 'guest outputs not pulled' }
+    if (-not (Test-M3E2eNullRunShape $Run)) { $why += "run name '$Run' is not of the null shape" }
+    if (-not $E2e) { return @($why + 'no readable e2e.json') }
+    if ("$($E2e.schema)" -cne 'purge.rig.m3e2e.app/1') { $why += "e2e.json schema '$($E2e.schema)'" }
+    if ("$($E2e.app)" -cne $App) { $why += "e2e.json names app '$($E2e.app)'" }
+    if (-not ($E2e.state -and $E2e.state.PSObject.Properties['null_run'] -and $E2e.state.null_run -eq $true)) { $why += 'the guest did not run it as a null run (state.null_run)' }
+    $st = $E2e.steps
+    $step = { param($n) if ($st -and $st.PSObject.Properties[$n]) { $st.$n } else { $null } }
+    foreach ($n in 'capture-post', 'ui-move', 'consent-wait-plan', 'consent-cancel-plan', 'null-wait', 'capture-exec') {
+        $s = & $step $n
+        if (-not $s) { $why += "no step $n" } elseif ($s.ok -ne $true) { $why += "step $n not ok" }
+    }
+    $r = & $step 'ui-wait-result'
+    if (-not ($r -and "$($r.state)" -ceq 'declined')) { $why += "ui-wait-result '$(if ($r) { $r.state })', want 'declined'" }
+    foreach ($n in 'consent-approve-plan', 'ui-undo', 'consent-approve-undo', 'capture-undo') { if (& $step $n) { $why += "ran $n" } }
+    $cx = & $step 'capture-exec'
+    if ($cx -and @(@($cx.sessions_new) | Where-Object { $_ }).Count) { $why += "a session was made: $(@($cx.sessions_new) -join ', ')" }
+    if ($E2e.files -and $E2e.files.execdiff -eq $true) { $why += 'an execdiff ran' }
+    if ($E2e.PSObject.Properties['ambient'] -and $E2e.ambient -and "$($E2e.ambient.guest_sha256)") { $why += 'an ambient set was in the guest' }
+    $why
+}
+
+# The objects a null run's own CLI plan preselected (capture-post cli.preselected_keys, Get-E2eTargetKey form), folded:
+# Path / RegKey -> {path} (a record on it or under it), RegValue -> {path, name} (that value only), Service -> its
+# Services key, Task -> its file under System32\Tasks. Firewall rules and packages have no snapshot path.
+function Get-M3E2eTargetRoots([string[]]$Keys) {
+    foreach ($k in @($Keys | Where-Object { $_ })) {
+        $p = "$k" -split '\|'
+        switch -CaseSensitive ($p[0]) {
+            'Service' { [pscustomobject]@{ path = "hklm\system\currentcontrolset\services\$($p[1])".ToLowerInvariant(); name = '' } }
+            'Task' { [pscustomobject]@{ path = ('c:\windows\system32\tasks\' + "$($p[1])".TrimStart('\')).ToLowerInvariant(); name = '' } }
+            'FirewallRule' { }
+            'AppxPackage' { }
+            default {
+                if ($p.Count -ge 2 -and $p[1]) {
+                    [pscustomobject]@{ path = $p[1].TrimEnd('\').ToLowerInvariant(); name = $(if ($p[0] -ceq 'RegValue' -and $p.Count -ge 3) { $p[2].ToLowerInvariant() } else { '' }) }
+                }
+            }
+        }
+    }
+}
+
+# Every record and pattern of an ambient set (purge.rig.m2ambient/1, parsed) that names a fixture ($M3E2eFixtureRx) or
+# one of $Roots (Get-M3E2eTargetRoots: the null runs' own preselected objects): union and per run. A record names a root
+# when its path is the root or lies under it (a RegValue root: that value only); a pattern when its text, backslashes
+# dropped, holds the root's path (and value name), backslashes dropped (fail-closed: it may refuse more than needed).
+function Get-M3E2eAmbientFixtureHits($Set, $Roots = @()) {
+    $recs = @(@($Set.records)); $pats = @(@($Set.patterns))
+    foreach ($r in @($Set.runs)) { if ($r) { $recs += @($r.records); $pats += @($r.patterns) } }
+    $recs = @($recs | Where-Object { $null -ne $_ } | ForEach-Object { "$_" }); $pats = @($pats | Where-Object { $null -ne $_ } | ForEach-Object { "$_" })
+    $hits = @(@($recs + $pats) | Where-Object { $_ -match $M3E2eFixtureRx })
+    $flat = { param($s) "$s".ToLowerInvariant().Replace('\', '') }
+    foreach ($root in @($Roots | Where-Object { $_ -and $_.path })) {
+        foreach ($k in $recs) {
+            if ($k.Length -lt 4) { continue }
+            $body = $k.Substring(3).ToLowerInvariant(); $path = $body; $val = $null
+            if ($k[1] -ceq 'V') { $i = $body.IndexOf('|'); if ($i -ge 0) { $path = $body.Substring(0, $i); $val = $body.Substring($i + 1) } }
+            if ($root.name) { if ($k[1] -ceq 'V' -and $path -eq $root.path -and $val -eq $root.name) { $hits += $k } }
+            elseif ($path -eq $root.path -or $path.StartsWith($root.path + '\')) { $hits += $k }
+        }
+        $needle = & $flat ($root.path + $(if ($root.name) { '|' + $root.name }))
+        foreach ($p in $pats) { if ((& $flat $p).Contains($needle)) { $hits += $p } }
+    }
+    @($hits | Select-Object -Unique)
+}
+
+# The host rigtool (ambient builds): $env:RIG_RIGTOOL, else vm\rigtool\target\release\rigtool.exe.
+function Get-M3E2eHostRigTool {
+    $t = $(if ($env:RIG_RIGTOOL) { $env:RIG_RIGTOOL } else { Join-Path $script:RigDir 'rigtool\target\release\rigtool.exe' })
+    if (-not (Test-Path -LiteralPath $t -PathType Leaf)) { throw "rigtool not built: $t" }
+    $t
+}
+
+# After a null run: vm\runs\<run>\ gets the window's snapshot pair (snap-<run>-a / -b.tsv.gz, moved out of the pulled
+# guest outputs), the guest's e2e.json and the host's run.json (purge.rig.m3e2e.null/1). An older dir of that name goes
+# to vm\runs\_old\ first. Returns why it is not a null run (Test-M3E2eNullRunDoc); none: it is.
+function Save-M3E2eNullRun([string]$Run, $AppDef, $Rec, [string]$Dir) {
+    $d = Join-Path $script:RunsDir $Run
+    if (Test-Path -LiteralPath $d) {
+        $old = Join-Path $script:RunsDir '_old'
+        New-Item -ItemType Directory -Force $old | Out-Null
+        Move-Item -LiteralPath $d -Destination (Join-Path $old "$Run-$(Get-Date -Format 'yyyyMMdd-HHmmss')")
+    }
+    New-Item -ItemType Directory -Force $d | Out-Null
+    $g = Join-Path $Dir 'guest'
+    foreach ($s in 'a', 'b') {
+        $src = Join-Path $g "snap-$s.tsv.gz"
+        if (Test-Path -LiteralPath $src) { Move-Item -LiteralPath $src -Destination (Join-Path $d "snap-$Run-$s.tsv.gz") }
+    }
+    if (Test-Path -LiteralPath (Join-Path $g 'e2e.json')) { Copy-Item -LiteralPath (Join-Path $g 'e2e.json') -Destination (Join-Path $d 'e2e.json') }
+    $doc = [ordered]@{ schema = 'purge.rig.m3e2e.null/1'; run = $Run; mode = 'm3-e2e'; app = "$($AppDef.id)"; vm = $M3Vm; snapshot = $Rec.base
+                       null_run = [ordered]@{ null = $true; wait_sec = $M3.null_wait }; evidence = $Dir; started = $Rec.started; finished = $Rec.ended
+                       error = $Rec.error; pulled = $Rec.pulled }
+    [IO.File]::WriteAllText((Join-Path $d 'run.json'), (ConvertTo-Json $doc -Depth 6), (New-Object System.Text.UTF8Encoding($false)))
+    $why = @(Test-M3E2eNullRunDoc (Read-M3Json (Join-Path $d 'run.json')) (Read-M3Json (Join-Path $d 'e2e.json')) $Run "$($AppDef.id)")
+    foreach ($s in 'a', 'b') { if (-not (Test-Path -LiteralPath (Join-Path $d "snap-$Run-$s.tsv.gz"))) { $why += "no snap-$Run-$s.tsv.gz" } }
+    $why
+}
+
+# m3-e2e-ambient (host only): the set from the null runs <prefix><k>-m3-e2e-<app>, k = 1..-Count, of each null app ->
+# the VM's file (Resolve-M3E2eAmbient). Each run dir must hold its snapshot pair and mark a finished null run
+# (Test-M3E2eNullRunDoc); at least $M3E2eMinNullRuns runs; the set is built into a temporary file and must name no
+# fixture and none of the null runs' own preselected objects (Get-M3E2eAmbientFixtureHits). Any refusal throws and writes
+# no file (an older file stays as it was). Returns the dirs used.
+function Invoke-M3E2eBuildAmbient {
+    $out = Resolve-M3E2eAmbient
+    $dirs = @(); $bad = @(); $roots = @()
+    foreach ($a in @(Get-M3E2eNullApps -Only $M3.apps)) {
+        foreach ($k in 1..([Math]::Max(1, $M3.count))) {
+            $r = Get-M3E2eNullRunName $k "$($a.id)" $M3.prefix
+            $d = Join-Path $script:RunsDir $r
+            if (-not (Test-Path -LiteralPath (Join-Path $d "snap-$r-a.tsv.gz")) -or -not (Test-Path -LiteralPath (Join-Path $d "snap-$r-b.tsv.gz"))) { $bad += "$r`: no snapshot pair in $d"; continue }
+            $e2e = Read-M3Json (Join-Path $d 'e2e.json')
+            $why = @(Test-M3E2eNullRunDoc (Read-M3Json (Join-Path $d 'run.json')) $e2e $r "$($a.id)")
+            if ($why.Count) { $bad += "$r`: $($why -join '; ')"; continue }
+            $roots += @(Get-M3E2eTargetRoots @($e2e.state.cli.preselected_keys))
+            $dirs += $d
+        }
+    }
+    if ($bad.Count) { throw "not null runs, no ambient set written:`n  $($bad -join "`n  ")" }
+    if ($dirs.Count -lt $M3E2eMinNullRuns) { throw "$($dirs.Count) null run(s); the set needs at least $M3E2eMinNullRuns (-Count); no ambient set written" }
+    $tmp = "$out.tmp-" + [guid]::NewGuid().ToString('N').Substring(0, 8)
+    try {
+        $a = Get-M3E2eAmbientArgs $dirs $tmp
+        $tool = Get-M3E2eHostRigTool
+        Write-RigLog "$tool $($a -join ' ')"
+        & $tool @a
+        if ($LASTEXITCODE -ne 0) { throw "rigtool ambient --m2 --added exited $LASTEXITCODE; no ambient set written" }
+        $set = Read-M3Json $tmp
+        if (-not $set -or "$($set.schema)" -cne 'purge.rig.m2ambient/1') { throw "the built set has schema '$(if ($set) { $set.schema })'; no ambient set written" }
+        $hits = @(Get-M3E2eAmbientFixtureHits $set $roots)
+        if ($hits.Count) { throw "the built set names fixture or plan objects ($($hits.Count)), no ambient set written; rerun the null rounds: $(@($hits | Select-Object -First 10) -join ' | ')" }
+        Move-Item -LiteralPath $tmp -Destination $out -Force
+    } finally { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+    Write-RigLog "m3-e2e ambient set ($($dirs.Count) null runs, $(@($set.records).Count) records, $(@($set.patterns).Count) patterns) -> $out"
+    $dirs
+}
+
+# m3-e2e-null: -Count null rounds per null app (Get-M3E2eNullApps), each from a fresh restore, then the set
+# (Invoke-M3E2eBuildAmbient). Any failed null run: no ambient file is written (throws).
+function Invoke-M3E2eNullCampaign {
+    if ($M3.count -lt 1) { throw '-Count must be at least 1' }
+    if ($M3.null_wait -lt 0 -or $M3.null_wait -gt 600) { throw '-NullWaitSec must be 0..600' }
+    if ($M3.undo_apps.Count) { throw 'a null run is never undone (-UndoApps)' }
+    $null = Get-M3E2eHostRigTool
+    $out = Resolve-M3E2eAmbient                                       # the output file must be known before the rounds
+    $ui = $(if ($M3.ui) { $M3.ui } else { Join-Path $script:RepoRoot 'target\ui-publish' })
+    if (-not (Test-Path -LiteralPath (Join-Path $ui 'Purge.exe') -PathType Leaf)) { throw "m3-e2e-null needs the UI publish folder (-UiPublish; no Purge.exe in $ui)" }
+    $base = $(if ($M3.base) { $M3.base } elseif ($M3.uac_on) { 'm3-uac-on' } else { 'rig-base' })
+    if ($base -eq 'm3-uac-on' -and -not (Test-M3Snapshot)) { throw "snapshot $M3Snap missing (rig-m3.ps1 -Mode snapshot)" }
+    $apps = @(Get-M3E2eNullApps -Only $M3.apps)
+    $sum = [ordered]@{ schema = 'purge.rig.m3e2e.null-summary/1'; run = $M3.run; vm = $M3Vm; snapshot = $base; uac_on = $M3.uac_on; started = $script:M3Started
+                       engine = $M3.engine; broker = $M3.broker; ui = $ui; null_wait = $M3.null_wait; out = $out; runs = @() }
+    $bad = @()
+    foreach ($a in $apps) {
+        foreach ($k in 1..$M3.count) {
+            $run = Get-M3E2eNullRunName $k "$($a.id)" $M3.prefix
+            $dir = Join-Path $M3.evidence "$run\$($a.id)"
+            $rec = Invoke-M3E2eApp $a $false $base -Dir $dir -NullRun $run
+            $why = @(Save-M3E2eNullRun $run $a $rec $dir)
+            if ($why.Count) { $bad += $run; Write-RigLog "  !! null run $run`: $($why -join '; ')" } else { Write-RigLog "  null run $run ok -> $(Join-Path $script:RunsDir $run)" }
+            $sum.runs += [ordered]@{ run = $run; app = "$($a.id)"; ok = ($why.Count -eq 0); why = $why; error = $rec.error }
+            [IO.File]::WriteAllText((Join-Path $M3.evidence 'summary.json'), (ConvertTo-Json $sum -Depth 10), (New-Object System.Text.UTF8Encoding($false)))
+        }
+    }
+    if ($bad.Count) { throw "null run(s) failed: $($bad -join ', '); no ambient set written" }
+    $sum.dirs = @(Invoke-M3E2eBuildAmbient)
+    $sum.ended = (Get-Date).ToString('o')
+    [IO.File]::WriteAllText((Join-Path $M3.evidence 'summary.json'), (ConvertTo-Json $sum -Depth 10), (New-Object System.Text.UTF8Encoding($false)))
+}
+
 # ------------------------------------------------------------------------------------------------- main
 
 # Dot-sourced (the rig self-test): the functions only.
 if ($MyInvocation.InvocationName -eq '.') { return }
+
+# m3-e2e-ambient: host only (no VM, no lock, no evidence directory).
+if ($M3.mode -eq 'm3-e2e-ambient') {
+    try { $null = Invoke-M3E2eBuildAmbient; exit 0 } catch { Write-Host "!! $($_.Exception.Message)"; exit 1 }
+}
 
 $aside = $null
 if ($M3.mode -like 'm3-*') { $aside = Move-M3EvidenceAside $M3.evidence }
@@ -789,6 +1096,7 @@ try {
     if ($M3.mode -eq 'm3-consent') { Invoke-M3SecConsent }
     if ($M3.mode -eq 'm3-uac') { Invoke-M3SecUac }
     if ($M3.mode -eq 'm3-e2e') { Invoke-M3E2e }
+    if ($M3.mode -eq 'm3-e2e-null') { Invoke-M3E2eNullCampaign }
 } catch {
     Write-RigLog "!! $($_.Exception.Message)"
     $code = 1

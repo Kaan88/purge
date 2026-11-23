@@ -1985,6 +1985,197 @@ function Invoke-M2Script([string]$Script, [string]$Arguments = '', [int]$Timeout
     Check 'm3-e2e: every phase the host calls has a guest branch' ($called.Count -ge 15 -and $missing.Count -eq 0) "called $($called.Count); missing: $($missing -join ', ')"
 }
 
+# ------------------------------------- m3-e2e ambient set: null runs, one window, the build (RIG.md section 17.1)
+& {
+    . (Join-Path $Vm 'rig-m3.ps1')
+    $ErrorActionPreference = 'Stop'
+    $expect = Join-Path $Vm 'truth\m3-e2e-expect.json'
+    # null_run_names / gate_run_names_never_null_shaped
+    Check 'm3-e2e null: run names <prefix><k>-m3-e2e-<app> (default en)' ((Get-M3E2eNullRunName 1 'vscode') -ceq 'en1-m3-e2e-vscode' -and (Get-M3E2eNullRunName 12 'git' 'cpn') -ceq 'cpn12-m3-e2e-git')
+    $threw = 0
+    foreach ($bad in @(@(0, 'vscode', ''), @(1, 'VSCode', ''), @(1, "npp'; x", ''), @(1, 'npp', 'X'))) { try { $null = Get-M3E2eNullRunName $bad[0] $bad[1] $bad[2] } catch { $threw++ } }
+    Check 'm3-e2e null: round 0, upper case, quotes, an upper-case prefix are refused' ($threw -eq 4) "$threw of 4"
+    Check 'm3-e2e null: every null run name has the null shape' (@(1..12 | ForEach-Object { Get-M3E2eNullRunName $_ 'vscode-user' 'x' } | Where-Object { -not (Test-M3E2eNullRunShape $_) }).Count -eq 0)
+    $threw = $false; try { Assert-M3E2eGateRunName 'en3-m3-e2e-vscode' } catch { $threw = $true }
+    $ok = $true; try { Assert-M3E2eGateRunName 'e2e-20261123-065615'; Assert-M3E2eGateRunName 'gate-m3-e2e-vscode' } catch { $ok = $false }
+    Check 'm3-e2e gate: a -RunName of the null shape is refused, the default and other names are not' ($threw -and $ok)
+    # ambient_file_per_vm
+    Check 'm3-e2e ambient: one file per VM' ((Get-M3E2eAmbientFile 'Inbound-Win11-Test') -eq (Join-Path $Vm 'truth\m3-e2e-ambient.json') -and (Get-M3E2eAmbientFile 'Purge-CleanPro') -eq (Join-Path $Vm 'truth\m3-e2e-ambient-cleanpro.json'))
+    $threw = 0; foreach ($v in 'inbound-win11-test', 'Other') { try { $null = Get-M3E2eAmbientFile $v } catch { $threw++ } }
+    Check 'm3-e2e ambient: another VM (or another case) has none' ($threw -eq 2)
+    # ambient_build_keeps_added_records
+    Check 'm3-e2e ambient: rigtool ambient --m2 --added --null <dirs> -o <out>' ((@(Get-M3E2eAmbientArgs @('a', 'b') 'o.json') -join ' ') -ceq 'ambient --m2 --added --null a b -o o.json')
+    $threw = $false; try { $null = Get-M3E2eAmbientArgs @() 'o.json' } catch { $threw = $true }
+    Check 'm3-e2e ambient: no run dirs throws' $threw
+    # The phase text of a null run and the declared hash of a gate run.
+    $sha = 'ab' * 32
+    Check 'm3-e2e null: a null phase carries -NullRun' ((New-M3E2ePhaseText 'consent-cancel' 'vscode' 'plan' 10 -NullRun) -ceq "& 'C:\cr\guest\m3-e2e.ps1' -Phase 'consent-cancel' -App 'vscode' -Step 'plan' -WaitSec 10 -NullRun")
+    Check 'm3-e2e gate: setup carries the pushed set''s SHA-256' ((New-M3E2ePhaseText 'setup' 'vscode' -AmbientSha $sha) -ceq "& 'C:\cr\guest\m3-e2e.ps1' -Phase 'setup' -App 'vscode' -AmbientSha '$sha'")
+    $threw = 0
+    foreach ($b in @({ New-M3E2ePhaseText 'setup' 'npp' -AmbientSha ('AB' * 32) }, { New-M3E2ePhaseText 'setup' 'npp' -AmbientSha "x'; y" }, { New-M3E2ePhaseText 'setup' 'npp' -AmbientSha $sha -NullRun })) { try { $null = & $b } catch { $threw++ } }
+    Check 'm3-e2e: a bad SHA-256, quotes, or a hash on a null run are refused' ($threw -eq 3) "$threw of 3"
+    Check 'm3-e2e null: null apps default to vscode, a failing uninstaller is refused' ((@(Get-M3E2eNullApps -ExpectFile $expect | ForEach-Object { $_.id }) -join ',') -eq 'vscode' -and $(try { $null = Get-M3E2eNullApps -ExpectFile $expect -Only @('msi3010'); $false } catch { $true }))
+
+    # guest_null_window_replaces_exec: one window function for gate and null runs; apart from the plan consent's
+    # answer (approve / cancel with the null wait) the two traces are equal.
+    $hostText = [IO.File]::ReadAllText((Join-Path $Vm 'rig-m3.ps1'))
+    $win = [regex]::Match($hostText, '(?s)\nfunction Invoke-M3E2eWindow\(.*?\n\}')
+    $outside = $hostText.Remove($win.Index, $win.Length)
+    Check 'm3-e2e window: one Invoke-M3E2eWindow call, right after capture-post on the review page' ($win.Success -and ([regex]::Matches($hostText, '(?m)^\s+Invoke-M3E2eWindow ').Count -eq 1) -and
+        $hostText -match "Invoke-M3E2ePhase 'capture-post' \`$id -TimeoutSec 5400\r?\n\s+if \(\`$state -eq 'review'\) \{\r?\n\s+Invoke-M3E2eWindow \`$id \`$rec \`$isNull\r?\n")
+    Check 'm3-e2e window: snap B (capture-exec), the plan approval and the cancel only inside the window' (
+        $win.Value -match "Invoke-M3E2ePhase 'capture-exec'" -and $outside -notmatch "Invoke-M3E2ePhase 'capture-exec'" -and $outside -notmatch "'consent-approve' \`$\w+ 'plan'" -and
+        $outside -notmatch "Invoke-M3E2ePhase 'consent-cancel'" -and @([regex]::Matches($win.Value, '\$IsNull')).Count -eq 2)
+    $script:trace = New-Object System.Collections.ArrayList
+    $M3.null_wait = 10
+    function Invoke-M3E2ePhase([string]$Phase, [string]$App, [string]$Step = '', [int]$WaitSec = 0, [int]$TimeoutSec = 900, [string]$AmbientSha = '') { [void]$script:trace.Add("phase:$Phase$(if ($Step) { ":$Step" })$(if ($WaitSec) { " wait=$WaitSec" })"); 'M3E X' }
+    function Save-M3E2eShot([string]$Name) { [void]$script:trace.Add("shot:$Name") }
+    function Invoke-M3E2eUac([string]$Tag, [string]$App = '', [string]$Step = '') { [void]$script:trace.Add("uac:$Tag"); @() }
+    $r1 = [ordered]@{ uac_keys = [ordered]@{} }; Invoke-M3E2eWindow 'vscode' $r1 $false; $gate = @($script:trace); $script:trace.Clear()
+    $r2 = [ordered]@{ uac_keys = [ordered]@{} }; Invoke-M3E2eWindow 'vscode' $r2 $true; $nul = @($script:trace)
+    $gi = [array]::IndexOf($gate, 'phase:consent-approve:plan'); $ni = [array]::IndexOf($nul, 'phase:consent-cancel:plan wait=10')
+    $same = ($gi -ge 0 -and $gi -eq $ni -and $gate.Count -eq $nul.Count)
+    if ($same) { for ($i = 0; $i -lt $gate.Count; $i++) { if ($i -ne $gi -and $gate[$i] -cne $nul[$i]) { $same = $false } } }
+    Check 'm3-e2e window: gate and null traces are equal but for approve / cancel (+ null wait)' ($same -and $gate[-1] -ceq 'phase:capture-exec' -and $gate[0] -ceq 'phase:ui-move') "gate: $($gate -join ' '); null: $($nul -join ' ')"
+
+    # The guest side of a null run.
+    $g = [IO.File]::ReadAllText((Join-Path $Guest 'm3-e2e.ps1'))
+    $cancel = [regex]::Match($g, "(?s)\n    'consent-cancel' \{.*?\n    \}")
+    Check 'm3-e2e guest: consent-cancel presses IDCANCEL (2) without a tick, then the null wait; null runs only' ($cancel.Success -and
+        $cancel.Value -match 'tick = \$false; button = 2;' -and $cancel.Value -match "Save-Step \`$nw 'null-wait'" -and $cancel.Value -match "if \(-not \`$NullRun -or \`$Step -ne 'plan'\)")
+    Check 'm3-e2e guest: a null run never approves the plan or undo, never mixes with a gate run' (
+        $g -match "if \(\`$NullRun -and \`$Step -ne 'run'\) \{ `"M3E REFUSED" -and $g -match "\[bool\]\`$st\.null_run -ne \[bool\]\`$NullRun" -and $g -match 'null_run = \[bool\]\$NullRun \}')
+    $cx = [regex]::Match($g, "(?s)\n    'capture-exec' \{.*?\n    \}")
+    Check 'm3-e2e guest: a null capture-exec takes snap B and deep B, refuses a session, keeps the pair, runs no execdiff' ($cx.Success -and
+        $cx.Value -match "(?s)Invoke-M2Snap \(Join-Path \`$W 'snap-b\.tsv\.gz'\).*Invoke-M2Deep.*if \(\`$NullRun\) \{.*throw `"a null run made a session.*snap-\`$s\.tsv\.gz.*\} else \{.*Invoke-M2Execdiff")
+    Check 'm3-e2e guest: setup records the declared and the guest hash of the set; a gate run without it fails setup' (
+        $g -match 'declared = \$\(if \(\$AmbientSha\)' -and $g -match 'guest_sha256 = \$\(if \(Test-Path -LiteralPath \$RigM2Ambient' -and $g -match "elseif \(-not \`$AmbientSha -or \`$rec\.ambient\.guest_sha256 -cne \`$AmbientSha\)")
+
+    # Test-M3E2eNullRunDoc and the build (ambient_build_takes_only_null_runs, ambient_build_refuses_fixture_names).
+    $newE2e = {
+        '{"schema":"purge.rig.m3e2e.app/1","app":"vscode","null_run":true,"ambient":{"declared":null,"guest":"C:\\cr\\bin\\m2-ambient.json","guest_sha256":null},' +
+        '"files":{"execdiff":false},"state":{"null_run":true,"cli":{"preselected_keys":["Path|c:\\program files\\microsoft vs code||","RegValue|hku\\s-1-5-21-1\\environment|path|x"]}},' +
+        '"steps":{"capture-post":{"ok":true},"ui-move":{"ok":true,"state":"prompt"},"consent-wait-plan":{"ok":true},"consent-cancel-plan":{"ok":true},"null-wait":{"ok":true,"seconds":10},' +
+        '"ui-wait-result":{"ok":true,"state":"declined"},"capture-exec":{"ok":true,"null":true,"sessions_new":[]}}}' | ConvertFrom-Json }
+    $newDoc = { param($run) [pscustomobject]@{ schema = 'purge.rig.m3e2e.null/1'; run = $run; mode = 'm3-e2e'; app = 'vscode'; null_run = [pscustomobject]@{ null = $true; wait_sec = 10 }; finished = 'x'; error = $null; pulled = $true } }
+    $why = @(Test-M3E2eNullRunDoc (& $newDoc 'en1-m3-e2e-vscode') (& $newE2e) 'en1-m3-e2e-vscode' 'vscode')
+    Check 'm3-e2e null doc: a finished null run passes' ($why.Count -eq 0) ($why -join '; ')
+    $muts = [ordered]@{
+        'the plan consent approved' = { param($d, $e) $e.steps | Add-Member -NotePropertyName 'consent-approve-plan' -NotePropertyValue ([pscustomobject]@{ ok = $true }) }
+        'no cancel' = { param($d, $e) $e.steps.PSObject.Properties.Remove('consent-cancel-plan') }
+        'no null wait' = { param($d, $e) $e.steps.PSObject.Properties.Remove('null-wait') }
+        'the result page reached' = { param($d, $e) $e.steps.'ui-wait-result'.state = 'result' }
+        'a session made' = { param($d, $e) $e.steps.'capture-exec'.sessions_new = @('20261123-1') }
+        'an execdiff ran' = { param($d, $e) $e.files.execdiff = $true }
+        'an ambient set in the guest' = { param($d, $e) $e.ambient.guest_sha256 = ('c' * 64) }
+        'the guest ran it as a gate run' = { param($d, $e) $e.state.null_run = $false }
+        'capture-exec failed' = { param($d, $e) $e.steps.'capture-exec'.ok = $false }
+        'another app' = { param($d, $e) $e.app = 'git' }
+        'run.json of another run' = { param($d, $e) $d.run = 'en2-m3-e2e-vscode' }
+        'not a null run on the host' = { param($d, $e) $d.null_run.null = $false }
+        'a host error' = { param($d, $e) $d.error = 'setup failed' }
+        'not pulled' = { param($d, $e) $d.pulled = $false }
+        'another schema' = { param($d, $e) $d.schema = 'purge.rig.m2/1' }
+    }
+    $missed = @()
+    foreach ($k in $muts.Keys) { $d = & $newDoc 'en1-m3-e2e-vscode'; $e = & $newE2e; & $muts[$k] $d $e; if (-not @(Test-M3E2eNullRunDoc $d $e 'en1-m3-e2e-vscode' 'vscode').Count) { $missed += $k } }
+    Check "m3-e2e null doc: each of $($muts.Count) bad-run controls is refused" ($missed.Count -eq 0) ($missed -join ', ')
+    Check 'm3-e2e null doc: a gate-shaped run name is refused' (@(Test-M3E2eNullRunDoc (& $newDoc 'e2e-1') (& $newE2e) 'e2e-1' 'vscode').Count -gt 0)
+
+    $roots = @(Get-M3E2eTargetRoots @('Path|c:\program files\microsoft vs code||', 'RegValue|hku\s-1-5-21-1\environment|path|x', 'Service|svc', 'Task|\purgeexecapp\simple update', 'FirewallRule|AbC'))
+    Check 'm3-e2e ambient: the plan roots (path, value, service key, task file; no rule)' ($roots.Count -eq 4 -and $roots[0].path -eq 'c:\program files\microsoft vs code' -and $roots[1].name -eq 'path' -and
+        $roots[2].path -eq 'hklm\system\currentcontrolset\services\svc' -and $roots[3].path -eq 'c:\windows\system32\tasks\purgeexecapp\simple update')
+    $set = { param($recs, $pats = @()) [pscustomobject]@{ schema = 'purge.rig.m2ambient/1'; runs = @([pscustomobject]@{ id = 'en1-m3-e2e-vscode'; records = @($recs); patterns = @($pats) }); records = @($recs); patterns = @($pats) } }
+    $hit = { param($s) @(Get-M3E2eAmbientFixtureHits $s $roots).Count }
+    Check 'm3-e2e ambient: Windows churn is no fixture' ((& $hit (& $set @('~F:C:\WINDOWS\Prefetch\TASKLIST.EXE-2448BC7D.pf', '~V:HKU\S-1-5-21-1\Environment|TEMP', '+D:C:\Program Files\Microsoft VS Code Insiders')) ) -eq 0)
+    Check 'm3-e2e ambient: fixture names are refused (PurgeExec, PurgeE2eMsi, the store)' ((& $hit (& $set @('-K:HKLM\SOFTWARE\PurgeE2eMsi\1603'))) -eq 1 -and (& $hit (& $set @('~F:C:\ProgramData\Purge\index.json'))) -eq 1 -and
+        (& $hit (& $set @() @('^\~K:HKLM\\SYSTEM\\CurrentControlSet\\Services\\PurgeExecSvc[0-9a-f]{16}$'))) -eq 1)
+    Check 'm3-e2e ambient: a record or pattern on or under a preselected object is refused (folder, file in it, value, pattern)' ((& $hit (& $set @('~D:C:\Program Files\Microsoft VS Code'))) -eq 1 -and
+        (& $hit (& $set @('-F:C:\Program Files\Microsoft VS Code\bin\code.cmd'))) -eq 1 -and (& $hit (& $set @('~V:HKU\S-1-5-21-1\Environment|Path'))) -eq 1 -and (& $hit (& $set @() @('^\~F:C:\\Program Files\\Microsoft VS Code\\[0-9a-f]{16}\.tmp$'))) -eq 1)
+
+    # The build, against null run dirs in a temporary runs dir and a stub rigtool (a .ps1 writing the set it is given).
+    $rd = Join-Path $Work 'm3e2e-runs'; New-Item -ItemType Directory -Force $rd | Out-Null
+    $script:RunsDir = $rd
+    $stub = Join-Path $Work 'm3e2e-rigtool.ps1'
+    [IO.File]::WriteAllText($stub, @'
+$o = $args[[array]::IndexOf($args, '-o') + 1]
+$dirs = @(); for ($i = [array]::IndexOf($args, '--null') + 1; $args[$i] -ne '-o'; $i++) { $dirs += $args[$i] }
+[IO.File]::WriteAllText((Join-Path (Split-Path -Parent $o) 'stub-args.txt'), ($args -join ' '))
+$recs = @([IO.File]::ReadAllLines((Join-Path (Split-Path -Parent $o) 'stub-records.txt')) | Where-Object { $_ })
+$runs = @($dirs | ForEach-Object { [ordered]@{ id = (Split-Path -Leaf $_); dir = $_; records = $recs; patterns = @() } })
+[IO.File]::WriteAllText($o, (ConvertTo-Json ([ordered]@{ schema = 'purge.rig.m2ambient/1'; runs = $runs; records = $recs; patterns = @() }) -Depth 5))
+exit 0
+'@)
+    $env:RIG_RIGTOOL = $stub
+    $out = Join-Path $Work 'm3e2e-ambient.json'
+    $M3.ambient = $out; $M3.count = 6; $M3.apps = @(); $M3.prefix = ''
+    [IO.File]::WriteAllText((Join-Path $Work 'stub-records.txt'), "~F:C:\WINDOWS\Prefetch\TASKLIST.EXE-2448BC7D.pf`r`n+F:C:\Users\tester\AppData\Local\Comms\Unistore\data\AggregateCache.uca")
+    $mkRun = { param($k, $e2eAct = $null)
+        $r = Get-M3E2eNullRunName $k 'vscode'
+        $d = Join-Path $rd $r
+        New-Item -ItemType Directory -Force $d | Out-Null
+        foreach ($s in 'a', 'b') { [IO.File]::WriteAllText((Join-Path $d "snap-$r-$s.tsv.gz"), 'x') }
+        $e = & $newE2e; $doc = & $newDoc $r
+        if ($e2eAct) { & $e2eAct $doc $e }
+        [IO.File]::WriteAllText((Join-Path $d 'e2e.json'), (ConvertTo-Json $e -Depth 8)); [IO.File]::WriteAllText((Join-Path $d 'run.json'), (ConvertTo-Json $doc -Depth 8)) }
+    foreach ($k in 1..6) { & $mkRun $k }
+    $dirs = @(Invoke-M3E2eBuildAmbient)
+    $built = Read-M3Json $out
+    Check 'm3-e2e ambient build: 6 null runs -> the set (added records kept, --added passed)' ($dirs.Count -eq 6 -and $built -and @($built.runs).Count -eq 6 -and @($built.records) -contains '+F:C:\Users\tester\AppData\Local\Comms\Unistore\data\AggregateCache.uca' -and
+        ([IO.File]::ReadAllText((Join-Path $Work 'stub-args.txt'))) -match '^ambient --m2 --added --null ') "dirs $($dirs.Count), runs $(@($built.runs).Count), records $(@($built.records) -join ' | '), args $([IO.File]::ReadAllText((Join-Path $Work 'stub-args.txt')))"
+    $before = [IO.File]::ReadAllText($out)
+    $refused = { param($name, [scriptblock]$setup, [scriptblock]$undo)
+        & $setup
+        $msg = $null; try { $null = Invoke-M3E2eBuildAmbient } catch { $msg = $_.Exception.Message }
+        & $undo
+        Check "m3-e2e ambient build refuses $name and writes no file" ($msg -and [IO.File]::ReadAllText($out) -ceq $before -and -not @(Get-ChildItem -LiteralPath $Work -Filter 'm3e2e-ambient.json.tmp-*').Count) "$msg" }
+    & $refused 'a gate run among the runs (plan approved, session)' { & $mkRun 3 { param($d, $e) $e.steps | Add-Member -NotePropertyName 'consent-approve-plan' -NotePropertyValue ([pscustomobject]@{ ok = $true }); $e.steps.'capture-exec'.sessions_new = @('s1') } } { & $mkRun 3 }
+    & $refused 'a run without its snapshot pair' { Remove-Item -LiteralPath (Join-Path $rd 'en4-m3-e2e-vscode\snap-en4-m3-e2e-vscode-b.tsv.gz') } { & $mkRun 4 }
+    & $refused 'a run whose run.json is not a null run' { & $mkRun 5 { param($d, $e) $d.null_run.null = $false } } { & $mkRun 5 }
+    & $refused 'fewer than 6 null runs' { $M3.count = 5 } { $M3.count = 6 }
+    & $refused 'a set naming a fixture' { [IO.File]::AppendAllText((Join-Path $Work 'stub-records.txt'), "`r`n-K:HKLM\SOFTWARE\PurgeE2eMsi\1603") } { [IO.File]::WriteAllText((Join-Path $Work 'stub-records.txt'), "~F:C:\WINDOWS\Prefetch\TASKLIST.EXE-2448BC7D.pf") }
+    & $refused 'a set naming a null run''s own preselected object' { [IO.File]::AppendAllText((Join-Path $Work 'stub-records.txt'), "`r`n~F:C:\Program Files\Microsoft VS Code\Code.exe") } { [IO.File]::WriteAllText((Join-Path $Work 'stub-records.txt'), "~F:C:\WINDOWS\Prefetch\TASKLIST.EXE-2448BC7D.pf") }
+    Remove-Item Env:\RIG_RIGTOOL
+
+    # Save-M3E2eNullRun: the pulled pair renamed into vm\runs\<run>, run.json written, and it passes the check.
+    $ev = Join-Path $Work 'm3e2e-ev\en7-m3-e2e-vscode\vscode'; New-Item -ItemType Directory -Force (Join-Path $ev 'guest') | Out-Null
+    foreach ($s in 'a', 'b') { [IO.File]::WriteAllText((Join-Path $ev "guest\snap-$s.tsv.gz"), 'x') }
+    [IO.File]::WriteAllText((Join-Path $ev 'guest\e2e.json'), (ConvertTo-Json (& $newE2e) -Depth 8))
+    $why = @(Save-M3E2eNullRun 'en7-m3-e2e-vscode' ([pscustomobject]@{ id = 'vscode' }) ([ordered]@{ base = 'rig-base'; started = 's'; ended = 'e'; error = $null; pulled = $true }) $ev)
+    Check 'm3-e2e null: Save-M3E2eNullRun moves the pair to vm\runs\<run> as snap-<run>-a / -b and passes' ($why.Count -eq 0 -and (Test-Path -LiteralPath (Join-Path $rd 'en7-m3-e2e-vscode\snap-en7-m3-e2e-vscode-b.tsv.gz')) -and
+        -not (Test-Path -LiteralPath (Join-Path $ev 'guest\snap-a.tsv.gz'))) ($why -join '; ')
+    $why = @(Save-M3E2eNullRun 'en8-m3-e2e-vscode' ([pscustomobject]@{ id = 'vscode' }) ([ordered]@{ base = 'rig-base'; started = 's'; ended = 'e'; error = 'prepare failed'; pulled = $true }) (Join-Path $Work 'm3e2e-ev\none'))
+    Check 'm3-e2e null: a failed null run (no pair, host error) is not saved as one' ($why.Count -ge 3) ($why -join '; ')
+
+    # The gate refuses to start without its set (no fallback to the M2 set) and pushes exactly that file.
+    $ui = Join-Path $Work 'm3e2e-ui'; New-Item -ItemType Directory -Force $ui | Out-Null; [IO.File]::WriteAllText((Join-Path $ui 'Purge.exe'), 'x')
+    $M3.ui = $ui; $M3.base = 'rig-base'; $M3.run = 'e2e-selftest'; $M3.apps = @('npp'); $M3.undo_apps = @()
+    $script:M3PushAmbient = $null
+    function Invoke-M3E2eApp { param($AppDef, [bool]$Undo, [string]$Base, [string]$Dir = '', [string]$NullRun = '', $Ambient = $null) $script:appAmbient = $Ambient; throw 'reached the app' }
+    $M3.ambient = Join-Path $Work 'no-such-ambient.json'
+    $msg = $null; try { Invoke-M3E2e } catch { $msg = $_.Exception.Message }
+    Check 'm3-e2e gate: no ambient set -> refused before any VM step' ($msg -match '^no m3-e2e ambient set ' -and -not $script:M3PushAmbient) "$msg"
+    $M3.ambient = $out
+    $msg = $null; try { Invoke-M3E2e } catch { $msg = $_.Exception.Message }
+    Check 'm3-e2e gate: the set is what Push-M2Ambient pushes and its SHA-256 goes to the app' ($msg -eq 'reached the app' -and (Get-M2AmbientFile) -eq $out -and
+        "$($script:appAmbient.sha256)" -ceq (Get-FileHash -Algorithm SHA256 -LiteralPath $out).Hash.ToLowerInvariant()) "$msg"
+    $M3.run = 'en1-m3-e2e-npp'
+    $msg = $null; try { Invoke-M3E2e } catch { $msg = $_.Exception.Message }
+    Check 'm3-e2e gate: a null-shaped -RunName is refused' ($msg -match 'shape of a null run') "$msg"
+    # Push-M3E2eFiles: a gate app without the resolved set throws; a null run pushes -None.
+    function Push-Tools { param([string]$RigTool = '', [string]$Engine = '', [string[]]$Installers = @()) }
+    function Push-M2Install { }
+    function Push-M2Ambient { param([switch]$None) $script:pushNone = [bool]$None; -not $None }
+    function Invoke-Guest([string[]]$Sub) { [pscustomobject]@{ code = 0; out = @() } }
+    function Invoke-GuestCmd([string]$CommandLine) { [pscustomobject]@{ code = 0; out = @() } }
+    function New-M3SecPayload { $z = Join-Path $Work 'm3e2e-payload.zip'; [IO.File]::WriteAllText($z, 'x'); $z }
+    $app = [pscustomobject]@{ id = 'execapp'; kind = 'fixture' }
+    $script:M3PushAmbient = $null
+    $threw = $false; try { Push-M3E2eFiles $app $false } catch { $threw = ($_.Exception.Message -match 'no m3-e2e ambient set to push') }
+    $script:pushNone = $null; Push-M3E2eFiles $app $true
+    Check 'm3-e2e: a gate push needs the set, a null push sends none' ($threw -and $script:pushNone -eq $true)
+}
+
 # ------------------------------------------------------------- m3-e2e guest library (UI driver, MSI fixtures)
 & {
     . (Join-Path $Guest 'm3-e2e-ui.ps1')

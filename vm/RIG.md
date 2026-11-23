@@ -2283,7 +2283,7 @@ preselected, non-Blocked item, as the review page ticks it), the deep scope of t
 deep A) - `ui-move` (`MoveButton` invoked; waits for "Confirm in the Purge security prompt."; `07-move-waiting`) -
 `consent-wait plan` (`08-consent-plan`), `consent-approve plan` - `ui-wait-result` (`ResultTitleText`; `09-result`) -
 `capture-exec` (snap B, deep B, the new session's `journal.jsonl` and `report.json` copied, `rigtool execdiff` with the
-M2 ambient set -> `execdiff.json`, the executed set = every item of the session's report, compared by target key with
+m3-e2e ambient set (section 17.1) -> `execdiff.json`, the executed set = every item of the session's report, compared by target key with
 the CLI's preselected set -> `run\executed.json`) - undo app: `ui-undo` (`UndoAllButton`; `10-undo-waiting`),
 `consent-wait undo` (`11-consent-undo`), `consent-approve undo`, `ui-wait-undone` (`UndoTitleText` "Put back";
 `12-undone`), `capture-undo` (deep C, `rigtool fidelity` deep A / deep C over the journal -> `fidelity.json`) - failing
@@ -2328,11 +2328,80 @@ set mismatch, danger, a failing fidelity row, the medium-route uninstaller at hi
 ContentDialog part `PrimaryButton` as UI Automation ids (the driver falls back to the button name, never to
 coordinates); whether ScrollPattern on the virtualized `ProgramList` realizes every row; whether the restart bar is
 still on the pipeline page when the driver reads it after the scan; whether the Inno uninstaller of `vscode-user` lives
-long enough to have its integrity read (the scorer needs one medium record); whether the UI's and the broker's own
-writes in the exec window (Application log, `%LOCALAPPDATA%\Purge`) show up as execdiff collateral, which the M2 ambient
-set (taken without a UI) does not cover; whether Windows Installer returns 3010 for the fixture with
+long enough to have its integrity read (the scorer needs one medium record); whether Windows Installer returns 3010 for the fixture with
 `REBOOT=ReallySuppress` (it should, as `/norestart` does). Snap A and B stay in the guest (only their execdiff leaves).
 G7's second half (wrong-route refusals) is not a UI flow and is not scored here.
+
+### 17.1 The m3-e2e ambient set: null runs of the e2e flow (2026-11-23)
+
+The first VS Code run that reached the end (`e2e-20261123-065615`) passed every product check, but its execdiff had
+collateral 19 and unexplained 2, all Windows and rig churn of the exec window: `~D %TEMP%` (mtime),
+`StartupProfileData-NonInteractive`, `TASKLIST.EXE-*.pf`, `Wbem\Tracing\Providers\{CIMWin32, ScheduledTaskProv,
+wfascim, Win32_WIN32_TERMINALSERVICE_Prov}`, `bam\State\UserSettings\<sid>` values of purge-broker.exe and cmd.exe,
+UserAssist `Count`, the Compatibility Assistant `Store` value of purge-broker.exe, `+D %TEMP%\<random>`,
+`+F ...\Comms\Unistore\data\AggregateCache.uca`. The run had pushed the M2 set (section 11.8), built from CLI null runs
+that never saw the UI, the consent dialog or the broker. As M1b did for its executor (section 12.8, binding here too),
+the e2e gets an ambient set from null runs of its own flow:
+
+    $env:VMPWFILE = '<guest password file>'
+    .\vm\rig-m3.ps1 -Mode m3-e2e-null -Count 6 -Engine <release engine> -Broker <release broker> -UiPublish <ui publish>
+    #   6 runs en<k>-m3-e2e-vscode, k = 1..6, each from a fresh restore of rig-base; then host rigtool
+    #   `ambient --m2 --added --null vm\runs\en1-m3-e2e-vscode ...` -> vm\truth\m3-e2e-ambient.json
+    .\vm\rig-m3.ps1 -Mode m3-e2e-ambient -Count 6      # host only: rebuild the file from those runs
+    .\vm\rig-m3.ps1 -Mode m3-e2e -Engine ... -Broker ... -UiPublish ...   # the gate pushes it (below)
+
+- **A null run** is the gate's flow for one executing app (`-Apps`, default `vscode`; a failing uninstaller has no exec
+  window and is refused), every guest phase with `-NullRun`: setup, prepare (install, launch, harvest), the UI from the
+  program row through Uninstall, UAC, confirm, the uninstall consent (approved: the uninstaller runs), the scan, the
+  review page, `capture-post` (the rig CLI plan, settle wait, snap A, deep A). Then the window (next point). Evidence
+  goes to `E:\purge-build\gate-evidence\m3-e2e-null\<-RunName>\<run>\<app>\`; the host then moves the window's snapshot
+  pair to `vm\runs\<run>\snap-<run>-a|b.tsv.gz` beside a copy of the guest's `e2e.json` and its own `run.json`
+  (`purge.rig.m3e2e.null/1`). Run names `<prefix><k>-m3-e2e-<app>` (`-RunPrefix`, default `en`); `-NullWaitSec` (default
+  10 s, 0..600: the VS Code run's approve-to-result time was about 8 s of execution plus the job overhead) is the idle
+  time in place of the execution. No ambient set is pushed to a null run (the guest's setup fails if it finds one), it
+  is never undone, and a guest phase whose null flag differs from its prepare's is refused (`M3E REFUSED`).
+- **One window for both** (host `Invoke-M3E2eWindow`, as M1b's `Invoke-ExWindow`): everything between snap A / deep A
+  (end of `capture-post`) and snap B / deep B (start of `capture-exec`), in the same order with the same screenshots:
+  `ui-move` (`07-move-waiting`), the UAC check, `consent-wait plan` (`08-consent-plan`), then the gate's
+  `consent-approve plan` (the engine executes) or the null run's `consent-cancel plan` (the same `m3sec press` from high,
+  on the TaskDialog's Cancel, `IDCANCEL` 2, no tick; then the idle wait, step `null-wait`), `ui-wait-result` (the gate
+  wants the result page, a null run the "Nothing was moved: the prompt was cancelled." bar, state `declined`;
+  `09-result`), `capture-exec`. A null `capture-exec` takes snap B and deep B, fails if a new session exists, and keeps
+  the pair for the host; no session copy, no execdiff. The guest agent jobs of these phases (PowerShell starts, CIM
+  reads, `tasklist`, `cmd`) and the broker's own consent dialog run in both, so their churn lands in the null runs.
+- **The build** (`Invoke-M3E2eBuildAmbient`, the same refusals as `Invoke-XBuildAmbient`): each run dir must hold its
+  snapshot pair and pass `Test-M3E2eNullRunDoc` (host run.json: schema, run, app, `null_run.null`, finished, no host
+  error, pulled, the null name shape; guest e2e.json: `state.null_run`, steps `capture-post`, `ui-move`,
+  `consent-wait-plan`, `consent-cancel-plan`, `null-wait`, `capture-exec` ok, `ui-wait-result` `declined`, no
+  `consent-approve-plan` / undo step, no new session, no execdiff, no ambient set in the guest); at least 6 runs; the set
+  (`rigtool ambient --m2 --added`: removed, changed and added records, exact or token-generalised, never a subtree) is
+  built into a temporary file and refused if a record or pattern names a fixture (`PurgeExec*`, `PurgeE2eMsi`,
+  `C:\ProgramData\Purge`) or one of the null runs' own preselected objects (`capture-post` `cli.preselected_keys`: a
+  record on or under a Path / RegKey target, that RegValue, a Service's key, a Task's file; a pattern holding the
+  path). Any refusal writes no file and leaves an older one as it was. **One file per VM** (`Get-M3E2eAmbientFile`):
+  Inbound `truth\m3-e2e-ambient.json`, Purge-CleanPro `truth\m3-e2e-ambient-cleanpro.json`; `-AmbientFile` names
+  another. Regenerate it when rig-base, the UI's flow or the window changes.
+- **The gate** (`-Mode m3-e2e`) refuses to start without the file (no fallback to the M2 set) and a `-RunName` of the
+  null shape. rig-m3.ps1's `Get-M2AmbientFile` returns the resolved file, so rig.ps1 `Push-M2Ambient` copies it to
+  `C:\cr\bin\m2-ambient.json`, where riglib `Invoke-M2Execdiff` passes it as `--ambient`. The host records
+  `{file, sha256}` in summary.json and each app's host.json `ambient`; setup gets the hash (`-AmbientSha`), records it
+  beside the guest copy's own hash (setup.json, e2e.json `ambient`: `declared.sha256`, `guest_sha256`) and fails when
+  they differ.
+- **The scorer** (`m3-e2e-score.ps1`, `-AmbientFile`, default the committed set of summary.json's VM): a row for the set
+  (schema `purge.rig.m2ambient/1`, at least `$E2eMinNullRuns` = 6 distinct run ids, each `<prefix><k>-m3-e2e-<executing
+  app>`, no fixture name in any record or pattern, same expression as the host) and per executing app a row
+  `host.json ambient.sha256 == e2e.json ambient.declared.sha256 == guest_sha256 ==` the set's SHA-256. Self-test: 15
+  more defects (the run's records: not recorded, another hash, guest copy differs or missing, declared missing; the set:
+  missing, 5 runs, a run twice, a gate run id, a failing uninstaller's run, a fixture record, a store pattern, another
+  schema).
+- Rig self-test (`vm\guest\tests\rig-selftest.ps1`, "m3-e2e null / ambient / window / gate / guest"): run names and
+  shape, the gate's name refusal, one file per VM, the rigtool arguments, the `-NullRun` / `-AmbientSha` job text, the
+  window (one call right after `capture-post`; `capture-exec`, the plan approval and the cancel only inside it; gate
+  and null traces equal but for approve vs cancel + wait), the guest's cancel, null guard and null `capture-exec`, the
+  null-run check with 15 bad-run controls, the fixture and plan-object refusals, the build against a stub rigtool
+  (6 runs build; a gate run among them, a missing pair, a non-null run.json, 5 runs, a fixture record, a plan-object
+  record each refused with no file written), `Save-M3E2eNullRun`, the gate's refusal without the file, and the push
+  (a gate needs the set, a null run pushes none).
 
 ## 18. M3 gate G1, elevated half: `m3-elevated-ci` (`rig-m3-ci.ps1`; M3_FINISH_PLAN B2)
 
