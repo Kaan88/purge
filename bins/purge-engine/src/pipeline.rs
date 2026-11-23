@@ -93,7 +93,7 @@ use purge_source::filesystem::FileSystemSource;
 use purge_source::registry::RegistrySource;
 use purge_source::sysobj::MsiTables;
 use purge_source::system::SystemSource;
-use purge_source::types::{MsiProductState, SourceError};
+use purge_source::types::{ExistsState, MsiProductState, SourceError};
 use purge_win::env::{EnvMap, expand_with};
 
 pub use purge_harvest::harvest::Sources;
@@ -790,7 +790,8 @@ pub fn uninstall_commands(
             generated: false,
             kind: entry.installer_kind,
         })
-        .map(expanded);
+        .map(expanded)
+        .map(|command| msi_remove_form(command, entry.product_code.as_deref()));
     let quiet = quiet_command(entry).ok().map(expanded);
     UninstallCommands { command, quiet }
 }
@@ -919,6 +920,7 @@ pub fn windows_dir() -> String {
 pub fn route(
     entry: &InventoryEntry,
     fs: &dyn FileSystemSource,
+    reg: &dyn RegistrySource,
     sys: &dyn SystemSource,
     env: &BTreeMap<String, String>,
     machine_env: &BTreeMap<String, String>,
@@ -954,7 +956,7 @@ pub fn route(
     let exes_admin_only = exes
         .iter()
         .all(|exe| fs.is_admin_only_executable(exe) == Ok(true));
-    let machine_product = machine_only_product(entry, sys);
+    let machine_product = machine_only_product(entry, reg, sys);
     let loads_admin_only = [commands.command.as_ref(), commands.quiet.as_ref()]
         .into_iter()
         .flatten()
@@ -1278,25 +1280,96 @@ fn command_loads_admin_only(
     is_absolute_path(&load) && fs.is_admin_only_executable(&load) == Ok(true)
 }
 
-/// The entry's ProductCode when Windows Installer has it installed per-machine and in neither
-/// per-user context of the user this process queries (the interactive user for the medium engine, the
-/// broker's own account, which is the one an elevated `msiexec` reads). `None` when the entry names no
-/// ProductCode, the state cannot be read, or any per-user context knows the product: then the cached
-/// package is not provably the machine's.
-fn machine_only_product(entry: &InventoryEntry, sys: &dyn SystemSource) -> Option<String> {
+/// The entry's ProductCode when it is [`machine_only_code`]; `None` when the entry names none.
+pub fn machine_only_product(
+    entry: &InventoryEntry,
+    reg: &dyn RegistrySource,
+    sys: &dyn SystemSource,
+) -> Option<String> {
     let code = entry.product_code.as_deref()?;
-    let states = sys.msi_product_state_all(code).ok()?;
+    machine_only_code(code, reg, sys).then(|| code.to_owned())
+}
+
+/// Whether Windows Installer has `code` installed per-machine and in neither per-user context, so the
+/// cached package an elevated `msiexec /x {code}` opens is provably the machine's:
+/// - `MsiQueryProductState` reads Machine as installed and both user contexts as unknown, for the user
+///   this process queries (the interactive user in the medium engine, the broker's own account, which
+///   is the one its elevated `msiexec` reads);
+/// - and the keys a per-user registration is made of do not exist, for that account and for the
+///   interactive user ([`SystemSource::user_sid`]): `HKU\<sid>\Software\Microsoft\Installer\Products\<P>`
+///   (unmanaged) and `HKLM\...\Installer\Managed\<sid>\Installer\Products\<P>` (managed). The query
+///   alone reads a half-made key as "unknown" too; the keys are what a planted registration writes
+///   (Fable review N2). Any key that cannot be read is not absent.
+///
+/// It reads state the user can write, so the broker checks it again just before it starts the command
+/// (`uninstall.run`, Fable review N1).
+pub fn machine_only_code(code: &str, reg: &dyn RegistrySource, sys: &dyn SystemSource) -> bool {
+    let Some(packed) = purge_win::msi::pack_guid(code) else {
+        return false;
+    };
+    let Ok(states) = sys.msi_product_state_all(code) else {
+        return false;
+    };
     let state = |context| {
         states
             .iter()
             .find(|s| s.context == context)
             .map(|s| s.state)
     };
-    let machine = state(MsiContext::Machine) == Some(MsiProductState::Default);
-    let user_free = [MsiContext::UserManaged, MsiContext::UserUnmanaged]
-        .into_iter()
-        .all(|context| matches!(state(context), Some(MsiProductState::Unknown)));
-    (machine && user_free).then(|| code.to_owned())
+    if state(MsiContext::Machine) != Some(MsiProductState::Default)
+        || ![MsiContext::UserManaged, MsiContext::UserUnmanaged]
+            .into_iter()
+            .all(|context| matches!(state(context), Some(MsiProductState::Unknown)))
+    {
+        return false;
+    }
+    let Ok(own) = purge_win::sid::current_user_sid() else {
+        return false;
+    };
+    let mut sids = vec![own];
+    if let Ok(user) = sys.user_sid() {
+        if !sids.iter().any(|s| s.eq_ignore_ascii_case(&user)) {
+            sids.push(user);
+        }
+    }
+    sids.iter().all(|sid| {
+        [
+            format!(r"HKU\{sid}\Software\Microsoft\Installer\Products\{packed}"),
+            format!(
+                r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\Managed\{sid}\Installer\Products\{packed}"
+            ),
+        ]
+        .iter()
+        .all(|key| reg.key_exists(key) == ExistsState::Absent)
+    })
+}
+
+/// `msiexec /I{code}` (the `UninstallString` Windows Installer writes) opens maintenance mode: Modify,
+/// Repair, Remove and browse dialogs, which in the broker would run elevated. When the arguments are
+/// exactly `/I` (or `-I`) and the entry's own ProductCode, the interactive command becomes `/X{code}`:
+/// the full UI of a removal, its confirmation and progress only (Fable review L1). Anything else is
+/// kept as written. Shown and run alike, since both come from [`uninstall_commands`].
+fn msi_remove_form(command: QuietCommand, code: Option<&str>) -> QuietCommand {
+    let Some(code) = code else {
+        return command;
+    };
+    if file_name_lower(&command.exe) != "msiexec.exe" {
+        return command;
+    }
+    let args = command.args.trim();
+    let rest = args
+        .strip_prefix("/I")
+        .or_else(|| args.strip_prefix("/i"))
+        .or_else(|| args.strip_prefix("-I"))
+        .or_else(|| args.strip_prefix("-i"))
+        .map(str::trim_start);
+    match rest {
+        Some(guid) if guid.eq_ignore_ascii_case(code) => QuietCommand {
+            args: format!("/X{code}"),
+            ..command
+        },
+        _ => command,
+    }
 }
 
 /// Whether the `msiexec` arguments name exactly one `{GUID}` and it is `code` (case-insensitive).
@@ -3102,6 +3175,11 @@ mod tests {
     /// H3). `Vendor`, `My Vendor` and `My Vendor (x64)` are vendor folders with a protected ACL of their
     /// own, so the cmd quoting cases there turn on the command line alone.
     fn route_fixture() -> Fixture {
+        route_fixture_with(&[])
+    }
+
+    /// [`route_fixture`] with extra registry keys (a planted per-user Windows Installer registration).
+    fn route_fixture_with(keys: &[String]) -> Fixture {
         const ADMIN_ONLY_FILES: [&str; 4] = [
             r"C:\ProgramData\Open\unins000.exe",
             r"C:\ProgramData\Open\uninstall.cmd",
@@ -3174,6 +3252,9 @@ mod tests {
                 .msi_state(code, MsiContext::UserManaged, MsiProductState::Unknown)
                 .msi_state(code, MsiContext::UserUnmanaged, MsiProductState::Unknown);
         }
+        for key in keys {
+            builder = builder.key(key);
+        }
         builder
             .msi_state(
                 USER_MSI,
@@ -3202,7 +3283,7 @@ mod tests {
         let msiexec = |args: &str, code: Option<&str>| {
             let mut entry = route_entry(&format!(r#""C:\Windows\System32\msiexec.exe" {args}"#));
             entry.product_code = code.map(str::to_owned);
-            route(&entry, &fs, &fs, &machine, &machine)
+            route(&entry, &fs, &fs, &fs, &machine, &machine)
         };
         assert_eq!(
             msiexec(&format!("/x {TEST_MSI} /qn"), Some(TEST_MSI)),
@@ -3264,19 +3345,19 @@ mod tests {
             r#""C:\Windows\System32\cmd.exe" /d /c "%ProgramData%\Vendor\uninstall.cmd""#,
         );
         assert_eq!(
-            route(&command, &fs, &fs, &user, &machine),
+            route(&command, &fs, &fs, &fs, &user, &machine),
             purge_rpc::methods::Route::Medium,
             "a value in HKCU\\Environment changed the expanded command"
         );
         assert_eq!(
-            route(&command, &fs, &fs, &machine, &machine),
+            route(&command, &fs, &fs, &fs, &machine, &machine),
             purge_rpc::methods::Route::Broker
         );
 
         let undefined =
             route_entry(r#""C:\Windows\System32\cmd.exe" /d /c "%X%\Vendor\uninstall.cmd""#);
         assert_eq!(
-            route(&undefined, &fs, &fs, &machine, &machine),
+            route(&undefined, &fs, &fs, &fs, &machine, &machine),
             purge_rpc::methods::Route::Medium,
             "a reference neither map defines stays medium"
         );
@@ -3292,7 +3373,7 @@ mod tests {
             r#""C:\Program Files\App\unins000.exe" --config "C:\Users\tester\AppData\Local\App\evil.ini""#,
         ] {
             assert_eq!(
-                route(&route_entry(command), &fs, &fs, &machine, &machine),
+                route(&route_entry(command), &fs, &fs, &fs, &machine, &machine),
                 purge_rpc::methods::Route::Medium,
                 "{command}"
             );
@@ -3302,6 +3383,7 @@ mod tests {
                 &route_entry(
                     r#""C:\Windows\System32\cmd.exe" /d /c "C:\ProgramData\Vendor\uninstall.cmd""#
                 ),
+                &fs,
                 &fs,
                 &fs,
                 &machine,
@@ -3317,6 +3399,7 @@ mod tests {
                 ),
                 &fs,
                 &fs,
+                &fs,
                 &machine,
                 &machine
             ),
@@ -3328,6 +3411,7 @@ mod tests {
                 &route_entry(
                     r#""C:\Windows\System32\msiexec.exe" /x {11111111-1111-1111-1111-111111111111} /qn"#
                 ),
+                &fs,
                 &fs,
                 &fs,
                 &machine,
@@ -3345,10 +3429,12 @@ mod tests {
 
     fn shell_route(exe: &str, args: &str) -> purge_rpc::methods::Route {
         let machine = env(&[("PROGRAMDATA", r"C:\ProgramData")]);
+        let fs = route_fixture();
         route(
             &route_entry(&format!(r#""{exe}" {args}"#)),
-            &route_fixture(),
-            &route_fixture(),
+            &fs,
+            &fs,
+            &fs,
             &machine,
             &machine,
         )
@@ -3469,7 +3555,7 @@ mod tests {
         ] {
             let entry = msi_entry(uninstall);
             assert_eq!(
-                route(&entry, &fs, &fs, &machine, &machine),
+                route(&entry, &fs, &fs, &fs, &machine, &machine),
                 purge_rpc::methods::Route::Broker,
                 "{uninstall}"
             );
@@ -3479,7 +3565,59 @@ mod tests {
                 Some(r"C:\Windows\System32\msiexec.exe"),
                 "the command shown and run names System32, never a bare name: {uninstall}"
             );
+            // The interactive command removes; it never opens maintenance mode (review L1).
+            assert_eq!(
+                commands
+                    .command
+                    .as_ref()
+                    .map(|c| c.args.to_ascii_uppercase().replace(' ', "")),
+                Some("/X{23170F69-40C1-2702-2408-000001000000}".to_owned()),
+                "{uninstall}"
+            );
         }
+        // `/I` is kept when it names another product or more than the ProductCode.
+        for (uninstall, args) in [
+            (
+                "MsiExec.exe /I{11111111-1111-1111-1111-111111111111}",
+                "/I{11111111-1111-1111-1111-111111111111}",
+            ),
+            (
+                "MsiExec.exe /I{23170F69-40C1-2702-2408-000001000000} REINSTALL=ALL",
+                "/I{23170F69-40C1-2702-2408-000001000000} REINSTALL=ALL",
+            ),
+        ] {
+            let commands = uninstall_commands(&msi_entry(uninstall), &machine);
+            assert_eq!(commands.command.map(|c| c.args), Some(args.to_owned()));
+        }
+        // A per-user registration of the same ProductCode, for this account or as managed, makes it
+        // medium even where the state query reads "unknown" (review N2).
+        let packed = purge_win::msi::pack_guid(SEVEN_ZIP_MSI).unwrap();
+        let sid = purge_win::sid::current_user_sid().unwrap();
+        for key in [
+            format!(r"HKU\{sid}\Software\Microsoft\Installer\Products\{packed}"),
+            format!(
+                r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\Managed\{sid}\Installer\Products\{packed}"
+            ),
+        ] {
+            let planted = route_fixture_with(std::slice::from_ref(&key));
+            assert_eq!(
+                route(
+                    &msi_entry("MsiExec.exe /X{23170F69-40C1-2702-2408-000001000000}"),
+                    &planted,
+                    &planted,
+                    &planted,
+                    &machine,
+                    &machine
+                ),
+                purge_rpc::methods::Route::Medium,
+                "{key}"
+            );
+            assert!(
+                !machine_only_code(SEVEN_ZIP_MSI, &planted, &planted),
+                "{key}"
+            );
+        }
+        assert!(machine_only_code(SEVEN_ZIP_MSI, &fs, &fs));
         // A vendor's QuietUninstallString with a bare msiexec is resolved too (review M1).
         let mut quiet = msi_entry("MsiExec.exe /I{23170F69-40C1-2702-2408-000001000000}");
         quiet.quiet_uninstall_string =
@@ -3492,14 +3630,14 @@ mod tests {
             Some(r"C:\Windows\System32\msiexec.exe")
         );
         assert_eq!(
-            route(&quiet, &fs, &fs, &machine, &machine),
+            route(&quiet, &fs, &fs, &fs, &machine, &machine),
             purge_rpc::methods::Route::Broker
         );
         // Still medium: a per-user entry, and a user environment that moves SystemRoot.
         let mut per_user = msi_entry("MsiExec.exe /I{23170F69-40C1-2702-2408-000001000000}");
         per_user.hive_sid = Some("S-1-5-21-1-2-3-1001".to_owned());
         assert_eq!(
-            route(&per_user, &fs, &fs, &machine, &machine),
+            route(&per_user, &fs, &fs, &fs, &machine, &machine),
             purge_rpc::methods::Route::Medium
         );
         let planted = env(&[
@@ -3509,6 +3647,7 @@ mod tests {
         assert_eq!(
             route(
                 &msi_entry("MsiExec.exe /I{23170F69-40C1-2702-2408-000001000000}"),
+                &fs,
                 &fs,
                 &fs,
                 &planted,
@@ -3555,6 +3694,7 @@ mod tests {
         assert_eq!(
             route(
                 &route_entry("unins000.exe /S"),
+                &fs,
                 &fs,
                 &fs,
                 &machine,

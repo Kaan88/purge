@@ -407,6 +407,10 @@ pub struct Session {
     pub route: Route,
     /// The commands `prepare` resolved and reported.
     pub commands: UninstallCommands,
+    /// The ProductCode when `prepare` found it per-machine only ([`pipeline::machine_only_product`]):
+    /// `uninstall.run` checks it again just before it starts an `msiexec` command, since what makes it
+    /// true is state the user can write (Fable review N1).
+    pub machine_product: Option<String>,
     /// When `prepare` harvested the program: the uninstall window's start when an observation records
     /// one (the medium engine runs the uninstaller between the two requests).
     window_start: FileTime,
@@ -599,7 +603,14 @@ fn prepare<H: FlowHandler>(
             .doc
             .entry(program)
             .ok_or_else(|| gone(IdKind::Program))?;
-        let route = pipeline::route(entry, sources.fs, sources.sys, &env, &machine_env);
+        let route = pipeline::route(
+            entry,
+            sources.fs,
+            sources.reg,
+            sources.sys,
+            &env,
+            &machine_env,
+        );
         // A machine-scope command is expanded with the machine environment only. The broker starts
         // such a command (or shows what would run), so a value in `HKCU\Environment` must never choose
         // its executable or arguments (review M3-R2 B1). A per-user program keeps the interactive
@@ -659,6 +670,7 @@ fn prepare<H: FlowHandler>(
             display_name: entry.display_name.clone(),
             route,
             commands,
+            machine_product: pipeline::machine_only_product(entry, sources.reg, sources.sys),
             window_start,
             fingerprint: Mutex::new(fingerprint),
             verify_gone: Mutex::new(None),
@@ -847,6 +859,19 @@ fn run<H: FlowHandler>(
             "the consent dialog does not describe this command",
         ));
     }
+    // An msiexec command was broker-route because its ProductCode was per-machine only; a per-user
+    // registration made since `prepare` (while the dialog was open) would let the elevated msiexec
+    // open a package the user chose, so it is checked again as late as possible (Fable review N1).
+    if !msiexec_still_machine_only(
+        &command,
+        session.machine_product.as_deref(),
+        machine.sources(),
+    ) {
+        return Err(ErrorObject::runtime(format!(
+            "Windows Installer now lists {} for a user as well, so its uninstaller was not started              as administrator. Check the program list and try again.",
+            session.display_name
+        )));
+    }
 
     let uninstalled = {
         let mut fingerprint = session
@@ -883,6 +908,23 @@ fn run<H: FlowHandler>(
         verify_gone: doc.verify_gone,
     })
     .map_err(|e| ErrorObject::runtime(e.to_string()))
+}
+
+/// Whether `command` may still start: anything but `msiexec` always may; `msiexec` only when the
+/// session's ProductCode is still per-machine only. A broker-route `msiexec` without one named an
+/// admin-only package path, which no user registration redirects.
+fn msiexec_still_machine_only(
+    command: &QuietCommand,
+    machine_product: Option<&str>,
+    sources: Sources<'_>,
+) -> bool {
+    let is_msiexec = std::path::Path::new(&command.exe)
+        .file_name()
+        .is_some_and(|name| name.eq_ignore_ascii_case("msiexec.exe"));
+    match (is_msiexec, machine_product) {
+        (false, _) | (true, None) => true,
+        (true, Some(code)) => pipeline::machine_only_code(code, sources.reg, sources.sys),
+    }
 }
 
 /// `uninstall.observed`: the broker's own verify-gone after a medium-route run.
@@ -1000,6 +1042,7 @@ mod tests {
             display_name: "App".into(),
             route: Route::Medium,
             commands: UninstallCommands::default(),
+            machine_product: None,
             window_start: FileTime(0),
             fingerprint: Mutex::new(fingerprint),
             verify_gone: Mutex::new(None),

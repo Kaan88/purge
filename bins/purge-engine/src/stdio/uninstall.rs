@@ -122,7 +122,14 @@ pub fn handle_route(
 pub fn route_info(entry: &InventoryEntry, sources: Sources<'_>) -> Result<RouteInfo, ErrorObject> {
     let env = sources.sys.env().unwrap_or_default();
     let machine_env = sources.sys.machine_env().unwrap_or_default();
-    let route = pipeline::route(entry, sources.fs, sources.sys, &env, &machine_env);
+    let route = pipeline::route(
+        entry,
+        sources.fs,
+        sources.reg,
+        sources.sys,
+        &env,
+        &machine_env,
+    );
     // A broker-route command is expanded with the machine environment only: that is the string the
     // broker shows and starts, and a value in `HKCU\Environment` must never change it (review M3-R2 B1).
     let command_env = if route == Route::Broker {
@@ -237,7 +244,14 @@ pub fn handle_run_user_entry(
 ) -> Result<RunUserResult, ErrorObject> {
     let env = sources.sys.env().unwrap_or_default();
     let machine_env = sources.sys.machine_env().unwrap_or_default();
-    let route = pipeline::route(entry, sources.fs, sources.sys, &env, &machine_env);
+    let route = pipeline::route(
+        entry,
+        sources.fs,
+        sources.reg,
+        sources.sys,
+        &env,
+        &machine_env,
+    );
     if route != Route::Medium {
         return Err(ErrorObject::server(ErrorData::WrongRoute { route }));
     }
@@ -436,7 +450,7 @@ mod tests {
         ];
         for (what, entry, expected) in cases {
             assert_eq!(
-                pipeline::route(&entry, &fs, &fs, &env, &env),
+                pipeline::route(&entry, &fs, &fs, &fs, &env, &env),
                 expected,
                 "{what}"
             );
