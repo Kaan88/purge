@@ -15,6 +15,19 @@ public sealed class UninstallClientTests
 {
     private static string Reply(ulong id, string result) => $"{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":{result}}}";
 
+    [Theory]
+    [InlineData(null, "Recording what the program registered")]
+    [InlineData("harvest: reading the inventory", "Finding the program")]
+    [InlineData("harvest: 586 entries; target HKLM|64|Git_is1 (Git) (173 ms)", "Finding the program")]
+    [InlineData("loading the baseline Professional-26300.9974", "Loading what a clean Windows looks like")]
+    [InlineData("baseline view local-Professional-26300.9974+2 loaded: trust merged (171 ms)", "Loading what a clean Windows looks like")]
+    [InlineData("harvest: reading roots, Inno log, anchors and the reference snapshot",
+        "Taking a snapshot of this PC to compare with after the uninstall. This usually takes 10 to 20 seconds.")]
+    [InlineData("harvest: 1 roots, 10 exes, 0 Inno records, 40 reference-snapshot entries (8739 ms)", "Recording what the program registered")]
+    [InlineData("something new", "Recording what the program registered")]
+    public void Record_phases_read_plainly(string? phase, string text) =>
+        Assert.Equal(text, Pipeline.UninstallController.RecordPhaseText(phase));
+
     [Fact]
     public async Task Route_reads_the_fixture_and_sends_the_program_id()
     {
