@@ -302,18 +302,39 @@ it that fails the broker's per-object rule. The same run creates `%ProgramData%\
 protected descriptors and `sessions\index.json`, and registers the `Purge` event-log source, all through
 the script's native layer: the .iss adds no `Permissions:` entry and no SDDL of its own. The second run
 is the script's own `-Check` (both trees, every deployed file, the shortcut, the event-log source). If
-either run fails, the setup shows the end of the script's log and aborts, which rolls the install back,
-so nothing half-installed stays in "Installed apps". The setup's own log is the usual
+either run fails, the setup shows the end of the script's log (a silent setup only writes it to the
+setup log) and aborts, which rolls the install back, so nothing half-installed stays in "Installed apps". The setup's own log is the usual
 `%TEMP%\Setup Log*.txt`.
 
 **Uninstall.** From "Installed apps" (or `unins000.exe`). Before the uninstaller deletes any file,
 `CurUninstallStepChanged(usUninstall)` force-stops `Purge.exe`, `purge-broker.exe` and
 `purge-engine.exe` (`taskkill /F /T`), removes
 `HKLM\SYSTEM\CurrentControlSet\Services\EventLog\Application\Purge`, then asks whether to delete
-`%ProgramData%\Purge` too. The default is **No** (silent uninstalls keep it): the quarantine holds
+`%ProgramData%\Purge` too. The default is **No** (silent uninstalls keep it without asking): the quarantine holds
 files that were removed from the PC and can still be restored, so deleting the folder is an explicit
 choice. The answer is only about the data root; the programs, `kb\`, `setup\`, the shortcuts and the
 registry source are always removed, and `[UninstallDelete]` clears `{app}` after that.
+
+**Upgrade, and Hub.** Hub (`Kaan88/mdhub`, `docs/COMPLIANCE.md`) installs and updates Purge by running
+the setup elevated with `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART` and reading its exit code (0 is
+success). A silent run shows nothing and asks nothing: the `[Run]` entry is `skipifsilent`, a failed
+post-install step only writes to the setup log, and there is no custom page. Hub asks Purge's window to
+close and never ends a process, and the broker and the engine have no window, so `PrepareToInstall`
+stops every process whose executable is in `{app}` (found by path through WMI; Purge.exe first, then
+the rest; `taskkill /F /PID`, no `/T`, so a program's uninstaller the broker started is left
+alone) and waits up to 10 s for them to be gone; if one stays, the setup stops before it changes
+anything (exit code 7). Run interactively, it asks first. `CloseApplications=yes` stays as the
+fallback for anything else holding a file. `AppId` and `DefaultDirName` never change, and the
+`DisplayVersion` Inno writes is `AppVersion`.
+
+**Version.** The one version is `[workspace.package] version` in the root `Cargo.toml`.
+`build-installer.ps1` passes it as `/DAppVersion` (`purge.iss` has no default), the engine's and the
+broker's `VERSIONINFO` come from it (`bins/versioninfo.rs`, included by both `build.rs`), and
+`ui/Directory.Build.props` reads it from `Cargo.toml` for `Purge.exe` (`Version`, `FileVersion`,
+`InformationalVersion`). `install/inno/check-version.ps1` checks `Cargo.lock`, the three exes
+(`ProductVersion` = the version, fixed `FILEVERSION` = `X.Y.Z.0`) and the setup; the preprocessor of
+`purge.iss` refuses the same mismatches. `.github/workflows/release.yml` builds, checks and publishes
+a release for the tag `v<version>`, with the `hub.txt` Hub reads.
 
 The setup must be tested on the target machine, elevated: it writes Program Files, ProgramData and
 HKLM, which is exactly what cannot be verified by compiling it.

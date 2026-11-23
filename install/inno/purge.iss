@@ -1,8 +1,17 @@
 ; Inno Setup 6 script for Purge (install\README.md, "Inno installer").
 ;
 ; Build it with install\inno\build-installer.ps1, which passes every payload path and the version as
-; /D defines; the defaults below are the repository layout, so `ISCC purge.iss` works from a checkout
-; whose target\release and target\ui-publish are already built.
+; /D defines; the payload defaults below are the repository layout. The version has no default here:
+; the one version of Purge is [workspace.package] version in the root Cargo.toml, and the script passes
+; it as /DAppVersion. The preprocessor then refuses to compile a setup whose purge-engine.exe,
+; purge-broker.exe or Purge.exe carries another version (their version resources come from the same
+; Cargo.toml: bins\versioninfo.rs, ui\Directory.Build.props).
+;
+; Hub (Kaan88/mdhub, docs/COMPLIANCE.md sections 1 and 4) installs and updates Purge by running this
+; setup elevated with /VERYSILENT /SUPPRESSMSGBOXES /NORESTART and reading its exit code (0 = done). So:
+; the AppId and DefaultDirName never change, a silent run shows nothing and asks nothing, and the setup
+; itself stops Purge (PrepareToInstall), because the broker and the engine have no window Hub could
+; ask to close and Hub never ends a process.
 ;
 ; What the setup does that install\install.ps1 does not do itself: it copies the payload (Inno's own
 ; file copy), creates the shortcuts and the uninstall (ARP) entry. The protected trees are still the
@@ -12,35 +21,67 @@
 #define AppName "Purge"
 
 #ifndef AppVersion
-  #define AppVersion "0.1.0"
+  #error Pass /DAppVersion=<the [workspace.package] version of Cargo.toml> (install\inno\build-installer.ps1 does)
 #endif
 
-; The repository root: the working directory of the sources below.
+; The repository root, relative to this script's folder unless given absolute.
 #ifndef RepoRoot
   #define RepoRoot "..\.."
 #endif
 #ifndef EngineExe
-  #define EngineExe "target\release\purge-engine.exe"
+  #define EngineExe RepoRoot + "\target\release\purge-engine.exe"
 #endif
 #ifndef BrokerExe
-  #define BrokerExe "target\release\purge-broker.exe"
+  #define BrokerExe RepoRoot + "\target\release\purge-broker.exe"
 #endif
 #ifndef UiPublishDir
-  #define UiPublishDir "target\ui-publish"
+  #define UiPublishDir RepoRoot + "\target\ui-publish"
 #endif
 #ifndef KbDir
-  #define KbDir "kb"
+  #define KbDir RepoRoot + "\kb"
 #endif
 #ifndef InstallPs1
-  #define InstallPs1 "install\install.ps1"
+  #define InstallPs1 RepoRoot + "\install\install.ps1"
 #endif
 #ifndef OutDir
-  #define OutDir "..\..\target\installer"
+  #define OutDir RepoRoot + "\target\installer"
 #endif
+
+; X.Y.Z of X.Y.Z[-pre]: the numeric version Windows' version resources hold.
+#if Pos("-", AppVersion) > 0
+  #define AppVersionNumeric Copy(AppVersion, 1, Pos("-", AppVersion) - 1)
+#else
+  #define AppVersionNumeric AppVersion
+#endif
+
+; Every shipped exe must carry AppVersion: ProductVersion (the string) = AppVersion, and the fixed
+; FILEVERSION = AppVersionNumeric.0, which is what Hub reads from Purge.exe (COMPLIANCE.md section 5).
+#sub CheckExeVersion
+  #define Path PayloadExe
+  #if !FileExists(Path)
+    #pragma error "The payload is missing: " + Path
+  #endif
+  #define GotProduct GetStringFileInfo(Path, "ProductVersion")
+  #define GotFixed GetVersionNumbersString(Path)
+  #if GotProduct != AppVersion
+    #pragma error "Version mismatch: " + Path + " says ProductVersion '" + GotProduct + "', the setup is " + AppVersion
+  #endif
+  #if GotFixed != AppVersionNumeric + ".0"
+    #pragma error "Version mismatch: " + Path + " has FILEVERSION " + GotFixed + ", the setup is " + AppVersionNumeric + ".0"
+  #endif
+#endsub
+#define PayloadExe EngineExe
+#expr CheckExeVersion
+#define PayloadExe BrokerExe
+#expr CheckExeVersion
+#define PayloadExe UiPublishDir + "\Purge.exe"
+#expr CheckExeVersion
 
 [Setup]
 ; A fixed AppId: every build of this script upgrades the same ARP entry ("Installed apps" and
-; Settings > Apps show one Purge).
+; Settings > Apps show one Purge). Never change it, nor DefaultDirName: Hub's catalog names the
+; uninstall key {7C1B9E64-2D58-4F1A-9B03-6E4C5A8D7F21}_is1 and finds Purge.exe through its
+; InstallLocation and DisplayVersion (= AppVersion, rewritten by every install and update).
 AppId={{7C1B9E64-2D58-4F1A-9B03-6E4C5A8D7F21}
 AppName={#AppName}
 AppVersion={#AppVersion}
@@ -67,10 +108,12 @@ SolidCompression=yes
 WizardStyle=modern
 UninstallDisplayName={#AppName}
 UninstallDisplayIcon={app}\Purge.exe
-; A running Purge.exe holds the files the setup replaces; Restart Manager offers to close it.
+; A running Purge.exe holds the files the setup replaces. PrepareToInstall (below) stops every process
+; that runs from {app} first, window or not; Restart Manager stays as the fallback for anything else
+; that holds a file (a silent setup lets it close those without asking).
 CloseApplications=yes
 RestartApplications=no
-VersionInfoVersion={#AppVersion}
+VersionInfoVersion={#AppVersionNumeric}
 VersionInfoCompany=Purge
 VersionInfoDescription={#AppName} Setup
 VersionInfoProductName={#AppName}
@@ -115,6 +158,9 @@ const
   EventLogKey = 'SYSTEM\CurrentControlSet\Services\EventLog\Application\Purge';
   DataRootName = 'Purge';
 
+type
+  TPidList = array of Integer;
+
 var
   ScriptLog: String;
 
@@ -157,10 +203,16 @@ begin
   end;
   if Length(Tail) > 1200 then
     Tail := '...' + Copy(Tail, Length(Tail) - 1200, 1200);
-  SuppressibleMsgBox(What + CrLf + CrLf +
-    'install.ps1 exited with code ' + IntToStr(ExitCode) + '. The end of its log (' + ScriptLog + '):' +
-    CrLf + CrLf + Tail,
-    mbCriticalError, MB_OK, IDOK);
+  { A silent setup (Hub's update) shows nothing even without /SUPPRESSMSGBOXES: the setup log gets the
+    text and the exit code tells the caller the setup failed. }
+  if WizardSilent then
+    Log(What + ' install.ps1 exited with code ' + IntToStr(ExitCode) + '. The end of its log (' +
+      ScriptLog + '):' + CrLf + Tail)
+  else
+    SuppressibleMsgBox(What + CrLf + CrLf +
+      'install.ps1 exited with code ' + IntToStr(ExitCode) + '. The end of its log (' + ScriptLog + '):' +
+      CrLf + CrLf + Tail,
+      mbCriticalError, MB_OK, IDOK);
   { Abort in ssPostInstall rolls the setup back: the files the setup copied are removed again and
     nothing half-installed is left registered in "Installed apps". }
   Abort;
@@ -209,6 +261,116 @@ begin
     Log('taskkill ' + ImageName + ' could not be started');
 end;
 
+{ The processes whose executable is inside AppDir (Purge.exe, purge-broker.exe, purge-engine.exe, and
+  anything else started from the install folder), found by their path through WMI, so that a
+  purge-engine.exe of a development build elsewhere is not touched. Purge.exe comes first: it hosts
+  the engine and started the broker. The setup is elevated, so it reads the elevated broker's path. }
+function FindAppProcesses(const AppDir: String; var Pids: TPidList; var Names: String): Integer;
+var
+  Locator, Services, Found, Item: Variant;
+  I, Pid, Pass: Integer;
+  ExePath, Name, Prefix: String;
+begin
+  Result := 0;
+  Names := '';
+  SetArrayLength(Pids, 0);
+  Prefix := AddBackslash(AppDir);
+  Locator := CreateOleObject('WbemScripting.SWbemLocator');
+  Services := Locator.ConnectServer('.', 'root\CIMV2');
+  Found := Services.ExecQuery('SELECT ProcessId, Name, ExecutablePath FROM Win32_Process');
+  for Pass := 0 to 1 do
+    for I := 0 to Found.Count - 1 do
+    begin
+      Item := Found.ItemIndex(I);
+      if VarIsNull(Item.ExecutablePath) or VarIsNull(Item.Name) then
+        Continue;
+      ExePath := Item.ExecutablePath;
+      Name := Item.Name;
+      if CompareText(Copy(ExePath, 1, Length(Prefix)), Prefix) <> 0 then
+        Continue;
+      if (CompareText(Name, 'Purge.exe') = 0) <> (Pass = 0) then
+        Continue;
+      Pid := Item.ProcessId;
+      SetArrayLength(Pids, Result + 1);
+      Pids[Result] := Pid;
+      Result := Result + 1;
+      if Names <> '' then
+        Names := Names + ', ';
+      Names := Names + Name + ' (' + IntToStr(Pid) + ')';
+    end;
+end;
+
+{ Stops every process that runs from AppDir and waits until they are gone. True when none is left.
+  taskkill /F per process id, without /T: a child the broker started (another program's uninstaller)
+  is not Purge's and is left alone. }
+function StopAppProcesses(const AppDir: String): Boolean;
+var
+  Pids: TPidList;
+  Names: String;
+  I, Count, Code, Waited: Integer;
+begin
+  Count := FindAppProcesses(AppDir, Pids, Names);
+  Result := Count = 0;
+  if Result then
+    Exit;
+  Log('Stopping Purge before the files are replaced: ' + Names);
+  for I := 0 to Count - 1 do
+    if Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /PID ' + IntToStr(Pids[I]), '', SW_HIDE,
+        ewWaitUntilTerminated, Code) then
+      Log('taskkill /F /PID ' + IntToStr(Pids[I]) + ': exit code ' + IntToStr(Code))
+    else
+      Log('taskkill could not be started for process ' + IntToStr(Pids[I]));
+  Waited := 0;
+  repeat
+    Sleep(250);
+    Waited := Waited + 250;
+    Count := FindAppProcesses(AppDir, Pids, Names);
+  until (Count = 0) or (Waited >= 10000);
+  Result := Count = 0;
+  if not Result then
+    Log('Still running after ' + IntToStr(Waited) + ' ms: ' + Names);
+end;
+
+{ Hub (COMPLIANCE.md section 4) asks Purge's window to close and never ends a process; the broker and
+  the engine have no window. So the setup stops whatever still runs from the install folder before it
+  replaces a file, in a silent run without asking. Interactive, it asks first (OK is the default when
+  message boxes are suppressed). A non-empty result stops the setup on the Preparing page; a silent
+  setup then exits with code 7 and changes nothing. }
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  AppDir, Names: String;
+  Pids: TPidList;
+  Count: Integer;
+begin
+  Result := '';
+  AppDir := ExpandConstant('{app}');
+  if not DirExists(AppDir) then
+    Exit;
+  try
+    Count := FindAppProcesses(AppDir, Pids, Names);
+    if Count = 0 then
+      Exit;
+    if not WizardSilent then
+      if SuppressibleMsgBox('Purge is running: ' + Names + '.' + CrLf + CrLf +
+          'Setup closes it before it replaces the files. A cleanup that is still running stops where it ' +
+          'is; Purge offers to resume or roll it back the next time it starts.' + CrLf + CrLf +
+          'Choose Cancel to close Purge yourself first.',
+          mbConfirmation, MB_OKCANCEL, IDOK) <> IDOK then
+      begin
+        Result := 'Purge is still running. Close Purge, then run Setup again.';
+        Exit;
+      end;
+    if not StopAppProcesses(AppDir) then
+      Result := 'Purge could not be closed. Close Purge, then run Setup again.';
+  except
+    { No WMI: stop the three images by name, as the uninstaller does. }
+    Log('Finding Purge''s processes failed (' + GetExceptionMessage + '); stopping them by name');
+    StopPurgeImage('Purge.exe');
+    StopPurgeImage('purge-broker.exe');
+    StopPurgeImage('purge-engine.exe');
+  end;
+end;
+
 procedure RemoveEventLogSource;
 begin
   if not RegKeyExists(HKLM, EventLogKey) then
@@ -218,6 +380,8 @@ begin
   end;
   if RegDeleteKeyIncludingSubkeys(HKLM, EventLogKey) then
     Log('Removed HKLM\' + EventLogKey)
+  else if UninstallSilent then
+    Log('The "Purge" event-log source could not be removed: HKLM\' + EventLogKey)
   else
     SuppressibleMsgBox('The "Purge" event-log source could not be removed:' + CrLf + CrLf +
       'HKLM\' + EventLogKey, mbError, MB_OK, IDOK);
@@ -243,8 +407,11 @@ begin
     if DirExists(DataRoot) then
     begin
       { Default No (MB_DEFBUTTON2): the quarantine holds files that were removed from this PC and can
-        still be restored, so deleting it is the user's explicit choice. Silent uninstalls keep it. }
-      if SuppressibleMsgBox(
+        still be restored, so deleting it is the user's explicit choice. Silent uninstalls keep it
+        without asking, also without /SUPPRESSMSGBOXES. }
+      if UninstallSilent then
+        Log('Silent uninstall: kept ' + DataRoot)
+      else if SuppressibleMsgBox(
           'Also delete Purge''s data folder?' + CrLf + CrLf +
           DataRoot + CrLf + CrLf +
           'It holds the quarantine, the history and the fingerprint cache. Files in the quarantine ' +

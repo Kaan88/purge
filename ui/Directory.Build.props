@@ -5,4 +5,35 @@
     <BaseIntermediateOutputPath>$(PURGE_UI_BUILD_ROOT)\obj\$(MSBuildProjectName)\</BaseIntermediateOutputPath>
     <BaseOutputPath>$(PURGE_UI_BUILD_ROOT)\bin\$(MSBuildProjectName)\</BaseOutputPath>
   </PropertyGroup>
+
+  <!-- The one version of Purge is [workspace.package] version in the root Cargo.toml; the engine, the
+       broker, the setup (install\inno\build-installer.ps1) and these assemblies all take it from there.
+       It becomes Purge.exe's version resource (FILEVERSION, ProductVersion), which Hub (Kaan88/mdhub,
+       docs/COMPLIANCE.md section 5) reads. install\inno\check-version.ps1 compares every shipped exe
+       with Cargo.toml and fails the build on a difference. -->
+  <PropertyGroup>
+    <PurgeCargoToml>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\Cargo.toml'))</PurgeCargoToml>
+    <PurgeCargoText>$([System.IO.File]::ReadAllText('$(PurgeCargoToml)'))</PurgeCargoText>
+    <!-- "[workspace.package]" up to its version line, then the quoted value of that line. -->
+    <PurgeVersionLine>$([System.Text.RegularExpressions.Regex]::Match($(PurgeCargoText), '\[workspace\.package\][^\[]*?\nversion\s*=\s*"[^"\r\n]*"'))</PurgeVersionLine>
+    <PurgeVersion>$([System.Text.RegularExpressions.Regex]::Replace($(PurgeVersionLine), '^[\s\S]*"([^"]*)"$', '$1'))</PurgeVersion>
+    <!-- X.Y.Z of X.Y.Z[-pre]: the numeric part a Win32 FILEVERSION and an assembly version can hold. -->
+    <PurgeVersionNumeric>$([System.Text.RegularExpressions.Regex]::Replace($(PurgeVersion), '[-+].*$', ''))</PurgeVersionNumeric>
+
+    <Version>$(PurgeVersion)</Version>
+    <AssemblyVersion>$(PurgeVersionNumeric).0</AssemblyVersion>
+    <FileVersion>$(PurgeVersionNumeric)</FileVersion>
+    <InformationalVersion>$(PurgeVersion)</InformationalVersion>
+    <!-- No "+<commit>" suffix: ProductVersion is the release version exactly. -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <Product>Purge</Product>
+    <Company>Purge</Company>
+  </PropertyGroup>
+
+  <Target Name="PurgeCheckVersion" BeforeTargets="BeforeBuild;GenerateAssemblyInfo">
+    <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(PurgeVersion)', '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'))"
+           Text="The workspace version in $(PurgeCargoToml) could not be read as X.Y.Z[-pre] (got '$(PurgeVersion)')." />
+    <Error Condition="'$(Version)' != '$(PurgeVersion)' Or '$(InformationalVersion)' != '$(PurgeVersion)'"
+           Text="Version '$(Version)' / InformationalVersion '$(InformationalVersion)' differ from Cargo.toml's '$(PurgeVersion)'. Do not pass a version to dotnet; change Cargo.toml." />
+  </Target>
 </Project>
