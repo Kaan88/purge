@@ -54,6 +54,10 @@ public sealed class RemovedLeftoversController
     private readonly object _gate = new();
     private CancellationTokenSource? _cts;
     private bool _busy;
+    // Written by the check (any thread), read by the page on the UI thread: volatile, so a read sees the last write.
+    private volatile string? _activeProgram;
+    private volatile string? _progressText;
+    private volatile RemovedNotice? _notice;
 
     /// <param name="mayHaveRecord">False when Purge surely stored no fingerprint for the id (<see cref="FingerprintStore.MayHaveRecord"/>).</param>
     /// <param name="launch">Starts the elevated broker (the first-elevation explanation and the Windows prompt happen here).</param>
@@ -73,13 +77,25 @@ public sealed class RemovedLeftoversController
     public event Action<StoredScanOutcome>? Completed;
 
     /// <summary>The program being checked, while a check runs.</summary>
-    public string? ActiveProgram { get; private set; }
+    public string? ActiveProgram
+    {
+        get => _activeProgram;
+        private set => _activeProgram = value;
+    }
 
     /// <summary>The broker's last scan phase, while it scans.</summary>
-    public string? ProgressText { get; private set; }
+    public string? ProgressText
+    {
+        get => _progressText;
+        private set => _progressText = value;
+    }
 
     /// <summary>The bar for the last check that did not reach the Leftovers page; null when there is none.</summary>
-    public RemovedNotice? Notice { get; private set; }
+    public RemovedNotice? Notice
+    {
+        get => _notice;
+        private set => _notice = value;
+    }
 
     /// <summary>True while a check runs; the other rows' buttons wait.</summary>
     public bool IsBusy
