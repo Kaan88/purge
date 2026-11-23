@@ -1518,6 +1518,7 @@ fn plan_create_holds_the_frozen_plan_the_response_describes() {
             app_name: BROKER_NAME.into(),
             restorable_until: None,
             restore_point: false,
+            delete_after: false,
         },
     )
     .expect("the view");

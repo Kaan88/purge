@@ -129,10 +129,34 @@ public sealed partial class VaultView : UserControl
 
     private void OnReviewExpired(object sender, RoutedEventArgs e) => _ = _vm.ReviewExpiredAsync();
 
-    // "Delete now": no confirmation of the page's own. The broker's prompt names every item and is the gate.
+    // "Delete now": the page asks one thing of its own, whether the registry backups go too (off each time, DECISIONS
+    // 2026-11-24). It is a choice, not the confirmation: the broker's prompts name every item and backup and are the gate.
     private void OnDeleteNow(object sender, RoutedEventArgs e)
     {
-        if ((sender as FrameworkElement)?.DataContext is VaultBatch b) _ = _vm.DeleteNowAsync(b.Id);
+        if (sender is not FrameworkElement { DataContext: VaultBatch b } anchor) return;
+        var model = b.Model;
+        var also = new CheckBox
+        {
+            Content = new TextBlock { Text = VaultBatchModel.AlsoBackupsText, TextWrapping = TextWrapping.Wrap },
+            IsChecked = false,
+            Visibility = model.CanDeleteBackups ? Visibility.Visible : Visibility.Collapsed,
+        };
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(also, VaultBatchModel.AlsoBackupsText);
+        var go = new Button { Content = "Continue to the security prompt…", IsEnabled = model.CanDeleteNow(false) };
+        var panel = new StackPanel { Spacing = 10, MaxWidth = 340, RequestedTheme = MainWindow.Instance.ActualTheme };
+        panel.Children.Add(new TextBlock { Text = model.DeleteNowIntro, TextWrapping = TextWrapping.Wrap, FontSize = 13 });
+        panel.Children.Add(also);
+        panel.Children.Add(go);
+        var flyout = new Flyout { Content = panel };
+        void Sync(object s, RoutedEventArgs a) => go.IsEnabled = model.CanDeleteNow(also.IsChecked == true);
+        also.Checked += Sync;
+        also.Unchecked += Sync;
+        go.Click += (_, _) =>
+        {
+            flyout.Hide();
+            _ = _vm.DeleteNowAsync(b.Id, also.IsChecked == true);
+        };
+        flyout.ShowAt(anchor);
     }
 
     private void OnChooseItems(object sender, RoutedEventArgs e)

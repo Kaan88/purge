@@ -3597,6 +3597,100 @@ fn an_item_deleted_before_its_retention_is_not_promised_by_the_preview_and_ends_
     assert!(again.put_back.is_empty(), "{:?}", again.put_back);
 }
 
+/// Registry backups deleted early and undo (DECISIONS 2026-11-24): a registry op whose backup the
+/// user had deleted before the backup class was due is not among the ops a preview promises, the run
+/// ends it as the `Expired` conflict in words that say it was asked for and leaves the registry as
+/// the cleanup left it, and the file of the same session is put back as before. Nothing but the
+/// consent's own mark for backups deletes the backup.
+#[test]
+fn a_registry_op_whose_backup_was_deleted_early_is_not_promised_and_ends_as_a_conflict() {
+    use crate::expiry::{self, Exclusion, PurgeConsent, PurgeOutcome};
+    let mut rig = Rig::new("m3undo-early-bk");
+    let k = TestKey::new();
+    k.create("App");
+    k.set("App", "a", REG_SZ, &utf16z("a"));
+    let kept = rig.s.file(r"app\kept.txt", b"kept");
+    let request = preselected(
+        vec![
+            quarantine("c-kept", &kept),
+            safe("c-key", key(&k.wire("App")), Action::DeleteKey),
+        ],
+        Vec::new(),
+    );
+    let id = rig.run(request).session;
+    let read = rig.journal(&id);
+    let reg = op_of(&read, "c-key");
+    assert!(!k.exists("App") && !exists(&kept));
+    // The moment the session started: 180 days before the backup class is due.
+    let now = read.state.header().created;
+
+    // Listed apart, as a backup that is not due; the quarantined file is not among the backups.
+    let listing = expiry::expiring(&rig.roots, now).unwrap();
+    assert!(listing.backups.is_empty(), "{listing:?}");
+    let [unit] = listing.not_due_backups.as_slice() else {
+        panic!("{listing:?}");
+    };
+    assert_eq!((&unit.id.session, unit.id.op), (&id, reg));
+    let session_dir = rig.session(&id);
+    let on_disk = |rel: &String| exists(&session_dir.path().join(rel).to_string_lossy());
+    assert!(unit.files.iter().all(on_disk));
+
+    // Named, every file named, confirmed, and allowed early as a quarantined item would be: not
+    // enough, the backup stays.
+    let mut consent = PurgeConsent::naming([unit.id.clone()]);
+    consent.name_files(unit.id.clone(), unit.files.clone());
+    consent.confirm_user_data(unit.id.clone());
+    consent.allow_early(unit.id.clone());
+    let ids = [unit.id.clone()];
+    let report = expiry::purge(&rig.roots, &ids, &consent, now).unwrap();
+    assert!(
+        matches!(
+            report.items[0].outcome,
+            PurgeOutcome::Excluded(Exclusion::NotExpired { .. })
+        ),
+        "not without the early consent for backups: {report:?}"
+    );
+    assert!(unit.files.iter().all(on_disk));
+    consent.allow_early_backup(unit.id.clone());
+    let report = expiry::purge(&rig.roots, &ids, &consent, now).unwrap();
+    assert_eq!(report.items[0].outcome, PurgeOutcome::Purged, "{report:?}");
+    assert!(!unit.files.iter().any(on_disk));
+    let state = rig.journal(&id).state;
+    assert!(state.op(reg).unwrap().deleted_early);
+
+    let preview = crate::undo::preview(&rig.roots, &id, None).unwrap();
+    assert_eq!(
+        preview.put_back,
+        [op_of(&read, "c-kept")],
+        "the registry change is not promised"
+    );
+    let done =
+        crate::undo::undo_expecting(&preview.request, undo_env(&mut rig), &preview.expect).unwrap();
+    let result = done
+        .report
+        .items
+        .iter()
+        .find(|item| item.op == reg)
+        .unwrap()
+        .result
+        .clone();
+    match result {
+        purge_model::exec::session::UndoResult::Conflict { conflict, detail } => {
+            assert_eq!(conflict, UndoConflict::Expired);
+            assert!(
+                detail.contains("at the user's request before its retention ended"),
+                "{detail}"
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(exists(&kept), "the file is back");
+    assert!(
+        !k.exists("App"),
+        "the registry stays as the cleanup left it"
+    );
+}
+
 /// M3-R2 point 2: a recovery with nothing to change on the machine runs without a dialog, so it must
 /// be bound to the journal its preview read. An `Unindexed` session (its run ended, its report was
 /// never written) whose journal changed after the preview is refused before anything is written.

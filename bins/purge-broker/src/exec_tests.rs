@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use purge_engine::pipeline::Settings;
 use purge_exec::execute::{ExecError, ExecOutput, Progress as ExecProgress};
+use purge_exec::expiry::{ExpiringBackup, ExpiringItem, ExpiryId as ExecExpiryId};
 use purge_exec::plan_in::{BoundPlan, ExecSettings};
 use purge_exec::prepare::RestorePointSetting;
 use purge_model::exec::op::ItemOutcome;
@@ -131,6 +132,160 @@ impl ExpirySource for NoExpiry {
         _: FileTime,
     ) -> Result<purge_exec::expiry::PurgeReport, purge_exec::expiry::PurgeError> {
         panic!("not scripted")
+    }
+}
+
+/// The quarantine store after a run, for the delete step of `plan.execute {delete_after}`: what a
+/// fresh listing holds (quarantined items that are not due, and one backup that is not due), every
+/// purge the handler asked for, and the executor's rule that an item that is not due goes only with
+/// the consent's early mark.
+#[derive(Default)]
+struct MovedStore {
+    not_due: Mutex<Vec<ExpiringItem>>,
+    not_due_backups: Mutex<Vec<ExpiringBackup>>,
+    fail_listing: AtomicBool,
+    listings: AtomicUsize,
+    /// Per purge: the ids, and for each whether it was allowed early and confirmed as user data.
+    purges: Mutex<Vec<Vec<(ExecExpiryId, bool, bool)>>>,
+}
+
+fn moved_item(session: &SessionId, op: u32, user_data: bool) -> ExpiringItem {
+    ExpiringItem {
+        id: ExecExpiryId {
+            session: session.clone(),
+            op: purge_model::exec::op::OpId(op),
+        },
+        item: CandidateId(format!("c-{op}")),
+        original_path: format!(r"C:\Vendor\moved-{op}"),
+        quarantine_path: format!(r"C:\ProgramData\Purge\Quarantine\{session}\{op:06}\moved-{op}"),
+        expires: FileTime(134_080_000_000_000_000 + 30 * 864_000_000_000),
+        bytes: 1000 + u64::from(op),
+        is_dir: false,
+        user_data,
+        unfinished: false,
+    }
+}
+
+/// A session that is not the run's.
+fn other_session() -> SessionId {
+    SessionId::new(FileTime(133_700_000_000_000_000), 7)
+}
+
+impl MovedStore {
+    /// A store holding `items` of the run's session, one item of another session and one backup of
+    /// the run's session, none of them due.
+    fn after_run(items: &[(u32, bool)]) -> Arc<MovedStore> {
+        let store = MovedStore::default();
+        let mut not_due: Vec<ExpiringItem> = items
+            .iter()
+            .map(|(op, user_data)| moved_item(&session_id(), *op, *user_data))
+            .collect();
+        not_due.push(moved_item(&other_session(), 1, false));
+        *store.not_due.lock().unwrap() = not_due;
+        store.not_due_backups.lock().unwrap().push(ExpiringBackup {
+            id: ExecExpiryId {
+                session: session_id(),
+                op: purge_model::exec::op::OpId(50),
+            },
+            item: CandidateId("c-50".into()),
+            target: Target::RegKey {
+                path: r"HKLM\SOFTWARE\Vendor".into(),
+            },
+            files: vec![r"reg\000050.regbackup.json".into()],
+            expires: FileTime(134_080_000_000_000_000 + 180 * 864_000_000_000),
+            bytes: 9,
+            user_data: false,
+            unfinished: false,
+        });
+        Arc::new(store)
+    }
+
+    fn purged_ids(&self) -> Vec<Vec<String>> {
+        self.purges
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|call| call.iter().map(|(id, _, _)| id.to_string()).collect())
+            .collect()
+    }
+
+    fn left(&self) -> Vec<String> {
+        self.not_due
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|item| item.id.to_string())
+            .collect()
+    }
+}
+
+impl ExpirySource for MovedStore {
+    fn now(&self) -> FileTime {
+        FileTime(134_080_000_000_000_000)
+    }
+
+    fn listing(&self, _: FileTime) -> Result<Listing, purge_exec::storage::StorageError> {
+        self.listings.fetch_add(1, Ordering::SeqCst);
+        if self.fail_listing.load(Ordering::SeqCst) {
+            return Err(purge_exec::storage::StorageError::InvalidPath(
+                "scripted".into(),
+            ));
+        }
+        Ok(Listing {
+            not_due: self.not_due.lock().unwrap().clone(),
+            not_due_backups: self.not_due_backups.lock().unwrap().clone(),
+            ..Listing::default()
+        })
+    }
+
+    fn purge(
+        &self,
+        ids: &[ExecExpiryId],
+        consent: &purge_exec::expiry::PurgeConsent,
+        _: FileTime,
+    ) -> Result<purge_exec::expiry::PurgeReport, purge_exec::expiry::PurgeError> {
+        self.purges.lock().unwrap().push(
+            ids.iter()
+                .map(|id| {
+                    (
+                        id.clone(),
+                        consent.allows_early(id),
+                        consent.confirms_user_data(id),
+                    )
+                })
+                .collect(),
+        );
+        let mut items = Vec::new();
+        let mut not_due = self.not_due.lock().unwrap();
+        for id in ids {
+            let listed = not_due.iter().position(|item| item.id == *id);
+            let goes = listed.is_some_and(|at| {
+                consent.allows_early(id)
+                    && (!not_due[at].user_data || consent.confirms_user_data(id))
+            });
+            if let (true, Some(at)) = (goes, listed) {
+                not_due.remove(at);
+            }
+            items.push(purge_exec::expiry::PurgeResult {
+                id: id.clone(),
+                outcome: if goes {
+                    purge_exec::expiry::PurgeOutcome::Purged
+                } else {
+                    purge_exec::expiry::PurgeOutcome::Excluded(
+                        purge_exec::expiry::Exclusion::NotInQuarantine,
+                    )
+                },
+                expire_recorded: goes,
+                entries_deleted: u64::from(goes),
+                bytes_deleted: 0,
+                op_dir_removed: goes,
+            });
+        }
+        Ok(purge_exec::expiry::PurgeReport {
+            items,
+            alerts: Vec::new(),
+            index: purge_exec::expiry::IndexUpdate::NotNeeded,
+        })
     }
 }
 
@@ -361,6 +516,15 @@ impl Rig {
     }
 
     fn start_timed(timings: crate::timing::Timings) -> Rig {
+        Rig::start_with(timings, Arc::new(NoExpiry))
+    }
+
+    /// A broker whose quarantine store is `expiry` (for the delete step of `delete_after`).
+    fn start_over(expiry: Arc<MovedStore>) -> Rig {
+        Rig::start_with(crate::timing::Timings::default(), expiry)
+    }
+
+    fn start_with(timings: crate::timing::Timings, expiry: Arc<dyn ExpirySource>) -> Rig {
         let net = MemNet::default();
         let clock = Arc::new(FakeClock::default());
         let parent = Arc::new(FakeParent::default());
@@ -376,7 +540,7 @@ impl Rig {
         let handler = Wrapped {
             inner: BrokerHandler::new(
                 crate::uninstall::Flow::new(machine),
-                Purger::new(Arc::new(NoExpiry)),
+                Purger::new(expiry),
                 UndoMethods::new(undo.clone()),
                 exec.clone(),
             ),
@@ -750,6 +914,299 @@ fn an_approved_plan_runs_the_plan_object_the_dialog_was_drawn_from() {
     // A completed change with no session left ends the broker once the client closes.
     c.close();
     assert_eq!(rig.exit(SECS).reason, ExitReason::CompletedChange);
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Delete instead of keeping in quarantine (`delete_after`, DECISIONS 2026-11-24)
+// ---------------------------------------------------------------------------------------------------
+
+fn execute_then_delete(plan: &str) -> Value {
+    json!({ "plan_id": plan, "restore_point": "off", "delete_after": true })
+}
+
+/// The ids of the run's session, as the store spells them.
+fn moved_ids(ops: &[u32]) -> Vec<String> {
+    ops.iter()
+        .map(|op| format!("{}/{op}", session_id()))
+        .collect()
+}
+
+/// `delete_after` is the normal move, recorded, and then a second decision: the move dialog says a
+/// second prompt follows and approves the move only; the "Delete now" dialog names exactly the
+/// quarantined items of the session the run made (no other session's item, no backup), says that it
+/// cannot be undone, and only its approval deletes them.
+#[test]
+fn delete_after_moves_first_and_deletes_only_what_its_own_dialog_approves() {
+    let store = MovedStore::after_run(&[(1, false), (2, false)]);
+    let mut rig = Rig::start_over(store.clone());
+    let c = rig.client();
+    let p = planned(&rig, &c, &[broker_id()]);
+    let frozen = rig.plan();
+
+    c.send_line(&request(5, "plan.execute", &execute_then_delete(&p.plan)));
+    let (seen, pages) = rig
+        .consent
+        .next_dialog(0, SECS)
+        .expect("the move dialog opened");
+    let text = text_of(&pages);
+    assert!(text.contains(&frozen.code.to_string()), "{text}");
+    assert!(text.contains("to quarantine?"), "it is the move: {text}");
+    assert!(
+        text.contains("a second prompt names the quarantined files")
+            && text.contains("this prompt approves the move only"),
+        "the move dialog says what follows: {text}"
+    );
+    assert_eq!(rig.exec.calls(), 0);
+    assert_eq!(store.listings.load(Ordering::SeqCst), 0);
+    rig.consent.answer(Answer::Approved);
+
+    // The run is finished before the second dialog opens; nothing is deleted yet.
+    let (_, pages) = rig
+        .consent
+        .next_dialog(seen, SECS)
+        .expect("the Delete now dialog opened");
+    assert_eq!(rig.exec.completed.load(Ordering::SeqCst), 1);
+    assert!(store.purged_ids().is_empty());
+    let text = text_of(&pages);
+    assert!(
+        text.contains("Delete 2 quarantined items now, before their retention ends?"),
+        "{text}"
+    );
+    assert!(text.contains("This cannot be undone"), "{text}");
+    assert!(
+        text.contains("Undo and History can no longer restore them"),
+        "{text}"
+    );
+    assert!(
+        text.contains("moved-1") && text.contains("moved-2"),
+        "{text}"
+    );
+    assert!(
+        !text.contains(&other_session().to_string()) && !text.contains("regbackup"),
+        "nothing of another session and no backup: {text}"
+    );
+    assert!(
+        !text.contains(&frozen.code.to_string()),
+        "not the move's code: {text}"
+    );
+    rig.consent.answer(Answer::Approved);
+
+    let (reply, notes) = answer_with_notes(&c);
+    assert_eq!(reply["result"]["outcome"], "complete", "{reply}");
+    assert_eq!(reply["result"]["counts"]["done"], 1);
+    assert_eq!(
+        reply["result"]["delete_after"],
+        json!({ "outcome": "deleted", "purged": 2, "kept": 0 }),
+        "{reply}"
+    );
+    assert_eq!(store.purged_ids(), vec![moved_ids(&[1, 2])]);
+    assert!(
+        store.purges.lock().unwrap()[0]
+            .iter()
+            .all(|(_, early, confirmed)| *early && !*confirmed),
+        "allowed early by the Delete now approval, nothing confirmed as user data"
+    );
+    assert_eq!(store.left(), vec![format!("{}/1", other_session())]);
+    assert_eq!(store.not_due_backups.lock().unwrap().len(), 1);
+    assert!(
+        notes.iter().any(|n| n["method"] == "exec.progress"
+            && n["params"]["phase"] == crate::execute::DELETE_AFTER_PHASE),
+        "the client is told that the delete step began: {notes:?}"
+    );
+    let shown = notes
+        .iter()
+        .filter(|n| n["method"] == "consent.shown")
+        .count();
+    assert_eq!(shown, 2, "each dialog announces its own code: {notes:?}");
+
+    c.close();
+    assert_eq!(rig.exit(SECS).reason, ExitReason::CompletedChange);
+}
+
+/// A declined "Delete now" after the move deletes nothing: the items stay in quarantine, the answer
+/// says so, and the move's own outcome is unchanged.
+#[test]
+fn a_declined_delete_after_the_move_leaves_everything_in_quarantine() {
+    let store = MovedStore::after_run(&[(1, false), (2, true)]);
+    let rig = Rig::start_over(store.clone());
+    let c = rig.client();
+    let p = planned(&rig, &c, &[broker_id()]);
+
+    c.send_line(&request(5, "plan.execute", &execute_then_delete(&p.plan)));
+    let (seen, _) = rig.consent.next_dialog(0, SECS).expect("the move dialog");
+    rig.consent.answer(Answer::Approved);
+    let (seen, _) = rig
+        .consent
+        .next_dialog(seen, SECS)
+        .expect("the Delete now dialog");
+    rig.consent.answer(Answer::Declined);
+    assert!(
+        rig.consent
+            .next_dialog(seen, Duration::from_millis(150))
+            .is_none(),
+        "a Cancel asks for no user data either"
+    );
+    let reply = answer_of(&c);
+    assert_eq!(reply["result"]["outcome"], "complete", "{reply}");
+    assert_eq!(
+        reply["result"]["delete_after"],
+        json!({ "outcome": "declined", "purged": 0, "kept": 2 }),
+        "{reply}"
+    );
+    assert!(store.purged_ids().is_empty());
+    assert_eq!(store.left().len(), 3, "nothing was deleted");
+    assert_eq!(rig.exec.calls(), 1);
+}
+
+/// User data the run moved gets a "Delete now" dialog of its own; declining it keeps that item and
+/// the answer is `partial`.
+#[test]
+fn delete_after_asks_for_user_data_one_item_per_dialog() {
+    let store = MovedStore::after_run(&[(1, false), (2, true)]);
+    let rig = Rig::start_over(store.clone());
+    let c = rig.client();
+    let p = planned(&rig, &c, &[broker_id()]);
+
+    c.send_line(&request(5, "plan.execute", &execute_then_delete(&p.plan)));
+    let (seen, _) = rig.consent.next_dialog(0, SECS).expect("the move dialog");
+    rig.consent.answer(Answer::Approved);
+    let (seen, pages) = rig.consent.next_dialog(seen, SECS).expect("the bulk");
+    let text = text_of(&pages);
+    assert!(
+        text.contains("moved-1") && !text.contains("moved-2"),
+        "{text}"
+    );
+    rig.consent.answer(Answer::Approved);
+    let (_, pages) = rig.consent.next_dialog(seen, SECS).expect("the user data");
+    let text = text_of(&pages);
+    assert!(
+        text.contains("Delete this user data now, before its retention ends?"),
+        "{text}"
+    );
+    assert!(
+        text.contains("moved-2") && !text.contains("moved-1"),
+        "{text}"
+    );
+    rig.consent.answer(Answer::Declined);
+
+    let reply = answer_of(&c);
+    assert_eq!(
+        reply["result"]["delete_after"],
+        json!({ "outcome": "partial", "purged": 1, "kept": 1 }),
+        "{reply}"
+    );
+    assert_eq!(store.purged_ids(), vec![moved_ids(&[1])]);
+    assert!(store.left().contains(&format!("{}/2", session_id())));
+}
+
+/// Without `delete_after` there is one dialog, it says nothing of a second prompt, the store is never
+/// listed and the answer has no `delete_after`. A declined move with `delete_after` runs nothing and
+/// asks nothing more.
+#[test]
+fn the_delete_step_exists_only_for_a_request_that_asked_and_a_move_that_ran() {
+    let store = MovedStore::after_run(&[(1, false)]);
+    let rig = Rig::start_over(store.clone());
+    let c = rig.client();
+    let p = planned(&rig, &c, &[broker_id(), medium_id()]);
+
+    // Declined move: no run, no second dialog, no listing.
+    c.send_line(&request(5, "plan.execute", &execute_then_delete(&p.plan)));
+    let (seen, _) = rig.consent.next_dialog(0, SECS).expect("the move dialog");
+    rig.consent.answer(Answer::Declined);
+    let reply = answer_of(&c);
+    assert_eq!(kind(&reply), "consent_declined", "{reply}");
+    assert!(
+        rig.consent
+            .next_dialog(seen, Duration::from_millis(150))
+            .is_none()
+    );
+    assert_eq!(rig.exec.calls(), 0);
+    assert_eq!(store.listings.load(Ordering::SeqCst), 0);
+
+    // The same scan planned again, executed without the flag (explicitly false, as absent).
+    let again = create_selected(&c, 6, &p.scan, &[&p.item]);
+    let plan = created_id(&again);
+    c.send_line(&request(
+        7,
+        "plan.execute",
+        &json!({ "plan_id": plan, "restore_point": "off", "delete_after": false }),
+    ));
+    let (seen, pages) = rig
+        .consent
+        .next_dialog(seen, SECS)
+        .expect("the move dialog");
+    assert!(
+        !text_of(&pages).contains("second prompt"),
+        "{}",
+        text_of(&pages)
+    );
+    rig.consent.answer(Answer::Approved);
+    let reply = answer_of(&c);
+    assert_eq!(reply["result"]["outcome"], "complete", "{reply}");
+    assert!(reply["result"].get("delete_after").is_none(), "{reply}");
+    assert!(
+        rig.consent
+            .next_dialog(seen, Duration::from_millis(150))
+            .is_none()
+    );
+    assert_eq!(store.listings.load(Ordering::SeqCst), 0);
+    assert!(store.purged_ids().is_empty());
+}
+
+/// A run that left nothing deletable in quarantine (the session is held, or moved nothing) answers
+/// `nothing` without a dialog; a store that cannot be listed answers `failed`. Nothing is deleted.
+#[test]
+fn delete_after_with_nothing_listed_or_a_failing_store_deletes_nothing() {
+    for (fail, want) in [(false, "nothing"), (true, "failed")] {
+        // Only another session's item and a backup are in the store.
+        let store = MovedStore::after_run(&[]);
+        store.fail_listing.store(fail, Ordering::SeqCst);
+        let rig = Rig::start_over(store.clone());
+        let c = rig.client();
+        let p = planned(&rig, &c, &[broker_id()]);
+        c.send_line(&request(5, "plan.execute", &execute_then_delete(&p.plan)));
+        let (seen, _) = rig.consent.next_dialog(0, SECS).expect("the move dialog");
+        rig.consent.answer(Answer::Approved);
+        let reply = answer_of(&c);
+        assert_eq!(reply["result"]["outcome"], "complete", "{reply}");
+        assert_eq!(
+            reply["result"]["delete_after"],
+            json!({ "outcome": want, "purged": 0, "kept": 0 }),
+            "{reply}"
+        );
+        assert!(
+            rig.consent
+                .next_dialog(seen, Duration::from_millis(150))
+                .is_none(),
+            "no dialog for another session's item or a backup"
+        );
+        assert!(store.purged_ids().is_empty());
+        assert_eq!(store.left(), vec![format!("{}/1", other_session())]);
+    }
+}
+
+/// The client is lost while the approved move runs: the move finishes and is recorded, and the delete
+/// step deletes nothing (its dialog is never approved by anyone).
+#[test]
+fn a_client_lost_during_the_move_gets_the_move_and_no_delete() {
+    let store = MovedStore::after_run(&[(1, false)]);
+    let mut rig = Rig::start_over(store.clone());
+    let c = rig.client();
+    let p = planned(&rig, &c, &[broker_id(), medium_id()]);
+    rig.exec.hold_runs();
+    c.send_line(&request(5, "plan.execute", &execute_then_delete(&p.plan)));
+    assert!(rig.consent.wait_open(SECS));
+    rig.consent.answer(Answer::Approved);
+    assert!(rig.exec.started.wait(SECS), "the run started");
+
+    c.close();
+    assert!(rig.running(), "the broker waits for the change it started");
+    rig.exec.hold.open();
+    let exit = rig.exit(SECS);
+    assert_eq!(exit.reason, ExitReason::PipeLost);
+    assert_eq!(rig.exec.completed.load(Ordering::SeqCst), 1);
+    assert!(store.purged_ids().is_empty(), "nothing was deleted");
+    assert_eq!(store.left().len(), 2);
 }
 
 /// The marks of a result's `timings` (design 9.1): name and ms, after a check that they never go back.

@@ -48,8 +48,14 @@ public sealed partial class VaultBatch(VaultBatchModel model) : System.Component
         }
     }
 
-    /// <summary>"Delete now" is offered while the cleanup still has files in quarantine; backups are not deleted early.</summary>
-    public Visibility DeleteVisibility => Model.FilesPurged ? Visibility.Collapsed : Visibility.Visible;
+    /// <summary>
+    /// "Delete now" is offered while the cleanup still has files in quarantine, or registry backups (those only with
+    /// the tick of its choice, DECISIONS 2026-11-24).
+    /// </summary>
+    public Visibility DeleteVisibility => Model.CanDeleteNow(alsoBackups: true) ? Visibility.Visible : Visibility.Collapsed;
+
+    /// <summary>"Choose items" lists quarantined files only: a backup belongs to a registry change, not to a file.</summary>
+    public Visibility ChooseVisibility => Model.FilesPurged ? Visibility.Collapsed : Visibility.Visible;
 
     /// <summary>"Put back…", or "Undo registry changes…" once the files are gone and only registry backups are left.</summary>
     public string RestoreText => Model.RegistryOnly ? "Undo registry changes…" : "Put back…";

@@ -90,6 +90,62 @@ public sealed class LeftoversBrokerTests
     }
 
     /// <summary>
+    /// "Delete instead of keeping in quarantine" on the wire (DECISIONS 2026-11-24): the same <c>plan.execute</c> with
+    /// <c>delete_after: true</c> and nothing else new (no item, no path, no id); the plain call says <c>false</c>.
+    /// The two prompts announce two codes, the phase of the delete step is forwarded, and the answer's
+    /// <c>delete_after</c> is read; an answer without it reads as null.
+    /// </summary>
+    [Fact]
+    public async Task DeleteAfterIsOneFlagOnPlanExecuteAndItsAnswerIsRead()
+    {
+        await using var peer = await Peer.StartAsync((line, p) =>
+        {
+            var (id, method) = Peer.RequestOf(line);
+            if (method != "plan.execute") return;
+            var asked = line.Contains("\"delete_after\":true", StringComparison.Ordinal);
+            p.Send($"{{\"jsonrpc\":\"2.0\",\"method\":\"consent.shown\",\"params\":{{\"request\":{id},\"code\":\"A1B2-C3D4\"}}}}");
+            if (asked)
+            {
+                p.Send($"{{\"jsonrpc\":\"2.0\",\"method\":\"exec.progress\",\"params\":{{\"request\":{id},\"phase\":\"delete_after\",\"done\":1,\"total\":1}}}}");
+                p.Send($"{{\"jsonrpc\":\"2.0\",\"method\":\"consent.shown\",\"params\":{{\"request\":{id},\"code\":\"E5F6-A7B8\"}}}}");
+            }
+            p.Send($"{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":{{\"outcome\":\"complete\",\"session\":\"sess-1\"," +
+                   "\"counts\":{\"done\":2,\"vanished\":0},\"held\":[],\"restore_point\":{\"kind\":\"NotRequested\"}" +
+                   (asked ? ",\"delete_after\":{\"outcome\":\"partial\",\"purged\":1,\"kept\":1}" : "") + "}}");
+        });
+        await using var rpc = BrokerRpcClient.Over(peer.Client, ownsStream: true);
+        var broker = new LeftoversBroker(rpc);
+        var codes = new List<string>();
+        broker.ConsentShown += shown => { lock (codes) codes.Add(shown.Code); };
+        var phases = new List<string>();
+        var progress = new ListProgress(phases);
+
+        var plain = await broker.ExecuteAsync("p-1", RestorePoint.Off, progress, CancellationToken.None);
+        Assert.Null(plain.DeleteAfter);
+
+        var result = await broker.ExecuteThenDeleteAsync("p-2", RestorePoint.HighRisk, progress, CancellationToken.None);
+        Assert.Equal(Outcome.Complete, result.Outcome);
+        Assert.NotNull(result.DeleteAfter);
+        Assert.Equal(DeleteAfterOutcome.Partial, result.DeleteAfter!.Outcome);
+        Assert.Equal((1u, 1u), (result.DeleteAfter.Purged, result.DeleteAfter.Kept));
+        Assert.Equal(["delete_after"], phases);
+        Assert.Equal(["A1B2-C3D4", "A1B2-C3D4", "E5F6-A7B8"], codes);
+
+        var requests = peer.Requests;
+        Assert.Contains("\"params\":{\"delete_after\":false,\"plan_id\":\"p-1\",\"restore_point\":\"off\"}", requests[0]);
+        Assert.Contains("\"params\":{\"delete_after\":true,\"plan_id\":\"p-2\",\"restore_point\":\"high_risk\"}", requests[1]);
+    }
+
+    /// <summary>A progress sink that records the phases as they arrive (no synchronization context in between).</summary>
+    private sealed class ListProgress(List<string> phases) : IProgress<Progress>
+    {
+        public void Report(Progress value)
+        {
+            lock (phases) phases.Add(value.Phase);
+        }
+    }
+
+    /// <summary>
     /// The broker's optional <c>timings</c> member (design 9.1, gate G12) is read when present, a mark name or member
     /// the client does not know changes nothing, and a result without it reads as before (null).
     /// </summary>

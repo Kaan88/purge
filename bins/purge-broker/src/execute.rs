@@ -24,6 +24,7 @@
 //! | Cancel, a dialog that could not be shown, a broker that is ending | `consent_declined` | nothing |
 //! | the executor refused before it started (not elevated, cap, store, objects not vouched for) | the error | nothing |
 //! | the run ended | `{outcome, session, counts, held[], restore_point}` | the run, recorded |
+//! | the run ended and the request had `delete_after` | the same, plus `delete_after {outcome, purged, kept}` | the run, recorded; then what the "Delete now" dialogs approved |
 //!
 //! A scan is claimed by its live plan. The claim is given back whenever **nothing ran**, so a declined
 //! dialog (or a refusal) can be followed by a new `plan.create` of the same scan. Once the executor
@@ -35,6 +36,18 @@
 //! The run is finished and recorded even when the client or its parent is gone (the answer is dropped,
 //! `exec.progress` stops): the handler never looks at [`Ctx::cancelled`] after the approval. Before the
 //! approval a lost pipe or parent closes the dialog as Cancel (the core's `Closer`), and nothing runs.
+//!
+//! # Delete instead of keeping in quarantine (`delete_after`, DECISIONS 2026-11-24)
+//!
+//! There is no delete-in-place. With `delete_after` the run is the same run: the same dialog (which
+//! then also says that a second prompt follows and that it approves the move only), the same journal,
+//! backups and verification, and it is finished and recorded first. Only then the handler calls
+//! `delete_after` (the broker gives [`crate::purge::Purger::delete_after_run`]): the purge path's
+//! "Delete now" over the quarantined items of the session this run made, as a fresh listing of the
+//! store names them, with its own dialogs (user data one item per dialog) and the executor's own
+//! purge walk. The client names nothing; registry backups are not part of it. A declined, lost,
+//! busy or failed second step leaves the items in quarantine for their retention, and the answer
+//! says which (`delete_after.outcome`); the move's own `outcome` and counts never change with it.
 //!
 //! # Outcomes (design 6.4)
 //!
@@ -57,11 +70,11 @@ use purge_exec::plan_in::{BoundPlan, ExecSettings};
 use purge_exec::prepare::{RestorePointSetting, RiskItem, risk_reasons};
 use purge_exec::storage::StorageError;
 use purge_model::exec::op::ItemOutcome;
-use purge_model::exec::session::{RETAIN_QUARANTINE_DAYS, SessionState};
+use purge_model::exec::session::{RETAIN_QUARANTINE_DAYS, SessionId, SessionState};
 use purge_model::{FileTime, Fingerprint};
 use purge_rpc::error::{ErrorData, ErrorObject, Outcome, Refusal};
 use purge_rpc::methods::{
-    CandidateRef, ExecResult, HeldItem, PlanExecuteParams, Progress, RestorePoint,
+    CandidateRef, DeleteAfter, ExecResult, HeldItem, PlanExecuteParams, Progress, RestorePoint,
     ServerNotification,
 };
 use purge_rpc::timing::TimingName;
@@ -74,6 +87,10 @@ use crate::consent::view::{self, Facts};
 use crate::history::display_name;
 use crate::plan::Plan;
 use crate::uninstall::FlowHandler;
+
+/// The `exec.progress` phase sent once the move is recorded and the "Delete now" step of a request
+/// with `delete_after` begins.
+pub const DELETE_AFTER_PHASE: &str = "delete_after";
 
 /// FILETIME ticks (100 ns) per day.
 const TICKS_PER_DAY: u64 = 864_000_000_000;
@@ -147,11 +164,15 @@ fn restore_point_requested(plan: &BoundPlan, setting: RestorePointSetting) -> bo
 /// `plan.execute`: the dialog, then the run the dialog described.
 ///
 /// `check_nothing_pending` is the check that an interrupted session comes first
-/// ([`crate::undo::UndoMethods::check_nothing_pending`]).
+/// ([`crate::undo::UndoMethods::check_nothing_pending`]). `delete_after` is the second step of a
+/// request with `delete_after`: the purge path's "Delete now" over the quarantined items of the
+/// session the run made ([`crate::purge::Purger::delete_after_run`]); it is called only after a run
+/// that was recorded, and never for a request that did not ask.
 pub fn run<H: FlowHandler>(
     ctx: &crate::serve::Ctx<'_, H>,
     backend: &dyn ExecBackend,
     check_nothing_pending: &dyn Fn() -> Result<(), ErrorObject>,
+    delete_after: &dyn Fn(&SessionId) -> DeleteAfter,
     params: PlanExecuteParams,
 ) -> Result<Value, ErrorObject> {
     // A plan id works once, whatever happens next.
@@ -173,7 +194,15 @@ pub fn run<H: FlowHandler>(
         }));
     }
     let ran = Cell::new(false);
-    let result = execute_plan(ctx, backend, check_nothing_pending, &plan, &params, &ran);
+    let result = execute_plan(
+        ctx,
+        backend,
+        check_nothing_pending,
+        delete_after,
+        &plan,
+        &params,
+        &ran,
+    );
     if !ran.get() {
         // Nothing was changed: the scan can have its next plan.
         plan.release(ctx.tables(), params.plan_id);
@@ -202,6 +231,7 @@ fn execute_plan<H: FlowHandler>(
     ctx: &crate::serve::Ctx<'_, H>,
     backend: &dyn ExecBackend,
     check_nothing_pending: &dyn Fn() -> Result<(), ErrorObject>,
+    delete_after: &dyn Fn(&SessionId) -> DeleteAfter,
     plan: &Plan,
     params: &PlanExecuteParams,
     ran: &Cell<bool>,
@@ -218,6 +248,7 @@ fn execute_plan<H: FlowHandler>(
             .checked_add(u64::from(RETAIN_QUARANTINE_DAYS) * TICKS_PER_DAY)
             .and_then(|until| stamp_of(FileTime(until))),
         restore_point: restore_point_requested(&bound, setting),
+        delete_after: params.delete_after,
     };
     let consent = view::view(&bound, &facts)
         .map_err(|e| ErrorObject::runtime(format!("the dialog cannot be built: {e}")))?;
@@ -263,10 +294,22 @@ fn execute_plan<H: FlowHandler>(
     let output = backend.execute(job, &progress).map_err(failure_error)?;
     ctx.mark(TimingName::ExecuteComplete);
     ran.set(true);
-    let result = ExecResult {
+    let mut result = ExecResult {
         timings: ctx.timings(),
         ..result_of(&output, plan.bound())
     };
+    if params.delete_after {
+        // The move is finished and recorded; this is a second decision with its own dialogs. The
+        // client is told that a prompt follows (it shows the code of `consent.shown`).
+        let _ = ctx.notify(&ServerNotification::ExecProgress(Progress {
+            request: ctx.request(),
+            program_id: None,
+            phase: DELETE_AFTER_PHASE.to_owned(),
+            done: finished.get(),
+            total: Some(total),
+        }));
+        result.delete_after = Some(delete_after(&output.session));
+    }
     serde_json::to_value(result).map_err(|e| ErrorObject::runtime(e.to_string()))
 }
 
@@ -319,6 +362,7 @@ fn result_of(output: &ExecOutput, plan: &BoundPlan) -> ExecResult {
         held,
         restore_point: report.restore_point.clone(),
         timings: None,
+        delete_after: None,
     }
 }
 

@@ -271,7 +271,45 @@ public sealed class LeftoversViewModel : INotifyPropertyChanged
     public int SelectableCount => Items.Count(i => i.Selectable);
     public int SelectedCount => Items.Count(i => i.Checked && i.Selectable);
     public ulong SelectedBytes => Items.Where(i => i.Checked && i.Selectable).Aggregate(0UL, (sum, item) => sum + (item.SizeBytes ?? 0));
-    public string MoveText => SelectedCount == 1 ? "Move 1 item to quarantine…" : $"Move {SelectedCount} items to quarantine…";
+    public string MoveText => DeleteAfter
+        ? SelectedCount == 1 ? "Move 1 item, then delete it…" : $"Move {SelectedCount} items, then delete them…"
+        : SelectedCount == 1 ? "Move 1 item to quarantine…" : $"Move {SelectedCount} items to quarantine…";
+
+    /// <summary>The tick box of <see cref="DeleteAfter"/>.</summary>
+    public const string DeleteAfterText = "Delete instead of keeping in quarantine";
+
+    /// <summary>What the tick box of <see cref="DeleteAfter"/> means, for its tooltip.</summary>
+    public const string DeleteAfterHelp =
+        "Purge still moves the items to quarantine first, so the move is checked and recorded as always. " +
+        "Then a second security prompt names the quarantined files and asks whether to delete them for good. " +
+        "Deleted files cannot be put back. Registry changes keep their backups and can still be undone.";
+
+    /// <summary>The <c>exec.progress</c> phase the broker sends when the move is recorded and its delete step begins.</summary>
+    public const string DeleteAfterPhase = "delete_after";
+
+    private bool _deleteAfter;
+
+    /// <summary>
+    /// "Delete instead of keeping in quarantine" (DECISIONS 2026-11-24), off by default and after every move. It is a
+    /// request to the broker (<c>plan.execute {delete_after}</c>), never a consent: the move runs as always, and what
+    /// it moved is deleted only when the broker's own second prompt is approved. Without that approval, or if anything
+    /// fails in between, the items are in quarantine like after every other move.
+    /// </summary>
+    public bool DeleteAfter
+    {
+        get => _deleteAfter;
+        set
+        {
+            if (_deleteAfter == value) return;
+            _deleteAfter = value;
+            // The button text only: a tick must not rebuild the list.
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DeleteAfter)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(MoveText)));
+        }
+    }
+
+    /// <summary>What became of the delete step of the last move, in words; null when the move did not ask for one.</summary>
+    public string? DeleteAfterResult { get; private set; }
     public bool CanMove => Phase == LeftoversPhase.Review && SelectedCount > 0 && !_busy;
 
     /// <summary>
@@ -600,8 +638,11 @@ public sealed class LeftoversViewModel : INotifyPropertyChanged
         if (_busy || Scan is null) return;
         var chosen = Items.Where(i => i.Checked && i.Selectable).ToList();
         if (chosen.Count == 0) return;
+        // Read once: the request the broker gets is the one the page showed when the button was pressed.
+        var deleteAfter = DeleteAfter;
         _busy = true;
         _asked = chosen.Count;
+        DeleteAfterResult = null;
         Error = null;
         Info = null;
         RefusalLines.Clear();
@@ -632,18 +673,35 @@ public sealed class LeftoversViewModel : INotifyPropertyChanged
             Code = plan.Code;
             ApplyAttention(plan);
             WaitingTitle = "Confirm in the Purge security prompt.";
-            WaitingDetail = "Nothing has been moved yet. The prompt names the items and shows the same code.";
+            WaitingDetail = deleteAfter
+                ? "Nothing has been moved yet. The prompt names the items and shows the same code. " +
+                  "It approves the move only; a second prompt then asks about deleting."
+                : "Nothing has been moved yet. The prompt names the items and shows the same code.";
             Notify();
 
             _allowForeground?.Invoke();
             var progress = new Progress<ProgressDto>(p =>
             {
-                WaitingDetail = p.Phase;
+                if (deleteAfter && p.Phase == DeleteAfterPhase)
+                {
+                    // The move is done and recorded; the broker now asks its second question, with a code of its own.
+                    PromptUp = false;
+                    Code = null;
+                    WaitingTitle = "Confirm the delete in the second Purge security prompt.";
+                    WaitingDetail = "The items are in quarantine. Nothing has been deleted yet.";
+                    _allowForeground?.Invoke();
+                }
+                else WaitingDetail = p.Phase;
                 Changed?.Invoke();
             });
-            var result = await _broker.ExecuteAsync(plan.PlanId, restorePoint, progress, ct);
+            var result = deleteAfter
+                ? await _broker.ExecuteThenDeleteAsync(plan.PlanId, restorePoint, progress, ct)
+                : await _broker.ExecuteAsync(plan.PlanId, restorePoint, progress, ct);
             Result = result;
             BuildResult(result);
+            if (deleteAfter) DeleteAfterResult = DescribeDeleteAfter(result.DeleteAfter);
+            // Off again: the next move keeps its items unless the box is ticked again.
+            DeleteAfter = false;
             Phase = LeftoversPhase.Result;
             WaitingTitle = "";
         }
@@ -759,6 +817,36 @@ public sealed class LeftoversViewModel : INotifyPropertyChanged
         RestorePointText = result.RestorePoint.Kind == "Created"
             ? $"Restore point {result.RestorePoint.Sequence?.ToString(CultureInfo.CurrentCulture)} made before the move."
             : null;
+    }
+
+    /// <summary>
+    /// The result line of the delete step. Whatever is not counted as deleted is in quarantine, and the line says so:
+    /// a cancelled or failed second step never loses an item and never claims a delete.
+    /// </summary>
+    public static string DescribeDeleteAfter(DeleteAfter? step)
+    {
+        const string Kept = "can be put back for 30 days from the Quarantine page or History & undo";
+        // An answer without the step (a broker that does not know the request): nothing was deleted.
+        if (step is null) return $"The delete step did not run. What was moved is in quarantine and {Kept}.";
+        var n = step.Purged.ToString(CultureInfo.CurrentCulture);
+        var k = step.Kept.ToString(CultureInfo.CurrentCulture);
+        return step.Outcome switch
+        {
+            DeleteAfterOutcome.Deleted =>
+                $"Then deleted for good, as you asked: {n} quarantined {(step.Purged == 1 ? "item" : "items")}. " +
+                "That cannot be undone. Registry and other changes of this cleanup can still be undone.",
+            DeleteAfterOutcome.Partial =>
+                $"Then deleted for good: {n}. Still in quarantine: {k} (declined, or not deletable now); " +
+                $"{(step.Kept == 1 ? "it" : "they")} {Kept}.",
+            DeleteAfterOutcome.Declined =>
+                $"Nothing was deleted: the delete prompt was cancelled. What was moved is in quarantine and {Kept}.",
+            DeleteAfterOutcome.Nothing =>
+                "Nothing was deleted: this cleanup left nothing in quarantine that can be deleted now.",
+            DeleteAfterOutcome.Failed =>
+                $"The delete did not go through. What was moved is safe in quarantine and {Kept}; " +
+                "you can delete it from the Quarantine page.",
+            _ => $"The delete step did not finish. What was not deleted is in quarantine and {Kept}.",
+        };
     }
 
     /// <summary><c>undo.run</c> for everything the result's session moved.</summary>

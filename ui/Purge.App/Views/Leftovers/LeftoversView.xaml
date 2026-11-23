@@ -245,6 +245,8 @@
                         <TextBlock x:Name="ResultTitleText" FontSize="24" FontWeight="SemiBold" TextWrapping="Wrap" VerticalAlignment="Center" />
                     </StackPanel>
                     <TextBlock x:Name="ResultDetailText" FontSize="14" TextWrapping="Wrap" />
+                    <!-- "Delete instead of keeping in quarantine": what became of the second step (DECISIONS 2026-11-24). -->
+                    <TextBlock x:Name="DeleteAfterResultText" FontSize="14" TextWrapping="Wrap" Visibility="Collapsed" />
                     <TextBlock x:Name="RestorePointText" FontSize="13" Style="{StaticResource SecondaryText}" TextWrapping="Wrap" />
 
                     <StackPanel x:Name="HeldHost" Spacing="6" Visibility="Collapsed">
@@ -317,8 +319,13 @@
                 <Run x:Name="FooterCount" FontWeight="SemiBold" />
                 <Run x:Name="FooterDetail" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
             </TextBlock>
-            <TextBlock Grid.Column="1" Text="You'll confirm in the Purge security prompt" FontSize="12" VerticalAlignment="Center"
-                       Style="{StaticResource SecondaryText}" />
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="16" VerticalAlignment="Center">
+                <!-- Secondary on purpose: the default keeps everything in quarantine. A request only; the broker moves
+                     first and asks in a second prompt of its own before it deletes anything (DECISIONS 2026-11-24). -->
+                <CheckBox x:Name="DeleteAfterBox" MinWidth="0" FontSize="12" VerticalAlignment="Center" Click="OnDeleteAfter" />
+                <TextBlock Text="You'll confirm in the Purge security prompt" FontSize="12" VerticalAlignment="Center"
+                           Style="{StaticResource SecondaryText}" />
+            </StackPanel>
             <Button Grid.Column="2" Content="Skip" Click="OnSkip" />
             <Button x:Name="MoveButton" Grid.Column="3" Style="{StaticResource AccentButtonStyle}" Click="OnMove">
                 <StackPanel Orientation="Horizontal" Spacing="8">

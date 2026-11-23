@@ -85,12 +85,18 @@ public sealed class BrokerHelloTests
         var all = await vault.ExpiringAsync(true, CancellationToken.None).WaitAsync(Limit);
         await vault.ExpiringAsync(false, CancellationToken.None).WaitAsync(Limit);
         await vault.PurgeAsync([all.Items[0].ExpiryId], CancellationToken.None).WaitAsync(Limit);
+        // "Also delete its registry backups": the same two calls; only the listing asks for more, the delete still
+        // names ids and nothing else (the broker reads from its own listing that an id is a backup that is not due).
+        await vault.ExpiringWithBackupsAsync(CancellationToken.None).WaitAsync(Limit);
+        await vault.PurgeAsync([all.Items[0].ExpiryId], CancellationToken.None).WaitAsync(Limit);
 
         Assert.True(all.Items[0].Due);
         Assert.Equal(
             [
-                ("quarantine.expiring", "{\"include_not_due\":true}"),
-                ("quarantine.expiring", "{\"include_not_due\":false}"),
+                ("quarantine.expiring", "{\"include_backups_not_due\":false,\"include_not_due\":true}"),
+                ("quarantine.expiring", "{\"include_backups_not_due\":false,\"include_not_due\":false}"),
+                ("quarantine.purge", "{\"expiry_ids\":[\"e-0e0e000000000007\"]}"),
+                ("quarantine.expiring", "{\"include_backups_not_due\":true,\"include_not_due\":true}"),
                 ("quarantine.purge", "{\"expiry_ids\":[\"e-0e0e000000000007\"]}"),
             ],
             peer.Requests.Skip(1));

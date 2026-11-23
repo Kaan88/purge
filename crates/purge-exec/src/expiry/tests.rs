@@ -2443,8 +2443,10 @@ fn an_early_delete_of_user_data_needs_its_own_confirmation() {
     assert_deletes_inside(&fx.quarantine_of(built.session.id()));
 }
 
+/// The early mark of quarantined items ([`PurgeConsent::allow_early`], what a "Delete now" of files
+/// gives) never reaches a backup: without the mark of its own, a backup stays until its class is due.
 #[test]
-fn backups_are_never_deleted_before_their_class_is_due_whatever_the_consent_allows() {
+fn backups_are_never_deleted_before_their_class_is_due_by_the_early_mark_of_items() {
     let fx = Fx::new("early-backups");
     let b = build_backups(&fx, at_day(0), true, true);
     // Before the quarantine's retention ends, after it, and on the last day before the backups' own.
@@ -2454,6 +2456,8 @@ fn backups_are_never_deleted_before_their_class_is_due_whatever_the_consent_allo
             listing.backups.is_empty() && listing.not_due.is_empty(),
             "{listing:?}"
         );
+        // They are offered apart, never among the quarantined items or the due backups.
+        assert_eq!(listing.not_due_backups.len(), 2, "{listing:?}");
         let mut consent = naming_files(&b);
         for id in &b.ids {
             consent.allow_early(id.clone());
@@ -2519,6 +2523,388 @@ fn an_early_delete_leaves_the_backups_of_the_session_and_held_sessions_alone() {
     );
     assert!(exists(&held.quarantined[0]));
     assert!(expire_records(&held.session).is_empty());
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Deleting an op's backup files before the backup class is due (DECISIONS 2026-11-24)
+// ---------------------------------------------------------------------------------------------------
+
+/// A consent naming every op of `b` and its file, and allowing the backups of `ids` early.
+fn early_backups(b: &Backups, ids: &[ExpiryId]) -> PurgeConsent {
+    let mut consent = naming_files(b);
+    for id in ids {
+        consent.allow_early_backup(id.clone());
+    }
+    consent
+}
+
+#[test]
+fn backups_before_their_class_is_due_are_listed_apart_and_deleted_only_with_their_own_early_consent()
+ {
+    let fx = Fx::new("early-bk");
+    let b = build_backups(&fx, at_day(0), true, true);
+    let serial = b.session.dir().volume_serial();
+    let mut index = SessionIndex::default();
+    index.upsert(SessionSummary {
+        id: b.session.id().clone(),
+        app: "vendor-app".into(),
+        owner: None,
+        plan_hash: sha256_bytes(b"plan"),
+        state: SessionState::Committed,
+        started: at_day(0),
+        finished: Some(at_day(0)),
+        counts: Default::default(),
+        undone: 0,
+        backup_bytes: 12,
+        usage: vec![VolumeUsage {
+            serial,
+            root: r"C:\".into(),
+            bytes: 12,
+        }],
+        expires: Expiry::from_start(at_day(0)),
+        purged: Vec::new(),
+        pending_reboot: false,
+        journal: None,
+    });
+    fx.roots.write_index(&index).unwrap();
+    let now = at_day(3);
+
+    // Not due: nothing is proposed; both ops are listed apart, with what each would restore.
+    let listing = expiring(&fx.roots, now).unwrap();
+    assert!(listing.problems.is_empty(), "{:?}", listing.problems);
+    assert!(
+        listing.items.is_empty()
+            && listing.backups.is_empty()
+            && listing.not_due.is_empty()
+            && listing.held.is_empty()
+            && listing.due.is_empty(),
+        "{listing:?}"
+    );
+    let listed: Vec<(&ExpiryId, &[String], FileTime, bool)> = listing
+        .not_due_backups
+        .iter()
+        .map(|e| (&e.id, e.files.as_slice(), e.expires, e.unfinished))
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            (&b.ids[0], &b.files[..1], at_day(180), false),
+            (&b.ids[1], &b.files[1..], at_day(180), false),
+        ]
+    );
+    assert_eq!(
+        listing.not_due_backups[0].target,
+        Target::RegKey {
+            path: r"HKU\S-1-5-21-1-2-3-1001\Software\VendorApp".into()
+        }
+    );
+
+    // Named with every file, but not allowed early: nothing.
+    let report = purge(&fx.roots, &b.ids, &naming_files(&b), now).unwrap();
+    for id in &b.ids {
+        assert!(
+            matches!(
+                outcome_of(&report, id),
+                PurgeOutcome::Excluded(Exclusion::NotExpired { .. })
+            ),
+            "{report:?}"
+        );
+    }
+    // The early mark of a quarantined item is not the early mark of a backup.
+    let mut files_only = naming_files(&b);
+    files_only.allow_early(b.ids[0].clone());
+    assert!(!files_only.allows_early_backup(&b.ids[0]));
+    let report = purge(&fx.roots, &b.ids[..1], &files_only, now).unwrap();
+    assert!(
+        matches!(
+            outcome_of(&report, &b.ids[0]),
+            PurgeOutcome::Excluded(Exclusion::NotExpired { .. })
+        ),
+        "{report:?}"
+    );
+    // An early mark for an op the consent does not name counts for nothing.
+    let mut unnamed = PurgeConsent::default();
+    unnamed.allow_early_backup(b.ids[0].clone());
+    assert!(!unnamed.allows_early_backup(&b.ids[0]));
+    assert_eq!(
+        purge(&fx.roots, &b.ids[..1], &unnamed, now).unwrap_err(),
+        PurgeError::NotConsented(vec![b.ids[0].clone()])
+    );
+    // Allowed early, but a file is not named: nothing of the op.
+    let mut no_files = all(&b.ids);
+    no_files.allow_early_backup(b.ids[0].clone());
+    let report = purge(&fx.roots, &b.ids[..1], &no_files, now).unwrap();
+    assert_eq!(
+        outcome_of(&report, &b.ids[0]),
+        &PurgeOutcome::Excluded(Exclusion::FilesNotNamed {
+            files: vec![b.files[0].clone()]
+        })
+    );
+    assert!(b.files.iter().all(|f| backup_exists(&b, f)));
+    assert!(expire_records(&b.session).is_empty());
+
+    // The early mark of one op does not reach the other.
+    let report = purge(&fx.roots, &b.ids, &early_backups(&b, &b.ids[..1]), now).unwrap();
+    assert_eq!(outcome_of(&report, &b.ids[0]), &PurgeOutcome::Purged);
+    assert!(report.items[0].expire_recorded);
+    assert!(
+        matches!(
+            outcome_of(&report, &b.ids[1]),
+            PurgeOutcome::Excluded(Exclusion::NotExpired { .. })
+        ),
+        "{report:?}"
+    );
+    assert!(!backup_exists(&b, &b.files[0]) && backup_exists(&b, &b.files[1]));
+    // The record says it was asked for, and the op is not undone any more.
+    assert_eq!(early_marks(&b.session), [(OpId(1), true)]);
+    assert_eq!(
+        expire_records(&b.session),
+        [(OpId(1), RetentionClass::Backup)]
+    );
+    let state = journal::read(&b.session).unwrap().state;
+    assert!(state.op(OpId(1)).unwrap().deleted_early);
+    assert!(!state.op(OpId(2)).unwrap().deleted_early);
+    let mut w = JournalWriter::open_append(&b.session).unwrap();
+    assert!(w.undo_intent(OpId(1)).is_err());
+    drop(w);
+    // The index loses the bytes; the class is not purged while the other op keeps its file.
+    assert_eq!(report.index, IndexUpdate::Updated);
+    let s = fx.roots.read_index().unwrap().sessions[0].clone();
+    assert_eq!(s.backup_bytes, 6);
+    assert!(s.purged.is_empty());
+
+    // Deleted is deleted: listed nowhere, and asking again changes nothing (no replay).
+    let listing = expiring(&fx.roots, now).unwrap();
+    assert!(listing.backups.is_empty());
+    let listed: Vec<&ExpiryId> = listing.not_due_backups.iter().map(|e| &e.id).collect();
+    assert_eq!(listed, [&b.ids[1]]);
+    let report = purge(&fx.roots, &b.ids[..1], &early_backups(&b, &b.ids), now).unwrap();
+    assert_eq!(report.items[0].outcome, PurgeOutcome::AlreadyGone);
+    assert!(!report.items[0].expire_recorded);
+    assert_eq!(early_marks(&b.session), [(OpId(1), true)]);
+
+    // The other op: the class of the session is then purged, and nothing is listed any more.
+    let report = purge(&fx.roots, &b.ids[1..], &early_backups(&b, &b.ids), now).unwrap();
+    assert_eq!(report.items[0].outcome, PurgeOutcome::Purged, "{report:?}");
+    let s = fx.roots.read_index().unwrap().sessions[0].clone();
+    assert_eq!((s.backup_bytes, s.usage[0].bytes), (0, 0));
+    assert_eq!(s.purged, [RetentionClass::Backup]);
+    let listing = expiring(&fx.roots, at_day(200)).unwrap();
+    assert!(
+        listing.backups.is_empty()
+            && listing.not_due_backups.is_empty()
+            && !listing
+                .due
+                .iter()
+                .any(|d| d.class == RetentionClass::Backup),
+        "{listing:?}"
+    );
+
+    // A backup deleted once its class is due carries no early mark, with or without the consent's.
+    let due = build_backups(&fx, at_day(0), true, true);
+    let report = purge(
+        &fx.roots,
+        &due.ids[..1],
+        &early_backups(&due, &due.ids),
+        at_day(180),
+    )
+    .unwrap();
+    assert_eq!(report.items[0].outcome, PurgeOutcome::Purged, "{report:?}");
+    assert_eq!(early_marks(&due.session), [(OpId(1), false)]);
+}
+
+#[test]
+fn held_sessions_unsettled_ops_and_user_data_keep_their_backups_before_the_class_is_due() {
+    let fx = Fx::new("early-bk-held");
+    let now = at_day(5);
+    let untouched = |b: &Backups| {
+        assert!(b.files.iter().all(|f| backup_exists(b, f)));
+        assert!(expire_records(&b.session).is_empty());
+    };
+
+    // A run that has not ended: not listed, and refused whatever the consent says.
+    let open = build_backups(&fx, at_day(0), false, true);
+    let listing = expiring(&fx.roots, now).unwrap();
+    assert!(
+        listing.not_due_backups.is_empty() && listing.held.is_empty(),
+        "{listing:?}"
+    );
+    let report = purge(&fx.roots, &open.ids, &early_backups(&open, &open.ids), now).unwrap();
+    for id in &open.ids {
+        assert_eq!(
+            outcome_of(&report, id),
+            &PurgeOutcome::Excluded(Exclusion::Held(HoldReason::SessionOpen))
+        );
+    }
+    untouched(&open);
+    // Out of the way of the next sessions' listings.
+    let mut w = JournalWriter::open_append(&open.session).unwrap();
+    w.commit(at_day(1), 12).unwrap();
+    drop(w);
+
+    // An undo in progress holds the whole session.
+    let undoing = build_backups(&fx, at_day(0), true, true);
+    let mut w = JournalWriter::open_append(&undoing.session).unwrap();
+    w.undo_plan(at_day(1), vec![OpId(1)]).unwrap();
+    let _token = w.undo_intent(OpId(1)).unwrap();
+    drop(w);
+    let listing = expiring(&fx.roots, now).unwrap();
+    assert!(
+        !listing
+            .not_due_backups
+            .iter()
+            .any(|e| e.id.session == *undoing.session.id()),
+        "{listing:?}"
+    );
+    let report = purge(
+        &fx.roots,
+        &undoing.ids,
+        &early_backups(&undoing, &undoing.ids),
+        now,
+    )
+    .unwrap();
+    for id in &undoing.ids {
+        assert_eq!(
+            outcome_of(&report, id),
+            &PurgeOutcome::Excluded(Exclusion::Held(HoldReason::SessionUndoInProgress)),
+            "{report:?}"
+        );
+    }
+    untouched(&undoing);
+
+    // An op whose undo failed could still be undone by a second try: its backup is not offered and
+    // not deleted early; the other op of the session is. An op that was undone no longer needs its
+    // files and is offered.
+    let failed = build_backups(&fx, at_day(0), true, true);
+    let mut w = JournalWriter::open_append(&failed.session).unwrap();
+    w.undo_plan(at_day(1), vec![OpId(1)]).unwrap();
+    let token = w.undo_intent(OpId(1)).unwrap();
+    w.undo_done(
+        token,
+        UndoOutcome::Failed {
+            code: FailCode::VerifyFailed,
+            os_error: None,
+            detail: String::new(),
+        },
+    )
+    .unwrap();
+    drop(w);
+    let listing = expiring(&fx.roots, now).unwrap();
+    let listed: Vec<&ExpiryId> = listing
+        .not_due_backups
+        .iter()
+        .filter(|e| e.id.session == *failed.session.id())
+        .map(|e| &e.id)
+        .collect();
+    assert_eq!(listed, [&failed.ids[1]], "{listing:?}");
+    let report = purge(
+        &fx.roots,
+        &failed.ids[..1],
+        &early_backups(&failed, &failed.ids),
+        now,
+    )
+    .unwrap();
+    assert_eq!(
+        outcome_of(&report, &failed.ids[0]),
+        &PurgeOutcome::Excluded(Exclusion::Held(HoldReason::Unresolved)),
+        "{report:?}"
+    );
+    untouched(&failed);
+    // It still expires as usual.
+    let later = expiring(&fx.roots, at_day(181)).unwrap();
+    assert!(
+        later.backups.iter().any(|e| e.id == failed.ids[0]),
+        "{later:?}"
+    );
+
+    // User data (here: no scan copy, so every op counts as it) needs its own confirmation too.
+    let personal = build_backups(&fx, at_day(0), true, false);
+    let listing = expiring(&fx.roots, now).unwrap();
+    assert!(
+        listing
+            .not_due_backups
+            .iter()
+            .filter(|e| e.id.session == *personal.session.id())
+            .all(|e| e.user_data)
+    );
+    let mut consent = early_backups(&personal, &personal.ids);
+    let report = purge(&fx.roots, &personal.ids, &consent, now).unwrap();
+    for id in &personal.ids {
+        assert_eq!(
+            outcome_of(&report, id),
+            &PurgeOutcome::Excluded(Exclusion::UserDataNotConfirmed)
+        );
+    }
+    untouched(&personal);
+    consent.confirm_user_data(personal.ids[0].clone());
+    let report = purge(&fx.roots, &personal.ids, &consent, now).unwrap();
+    assert_eq!(outcome_of(&report, &personal.ids[0]), &PurgeOutcome::Purged);
+    assert!(
+        !backup_exists(&personal, &personal.files[0])
+            && backup_exists(&personal, &personal.files[1])
+    );
+    assert_eq!(early_marks(&personal.session), [(OpId(1), true)]);
+}
+
+/// A crash between the `expire` record and the delete of the files: the record stands (the op is not
+/// undone any more), the files are listed as an unfinished delete, and the next purge finishes it
+/// without a second record and without asking for the early mark again.
+#[test]
+fn an_early_backup_delete_stopped_after_its_record_is_continued_without_a_second_record() {
+    let fx = Fx::new("early-bk-resume");
+    let b = build_backups(&fx, at_day(0), true, true);
+    let now = at_day(2);
+    let mut w = JournalWriter::open_append(&b.session).unwrap();
+    w.expire(Expire {
+        at: now,
+        op: OpId(1),
+        class: RetentionClass::Backup,
+        bytes: 6,
+        early: true,
+    })
+    .unwrap();
+    drop(w);
+
+    let listing = expiring(&fx.roots, now).unwrap();
+    let unfinished: Vec<(OpId, bool)> = listing
+        .backups
+        .iter()
+        .map(|e| (e.id.op, e.unfinished))
+        .collect();
+    assert_eq!(unfinished, [(OpId(1), true)]);
+    let listed: Vec<OpId> = listing.not_due_backups.iter().map(|e| e.id.op).collect();
+    assert_eq!(listed, [OpId(2)], "the other op is still only offered");
+
+    let report = purge(&fx.roots, &b.ids[..1], &naming_files(&b), now).unwrap();
+    assert_eq!(report.items[0].outcome, PurgeOutcome::Purged, "{report:?}");
+    assert!(!report.items[0].expire_recorded, "no second expire record");
+    assert!(!backup_exists(&b, &b.files[0]) && backup_exists(&b, &b.files[1]));
+    assert_eq!(early_marks(&b.session), [(OpId(1), true)]);
+}
+
+/// A journal written before backups could be deleted early (every `expire` of the backup class is an
+/// expiry, no `early` member) reads as it did: expired, not deleted early, nothing left to list.
+#[test]
+fn a_journal_with_an_expired_backup_from_before_the_early_mark_reads_the_same() {
+    let fx = Fx::new("early-bk-old");
+    let b = build_backups(&fx, at_day(0), true, true);
+    purge(&fx.roots, &b.ids, &naming_files(&b), at_day(180)).unwrap();
+    let text = std::fs::read_to_string(b.session.path().join("journal.jsonl")).unwrap();
+    assert!(
+        text.contains(r#""class":"Backup""#) && !text.contains("early"),
+        "an expiry is written as before the member existed: {text}"
+    );
+    let state = journal::read(&b.session).unwrap().state;
+    for n in 1..=2 {
+        let op = state.op(OpId(n)).unwrap();
+        assert_eq!(op.expired, [RetentionClass::Backup]);
+        assert!(!op.deleted_early);
+    }
+    let listing = expiring(&fx.roots, at_day(181)).unwrap();
+    assert!(
+        listing.backups.is_empty() && listing.not_due_backups.is_empty(),
+        "{listing:?}"
+    );
 }
 
 #[test]

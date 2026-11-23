@@ -311,6 +311,193 @@ public sealed class VaultPageTests
         Assert.True(broker.Disposed);
     }
 
+    // ------------------------------------------------------------------------------------------------------------
+    // "Also delete its registry backups" on a whole cleanup's "Delete now" (DECISIONS 2026-11-24).
+    // ------------------------------------------------------------------------------------------------------------
+
+    /// <summary><see cref="Held"/> plus a registry backup of the Git cleanup that is not due, and one of another cleanup.</summary>
+    private static ExpiringList HeldWithBackups()
+    {
+        var list = Held();
+        var until = (ulong)DateTimeOffset.Now.AddDays(170).ToFileTime();
+        ExpiringItem Backup(string id, string session) => new()
+        {
+            ExpiryId = id, Session = session, App = "Git", Class = RetentionClass.Backup, Due = false, Expired = until,
+            Files = [@"reg\000005.regbackup.json"], Bytes = 512,
+        };
+        list.Items.Add(Backup("e-0000000000000005", GitSession));
+        list.Items.Add(Backup("e-0000000000000006", OtherSession));
+        return list;
+    }
+
+    [Fact]
+    public async Task WithoutTheTickDeleteNowNeverAsksForOrNamesABackupThatIsNotDue()
+    {
+        var broker = new ScriptedVaultBroker { Expiring = HeldWithBackups(), Purge = new PurgeResult { Outcome = Outcome.Complete, Purged = 2 } };
+        var vm = new VaultViewModel(_ => Task.FromResult(GitIndex()), _ => Launch(broker));
+        await vm.LoadAsync();
+
+        await vm.DeleteNowAsync(GitSession, alsoBackups: false);
+
+        Assert.Equal(0, broker.BackupListings);
+        Assert.Equal([["e-0000000000000001", "e-0000000000000002"]], broker.PurgeCalls);
+        Assert.Equal("2 items of HKLM|64|Git_is1 deleted for good", vm.ResultTitle);
+        Assert.Null(vm.ActionInfo);
+    }
+
+    [Fact]
+    public async Task WithTheTickDeleteNowAlsoSendsTheBrokersIdsOfThatCleanupsBackups()
+    {
+        var broker = new ScriptedVaultBroker
+        {
+            Expiring = HeldWithBackups(),
+            Purge = new PurgeResult { Outcome = Outcome.Complete, Purged = 4, PurgedBackups = 2 },
+        };
+        var vm = new VaultViewModel(_ => Task.FromResult(GitIndex()), _ => Launch(broker));
+        await vm.LoadAsync();
+
+        await vm.DeleteNowAsync(GitSession, alsoBackups: true);
+
+        // One listing, the one that asks for the backups too; ids only, the files first, and nothing of the other cleanup.
+        Assert.Equal(1, broker.BackupListings);
+        Assert.Equal(1, broker.ExpiringCalls);
+        Assert.Equal([["e-0000000000000001", "e-0000000000000002", "e-0000000000000003", "e-0000000000000005"]], broker.PurgeCalls);
+        Assert.Equal(1, broker.Foreground);
+        // The result does not count a backup as "an item", and says what was given up.
+        Assert.Equal("2 items of HKLM|64|Git_is1 deleted for good, and its registry backups", vm.ResultTitle);
+        Assert.Equal("Its registry changes can no longer be undone.", vm.ActionInfo);
+        Assert.Null(vm.ActionError);
+        Assert.True(broker.Disposed);
+    }
+
+    [Fact]
+    public async Task TheBackupsTheBrokersPromptKeptAreNotSaidToBeDeleted()
+    {
+        // The files were approved, the backups' own prompt was cancelled: two entries kept, no backup deleted.
+        var broker = new ScriptedVaultBroker
+        {
+            Expiring = HeldWithBackups(),
+            Purge = new PurgeResult { Outcome = Outcome.Partial, Purged = 2, Kept = 2, PurgedBackups = 0 },
+        };
+        var vm = new VaultViewModel(_ => Task.FromResult(GitIndex()), _ => Launch(broker));
+        await vm.LoadAsync();
+
+        await vm.DeleteNowAsync(GitSession, alsoBackups: true);
+
+        Assert.Equal("2 items of HKLM|64|Git_is1 deleted for good", vm.ResultTitle);
+        Assert.Equal("2 kept: you declined them, or they could not be deleted.", vm.ActionInfo);
+    }
+
+    [Fact]
+    public async Task ACleanupWithOnlyRegistryBackupsLeftDeletesThemOnlyWithTheTick()
+    {
+        var only = HeldWithBackups();
+        only.Items.RemoveAll(i => i.Session == GitSession && i.Class == RetentionClass.Quarantine);
+        var broker = new ScriptedVaultBroker { Expiring = only, Purge = new PurgeResult { Outcome = Outcome.Complete, Purged = 2, PurgedBackups = 2 } };
+        var second = new ScriptedVaultBroker { Expiring = only };
+        var brokers = new Queue<ScriptedVaultBroker>([second, broker]);
+        var vm = new VaultViewModel(_ => Task.FromResult(GitIndex()), _ => Launch(brokers.Dequeue()));
+        await vm.LoadAsync();
+
+        // Without the tick: a note, no prompt, nothing sent.
+        await vm.DeleteNowAsync(GitSession, alsoBackups: false);
+        Assert.Empty(second.PurgeCalls);
+        Assert.StartsWith("This cleanup has no quarantined files to delete now.", vm.ActionInfo);
+        await vm.CloseAsync();
+
+        await vm.DeleteNowAsync(GitSession, alsoBackups: true);
+        Assert.Equal([["e-0000000000000003", "e-0000000000000005"]], broker.PurgeCalls);
+        Assert.Equal("The registry backups of HKLM|64|Git_is1 were deleted for good", vm.ResultTitle);
+        Assert.Equal("Its registry changes can no longer be undone.", vm.ActionInfo);
+    }
+
+    [Fact]
+    public async Task WithTheTickACleanupWithNothingLeftIsANoteAndADeclinedPromptDeletesNothing()
+    {
+        var nothing = HeldWithBackups();
+        nothing.Items.RemoveAll(i => i.Session == GitSession);
+        var empty = new ScriptedVaultBroker { Expiring = nothing };
+        var declined = new ScriptedVaultBroker
+        {
+            Expiring = HeldWithBackups(),
+            PurgeError = new BrokerRpcException(-32000, "consent_declined", "declined"),
+        };
+        var brokers = new Queue<ScriptedVaultBroker>([empty, declined]);
+        var vm = new VaultViewModel(_ => Task.FromResult(GitIndex()), _ => Launch(brokers.Dequeue()));
+        await vm.LoadAsync();
+
+        await vm.DeleteNowAsync(GitSession, alsoBackups: true);
+        Assert.Empty(empty.PurgeCalls);
+        Assert.Equal(0, empty.Foreground);
+        Assert.StartsWith("This cleanup has nothing to delete now", vm.ActionInfo);
+        await vm.CloseAsync();
+
+        await vm.DeleteNowAsync(GitSession, alsoBackups: true);
+        Assert.Equal("Nothing was deleted: the prompt was cancelled.", vm.ActionInfo);
+        Assert.Null(vm.ResultTitle);
+        Assert.False(vm.Busy);
+    }
+
+    [Fact]
+    public async Task ASingleItemsDeleteNowNeverTakesABackupWithIt()
+    {
+        var broker = new ScriptedVaultBroker { Expiring = HeldWithBackups(), Purge = new PurgeResult { Outcome = Outcome.Complete, Purged = 1 } };
+        var vm = new VaultViewModel(_ => Task.FromResult(GitIndex()), _ => Launch(broker));
+        await vm.LoadAsync();
+        await vm.ShowItemsAsync(GitSession);
+
+        // The list holds quarantined files only, and an id of a backup is not one of the list: nothing is sent.
+        Assert.Equal(["e-0000000000000001", "e-0000000000000002"], vm.Items.Select(i => i.ExpiryId));
+        await vm.DeleteItemNowAsync("e-0000000000000005");
+        Assert.Empty(broker.PurgeCalls);
+
+        await vm.DeleteItemNowAsync("e-0000000000000001");
+        Assert.Equal([["e-0000000000000001"]], broker.PurgeCalls);
+        Assert.Equal(0, broker.BackupListings);
+    }
+
+    [Fact]
+    public void TheDeleteNowChoiceOffersTheBackupsOnlyWhileThereAreSomeAndIsOffByItself()
+    {
+        var now = DateTimeOffset.Now;
+        SessionSummary Session(params RetentionClass[] purged)
+        {
+            var s = GitIndex().Sessions[0];
+            s.Started = (ulong)now.AddDays(-2).ToFileTime();
+            s.Expires.Quarantine = (ulong)now.AddDays(28).ToFileTime();
+            s.Expires.Backups = (ulong)now.AddDays(178).ToFileTime();
+            s.Purged = [.. purged];
+            return s;
+        }
+        Assert.Equal("Also delete its registry backups (its registry changes can then no longer be undone)",
+            VaultBatchModel.AlsoBackupsText);
+
+        // Files and backups held: the files alone are enough; the backups are an option.
+        var full = new VaultBatchModel(Session(), now);
+        Assert.True(full.CanDeleteNow(alsoBackups: false));
+        Assert.True(full.CanDeleteBackups);
+        Assert.Contains("nothing is deleted without it", full.DeleteNowIntro);
+
+        // Only registry backups left ("Registry undo only"): nothing to delete without the tick.
+        var registryOnly = new VaultBatchModel(Session(RetentionClass.Quarantine), now);
+        Assert.Equal("Registry undo only", registryOnly.State);
+        Assert.False(registryOnly.CanDeleteNow(alsoBackups: false));
+        Assert.True(registryOnly.CanDeleteNow(alsoBackups: true));
+        Assert.Contains("already deleted", registryOnly.DeleteNowIntro);
+
+        // The backups went early and the files are kept: the files can still be put back or deleted, no backup option.
+        var filesOnly = new VaultBatchModel(Session(RetentionClass.Backup), now);
+        Assert.False(filesOnly.CanDeleteBackups);
+        Assert.True(filesOnly.CanDeleteNow(alsoBackups: true));
+        Assert.Equal("Restorable", filesOnly.State);
+        Assert.Contains("registry backups deleted", filesOnly.Detail);
+
+        // Everything deleted: the vault holds nothing of the cleanup and promises nothing (no row at all).
+        var gone = Session(RetentionClass.Quarantine, RetentionClass.Backup);
+        Assert.False(VaultBatchModel.Holds(gone));
+        Assert.False(new VaultBatchModel(gone, now).CanDeleteNow(alsoBackups: true));
+    }
+
     [Fact]
     public async Task ADeclinedDeleteNowPromptDeletesNothingAndKeepsTheList()
     {
@@ -489,8 +676,22 @@ public sealed class VaultPageTests
                 IsLive = false;
                 return Task.FromException<ExpiringList>(e);
             }
-            // As the broker: an item that is not due is listed only when asked for.
-            return Task.FromResult(includeNotDue ? Expiring : new ExpiringList { Items = [.. Expiring.Items.Where(i => i.Due)] });
+            // As the broker: an item that is not due is listed only when asked for, and a backup that is not due
+            // only by the listing that asks for the backups too.
+            return Task.FromResult(new ExpiringList
+            {
+                Items = [.. Expiring.Items.Where(i => i.Due || includeNotDue && i.Class == RetentionClass.Quarantine)],
+            });
+        }
+
+        /// <summary>How often the listing with the backups that are not due was asked for.</summary>
+        public int BackupListings { get; private set; }
+
+        public Task<ExpiringList> ExpiringWithBackupsAsync(CancellationToken ct)
+        {
+            ExpiringCalls++;
+            BackupListings++;
+            return ExpiringError is { } e ? Task.FromException<ExpiringList>(e) : Task.FromResult(Expiring);
         }
 
         public Task<PurgeResult> PurgeAsync(IReadOnlyList<string> expiryIds, CancellationToken ct)

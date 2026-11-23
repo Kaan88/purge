@@ -106,6 +106,24 @@ public enum Deleted
 }
 
 /// <summary>
+/// How the delete step of `plan.execute {delete_after}` ended.
+/// </summary>
+[JsonConverter(typeof(JsonStringEnumConverter<DeleteAfterOutcome>))]
+public enum DeleteAfterOutcome
+{
+    [JsonStringEnumMemberName("deleted")]
+    Deleted,
+    [JsonStringEnumMemberName("partial")]
+    Partial,
+    [JsonStringEnumMemberName("declined")]
+    Declined,
+    [JsonStringEnumMemberName("nothing")]
+    Nothing,
+    [JsonStringEnumMemberName("failed")]
+    Failed,
+}
+
+/// <summary>
 /// The engine token's `TokenElevationType`.
 /// </summary>
 [JsonConverter(typeof(JsonStringEnumConverter<ElevationType>))]
@@ -775,12 +793,36 @@ public sealed class ErrorObject
 }
 
 /// <summary>
+/// The second step of `plan.execute {delete_after}`: what became of the items the run had just moved into
+/// quarantine. Anything not counted in `purged` is still in quarantine and can be put back.
+/// </summary>
+public sealed class DeleteAfter
+{
+    [JsonPropertyName("kept")]
+    public uint Kept { get; set; }
+
+    [JsonPropertyName("outcome")]
+    public DeleteAfterOutcome Outcome { get; set; } = default!;
+
+    [JsonPropertyName("purged")]
+    public uint Purged { get; set; }
+
+}
+
+/// <summary>
 /// `plan.execute`.
 /// </summary>
 public sealed class ExecResult
 {
     [JsonPropertyName("counts")]
     public OutcomeCounts Counts { get; set; } = default!;
+
+    /// <summary>
+    /// What became of the delete the request asked for with `delete_after`; absent when it did not ask.
+    /// </summary>
+    [JsonPropertyName("delete_after")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DeleteAfter? DeleteAfter { get; set; }
 
     [JsonPropertyName("held")]
     public System.Collections.Generic.List<HeldItem> Held { get; set; } = new();
@@ -848,10 +890,17 @@ public sealed class ExpiringList
 }
 
 /// <summary>
-/// `quarantine.expiring {include_not_due?}`. Absent, `null` and `{}` ask for what is past retention.
+/// `quarantine.expiring {include_not_due?, include_backups_not_due?}`. Absent, `null` and `{}` ask for what is
+/// past retention.
 /// </summary>
 public sealed class ExpiringParams
 {
+    /// <summary>
+    /// Also list the backups (per op) whose retention has not ended, each with class Backup and due false.
+    /// </summary>
+    [JsonPropertyName("include_backups_not_due")]
+    public bool IncludeBackupsNotDue { get; set; }
+
     [JsonPropertyName("include_not_due")]
     public bool IncludeNotDue { get; set; }
 
@@ -1370,10 +1419,17 @@ public sealed class PlanCreated
 }
 
 /// <summary>
-/// `plan.execute {plan_id, restore_point}`.
+/// `plan.execute {plan_id, restore_point, delete_after?}`.
 /// </summary>
 public sealed class PlanExecuteParams
 {
+    /// <summary>
+    /// "Delete instead of keeping in quarantine": after the run the broker asks, in a "Delete now" dialog of its
+    /// own, whether the items the run moved are deleted for good. A request, never a consent.
+    /// </summary>
+    [JsonPropertyName("delete_after")]
+    public bool DeleteAfter { get; set; }
+
     [JsonPropertyName("plan_id")]
     public string PlanId { get; set; } = "";
 
@@ -1702,6 +1758,12 @@ public sealed class PurgeResult
 
     [JsonPropertyName("purged")]
     public uint Purged { get; set; }
+
+    /// <summary>
+    /// Of `purged`, the entries that were backups (one per op) rather than quarantined items.
+    /// </summary>
+    [JsonPropertyName("purged_backups")]
+    public uint PurgedBackups { get; set; }
 
 }
 

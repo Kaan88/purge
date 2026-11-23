@@ -659,7 +659,7 @@ pub enum PlanCreateParams {
     Preselected(PlanPreselectedParams),
 }
 
-/// `plan.execute {plan_id, restore_point}`.
+/// `plan.execute {plan_id, restore_point, delete_after?}`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PlanExecuteParams {
@@ -667,6 +667,14 @@ pub struct PlanExecuteParams {
     pub plan_id: PlanId,
     /// When to ask for a restore point.
     pub restore_point: RestorePoint,
+    /// "Delete instead of keeping in quarantine" (DECISIONS 2026-11-24): after the run, the broker
+    /// asks in a "Delete now" dialog of its own (user data: one item per dialog) whether the items
+    /// this run moved into quarantine are deleted for good, and deletes only what is approved there.
+    /// The flag is a request, never a consent: it names no item, the broker lists the session's
+    /// quarantined items itself, and without the second approval everything stays in quarantine.
+    /// Registry backups are not part of it. Absent is `false`.
+    #[serde(default)]
+    pub delete_after: bool,
 }
 
 /// `{session}`: `history.get`, `journal.resume`, `journal.rollback`, `journal.retry_held`.
@@ -688,7 +696,8 @@ pub struct UndoParams {
     pub item_ids: Option<NonEmpty<OpId>>,
 }
 
-/// `quarantine.expiring {include_not_due?}`. Absent, `null` and `{}` ask for what is past retention.
+/// `quarantine.expiring {include_not_due?, include_backups_not_due?}`. Absent, `null` and `{}` ask
+/// for what is past retention.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ExpiringParams {
@@ -696,13 +705,21 @@ pub struct ExpiringParams {
     /// for a "Delete now". Backups and journals are never among them.
     #[serde(default)]
     pub include_not_due: bool,
+    /// Also list the backups (registry backups and definitions, per op) whose retention has not
+    /// ended and that nothing holds, each with `class: Backup` and `due: false`, for a "Delete now"
+    /// that gives up the undo of a cleanup's registry changes (DECISIONS 2026-11-24). Journals are
+    /// never among them.
+    #[serde(default)]
+    pub include_backups_not_due: bool,
 }
 
 /// `quarantine.purge {expiry_ids[]}`.
 ///
-/// The request names ids and nothing else. Whether an entry is past its retention is the broker's own
-/// reading at purge time, never the client's word: an entry that is not due is deleted only through
-/// the dialog that says so (it is a "Delete now"), and only when it is a quarantined item.
+/// The request names ids and nothing else. Whether an entry is past its retention, and whether it is
+/// a quarantined item or a backup, is the broker's own reading at purge time, never the client's
+/// word: an entry that is not due is deleted only through the dialog that says so (a "Delete now"
+/// for quarantined items; for backups a dialog of its own, which says that the registry changes can
+/// then no longer be undone).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PurgeParams {
@@ -1156,6 +1173,40 @@ pub struct ExecResult {
     /// The broker's timing marks (M3_DESIGN.md §9.1): for measurement only; a client ignores it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timings: Option<Timings>,
+    /// What became of the delete the request asked for with `delete_after`; absent when it did not
+    /// ask. Whatever it says, `outcome`, `counts` and `held` are the move's alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delete_after: Option<DeleteAfter>,
+}
+
+/// The second step of `plan.execute {delete_after}`: what became of the items the run had just moved
+/// into quarantine. Anything not counted in `purged` is still in quarantine and can be put back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct DeleteAfter {
+    /// How the step ended.
+    pub outcome: DeleteAfterOutcome,
+    /// Quarantined items deleted for good.
+    pub purged: u32,
+    /// Quarantined items of the run that were offered and are still in quarantine.
+    pub kept: u32,
+}
+
+/// How the delete step of `plan.execute {delete_after}` ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DeleteAfterOutcome {
+    /// Every quarantined item of the run was approved and deleted.
+    Deleted,
+    /// Some were deleted; the rest (declined, or not deletable now) are in quarantine.
+    Partial,
+    /// The "Delete now" dialog was cancelled or could not be shown: nothing was deleted.
+    Declined,
+    /// The run left nothing in quarantine that can be deleted now (nothing was moved, or the session
+    /// is held: not recorded completely, items waiting for a restart or a retry).
+    Nothing,
+    /// The step failed before or while deleting (the store was busy or refused); what was not
+    /// deleted is in quarantine.
+    Failed,
 }
 
 /// One item of `history.get`.
@@ -1278,7 +1329,8 @@ pub struct ExpiringItem {
     pub session: SessionId,
     /// The app of the session.
     pub app: String,
-    /// Which retention class it is of. An entry that is not due is always `Quarantine`.
+    /// Which retention class it is of. An entry that is not due is `Quarantine`, or, when the request
+    /// asked for them (`include_backups_not_due`), `Backup`.
     pub class: RetentionClass,
     /// When its retention ends: in the past for a due entry, in the future for one that is not due.
     pub expired: FileTime,
@@ -1309,6 +1361,10 @@ pub struct PurgeResult {
     pub purged: u32,
     /// Entries kept.
     pub kept: u32,
+    /// Of `purged`, the entries that were backups (registry backups and definitions, one entry per
+    /// op) rather than quarantined items. Absent is 0.
+    #[serde(default)]
+    pub purged_backups: u32,
 }
 
 /// `broker.shutdown`.

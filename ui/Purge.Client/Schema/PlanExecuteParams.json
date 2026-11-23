@@ -1,9 +1,14 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "PlanExecuteParams",
-  "description": "`plan.execute {plan_id, restore_point}`.",
+  "description": "`plan.execute {plan_id, restore_point, delete_after?}`.",
   "type": "object",
   "properties": {
+    "delete_after": {
+      "description": "\"Delete instead of keeping in quarantine\" (DECISIONS 2026-11-24): after the run, the broker\nasks in a \"Delete now\" dialog of its own (user data: one item per dialog) whether the items\nthis run moved into quarantine are deleted for good, and deletes only what is approved there.\nThe flag is a request, never a consent: it names no item, the broker lists the session's\nquarantined items itself, and without the second approval everything stays in quarantine.\nRegistry backups are not part of it. Absent is `false`.",
+      "type": "boolean",
+      "default": false
+    },
     "plan_id": {
       "description": "The plan from `plan.create`.",
       "$ref": "#/$defs/PlanId"

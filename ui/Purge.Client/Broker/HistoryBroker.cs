@@ -56,6 +56,14 @@ public interface IVaultBroker : IAsyncDisposable
     Task<ExpiringList> ExpiringAsync(bool includeNotDue, CancellationToken ct);
 
     /// <summary>
+    /// <c>quarantine.expiring {include_not_due, include_backups_not_due}</c>: as <see cref="ExpiringAsync"/> with the
+    /// items that are not due, and also the registry backups (per op, class Backup) whose retention has not ended.
+    /// For a "Delete now" that also gives up the undo of a cleanup's registry changes (DECISIONS 2026-11-24); the
+    /// broker asks for those in a prompt of its own.
+    /// </summary>
+    Task<ExpiringList> ExpiringWithBackupsAsync(CancellationToken ct);
+
+    /// <summary>
     /// <c>quarantine.purge {expiry_ids}</c>: the broker's purge dialogs, then the deletes the user approved. The ids
     /// are all the request says; the broker itself tells an expired entry from one deleted before its retention ends
     /// and asks for the latter in its "Delete now" dialog.
@@ -111,6 +119,10 @@ public sealed class HistoryBroker : IHistoryBroker, IVaultBroker
 
     public Task<ExpiringList> ExpiringAsync(bool includeNotDue, CancellationToken ct) =>
         _session.Rpc.CallAsync("quarantine.expiring", new ExpiringParams { IncludeNotDue = includeNotDue },
+            RpcJsonContext.Default.ExpiringParams, RpcJsonContext.Default.ExpiringList, ct);
+
+    public Task<ExpiringList> ExpiringWithBackupsAsync(CancellationToken ct) =>
+        _session.Rpc.CallAsync("quarantine.expiring", new ExpiringParams { IncludeNotDue = true, IncludeBackupsNotDue = true },
             RpcJsonContext.Default.ExpiringParams, RpcJsonContext.Default.ExpiringList, ct);
 
     public Task<PurgeResult> PurgeAsync(IReadOnlyList<string> expiryIds, CancellationToken ct) =>

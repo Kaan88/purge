@@ -181,6 +181,9 @@ public sealed partial class LeftoversView : UserControl, ILeftoversPage
         UpdateCounts(vm);
         MoveButton.IsEnabled = vm.CanMove;
         MoveText.Text = vm.MoveText;
+        DeleteAfterBox.Content = LeftoversViewModel.DeleteAfterText;
+        DeleteAfterBox.IsChecked = vm.DeleteAfter;
+        ToolTipService.SetToolTip(DeleteAfterBox, LeftoversViewModel.DeleteAfterHelp);
         ExpandButton.Content = vm.Groups.Any(g => !g.Expanded) ? "Expand all" : "Collapse all";
         WeakButton.Content = vm.ShowWeak ? $"Hide weak matches ({vm.WeakCount})" : $"Show weak matches ({vm.WeakCount})";
         WeakButton.Visibility = Vis(vm.WeakCount > 0);
@@ -308,6 +311,8 @@ public sealed partial class LeftoversView : UserControl, ILeftoversPage
     {
         ResultTitleText.Text = vm.ResultTitle ?? "The move finished";
         ResultDetailText.Text = vm.ResultDetail ?? "";
+        DeleteAfterResultText.Text = vm.DeleteAfterResult ?? "";
+        DeleteAfterResultText.Visibility = Vis(vm.DeleteAfterResult is { Length: > 0 });
         RestorePointText.Text = vm.RestorePointText ?? "";
         RestorePointText.Visibility = Vis(vm.RestorePointText is { Length: > 0 });
         HeldHost.Visibility = Vis(vm.HeldLines.Count > 0);
@@ -458,6 +463,13 @@ public sealed partial class LeftoversView : UserControl, ILeftoversPage
             foreach (var item in _vm.Items.Where(i => i.IsWeak && i.Checked)) item.Checked = false;
     }
 
+    private void OnDeleteAfter(object sender, RoutedEventArgs e)
+    {
+        if (_vm is null) return;
+        _vm.DeleteAfter = DeleteAfterBox.IsChecked == true;
+        MoveText.Text = _vm.MoveText;
+    }
+
     private async void OnMove(object sender, RoutedEventArgs e)
     {
         if (_vm is null) return;
@@ -518,6 +530,9 @@ public sealed partial class LeftoversView : UserControl, ILeftoversPage
             throw new BrokerLinkException("The administrator part is not connected.");
 
         public Task<RpcExecResult> ExecuteAsync(string planId, RestorePoint restorePoint, IProgress<Progress>? progress, CancellationToken ct) =>
+            throw new BrokerLinkException("The administrator part is not connected.");
+
+        public Task<RpcExecResult> ExecuteThenDeleteAsync(string planId, RestorePoint restorePoint, IProgress<Progress>? progress, CancellationToken ct) =>
             throw new BrokerLinkException("The administrator part is not connected.");
 
         public Task<RpcUndoResult> UndoAsync(string session, IProgress<Progress>? progress, CancellationToken ct) =>

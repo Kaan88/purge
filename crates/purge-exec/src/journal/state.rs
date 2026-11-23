@@ -130,10 +130,11 @@ pub enum Violation {
     /// A second `expire` of the same class for an op.
     #[error("op {0}: expired twice")]
     DuplicateExpire(OpId),
-    /// An `expire` with `early` for a class other than the quarantine: only a quarantined item is ever
-    /// deleted before its retention ends.
-    #[error("op {0}: an early delete of something that is not a quarantined item")]
-    EarlyExpireNotQuarantine(OpId),
+    /// An `expire` with `early` for a class that is neither the quarantine nor the backups: only a
+    /// quarantined item, or an op's backup files, is ever deleted before its retention ends (the
+    /// journal itself never is).
+    #[error("op {0}: an early delete of something that is neither a quarantined item nor a backup")]
+    EarlyExpireNotKeptData(OpId),
     /// A `settings` record anywhere but right after the header, or a second one.
     #[error("a settings record that does not follow the header directly")]
     SettingsMisplaced,
@@ -242,11 +243,12 @@ pub struct OpState {
     pub undo: UndoState,
     /// How many `undo_intent` records the op has.
     pub undo_attempts: u32,
-    /// The retention classes of its data that were deleted: by a confirmed expiry, or (the quarantine
-    /// class only) at the user's request before the retention ended, see [`OpState::deleted_early`].
+    /// The retention classes of its data that were deleted: by a confirmed expiry, or at the user's
+    /// request before the retention ended, see [`OpState::deleted_early`].
     pub expired: Vec<RetentionClass>,
-    /// The op's quarantined item was deleted before its retention ended, because the user asked for
-    /// it (an `expire` record with `early`). It is in [`OpState::expired`] too.
+    /// The op's quarantined item, or its backup files (an op has one or the other), was deleted
+    /// before its retention ended, because the user asked for it (an `expire` record with `early`).
+    /// The class is in [`OpState::expired`] too.
     pub deleted_early: bool,
     /// Whether a retry of the held item is in flight: a `retry_intent` with no `reconcile` after it.
     /// The retry may have moved the item; recovery probes it and ends it with the token of
@@ -821,8 +823,10 @@ impl JournalState {
                 if s.retry_in_flight {
                     return Err(Violation::RetryInFlight(e.op));
                 }
-                if e.early && e.class != RetentionClass::Quarantine {
-                    return Err(Violation::EarlyExpireNotQuarantine(e.op));
+                if e.early
+                    && !matches!(e.class, RetentionClass::Quarantine | RetentionClass::Backup)
+                {
+                    return Err(Violation::EarlyExpireNotKeptData(e.op));
                 }
                 if s.expired.contains(&e.class) {
                     return Err(Violation::DuplicateExpire(e.op));

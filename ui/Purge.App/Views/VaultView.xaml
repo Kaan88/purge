@@ -152,7 +152,7 @@
                                             IsEnabled="{x:Bind CanAct, Mode=OneWay}" AutomationProperties.Name="Delete the files of this cleanup now"
                                             ToolTipService.ToolTip="Delete this cleanup's quarantined files for good, without waiting for the retention to end" />
                                     <Button Content="Choose items…" Style="{StaticResource SubtleButton}" Click="OnChooseItems"
-                                            Visibility="{x:Bind DeleteVisibility}" IsEnabled="{x:Bind CanAct, Mode=OneWay}"
+                                            Visibility="{x:Bind ChooseVisibility}" IsEnabled="{x:Bind CanAct, Mode=OneWay}"
                                             AutomationProperties.Name="Choose items to delete now"
                                             ToolTipService.ToolTip="List this cleanup's quarantined items and delete single ones" />
                                     <Button Content="Details" Style="{StaticResource SubtleButton}" Click="OnDetails" />

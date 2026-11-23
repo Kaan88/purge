@@ -23,7 +23,7 @@ use purge_exec::storage::StorageError;
 use purge_model::exec::op::OpId;
 use purge_model::exec::session::{RetentionClass, SessionId};
 use purge_model::{CandidateId, FileTime};
-use purge_rpc::methods::{ExpiringList, ExpiryId, PurgeResult};
+use purge_rpc::methods::{ExpiringList, ExpiringParams, ExpiryId, PurgeResult};
 use purge_win::taskdialog::{Outcome, Page};
 use serde_json::{Value, json};
 
@@ -79,6 +79,9 @@ fn backup(n: u32, user_data: bool) -> ExpiringBackup {
     ExpiringBackup {
         id: expiry(n),
         item: CandidateId(format!("c-{n:03}")),
+        target: purge_model::Target::RegKey {
+            path: format!(r"HKLM\SOFTWARE\Vendor\Key{n}"),
+        },
         files: vec![
             format!(r"reg\0000{n:02}.regbackup.json"),
             format!(r"def\0000{n:02}.json"),
@@ -102,6 +105,8 @@ struct Call {
     files: BTreeMap<ExecExpiryId, Vec<(String, bool)>>,
     /// For every unit: was it allowed before its retention ends?
     early: BTreeMap<ExecExpiryId, bool>,
+    /// For every unit: were its backups allowed before their retention ends?
+    early_backups: BTreeMap<ExecExpiryId, bool>,
 }
 
 #[derive(Default)]
@@ -110,6 +115,8 @@ struct Scripted {
     backups: Mutex<Vec<ExpiringBackup>>,
     /// Quarantined items whose retention has not ended.
     not_due: Mutex<Vec<ExpiringItem>>,
+    /// Backups whose retention has not ended.
+    not_due_backups: Mutex<Vec<ExpiringBackup>>,
     apps: BTreeMap<SessionId, String>,
     calls: Mutex<Vec<Call>>,
     fail: Mutex<Option<StorageError>>,
@@ -144,6 +151,14 @@ impl Scripted {
         });
     }
 
+    /// The backup of one op whose retention ends in 170 days.
+    fn add_not_due_backup(&self, backup: ExpiringBackup) {
+        self.not_due_backups.lock().unwrap().push(ExpiringBackup {
+            expires: at(570),
+            ..backup
+        });
+    }
+
     fn fail_listing(&self, error: StorageError) {
         *self.fail.lock().unwrap() = Some(error);
     }
@@ -173,6 +188,13 @@ impl Scripted {
             .collect();
         ids.extend(self.backups.lock().unwrap().iter().map(|b| b.id.clone()));
         ids.extend(self.not_due.lock().unwrap().iter().map(|i| i.id.clone()));
+        ids.extend(
+            self.not_due_backups
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|b| b.id.clone()),
+        );
         ids
     }
 }
@@ -194,6 +216,7 @@ impl ExpirySource for Scripted {
             items: self.items.lock().unwrap().clone(),
             backups: self.backups.lock().unwrap().clone(),
             not_due: self.not_due.lock().unwrap().clone(),
+            not_due_backups: self.not_due_backups.lock().unwrap().clone(),
             apps: self.apps.clone(),
         })
     }
@@ -214,8 +237,11 @@ impl ExpirySource for Scripted {
             call.confirmed
                 .insert(id.clone(), consent.confirms_user_data(id));
             call.early.insert(id.clone(), consent.allows_early(id));
+            call.early_backups
+                .insert(id.clone(), consent.allows_early_backup(id));
         }
-        for unit in self.backups.lock().unwrap().iter() {
+        let not_due_backups = self.not_due_backups.lock().unwrap().clone();
+        for unit in self.backups.lock().unwrap().iter().chain(&not_due_backups) {
             call.files.insert(
                 unit.id.clone(),
                 unit.files
@@ -257,9 +283,27 @@ impl ExpirySource for Scripted {
             .lock()
             .unwrap()
             .retain(|unit| !ids.contains(&unit.id) || kept_not_due.contains(&unit.id));
+        // As the executor: a backup that is not due goes only when the consent allows this op's
+        // backups early and names every file; the early mark of an item does not count.
+        let kept_backups: Vec<ExecExpiryId> = not_due_backups
+            .iter()
+            .filter(|unit| {
+                ids.contains(&unit.id)
+                    && !(consent.allows_early_backup(&unit.id)
+                        && unit
+                            .files
+                            .iter()
+                            .all(|file| consent.names_file(&unit.id, file)))
+            })
+            .map(|unit| unit.id.clone())
+            .collect();
+        self.not_due_backups
+            .lock()
+            .unwrap()
+            .retain(|unit| !ids.contains(&unit.id) || kept_backups.contains(&unit.id));
         let ids: Vec<ExecExpiryId> = ids
             .iter()
-            .filter(|id| !kept_not_due.contains(id))
+            .filter(|id| !kept_not_due.contains(id) && !kept_backups.contains(id))
             .cloned()
             .collect();
         Ok(PurgeReport {
@@ -426,7 +470,7 @@ fn expiring_maps_items_and_backups_with_app_class_files_and_the_user_data_flag()
     let source = Arc::new(source);
 
     let purger = Purger::new(source.clone());
-    let list: ExpiringList = purger.expiring(false).unwrap();
+    let list: ExpiringList = purger.expiring(ExpiringParams::default()).unwrap();
     assert_eq!(list.items.len(), 3);
 
     let first = &list.items[0];
@@ -447,7 +491,7 @@ fn expiring_maps_items_and_backups_with_app_class_files_and_the_user_data_flag()
     assert_eq!(third.bytes, 6);
 
     // The ids are stable across listings and distinct.
-    let again: ExpiringList = purger.expiring(false).unwrap();
+    let again: ExpiringList = purger.expiring(ExpiringParams::default()).unwrap();
     let ids = |l: &ExpiringList| -> Vec<String> {
         l.items.iter().map(|i| i.expiry_id.to_string()).collect()
     };
@@ -467,7 +511,9 @@ fn the_bulk_view_refuses_a_user_data_unit() {
 fn expiring_still_lists_a_session_the_index_cannot_name() {
     let source = Arc::new(Scripted::new());
     source.add_item(item(1, false));
-    let list = Purger::new(source).expiring(false).unwrap();
+    let list = Purger::new(source)
+        .expiring(ExpiringParams::default())
+        .unwrap();
     assert_eq!(list.items[0].app, "");
 }
 
@@ -1303,10 +1349,304 @@ fn expired_units_and_items_that_are_not_due_are_asked_apart_and_only_the_latter_
     live.finish();
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Backups before their retention ends (DECISIONS 2026-11-24).
+// ---------------------------------------------------------------------------------------------------
+
+/// What every dialog that deletes backups early must say, in its own sentence.
+fn assert_says_backups_now(text: &str) {
+    assert!(text.contains("before"), "{text}");
+    assert!(text.contains("cannot be undone"), "{text}");
+    assert!(
+        text.contains("Undo can then no longer restore"),
+        "the instruction says what is given up: {text}"
+    );
+    assert!(
+        text.contains("Undo and History can no longer undo"),
+        "the summary says it in its own sentence: {text}"
+    );
+    assert!(
+        !text.contains("Undo can put them back") && !text.contains("Undo can put it back"),
+        "not the sentence of the quarantined items: {text}"
+    );
+}
+
+/// The confirmation code a dialog shows in its footer.
+fn code_of(pages: &[Page]) -> String {
+    pages[0].footer.clone().expect("a footer with the code")
+}
+
+#[test]
+fn backups_that_are_not_due_are_listed_only_when_asked_for_and_marked() {
+    let source = Arc::new(Scripted::new());
+    source.add_item(item(1, false));
+    source.add_not_due(item(2, false));
+    source.add_not_due_backup(backup(3, false));
+    let live = Live::start(source.clone());
+
+    // Not with the flag of the quarantined items alone: the vault's "Delete now" lists as before.
+    for (id, params, want) in [
+        (2, json!({}), 1),
+        (3, json!({ "include_not_due": true }), 2),
+        (4, json!({ "include_backups_not_due": false }), 1),
+    ] {
+        live.send(id, "quarantine.expiring", &params);
+        let reply = live.client.reply();
+        let list: ExpiringList = serde_json::from_value(reply["result"].clone()).unwrap();
+        assert_eq!(list.items.len(), want, "{reply}");
+        assert!(
+            list.items
+                .iter()
+                .all(|i| i.class == RetentionClass::Quarantine),
+            "{reply}"
+        );
+    }
+
+    live.send(
+        5,
+        "quarantine.expiring",
+        &json!({ "include_not_due": true, "include_backups_not_due": true }),
+    );
+    let reply = live.client.reply();
+    let list: ExpiringList = serde_json::from_value(reply["result"].clone()).unwrap();
+    let rows: Vec<(ExpiryId, bool, RetentionClass)> = list
+        .items
+        .iter()
+        .map(|i| (i.expiry_id, i.due, i.class))
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            (live.wire(&expiry(1)), true, RetentionClass::Quarantine),
+            (live.wire(&expiry(2)), false, RetentionClass::Quarantine),
+            (live.wire(&expiry(3)), false, RetentionClass::Backup),
+        ]
+    );
+    assert_eq!(list.items[2].expired, at(570));
+    live.finish();
+}
+
+#[test]
+fn a_backup_that_is_not_due_is_deleted_only_through_the_dialog_of_its_own() {
+    let source = Arc::new(Scripted::new());
+    source.add_not_due(item(1, false));
+    source.add_not_due_backup(backup(2, false));
+    source.add_not_due_backup(backup(3, false));
+    let live = Live::start(source.clone());
+    live.open_session();
+    let file = live.wire(&expiry(1));
+    let first = live.wire(&expiry(2));
+
+    live.send_purge(2, &[file, first]);
+    // The files first, in the Delete now dialog, which names no backup.
+    let (seen, pages) = live
+        .consent
+        .next_dialog(0, SECS)
+        .expect("the Delete now dialog opened");
+    let files_text = pages_text(&pages);
+    assert_says_delete_now(&files_text);
+    assert!(
+        !files_text.contains("regbackup") && !files_text.contains("Key2"),
+        "no backup in the Delete now dialog: {files_text}"
+    );
+    let files_code = code_of(&pages);
+    live.consent.answer(Outcome::Approved);
+
+    // Then the backups, in a dialog that says what deleting them gives up.
+    let (_, pages) = live
+        .consent
+        .next_dialog(seen, SECS)
+        .expect("the dialog of the backups opened");
+    let text = pages_text(&pages);
+    assert!(
+        text.contains("Delete 1 registry backup now, before its retention ends?"),
+        "{text}"
+    );
+    assert_says_backups_now(&text);
+    assert!(text.contains(r"HKLM\SOFTWARE\Vendor\Key2"), "{text}");
+    assert!(text.contains(r"reg\000002.regbackup.json"), "{text}");
+    assert!(text.contains(r"def\000002.json"), "{text}");
+    assert!(
+        !text.contains("Key3") && !text.contains(r"C:\Vendor\app-1"),
+        "only what the request named, and no quarantined item: {text}"
+    );
+    assert!(!text.contains("expired"), "not called expired: {text}");
+    assert_ne!(code_of(&pages), files_code, "a code of its own");
+    live.consent.answer(Outcome::Approved);
+
+    let reply = live.client.reply();
+    let result = result_of(&reply);
+    assert_eq!(
+        (result.purged, result.kept, result.purged_backups),
+        (2, 0, 1),
+        "{reply}"
+    );
+    let calls = source.calls();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].ids, vec![expiry(1), expiry(2)]);
+    // Each approval gives its own early mark and no other.
+    assert_eq!(calls[0].early.get(&expiry(1)), Some(&true));
+    assert_eq!(calls[0].early_backups.get(&expiry(1)), Some(&false));
+    assert_eq!(calls[0].early.get(&expiry(2)), Some(&false));
+    assert_eq!(calls[0].early_backups.get(&expiry(2)), Some(&true));
+    assert!(
+        calls[0].files[&expiry(2)].iter().all(|(_, named)| *named),
+        "every file of the approved backup is named"
+    );
+    // The backup the request did not name: not named, not allowed, none of its files.
+    assert_eq!(calls[0].named.get(&expiry(3)), Some(&false));
+    assert_eq!(calls[0].early_backups.get(&expiry(3)), Some(&false));
+    assert!(calls[0].files[&expiry(3)].iter().all(|(_, named)| !*named));
+    assert_eq!(source.held_ids(), vec![expiry(3)]);
+
+    // Deleted is gone: the same id names nothing in the next listing (no replay).
+    let again = live.purge(3, &[first]);
+    assert_eq!(kind(&again), "gone", "{again}");
+    assert_eq!(source.call_count(), 1);
+    live.finish();
+}
+
+#[test]
+fn a_declined_dialog_of_the_backups_keeps_every_backup() {
+    let source = Arc::new(Scripted::new());
+    source.add_not_due(item(1, false));
+    source.add_not_due_backup(backup(2, false));
+    source.add_not_due_backup(backup(3, true));
+    let live = Live::start(source.clone());
+    live.open_session();
+    let ids = [1, 2, 3].map(|n| live.wire(&expiry(n)));
+
+    // The files are approved, the backups are not: the files go, every backup stays, and the
+    // user-data backup is not even asked for.
+    live.send_purge(2, &ids);
+    let (seen, _) = live.consent.next_dialog(0, SECS).expect("Delete now");
+    live.consent.answer(Outcome::Approved);
+    let (seen, pages) = live
+        .consent
+        .next_dialog(seen, SECS)
+        .expect("the dialog of the backups opened");
+    assert_says_backups_now(&pages_text(&pages));
+    live.consent.answer(Outcome::Declined);
+    assert!(
+        live.consent
+            .next_dialog(seen, Duration::from_millis(150))
+            .is_none(),
+        "a Cancel of the backups dialog asks for no user-data backup either"
+    );
+    let reply = live.client.reply();
+    let result = result_of(&reply);
+    assert_eq!(
+        (result.purged, result.kept, result.purged_backups),
+        (1, 2, 0),
+        "{reply}"
+    );
+    let calls = source.calls();
+    assert_eq!(calls[0].ids, vec![expiry(1)]);
+    for n in [2, 3] {
+        assert_eq!(calls[0].named.get(&expiry(n)), Some(&false));
+        assert_eq!(calls[0].early_backups.get(&expiry(n)), Some(&false));
+        assert!(calls[0].files[&expiry(n)].iter().all(|(_, named)| !*named));
+    }
+    assert_eq!(source.held_ids(), vec![expiry(2), expiry(3)]);
+
+    // Backups alone, declined: nothing is deleted, the request is declined, the broker serves on.
+    live.send_purge(3, &ids[1..2]);
+    let (_, pages) = live
+        .consent
+        .next_dialog(seen, SECS)
+        .expect("the dialog of the backups opened");
+    assert_says_backups_now(&pages_text(&pages));
+    live.consent.answer(Outcome::Declined);
+    let reply = live.client.reply();
+    assert_eq!(kind(&reply), "consent_declined", "{reply}");
+    assert_eq!(source.call_count(), 1);
+    assert_eq!(source.held_ids(), vec![expiry(2), expiry(3)]);
+    live.finish();
+}
+
+#[test]
+fn a_cancelled_delete_now_of_the_files_asks_for_no_backup() {
+    let source = Arc::new(Scripted::new());
+    source.add_not_due(item(1, false));
+    source.add_not_due_backup(backup(2, false));
+    let live = Live::start(source.clone());
+    let ids = [1, 2].map(|n| live.wire(&expiry(n)));
+
+    live.send_purge(2, &ids);
+    let (seen, pages) = live.consent.next_dialog(0, SECS).expect("Delete now");
+    assert_says_delete_now(&pages_text(&pages));
+    live.consent.answer(Outcome::Declined);
+    assert!(
+        live.consent
+            .next_dialog(seen, Duration::from_millis(150))
+            .is_none(),
+        "Cancel keeps every entry of the request that is not due: no backup dialog"
+    );
+    let reply = live.client.reply();
+    assert_eq!(kind(&reply), "consent_declined", "{reply}");
+    assert_eq!(source.call_count(), 0);
+    assert_eq!(source.held_ids(), vec![expiry(1), expiry(2)]);
+    live.finish();
+}
+
+#[test]
+fn a_user_data_backup_that_is_not_due_gets_a_dialog_of_its_own() {
+    let source = Arc::new(Scripted::new());
+    source.add_not_due_backup(backup(1, false));
+    source.add_not_due_backup(backup(2, true));
+    source.add_not_due_backup(backup(3, true));
+    let live = Live::start(source.clone());
+    let ids = [1, 2, 3].map(|n| live.wire(&expiry(n)));
+
+    live.send_purge(2, &ids);
+    let (seen, pages) = live.consent.next_dialog(0, SECS).expect("the bulk dialog");
+    let bulk = pages_text(&pages);
+    assert!(bulk.contains("Key1"), "{bulk}");
+    assert!(
+        !bulk.contains("Key2") && !bulk.contains("Key3"),
+        "user data is not in the bulk dialog: {bulk}"
+    );
+    live.consent.answer(Outcome::Approved);
+
+    let (seen, pages) = live.consent.next_dialog(seen, SECS).expect("user data 1");
+    let text = pages_text(&pages);
+    assert!(
+        text.contains("Delete this registry backup of user data now, before its retention ends?"),
+        "{text}"
+    );
+    assert_says_backups_now(&text);
+    assert!(text.contains("Key2") && !text.contains("Key3"), "{text}");
+    live.consent.answer(Outcome::Declined);
+
+    let (_, pages) = live.consent.next_dialog(seen, SECS).expect("user data 2");
+    assert!(pages_text(&pages).contains("Key3"));
+    live.consent.answer(Outcome::Approved);
+
+    let reply = live.client.reply();
+    let result = result_of(&reply);
+    assert_eq!(
+        (result.purged, result.kept, result.purged_backups),
+        (2, 1, 2),
+        "{reply}"
+    );
+    let calls = source.calls();
+    assert_eq!(calls[0].ids, vec![expiry(1), expiry(3)]);
+    assert_eq!(calls[0].confirmed.get(&expiry(1)), Some(&false));
+    assert_eq!(calls[0].confirmed.get(&expiry(3)), Some(&true));
+    assert_eq!(calls[0].early_backups.get(&expiry(3)), Some(&true));
+    assert_eq!(calls[0].named.get(&expiry(2)), Some(&false));
+    assert_eq!(calls[0].early_backups.get(&expiry(2)), Some(&false));
+    assert_eq!(source.held_ids(), vec![expiry(2)]);
+    live.finish();
+}
+
 #[test]
 fn a_backup_has_no_delete_now_dialog() {
-    // The executor lists no backup as not due. If one arrived there all the same, the view refuses
-    // it and nothing is asked or deleted.
+    // The executor lists no backup among the quarantined items that are not due. If one arrived in
+    // the Delete now dialog all the same, the view refuses it and nothing is asked or deleted; and
+    // the dialog of the backups refuses a quarantined item.
+    let quarantined = item(9, false);
+    assert!(super::view::view_delete_backups_now(&[super::PurgeUnit::Item(&quarantined)]).is_err());
     let unit = backup(1, false);
     assert!(super::view::view_delete_now(&[super::PurgeUnit::Backup(&unit)]).is_err());
     let personal = backup(2, true);

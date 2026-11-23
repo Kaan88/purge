@@ -257,6 +257,7 @@ pub(crate) fn create<H: crate::uninstall::FlowHandler>(
             app_name: scan.app_name.clone(),
             restorable_until: None,
             restore_point: false,
+            delete_after: false,
         },
     )
     .map_err(|error| {

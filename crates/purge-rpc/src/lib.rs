@@ -589,6 +589,7 @@ mod api_tests {
                 v(PlanExecuteParams {
                     plan_id: plan(),
                     restore_point: RestorePoint::HighRisk,
+                    delete_after: true,
                 }),
             );
             put(
@@ -613,6 +614,7 @@ mod api_tests {
                 "pipe.quarantine.expiring.params",
                 v(ExpiringParams {
                     include_not_due: true,
+                    include_backups_not_due: true,
                 }),
             );
             put(
@@ -779,6 +781,11 @@ mod api_tests {
                         (TimingName::ExecuteStart, 16_481),
                         (TimingName::ExecuteComplete, 19_900),
                     ])),
+                    delete_after: Some(DeleteAfter {
+                        outcome: DeleteAfterOutcome::Partial,
+                        purged: 20,
+                        kept: 1,
+                    }),
                 }),
             );
             put(
@@ -894,6 +901,7 @@ mod api_tests {
                     outcome: Outcome::Complete,
                     purged: 41,
                     kept: 0,
+                    purged_backups: 3,
                 }),
             );
             put(

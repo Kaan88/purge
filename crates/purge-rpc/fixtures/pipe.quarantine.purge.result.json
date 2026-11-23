@@ -1,5 +1,6 @@
 {
   "kept": 0,
   "outcome": "complete",
-  "purged": 41
+  "purged": 41,
+  "purged_backups": 3
 }

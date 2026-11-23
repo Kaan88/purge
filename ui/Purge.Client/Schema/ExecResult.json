@@ -8,6 +8,17 @@
       "description": "Items per outcome.",
       "$ref": "#/$defs/OutcomeCounts"
     },
+    "delete_after": {
+      "description": "What became of the delete the request asked for with `delete_after`; absent when it did not\nask. Whatever it says, `outcome`, `counts` and `held` are the move's alone.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DeleteAfter"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "held": {
       "description": "Items held by a lock.",
       "type": "array",
@@ -47,6 +58,63 @@
     "restore_point"
   ],
   "$defs": {
+    "DeleteAfter": {
+      "description": "The second step of `plan.execute {delete_after}`: what became of the items the run had just moved\ninto quarantine. Anything not counted in `purged` is still in quarantine and can be put back.",
+      "type": "object",
+      "properties": {
+        "kept": {
+          "description": "Quarantined items of the run that were offered and are still in quarantine.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "outcome": {
+          "description": "How the step ended.",
+          "$ref": "#/$defs/DeleteAfterOutcome"
+        },
+        "purged": {
+          "description": "Quarantined items deleted for good.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "outcome",
+        "purged",
+        "kept"
+      ]
+    },
+    "DeleteAfterOutcome": {
+      "description": "How the delete step of `plan.execute {delete_after}` ended.",
+      "oneOf": [
+        {
+          "description": "Every quarantined item of the run was approved and deleted.",
+          "type": "string",
+          "const": "deleted"
+        },
+        {
+          "description": "Some were deleted; the rest (declined, or not deletable now) are in quarantine.",
+          "type": "string",
+          "const": "partial"
+        },
+        {
+          "description": "The \"Delete now\" dialog was cancelled or could not be shown: nothing was deleted.",
+          "type": "string",
+          "const": "declined"
+        },
+        {
+          "description": "The run left nothing in quarantine that can be deleted now (nothing was moved, or the session\nis held: not recorded completely, items waiting for a restart or a retry).",
+          "type": "string",
+          "const": "nothing"
+        },
+        {
+          "description": "The step failed before or while deleting (the store was busy or refused); what was not\ndeleted is in quarantine.",
+          "type": "string",
+          "const": "failed"
+        }
+      ]
+    },
     "HeldItem": {
       "description": "An item left in place because it is locked.",
       "type": "object",

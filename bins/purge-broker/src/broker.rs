@@ -5,7 +5,8 @@
 //!
 //! Order of the dispatch: the purge methods, then the history, undo and recovery methods, then
 //! `plan.execute`, then the flow. `plan.execute` asks [`UndoMethods::check_nothing_pending`] before
-//! its dialog: an interrupted session comes first.
+//! its dialog: an interrupted session comes first. A `plan.execute` with `delete_after` hands its
+//! second step to [`Purger::delete_after_run`] once the run is recorded.
 
 use std::sync::Arc;
 
@@ -64,6 +65,7 @@ impl<B: Backend> BrokerHandler<B> {
                 ctx,
                 &*self.exec,
                 &|| self.undo.check_nothing_pending(),
+                &|session| self.purge.delete_after_run(ctx, session),
                 params,
             );
         }

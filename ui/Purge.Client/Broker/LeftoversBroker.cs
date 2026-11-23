@@ -37,6 +37,15 @@ public interface ILeftoversBroker
     /// <summary><c>plan.execute {plan_id, restore_point}</c>: shows the broker's dialog, then runs the plan.</summary>
     Task<ExecResult> ExecuteAsync(string planId, RestorePoint restorePoint, IProgress<Progress>? progress, CancellationToken ct);
 
+    /// <summary>
+    /// <c>plan.execute {plan_id, restore_point, delete_after: true}</c> ("delete instead of keeping in quarantine",
+    /// DECISIONS 2026-11-24): the same move through the same dialog, and then a second dialog of the broker's own
+    /// ("Delete now", user data one item per dialog) that asks whether what was just moved is deleted for good. The
+    /// result's <see cref="ExecResult.DeleteAfter"/> says what became of that; without the second approval
+    /// everything stays in quarantine.
+    /// </summary>
+    Task<ExecResult> ExecuteThenDeleteAsync(string planId, RestorePoint restorePoint, IProgress<Progress>? progress, CancellationToken ct);
+
     /// <summary><c>undo.run {session}</c>: restores everything one session moved.</summary>
     Task<UndoResult> UndoAsync(string session, IProgress<Progress>? progress, CancellationToken ct);
 
@@ -106,6 +115,14 @@ public sealed class LeftoversBroker : ILeftoversBroker
         CancellationToken ct)
     {
         var parameters = new PlanExecuteParams { PlanId = planId, RestorePoint = restorePoint };
+        return await WithProgress(progress, () => _rpc.CallAsync("plan.execute", parameters,
+            RpcJsonContext.Default.PlanExecuteParams, RpcJsonContext.Default.ExecResult, ct)).ConfigureAwait(false);
+    }
+
+    public async Task<ExecResult> ExecuteThenDeleteAsync(string planId, RestorePoint restorePoint, IProgress<Progress>? progress,
+        CancellationToken ct)
+    {
+        var parameters = new PlanExecuteParams { PlanId = planId, RestorePoint = restorePoint, DeleteAfter = true };
         return await WithProgress(progress, () => _rpc.CallAsync("plan.execute", parameters,
             RpcJsonContext.Default.PlanExecuteParams, RpcJsonContext.Default.ExecResult, ct)).ConfigureAwait(false);
     }

@@ -242,6 +242,164 @@ public sealed class LeftoversPageTests
         Assert.Equal(1, broker.ExecuteCalls);
     }
 
+    // ------------------------------------------------------------------------------------------------------------
+    // "Delete instead of keeping in quarantine" (DECISIONS 2026-11-24).
+    // ------------------------------------------------------------------------------------------------------------
+
+    private static ExecResult Deleted(DeleteAfterOutcome outcome, uint purged, uint kept)
+    {
+        var result = Complete(1, 0, "sess-1");
+        result.DeleteAfter = new DeleteAfter { Outcome = outcome, Purged = purged, Kept = kept };
+        return result;
+    }
+
+    [Fact]
+    public async Task QuarantineIsTheDefaultAndTheMoveAsksForNoDelete()
+    {
+        var broker = new ScriptedBroker();
+        broker.Rows.Add(Row(1, pre: true));
+        var vm = new LeftoversViewModel(broker);
+        await vm.ScanAsync("s-1", null, forced: false);
+
+        Assert.False(vm.DeleteAfter);
+        Assert.Equal("Move 1 item to quarantine…", vm.MoveText);
+        Assert.Equal("Delete instead of keeping in quarantine", LeftoversViewModel.DeleteAfterText);
+        await vm.MoveAsync();
+
+        Assert.Equal(1, broker.ExecuteCalls);
+        Assert.Equal(0, broker.DeleteCalls);
+        Assert.Null(vm.DeleteAfterResult);
+        Assert.Equal("Moved 1 item to quarantine", vm.ResultTitle);
+    }
+
+    [Fact]
+    public async Task TheTickAsksTheBrokerForTheDeleteStepAndTheResultSaysWhatItDid()
+    {
+        var broker = new ScriptedBroker();
+        broker.Rows.Add(Row(1, pre: true));
+        broker.DeleteHook = (_, _) => Task.FromResult(Deleted(DeleteAfterOutcome.Deleted, 1, 0));
+        var foreground = 0;
+        var vm = new LeftoversViewModel(broker, () => foreground++);
+        await vm.ScanAsync("s-1", null, forced: false);
+
+        var changed = new List<string?>();
+        vm.PropertyChanged += (_, e) => changed.Add(e.PropertyName);
+        vm.DeleteAfter = true;
+        Assert.Equal("Move 1 item, then delete it…", vm.MoveText);
+        // The tick changes the button's words and nothing else (no list rebuild).
+        Assert.Equal([nameof(vm.DeleteAfter), nameof(vm.MoveText)], changed);
+
+        await vm.MoveAsync(RestorePoint.Off);
+
+        // One request, the one with the delete step; the plain execute is not also sent.
+        Assert.Equal(1, broker.DeleteCalls);
+        Assert.Equal(0, broker.ExecuteCalls);
+        Assert.Equal(RestorePoint.Off, broker.LastRestorePoint);
+        Assert.Equal(LeftoversPhase.Result, vm.Phase);
+        Assert.Equal("Moved 1 item to quarantine", vm.ResultTitle);
+        Assert.StartsWith("Then deleted for good, as you asked: 1 quarantined item. That cannot be undone.", vm.DeleteAfterResult);
+        Assert.Contains("Registry and other changes of this cleanup can still be undone", vm.DeleteAfterResult);
+        // Off again for the next move.
+        Assert.False(vm.DeleteAfter);
+        Assert.True(foreground >= 1);
+    }
+
+    [Fact]
+    public async Task ADeclinedOrFailedDeleteStepLeavesTheItemsInQuarantineAndSaysSo()
+    {
+        foreach (var (outcome, purged, kept, starts) in new[]
+                 {
+                     (DeleteAfterOutcome.Declined, 0u, 2u, "Nothing was deleted: the delete prompt was cancelled. What was moved is in quarantine and can be put back for 30 days"),
+                     (DeleteAfterOutcome.Failed, 0u, 2u, "The delete did not go through. What was moved is safe in quarantine and can be put back for 30 days"),
+                     (DeleteAfterOutcome.Nothing, 0u, 0u, "Nothing was deleted: this cleanup left nothing in quarantine that can be deleted now."),
+                     (DeleteAfterOutcome.Partial, 1u, 1u, "Then deleted for good: 1. Still in quarantine: 1 (declined, or not deletable now); it can be put back for 30 days"),
+                 })
+        {
+            var broker = new ScriptedBroker();
+            broker.Rows.Add(Row(1, pre: true));
+            broker.DeleteHook = (_, _) => Task.FromResult(Deleted(outcome, purged, kept));
+            var vm = new LeftoversViewModel(broker) { };
+            await vm.ScanAsync("s-1", null, forced: false);
+            vm.DeleteAfter = true;
+
+            await vm.MoveAsync();
+
+            // The move's own result is unchanged; the delete line never claims a delete that did not happen.
+            Assert.Equal(LeftoversPhase.Result, vm.Phase);
+            Assert.Equal("Moved 1 item to quarantine", vm.ResultTitle);
+            Assert.StartsWith(starts, vm.DeleteAfterResult);
+            Assert.True(vm.CanUndo);
+        }
+
+        // An answer without the step at all (a broker that does not know the request) claims nothing either.
+        Assert.StartsWith("The delete step did not run. What was moved is in quarantine",
+            LeftoversViewModel.DescribeDeleteAfter(null));
+        Assert.DoesNotContain("deleted for good", LeftoversViewModel.DescribeDeleteAfter(null));
+    }
+
+    [Fact]
+    public async Task TheWaitingStateSaysWhenTheSecondPromptIsTheOneToConfirm()
+    {
+        var broker = new ScriptedBroker();
+        broker.Rows.Add(Row(1, pre: true));
+        broker.CreatePlanHook = _ => Task.FromResult(Plan("A1B2-C3D4"));
+        var moved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var answered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        broker.DeleteHook = async (_, progress) =>
+        {
+            broker.RaiseConsentShown("A1B2-C3D4");
+            await moved.Task;
+            progress?.Report(new Progress { Phase = LeftoversViewModel.DeleteAfterPhase, Request = 1 });
+            await answered.Task;
+            return Deleted(DeleteAfterOutcome.Declined, 0, 1);
+        };
+        var vm = new LeftoversViewModel(broker);
+        await vm.ScanAsync("s-1", null, forced: false);
+        vm.DeleteAfter = true;
+
+        var move = vm.MoveAsync();
+
+        await WaitUntil(() => vm.Phase == LeftoversPhase.Waiting && vm.PromptUp, "the move prompt");
+        Assert.Equal("A1B2-C3D4", vm.Code);
+        Assert.Contains("Confirm in the Purge security prompt", vm.WaitingTitle);
+        Assert.Contains("It approves the move only; a second prompt then asks about deleting", vm.WaitingDetail);
+
+        moved.SetResult();
+        await WaitUntil(() => vm.WaitingTitle.Contains("second Purge security prompt"), "the delete step");
+        Assert.Equal("The items are in quarantine. Nothing has been deleted yet.", vm.WaitingDetail);
+        // The first prompt's code is not shown for the second prompt; the broker announces its own.
+        Assert.Null(vm.Code);
+        Assert.False(vm.PromptUp);
+        broker.RaiseConsentShown("E5F6-A7B8");
+        await WaitUntil(() => vm.Code == "E5F6-A7B8" && vm.PromptUp, "the second prompt's code");
+        Assert.True(vm.IsChanging);
+
+        answered.SetResult();
+        await move;
+        Assert.Equal(LeftoversPhase.Result, vm.Phase);
+        Assert.StartsWith("Nothing was deleted: the delete prompt was cancelled.", vm.DeleteAfterResult);
+    }
+
+    [Fact]
+    public async Task ACancelledMovePromptWithTheTickMovesAndDeletesNothing()
+    {
+        var broker = new ScriptedBroker();
+        broker.Rows.Add(Row(1, pre: true));
+        broker.DeleteHook = (_, _) => throw new BrokerRpcException(0, "consent_declined", "cancelled");
+        var vm = new LeftoversViewModel(broker);
+        await vm.ScanAsync("s-1", null, forced: false);
+        vm.DeleteAfter = true;
+
+        await vm.MoveAsync();
+
+        Assert.Equal(LeftoversPhase.Review, vm.Phase);
+        Assert.Equal("Nothing was moved: the prompt was cancelled.", vm.Info);
+        Assert.Null(vm.Result);
+        Assert.Null(vm.DeleteAfterResult);
+        // The choice is the user's and stays as it was for the next try.
+        Assert.True(vm.DeleteAfter);
+    }
+
     [Fact]
     public async Task AttentionRowsComeFromPlanCreateIncludingAbsorbedIds()
     {
@@ -567,6 +725,19 @@ public sealed class LeftoversPageTests
             ExecuteCalls++;
             LastRestorePoint = restorePoint;
             return ExecuteHook(planId);
+        }
+
+        /// <summary><c>plan.execute {delete_after}</c>: how often, and what it answers (the progress is the call's).</summary>
+        public int DeleteCalls { get; private set; }
+
+        public Func<string, IProgress<Progress>?, Task<ExecResult>> DeleteHook { get; set; } =
+            (_, _) => Task.FromResult(Complete(1, 0, "sess-1"));
+
+        public Task<ExecResult> ExecuteThenDeleteAsync(string planId, RestorePoint restorePoint, IProgress<Progress>? progress, CancellationToken ct)
+        {
+            DeleteCalls++;
+            LastRestorePoint = restorePoint;
+            return DeleteHook(planId, progress);
         }
 
         public Task<UndoResult> UndoAsync(string session, IProgress<Progress>? progress, CancellationToken ct) =>

@@ -32,10 +32,22 @@
 //! so the journal says the delete was asked for and was not an expiry; from then on the op is not
 //! undone, as after an expiry.
 //!
-//! Only quarantined items: a backup file is never deleted before its class is due, with or without
-//! `allow_early` (the journal refuses an early `expire` of another class too). The backups belong to
-//! other ops than the quarantine moves (an op has one or the other), so deleting a quarantined item
-//! early makes no backup meaningless; each still undoes its own registry or package op.
+//! `allow_early` reaches quarantined items only: with it alone a backup file is never deleted before
+//! its class is due. The backups belong to other ops than the quarantine moves (an op has one or the
+//! other), so deleting a quarantined item early makes no backup meaningless; each still undoes its own
+//! registry or package op.
+//!
+//! # Deleting backups before their retention ends
+//!
+//! The user may also give up the undo of a session's registry, service, task and package ops before
+//! the backup class is due (DECISIONS 2026-11-24). [`expiring`] lists the backups this is possible
+//! for in [`ExpiryListing::not_due_backups`]: the session is not held, the op is settled (not waiting
+//! for recovery, a retry or a restart) and no undo of it failed or met a conflict (a second undo could
+//! still need the files). [`purge`] deletes such an op's files only when the consent, on top of naming
+//! the op and every file, carries [`PurgeConsent::allow_early_backup`] for it, a mark of its own that
+//! [`PurgeConsent::allow_early`] does not imply (so an approval of "delete these files now" can never
+//! delete a backup). Everything else is the purge of a due backup; the `expire` record of the backup
+//! class is written first and carries `early`.
 //!
 //! # Every session is read against its index entry
 //!
@@ -51,8 +63,9 @@
 //! An op whose intent names backup files (a registry backup, a package definition) is purged, once its
 //! class is due ([`RETAIN_BACKUP_DAYS`](purge_model::exec::session::RETAIN_BACKUP_DAYS) after the
 //! journal's `created`), by deleting each file through the store ([`SessionDir::delete_backup_file`]:
-//! `reg\` and `def\` only, by handle, after the store's file check). Before that, never: an op that can
-//! still be undone needs its backup, and the class is due for every op of the session at once. The
+//! `reg\` and `def\` only, by handle, after the store's file check). Before that, only with the
+//! consent's own early mark for backups (see above): an op that can still be undone needs its backup,
+//! and the class is due for every op of the session at once. The
 //! holds are those of quarantined items (an open run, an undo in progress, an op waiting for recovery
 //! or with a retry in flight). The `expire` record of the backup class is written first, as for the
 //! quarantine; a file left behind (a reader holding it, an I/O error) is listed as
@@ -133,14 +146,14 @@ use purge_guard::prefix;
 use purge_model::exec::journal::{Expire, Intent, ItemFacts, ReconcileResult, UndoOutcome};
 use purge_model::exec::op::{ExecOp, FailCode, Inverse, ItemOutcome, OpId};
 use purge_model::exec::session::{Expiry, JournalMark, RetentionClass, SessionId, SessionIndex};
-use purge_model::{Blocker, CandidateId, FileTime};
+use purge_model::{Blocker, CandidateId, FileTime, Target};
 use purge_win::fs::FileId;
 use purge_win::fs_write::FsError;
 use purge_win::os::Win32Error;
 
 use crate::fault;
 use crate::journal::{
-    self, JournalError, JournalState, JournalWriter, OpState, OpStatus, UndoState,
+    self, JournalError, JournalState, JournalWriter, OpState, OpStatus, Pending, UndoState,
 };
 use crate::storage::{QuarantineDir, SCAN_FILE, SessionDir, StorageError, StorageRoots};
 use crate::undo;
@@ -235,6 +248,9 @@ pub struct ExpiringBackup {
     pub id: ExpiryId,
     /// The plan candidate of the op.
     pub item: CandidateId,
+    /// What the op acted on (the registry key or value, service, task, rule or package the files
+    /// would restore), for the prompt.
+    pub target: Target,
     /// The files, by the session-relative paths the op's intent records (`reg\000042.regbackup.json`),
     /// in the intent's order. A consent must name each one ([`PurgeConsent::name_files`]).
     pub files: Vec<String>,
@@ -314,6 +330,10 @@ pub struct ExpiryListing {
     /// order; [`ExpiringItem::expires`] is in the future. [`purge`] deletes one only when the consent
     /// allows it early ([`PurgeConsent::allow_early`]). Never a backup.
     pub not_due: Vec<ExpiringItem>,
+    /// Backup files whose class is **not** due, of ops that nothing holds, per op in session and op
+    /// order; [`ExpiringBackup::expires`] is in the future. [`purge`] deletes one only when the
+    /// consent allows this op's backups early ([`PurgeConsent::allow_early_backup`]).
+    pub not_due_backups: Vec<ExpiringBackup>,
 }
 
 /// The consent for one irreversible [`purge`]: the items the user saw and confirmed, by id, among them
@@ -325,6 +345,7 @@ pub struct PurgeConsent {
     user_data: BTreeSet<ExpiryId>,
     files: BTreeMap<ExpiryId, BTreeSet<String>>,
     early: BTreeSet<ExpiryId>,
+    early_backups: BTreeSet<ExpiryId>,
 }
 
 impl PurgeConsent {
@@ -374,6 +395,19 @@ impl PurgeConsent {
     pub fn allows_early(&self, id: &ExpiryId) -> bool {
         self.names(id) && self.early.contains(id)
     }
+
+    /// Says that the user asked for the **backup files** of op `id` to be deleted before the backup
+    /// class is due, in a prompt that said the op can then no longer be undone. It counts only if the
+    /// consent also names the op (and, as for every backup, each file). A mark of its own:
+    /// [`PurgeConsent::allow_early`] never reaches a backup.
+    pub fn allow_early_backup(&mut self, id: ExpiryId) {
+        self.early_backups.insert(id);
+    }
+
+    /// Whether `id` is named and its backup files may be deleted before their class is due.
+    pub fn allows_early_backup(&self, id: &ExpiryId) -> bool {
+        self.names(id) && self.early_backups.contains(id)
+    }
 }
 
 /// Why [`purge`] refused the whole request; nothing was opened for delete and nothing was written.
@@ -394,8 +428,9 @@ pub enum Exclusion {
     /// The item is user data (or its category is unknown) and the consent does not confirm it
     /// individually.
     UserDataNotConfirmed,
-    /// Its retention has not ended, and for a quarantined item the consent does not allow it early
-    /// ([`PurgeConsent::allow_early`]). Backup files before their class is due always end here.
+    /// Its retention has not ended and the consent does not allow it early: a quarantined item
+    /// without [`PurgeConsent::allow_early`], backup files without
+    /// [`PurgeConsent::allow_early_backup`].
     NotExpired {
         /// When it ends.
         expires: FileTime,
@@ -640,6 +675,27 @@ fn backup_hold(op: &OpState) -> Option<HoldReason> {
     }
 }
 
+/// Why the backup files of `op` are not deleted **before their class is due**, on top of
+/// [`backup_hold`] and the session's holds: the op still waits (for a retry of a held item, for a
+/// restart), or an undo of it failed or met a conflict, so that a second undo could still need the
+/// files (the rule of the quarantined items, Fable review of Delete now, L1). An op that was undone,
+/// or had nothing to undo, no longer needs them.
+fn early_backup_hold(op: &OpState) -> Option<HoldReason> {
+    let undo_settled = matches!(
+        op.undo,
+        UndoState::NotStarted
+            | UndoState::Finished(
+                UndoOutcome::Restored | UndoOutcome::AlreadyRestored | UndoOutcome::NothingToUndo
+            )
+    );
+    match op.pending() {
+        Some(Pending::Reboot) => Some(HoldReason::PendingReboot),
+        Some(Pending::Held) => Some(HoldReason::Unresolved),
+        None if !undo_settled => Some(HoldReason::Unresolved),
+        None => None,
+    }
+}
+
 /// Whether any of the backup files `files` is still in the session, probed through the store.
 fn backup_presence(session: &SessionDir, files: &[String]) -> Presence {
     let mut presence = Presence::Gone;
@@ -723,6 +779,7 @@ fn list_session(
         let entry = |unfinished: bool| ExpiringBackup {
             id: id.clone(),
             item: op.item.clone(),
+            target: op.target.clone(),
             files: files.clone(),
             expires: expiry.backups,
             bytes: backup_bytes_of(op),
@@ -737,6 +794,14 @@ fn list_session(
             continue;
         }
         if expiry.backups > now {
+            // Not due: offered for a delete the user asks for, when `purge` would take it. A held
+            // one is not listed at all; nothing is past retention.
+            if session_hold.is_none()
+                && backup_hold(op).is_none()
+                && early_backup_hold(op).is_none()
+            {
+                listing.not_due_backups.push(entry(false));
+            }
             continue;
         }
         match (&session_hold, backup_hold(op)) {
@@ -1507,7 +1572,8 @@ fn purge_one(
 }
 
 /// Decides and deletes the backup files of one op (see "Backup files" in the module docs): holds, the
-/// backup class's retention, the user-data confirmation, every file named by the consent; then the
+/// backup class's retention (or the consent's early mark for backups, and the op being settled), the
+/// user-data confirmation, every file named by the consent; then the
 /// `expire` record of the backup class (write-ahead, once), then each file through the store. A file
 /// already gone is skipped; the first file the store refuses or fails to delete stops the op, and a
 /// later purge continues it.
@@ -1527,6 +1593,9 @@ fn purge_backup(
     };
     let bytes = backup_bytes_of(op);
     let resume = op.expired.contains(&RetentionClass::Backup);
+    // Before the class is due the files go only when the consent says the user asked for exactly
+    // that; the expire record then says so too. Judged on the same `now` as everything else.
+    let early = !resume && cx.backups_expire > cx.now;
     if !resume {
         if let Some(reason) = cx.session_hold {
             return excluded(Exclusion::Held(reason.clone()));
@@ -1534,11 +1603,17 @@ fn purge_backup(
         if let Some(reason) = backup_hold(op) {
             return excluded(Exclusion::Held(reason));
         }
-        // Never before the class is due: until then the op may be undone from these files.
-        if cx.backups_expire > cx.now {
-            return excluded(Exclusion::NotExpired {
-                expires: cx.backups_expire,
-            });
+        if early {
+            // Until the class is due the op may be undone from these files: the consent's own mark
+            // for backups, and nothing of the op still open.
+            if !cx.consent.allows_early_backup(id) {
+                return excluded(Exclusion::NotExpired {
+                    expires: cx.backups_expire,
+                });
+            }
+            if let Some(reason) = early_backup_hold(op) {
+                return excluded(Exclusion::Held(reason));
+            }
         }
     }
     if cx.categories.is_user_data(&op.item) && !cx.consent.confirms_user_data(id) {
@@ -1561,8 +1636,7 @@ fn purge_backup(
             op: id.op,
             class: RetentionClass::Backup,
             bytes,
-            // Never early: the class is due here, or the record exists already.
-            early: false,
+            early,
         };
         if let Err(e) = writer.expire(expire) {
             return untouched(id, PurgeOutcome::Failed(Failure::Journal(e.to_string())));

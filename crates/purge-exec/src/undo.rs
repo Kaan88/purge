@@ -859,7 +859,7 @@ impl Driver<'_> {
         };
         if !op.expired.is_empty() {
             let how = if op.deleted_early {
-                "was deleted from quarantine at the user's request before its retention ended"
+                "was deleted at the user's request before its retention ended"
             } else {
                 "was deleted by expiry"
             };

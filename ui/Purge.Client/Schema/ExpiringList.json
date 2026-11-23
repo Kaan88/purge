@@ -31,7 +31,7 @@
           "minimum": 0
         },
         "class": {
-          "description": "Which retention class it is of. An entry that is not due is always `Quarantine`.",
+          "description": "Which retention class it is of. An entry that is not due is `Quarantine`, or, when the request\nasked for them (`include_backups_not_due`), `Backup`.",
           "$ref": "#/$defs/RetentionClass"
         },
         "due": {

@@ -7,6 +7,11 @@
     "skipped": 0,
     "vanished": 0
   },
+  "delete_after": {
+    "kept": 1,
+    "outcome": "partial",
+    "purged": 20
+  },
   "held": [
     {
       "display_name": "C:\\Program Files\\Git\\git-bash.exe",

@@ -18,11 +18,12 @@ use purge_win::taskdialog::{self, Icon as DialogIcon};
 use super::dialog::{self, PRIMARY};
 use super::text::{LINE_COST, Stamp};
 use super::view::{
-    ConflictKind, ConsentView, DELETE_NOW_WARNING, DELETE_NOW_WARNING_ONE, Facts, OTHER_SHOWN,
+    ConflictKind, ConsentView, DELETE_AFTER_NOTE, DELETE_BACKUPS_NOW_WARNING,
+    DELETE_BACKUPS_NOW_WARNING_ONE, DELETE_NOW_WARNING, DELETE_NOW_WARNING_ONE, Facts, OTHER_SHOWN,
     PAGE_CHARS, PAGE_ENTRIES, PurgeUnit, Reason, RecoverFacts, RecoverKind, RestoreFacts,
-    UninstallFacts, Variant, ViewError, split_purge, view, view_delete_now,
-    view_delete_now_user_data, view_purge, view_purge_user_data, view_recover, view_restore,
-    view_uninstall,
+    UninstallFacts, Variant, ViewError, split_purge, view, view_delete_backups_now,
+    view_delete_backups_now_user_data, view_delete_now, view_delete_now_user_data, view_purge,
+    view_purge_user_data, view_recover, view_restore, view_uninstall,
 };
 
 // ---------------------------------------------------------------------------------------------------
@@ -199,6 +200,7 @@ fn plan_selecting(specs: Vec<Spec>, absorbed: Vec<Spec>, chosen: &[&str]) -> Bou
 
 fn facts() -> Facts {
     Facts {
+        delete_after: false,
         app_name: "Mozilla Firefox".into(),
         restorable_until: Some(Stamp {
             year: 2026,
@@ -394,7 +396,8 @@ fn the_plain_quarantine_dialog_follows_the_design_table() {
         .collect();
     let mut f = facts();
     f.restore_point = true;
-    let v = view(&plan(specs), &f).unwrap();
+    let bound = plan(specs);
+    let v = view(&bound, &f).unwrap();
     assert_eq!(v.variant, Variant::Quarantine);
     assert_eq!(v.icon, super::view::Icon::Shield);
     assert_eq!(
@@ -433,6 +436,26 @@ fn the_plain_quarantine_dialog_follows_the_design_table() {
             .starts_with("Shown by the administrator part of Purge. Code ")
     );
     assert!(v.footer.ends_with(&format!("{}.", v.code)));
+    // Nothing of a second prompt unless the request asked to delete instead of keeping in
+    // quarantine; then the dialog says that one follows and that this one approves the move only,
+    // and it is still the same move with the same code.
+    assert!(!v.summary.iter().any(|line| line.contains("second prompt")));
+    let mut then_delete = f.clone();
+    then_delete.delete_after = true;
+    let d = view(&bound, &then_delete).unwrap();
+    assert_eq!(
+        d.summary.last().map(String::as_str),
+        Some(DELETE_AFTER_NOTE)
+    );
+    assert!(DELETE_AFTER_NOTE.contains("a second prompt names the quarantined files"));
+    assert!(DELETE_AFTER_NOTE.contains("Nothing is deleted without it"));
+    assert!(DELETE_AFTER_NOTE.contains("this prompt approves the move only"));
+    assert_eq!(
+        (&d.instruction, &d.button, d.code, d.variant),
+        (&v.instruction, &v.button, v.code, v.variant)
+    );
+    assert_eq!(d.summary[..d.summary.len() - 1], v.summary[..]);
+    taskdialog::check(&dialog::pages(&d), PRIMARY).unwrap();
     // No restore point line and no date unless the facts say so.
     let mut f = facts();
     f.restorable_until = None;
@@ -1284,6 +1307,9 @@ fn expiring_backup(op: u32, files: &[&str], user_data: bool) -> ExpiringBackup {
     ExpiringBackup {
         id: expiry(op),
         item: cid(&format!("c-{op}")),
+        target: Target::RegKey {
+            path: format!(r"HKLM\SOFTWARE\Vendor\Key{op}"),
+        },
         files: files.iter().map(|f| (*f).to_owned()).collect(),
         expires: FileTime(0),
         bytes: 4096,
@@ -1610,6 +1636,189 @@ fn uninstall_refuses_a_command_without_a_program() {
             view_uninstall(&uninstall_facts(quiet_command(exe, "/S"), true)),
             Err(ViewError::NoCommand)
         );
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Backups before their retention ends (DECISIONS 2026-11-24).
+// ---------------------------------------------------------------------------------------------------
+
+#[test]
+fn delete_backups_now_names_every_backup_with_its_change_and_says_what_is_given_up() {
+    let backups: Vec<ExpiringBackup> = (1..=44)
+        .map(|op| expiring_backup(op, &[&format!(r"reg\{op:06}.regbackup.json")], false))
+        .chain(std::iter::once(ExpiringBackup {
+            target: Target::Service {
+                name: "VendorSvc".into(),
+            },
+            ..expiring_backup(
+                45,
+                &[r"reg\000045.regbackup.json", r"def\000045.json"],
+                false,
+            )
+        }))
+        .collect();
+    let (bulk, user) = split_purge(&[], &backups);
+    assert!(user.is_empty());
+    let v = view_delete_backups_now(&bulk).unwrap();
+    assert_eq!(v.variant, Variant::DeleteBackupsNow);
+    assert_eq!(v.icon, super::view::Icon::Warning);
+    assert_eq!(
+        v.instruction,
+        "Delete 45 registry backups now, before their retention ends? Undo can then no longer \
+         restore these registry changes. This cannot be undone."
+    );
+    assert_eq!(v.button, "Delete 45 registry backups now, for good");
+    assert_eq!((v.counts.items, v.counts.files), (45, 46));
+    assert!(
+        v.summary[0].starts_with("45 registry backups (46 backup files), "),
+        "{}",
+        v.summary[0]
+    );
+    // Its own sentence: what the backups are for, that this is early, and what Undo loses.
+    assert_eq!(v.summary[1], DELETE_BACKUPS_NOW_WARNING);
+    assert!(DELETE_BACKUPS_NOW_WARNING.contains("before their retention date"));
+    assert!(
+        DELETE_BACKUPS_NOW_WARNING.contains("Undo and History can no longer undo these changes")
+    );
+    assert!(DELETE_BACKUPS_NOW_WARNING.contains("stays removed"));
+    assert_ne!(DELETE_BACKUPS_NOW_WARNING, DELETE_NOW_WARNING);
+    for line in every_line(&v) {
+        assert!(!line.contains("expired"), "not an expiry: {line}");
+        assert!(
+            !line.contains("Undo can put"),
+            "not the sentence of quarantined items: {line}"
+        );
+    }
+    // Every file of every backup is an attention entry that names the change; no "and N more".
+    assert_eq!(v.attention.len(), 46);
+    assert!(v.others.is_empty() && v.others_more.is_none());
+    for (op, entry) in (1..=44).zip(&v.attention) {
+        assert!(
+            entry.text.contains(&format!(
+                r#"Delete the backup of: "HKLM\SOFTWARE\Vendor\Key{op}""#
+            )),
+            "{}",
+            entry.text
+        );
+        assert!(
+            entry
+                .text
+                .contains(&format!(r#"backup file "reg\{op:06}.regbackup.json""#)),
+            "{}",
+            entry.text
+        );
+        assert!(entry.reasons.contains(&Reason::Irreversible));
+    }
+    assert!(
+        v.attention[44]
+            .text
+            .contains(r#"Delete the backup of: service "VendorSvc""#),
+        "{}",
+        v.attention[44].text
+    );
+    assert!(v.attention[45].text.contains(r#""def\000045.json""#));
+    assert_eq!(
+        v.verification.as_deref(),
+        Some("I reviewed the backups marked \u{26A0}")
+    );
+    let pages = dialog::pages(&v);
+    assert_eq!(page_counts(&v), [40, 6]);
+    taskdialog::check(&pages, PRIMARY).unwrap();
+    assert!(pages[1].verification.is_some() && pages[1].buttons[0].id == PRIMARY);
+    assert!(pages[0].buttons.is_empty());
+
+    // Never the code of the purge dialog over the same units, nor a Delete now code over the same
+    // ids.
+    assert_ne!(v.code, view_purge(&bulk).unwrap().code);
+    let same_ids: Vec<ExpiringItem> = (1..=45)
+        .map(|op| expiring_item(op, r"C:\x", false))
+        .collect();
+    let (as_items, _) = split_purge(&same_ids, &[]);
+    assert_ne!(v.code, view_delete_now(&as_items).unwrap().code);
+
+    let one = view_delete_backups_now(&bulk[..1]).unwrap();
+    assert_eq!(
+        one.instruction,
+        "Delete 1 registry backup now, before its retention ends? Undo can then no longer \
+         restore this registry change. This cannot be undone."
+    );
+    assert_eq!(one.button, "Delete 1 registry backup now, for good");
+    assert_eq!(one.summary[1], DELETE_BACKUPS_NOW_WARNING_ONE);
+    assert_eq!(
+        one.verification.as_deref(),
+        Some("I reviewed the backup marked \u{26A0}")
+    );
+}
+
+#[test]
+fn delete_backups_now_keeps_user_data_apart_and_refuses_quarantined_items() {
+    let backups = [
+        expiring_backup(1, &[r"reg\000001.regbackup.json"], false),
+        expiring_backup(2, &[r"reg\000002.regbackup.json"], true),
+    ];
+    let item = expiring_item(3, r"C:\Program Files\Vendor\a", false);
+    assert_eq!(
+        view_delete_backups_now(&[
+            PurgeUnit::Backup(&backups[0]),
+            PurgeUnit::Backup(&backups[1])
+        ]),
+        Err(ViewError::UserDataMisplaced(expiry(2).to_string()))
+    );
+    assert_eq!(
+        view_delete_backups_now_user_data(PurgeUnit::Backup(&backups[0])),
+        Err(ViewError::UserDataMisplaced(expiry(1).to_string()))
+    );
+    // A quarantined item is deleted early through the Delete now dialog, never through this one.
+    assert_eq!(
+        view_delete_backups_now(&[PurgeUnit::Backup(&backups[0]), PurgeUnit::Item(&item)]),
+        Err(ViewError::NotABackup(expiry(3).to_string()))
+    );
+    let personal_item = expiring_item(4, r"C:\Users\u\Documents\Vendor", true);
+    assert_eq!(
+        view_delete_backups_now_user_data(PurgeUnit::Item(&personal_item)),
+        Err(ViewError::NotABackup(expiry(4).to_string()))
+    );
+    assert_eq!(view_delete_backups_now(&[]), Err(ViewError::NothingToRun));
+    assert_eq!(
+        view_delete_backups_now(&[
+            PurgeUnit::Backup(&backups[0]),
+            PurgeUnit::Backup(&backups[0])
+        ]),
+        Err(ViewError::DuplicateUnit(expiry(1).to_string()))
+    );
+    let empty = expiring_backup(5, &[], false);
+    assert_eq!(
+        view_delete_backups_now(&[PurgeUnit::Backup(&empty)]),
+        Err(ViewError::NoFiles(expiry(5).to_string()))
+    );
+
+    let v = view_delete_backups_now_user_data(PurgeUnit::Backup(&backups[1])).unwrap();
+    assert_eq!(
+        v.instruction,
+        "Delete this registry backup of user data now, before its retention ends? Undo can then \
+         no longer restore this registry change. This cannot be undone."
+    );
+    assert_eq!(v.button, "Delete 1 registry backup now, for good");
+    assert_eq!(v.summary[1], DELETE_BACKUPS_NOW_WARNING_ONE);
+    assert!(
+        DELETE_BACKUPS_NOW_WARNING_ONE.contains("this change")
+            && !DELETE_BACKUPS_NOW_WARNING_ONE.contains("these")
+    );
+    assert_eq!(v.attention.len(), 1);
+    assert!(v.attention[0].reasons.contains(&Reason::UserData));
+    taskdialog::check(&dialog::pages(&v), PRIMARY).unwrap();
+
+    // Names cannot mislead here either: neither the change's nor the file's.
+    let odd = ExpiringBackup {
+        target: Target::RegKey {
+            path: "HKLM\\SOFTWARE\\evil\u{202e}gpj\nSafe".into(),
+        },
+        ..expiring_backup(6, &["reg\\a\u{200b}b\n.json"], false)
+    };
+    let v = view_delete_backups_now(&[PurgeUnit::Backup(&odd)]).unwrap();
+    for line in every_line(&v) {
+        assert_clean(line);
     }
 }
 

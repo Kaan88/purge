@@ -868,12 +868,23 @@ fn undo_and_reconcile_rules() {
         bytes: 1,
         early: false,
     };
-    // Only a quarantined item is deleted before its retention ends: never a backup.
+    // Only kept data is deleted before its retention ends (a quarantined item, an op's backup
+    // files): never the journal class.
     assert_eq!(
-        refused(w.expire(Expire { early: true, ..exp })),
-        Violation::EarlyExpireNotQuarantine(OpId(1))
+        refused(w.expire(Expire {
+            early: true,
+            class: RetentionClass::Journal,
+            ..exp
+        })),
+        Violation::EarlyExpireNotKeptData(OpId(1))
     );
-    w.expire(exp).unwrap();
+    // A backup deleted early at the user's request (DECISIONS 2026-11-24) is recorded as such, once.
+    w.expire(Expire { early: true, ..exp }).unwrap();
+    assert!(w.state().op(OpId(1)).unwrap().deleted_early);
+    assert_eq!(
+        w.state().op(OpId(1)).unwrap().expired,
+        [RetentionClass::Backup]
+    );
     assert_eq!(refused(w.expire(exp)), Violation::DuplicateExpire(OpId(1)));
 
     // Nothing of the run after the commit.

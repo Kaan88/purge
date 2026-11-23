@@ -127,6 +127,8 @@ public sealed class UiThreadTests
         public Task<ExpiringList> ExpiringAsync(bool includeNotDue, CancellationToken ct) =>
             OnPool(Fixture<ExpiringList>("pipe.quarantine.expiring.result.json"));
 
+        public Task<ExpiringList> ExpiringWithBackupsAsync(CancellationToken ct) => ExpiringAsync(true, ct);
+
         public Task<PurgeResult> PurgeAsync(IReadOnlyList<string> expiryIds, CancellationToken ct)
         {
             Purges++;
@@ -167,6 +169,9 @@ public sealed class UiThreadTests
             throw new NotSupportedException();
 
         public Task<ExecResult> ExecuteAsync(string planId, RestorePoint restorePoint, IProgress<Progress>? progress,
+            CancellationToken ct) => throw new NotSupportedException();
+
+        public Task<ExecResult> ExecuteThenDeleteAsync(string planId, RestorePoint restorePoint, IProgress<Progress>? progress,
             CancellationToken ct) => throw new NotSupportedException();
 
         public Task<UndoResult> UndoAsync(string session, IProgress<Progress>? progress, CancellationToken ct) =>

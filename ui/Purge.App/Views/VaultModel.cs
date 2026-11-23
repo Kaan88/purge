@@ -84,6 +84,27 @@ public sealed class VaultBatchModel
 
     /// <summary>Files deleted, registry backups kept: Put back undoes the registry changes only.</summary>
     public bool RegistryOnly { get; }
+
+    /// <summary>
+    /// The opt-in of a whole cleanup's "Delete now" (DECISIONS 2026-11-24), off each time it is offered. It is a
+    /// request: the broker asks for the backups in a prompt of their own before any is deleted.
+    /// </summary>
+    public const string AlsoBackupsText =
+        "Also delete its registry backups (its registry changes can then no longer be undone)";
+
+    /// <summary>Whether "Also delete its registry backups" is offered: the cleanup still has some.</summary>
+    public bool CanDeleteBackups => !BackupsPurged;
+
+    /// <summary>
+    /// Whether "Delete now" has anything to ask the broker for: quarantined files, or (ticked) registry backups.
+    /// </summary>
+    public bool CanDeleteNow(bool alsoBackups) => !FilesPurged || alsoBackups && CanDeleteBackups;
+
+    /// <summary>What the "Delete now" choice says above its tick box.</summary>
+    public string DeleteNowIntro => FilesPurged
+        ? "This cleanup's files are already deleted. Its registry backups are what is left; tick the box to delete them too."
+        : "Deletes this cleanup's quarantined files for good, before their retention ends. " +
+          "Purge names every file in its security prompt first; nothing is deleted without it.";
     public DateTimeOffset FileExpiry { get; }
     public DateTimeOffset BackupExpiry { get; }
     public int FileDays { get; }
@@ -174,7 +195,11 @@ public sealed record VaultBrokerLaunch(IVaultBroker? Broker, bool Cancelled, str
 /// "Delete now" (DECISIONS 2026-11-23) is the same two calls for one cleanup or one item of it before the
 /// retention ends: the page asks the broker for the cleanup's quarantined items (<c>include_not_due</c>) and sends
 /// back only the broker's ids. The broker decides from its own listing that this is an early delete and says so in
-/// its prompt, which is the confirmation; the page adds none of its own. Backups keep their own retention.
+/// its prompt, which is the confirmation; the page adds none of its own. Backups keep their own retention, unless
+/// the user ticks "Also delete its registry backups" on a whole cleanup's "Delete now" (DECISIONS 2026-11-24): the
+/// page then also asks the broker for the cleanup's backups and sends their ids along. The tick is only the
+/// request; the broker asks for the backups in a prompt of their own, which says that the registry changes can
+/// then no longer be undone.
 /// </para>
 /// <para>
 /// Threading as <see cref="HistoryViewModel"/>: driven from the UI thread, it never leaves its context.
@@ -454,15 +479,25 @@ public sealed class VaultViewModel
     /// delete cannot be undone and takes the item out of Undo; only what is approved there is deleted. Registry
     /// and task backups are not part of it.
     /// </summary>
-    public Task DeleteNowAsync(string sessionId, CancellationToken ct = default) => DeleteNowAsync(sessionId, null, ct);
+    public Task DeleteNowAsync(string sessionId, CancellationToken ct = default) => DeleteNowAsync(sessionId, null, false, ct);
+
+    /// <summary>
+    /// "Delete now" for a whole cleanup with "Also delete its registry backups" ticked (DECISIONS 2026-11-24): the
+    /// cleanup's quarantined items as <see cref="DeleteNowAsync(string, CancellationToken)"/>, and also its registry
+    /// backups, by the broker's ids. The broker asks for the backups last, in a prompt of their own that says its
+    /// registry changes can then no longer be undone; cancelling that one keeps every backup. Not offered per item:
+    /// a backup belongs to a registry change of the cleanup, not to one of its files.
+    /// </summary>
+    public Task DeleteNowAsync(string sessionId, bool alsoBackups, CancellationToken ct = default) =>
+        DeleteNowAsync(sessionId, null, alsoBackups, ct);
 
     /// <summary>"Delete now" for one item of the list <see cref="ShowItemsAsync"/> read, by the broker's id.</summary>
     public Task DeleteItemNowAsync(string expiryId, CancellationToken ct = default) =>
         ItemsFor is { } session && Items.Any(i => i.ExpiryId == expiryId)
-            ? DeleteNowAsync(session, expiryId, ct)
+            ? DeleteNowAsync(session, expiryId, false, ct)
             : Task.CompletedTask;
 
-    private async Task DeleteNowAsync(string sessionId, string? only, CancellationToken ct)
+    private async Task DeleteNowAsync(string sessionId, string? only, bool alsoBackups, CancellationToken ct)
     {
         if (_busy || Batches.FirstOrDefault(b => b.Id == sessionId) is not { } batch) return;
         Begin(only is null ? "Reading what this cleanup holds…" : "Confirm the delete in the Purge security prompt.");
@@ -475,10 +510,15 @@ public sealed class VaultViewModel
             else
             {
                 // The ids are the broker's own, from a listing made now: the page never names a path.
-                ids = Quarantined(await broker.ExpiringAsync(true, ct), batch.Id).Select(i => i.ExpiryId).ToList();
+                var listed = alsoBackups ? await broker.ExpiringWithBackupsAsync(ct) : await broker.ExpiringAsync(true, ct);
+                ids = Quarantined(listed, batch.Id).Select(i => i.ExpiryId).ToList();
+                // With the tick, the cleanup's backups too (due or not; the broker tells which and asks accordingly).
+                if (alsoBackups)
+                    ids.AddRange(listed.Items.Where(i => i.Session == batch.Id && i.Class == RetentionClass.Backup)
+                        .Select(i => i.ExpiryId));
                 if (ids.Count == 0)
                 {
-                    ActionInfo = NothingToDelete;
+                    ActionInfo = alsoBackups ? NothingToDeleteAtAll : NothingToDelete;
                     return;
                 }
                 Waiting = "Confirm the delete in the Purge security prompt.";
@@ -487,11 +527,18 @@ public sealed class VaultViewModel
             broker.AllowForeground();
             var result = await broker.PurgeAsync(ids, ct);
             changed = true;
+            // The backups are counted apart: a deleted registry backup is not "an item deleted", it is an undo given up.
+            var backups = Math.Min(result.PurgedBackups, result.Purged);
+            var files = result.Purged - backups;
             ResultTitle = result.Purged == 0 ? "Nothing was deleted"
-                : $"{result.Purged.ToString(CultureInfo.CurrentCulture)} {(result.Purged == 1 ? "item" : "items")} of {batch.Name} deleted for good";
-            ActionInfo = result.Kept > 0
-                ? $"{result.Kept.ToString(CultureInfo.CurrentCulture)} kept: you declined them, or they could not be deleted."
-                : null;
+                : files == 0 ? $"The registry backups of {batch.Name} were deleted for good"
+                : $"{files.ToString(CultureInfo.CurrentCulture)} {(files == 1 ? "item" : "items")} of {batch.Name} deleted for good" +
+                  (backups > 0 ? ", and its registry backups" : "");
+            var notes = new List<string>();
+            if (backups > 0) notes.Add("Its registry changes can no longer be undone.");
+            if (result.Kept > 0)
+                notes.Add($"{result.Kept.ToString(CultureInfo.CurrentCulture)} kept: you declined them, or they could not be deleted.");
+            ActionInfo = notes.Count == 0 ? null : string.Join(" ", notes);
             // What was deleted leaves the item list; a list that may be stale is closed instead of guessed.
             if (only is not null && result.Purged > 0 && ItemsFor == batch.Id)
             {
@@ -534,6 +581,10 @@ public sealed class VaultViewModel
         }
         if (changed) await LoadAsync(ct);
     }
+
+    private const string NothingToDeleteAtAll =
+        "This cleanup has nothing to delete now: no quarantined files and no registry backups. A cleanup that is being " +
+        "put back or recovered is left alone.";
 
     private const string NothingToDelete =
         "This cleanup has no quarantined files to delete now. Registry and task backups keep their own retention, " +

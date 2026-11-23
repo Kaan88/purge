@@ -1,9 +1,14 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "ExpiringParams",
-  "description": "`quarantine.expiring {include_not_due?}`. Absent, `null` and `{}` ask for what is past retention.",
+  "description": "`quarantine.expiring {include_not_due?, include_backups_not_due?}`. Absent, `null` and `{}` ask\nfor what is past retention.",
   "type": "object",
   "properties": {
+    "include_backups_not_due": {
+      "description": "Also list the backups (registry backups and definitions, per op) whose retention has not\nended and that nothing holds, each with `class: Backup` and `due: false`, for a \"Delete now\"\nthat gives up the undo of a cleanup's registry changes (DECISIONS 2026-11-24). Journals are\nnever among them.",
+      "type": "boolean",
+      "default": false
+    },
     "include_not_due": {
       "description": "Also list the quarantined items whose retention has not ended ([`ExpiringItem::due`] false),\nfor a \"Delete now\". Backups and journals are never among them.",
       "type": "boolean",

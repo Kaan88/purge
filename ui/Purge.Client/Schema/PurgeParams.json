@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "PurgeParams",
-  "description": "`quarantine.purge {expiry_ids[]}`.\n\nThe request names ids and nothing else. Whether an entry is past its retention is the broker's own\nreading at purge time, never the client's word: an entry that is not due is deleted only through\nthe dialog that says so (it is a \"Delete now\"), and only when it is a quarantined item.",
+  "description": "`quarantine.purge {expiry_ids[]}`.\n\nThe request names ids and nothing else. Whether an entry is past its retention, and whether it is\na quarantined item or a backup, is the broker's own reading at purge time, never the client's\nword: an entry that is not due is deleted only through the dialog that says so (a \"Delete now\"\nfor quarantined items; for backups a dialog of its own, which says that the registry changes can\nthen no longer be undone).",
   "type": "object",
   "properties": {
     "expiry_ids": {

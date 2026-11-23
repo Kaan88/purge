@@ -63,6 +63,10 @@ pub enum Variant {
     /// `quarantine.purge` of quarantined items whose retention has not ended: delete them now, for
     /// good, because the user asked.
     DeleteNow,
+    /// `quarantine.purge` of backups (registry backups, definitions) whose retention has not ended:
+    /// delete them now, for good, because the user asked; the changes they would undo can then no
+    /// longer be undone.
+    DeleteBackupsNow,
     /// `uninstall.run`: start a program's own uninstaller as administrator.
     Uninstall,
 }
@@ -342,8 +346,11 @@ pub enum ViewError {
     DuplicateUnit(String),
     /// A backup unit that names no file.
     NoFiles(String),
-    /// A backup unit in a "Delete now" dialog: a backup is never deleted before its class is due.
+    /// A backup unit in a "Delete now" dialog of quarantined items: a backup is deleted before its
+    /// class is due only through the dialog of its own ([`view_delete_backups_now`]).
     BackupNotDue(String),
+    /// A quarantined item in the dialog that deletes backups early.
+    NotABackup(String),
     /// An uninstall command that names no program.
     NoCommand,
 }
@@ -362,7 +369,16 @@ impl fmt::Display for ViewError {
             ViewError::DuplicateUnit(id) => write!(f, "{id} is named twice"),
             ViewError::NoFiles(id) => write!(f, "{id} names no backup file"),
             ViewError::BackupNotDue(id) => {
-                write!(f, "{id}: a backup is not deleted before its retention ends")
+                write!(
+                    f,
+                    "{id}: a backup is not deleted before its retention ends in this dialog"
+                )
+            }
+            ViewError::NotABackup(id) => {
+                write!(
+                    f,
+                    "{id}: only backups belong in the dialog that deletes backups"
+                )
             }
             ViewError::NoCommand => f.write_str("the uninstall command names no program"),
         }
@@ -384,6 +400,10 @@ pub struct Facts {
     pub restorable_until: Option<Stamp>,
     /// Whether the run will ask for a restore point first.
     pub restore_point: bool,
+    /// The request asked for "delete instead of keeping in quarantine" (`plan.execute
+    /// {delete_after}`): the dialog says that a second prompt follows the move and that nothing is
+    /// deleted without it. This dialog approves the move only.
+    pub delete_after: bool,
 }
 
 /// What the broker knows for a restore dialog.
@@ -978,6 +998,12 @@ fn assemble(head: Head, counts: Counts, rows: Vec<Row>) -> ConsentView {
 // Quarantine
 // ---------------------------------------------------------------------------------------------------
 
+/// What the quarantine dialog adds when the request asked for "delete instead of keeping in
+/// quarantine" ([`Facts::delete_after`]): this dialog is the move, the delete is asked for apart.
+pub const DELETE_AFTER_NOTE: &str = "You asked to delete instead of keeping in quarantine: after \
+    the move, a second prompt names the quarantined files and asks whether to delete them for good. \
+    Nothing is deleted without it, and this prompt approves the move only.";
+
 /// The quarantine dialog of `plan.execute` (design 8.1), drawn from the frozen plan.
 pub fn view(plan: &BoundPlan, facts: &Facts) -> Result<ConsentView, ViewError> {
     let all: Vec<&BoundItem> = plan.items().iter().collect();
@@ -1064,6 +1090,9 @@ pub fn view(plan: &BoundPlan, facts: &Facts) -> Result<ConsentView, ViewError> {
     }
     if facts.restore_point {
         summary.push("Windows is asked for a restore point first.".to_owned());
+    }
+    if facts.delete_after {
+        summary.push(DELETE_AFTER_NOTE.to_owned());
     }
     let code = plan_code(plan, plan.selection_hash());
     let head = Head {
@@ -1557,6 +1586,181 @@ pub fn view_delete_now_user_data(unit: PurgeUnit<'_>) -> Result<ConsentView, Vie
         &[unit],
         "Delete this user data now, before its retention ends? This cannot be undone.".to_owned(),
         "Delete 1 item now, for good".to_owned(),
+        true,
+    )
+}
+
+/// What every dialog that deletes backups early says below its count: what the backups are for, and
+/// what deleting them takes away. A sentence of its own, never the one of the quarantined items.
+pub const DELETE_BACKUPS_NOW_WARNING: &str = "These backups are what Undo restores the registry, \
+    service and task changes of the cleanup from. This is before their retention date; until then \
+    Purge keeps them. Once they are deleted here, Undo and History can no longer undo these \
+    changes: what the cleanup removed there stays removed.";
+
+/// [`DELETE_BACKUPS_NOW_WARNING`] for a dialog that names one backup.
+pub const DELETE_BACKUPS_NOW_WARNING_ONE: &str = "This backup is what Undo restores a registry, \
+    service or task change of the cleanup from. This is before its retention date; until then \
+    Purge keeps it. Once it is deleted here, Undo and History can no longer undo this change: what \
+    the cleanup removed there stays removed.";
+
+/// The confirmation code of a dialog that deletes backups early: never the purge dialog's and never
+/// the "Delete now" dialog's over the same ids.
+fn delete_backups_now_code(units: &[PurgeUnit<'_>]) -> ConfirmCode {
+    let ids: Vec<CandidateId> = std::iter::once(CandidateId("delete-backups-now".to_owned()))
+        .chain(units.iter().map(|u| CandidateId(u.id().to_string())))
+        .collect();
+    ConfirmCode::of(&selection_hash(&ids))
+}
+
+fn delete_backups_now_view(
+    units: &[PurgeUnit<'_>],
+    instruction: String,
+    button: String,
+    single: bool,
+) -> Result<ConsentView, ViewError> {
+    if units.is_empty() {
+        return Err(ViewError::NothingToRun);
+    }
+    let mut seen = HashSet::new();
+    let mut entries = Vec::new();
+    let mut counts = Counts::default();
+    let mut flags = Flags::default();
+    for unit in units {
+        let id = unit.id().to_string();
+        // Only backups: a quarantined item is deleted early through the "Delete now" dialog.
+        let PurgeUnit::Backup(backup) = unit else {
+            return Err(ViewError::NotABackup(id));
+        };
+        if !seen.insert(unit.id().clone()) {
+            return Err(ViewError::DuplicateUnit(id));
+        }
+        if backup.files.is_empty() {
+            return Err(ViewError::NoFiles(id));
+        }
+        counts.items += 1;
+        counts.bytes += backup.bytes;
+        // What the backup would undo, then every file of it: the consent names each file.
+        let target = target_text(&backup.target);
+        flags.merge(target.flags);
+        for file in &backup.files {
+            let q = quote(file);
+            flags.merge(q.flags);
+            let mut reasons = vec![Reason::Irreversible];
+            if backup.user_data {
+                reasons.push(Reason::UserData);
+            }
+            name_reasons(target.flags, &mut reasons);
+            name_reasons(q.flags, &mut reasons);
+            reasons.dedup();
+            counts.files += 1;
+            entries.push(Entry {
+                id: id.clone(),
+                text: format!(
+                    "{MARK} Delete the backup of: {}{SEP}backup file {}{SEP}{}",
+                    target.text,
+                    q.text,
+                    reasons
+                        .iter()
+                        .map(|r| r.label())
+                        .collect::<Vec<_>>()
+                        .join("; "),
+                ),
+                reasons,
+            });
+        }
+    }
+    let one = single || units.len() == 1;
+    let mut summary = vec![
+        format!(
+            "{} ({}), {} in all. Every backup is listed with the change it would undo; nothing \
+             else is deleted.",
+            count(
+                u64::from(counts.items),
+                "registry backup",
+                "registry backups"
+            ),
+            count(u64::from(counts.files), "backup file", "backup files"),
+            size(counts.bytes),
+        ),
+        if one {
+            DELETE_BACKUPS_NOW_WARNING_ONE
+        } else {
+            DELETE_BACKUPS_NOW_WARNING
+        }
+        .to_owned(),
+    ];
+    if !flags.is_plain() {
+        summary.push(LEGEND.to_owned());
+    }
+    let code = delete_backups_now_code(units);
+    let box_text = if one {
+        format!("I reviewed the backup marked {MARK}")
+    } else {
+        format!("I reviewed the backups marked {MARK}")
+    };
+    Ok(ConsentView {
+        variant: Variant::DeleteBackupsNow,
+        code,
+        icon: Icon::Warning,
+        instruction,
+        summary,
+        attention: entries,
+        others: Vec::new(),
+        others_more: None,
+        verification: Some(box_text),
+        button,
+        footer: footer(code),
+        counts,
+        plan_hash: None,
+        selection_hash: None,
+        uninstall: None,
+    })
+}
+
+/// The dialog of `quarantine.purge` for backups (registry backups and definitions, per op) whose
+/// retention has **not** ended and whose op is not user data (DECISIONS 2026-11-24): every backup is
+/// named with the change it would undo and every file of it, in pages, never cut, and the dialog says
+/// that this is before the retention date, that it cannot be undone, and that Undo can then no
+/// longer undo the registry, service and task changes. A quarantined item is refused
+/// ([`ViewError::NotABackup`]); user data belongs in [`view_delete_backups_now_user_data`], one
+/// backup per dialog.
+pub fn view_delete_backups_now(units: &[PurgeUnit<'_>]) -> Result<ConsentView, ViewError> {
+    if let Some(u) = units.iter().find(|u| u.user_data()) {
+        return Err(ViewError::UserDataMisplaced(u.id().to_string()));
+    }
+    let n = units.len() as u64;
+    delete_backups_now_view(
+        units,
+        format!(
+            "Delete {} now, before {} retention ends? Undo can then no longer restore {}. This \
+             cannot be undone.",
+            count(n, "registry backup", "registry backups"),
+            if n == 1 { "its" } else { "their" },
+            if n == 1 {
+                "this registry change"
+            } else {
+                "these registry changes"
+            },
+        ),
+        format!(
+            "Delete {} now, for good",
+            count(n, "registry backup", "registry backups")
+        ),
+        false,
+    )
+}
+
+/// The dialog that deletes the backup of one user-data op early, in a dialog of its own.
+pub fn view_delete_backups_now_user_data(unit: PurgeUnit<'_>) -> Result<ConsentView, ViewError> {
+    if !unit.user_data() {
+        return Err(ViewError::UserDataMisplaced(unit.id().to_string()));
+    }
+    delete_backups_now_view(
+        &[unit],
+        "Delete this registry backup of user data now, before its retention ends? Undo can then no \
+         longer restore this registry change. This cannot be undone."
+            .to_owned(),
+        "Delete 1 registry backup now, for good".to_owned(),
         true,
     )
 }
