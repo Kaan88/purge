@@ -10,8 +10,8 @@
 # nothing: the files are kept as a workflow artifact. With publish=true it creates the tag v<version>
 # at the commit it ran on.
 #
-# Not run yet: nothing is tagged (the owner releases). Hub reads only PUBLIC releases; while this
-# repository is private, Hub sees none of them.
+# Not run yet (the owner releases). v0.1.0 was published by hand on 2026-11-23, so the first release
+# this workflow cuts needs a version bump in Cargo.toml (and Cargo.lock). Hub reads only public releases.
 name: release
 
 on:
