@@ -2260,7 +2260,8 @@ the folder are the leftovers), `msi1603`, `msi3010` (below). Undo through the UI
 **MSI fixtures.** The repo has no WiX and no MSI fixture, so `m3-e2e-msi.ps1` writes both packages with the Windows
 Installer automation interface (database in create mode, SQL `CREATE TABLE` / `INSERT`, summary stream `x64;1033`,
 schema 200): a per-machine product with one registry-only component (`HKLM\SOFTWARE\PurgeE2eMsi\<variant>`, its key
-path) and the standard execute sequence; `REBOOT=ReallySuppress` in the Property table. `1603`: a type 19 custom action
+path) and the standard execute sequence; `REBOOT=ReallySuppress` in the Property table; one empty Media row (disk 1,
+LastSequence 0), because RegisterProduct queries Media and fails with error 2228 without it (`msiexec /i` exit 1603). `1603`: a type 19 custom action
 (error, then failure) at 1550, condition `REMOVE="ALL"`: `msiexec /x` returns 1603, rolls back, the product stays.
 `3010`: `ScheduleReboot` at 6590, condition `REMOVE="ALL"`: the product goes, no restart, msiexec returns 3010. Codes
 are fixed. Built in the guest at install time; the rig self-test builds both on the host and reads them back.

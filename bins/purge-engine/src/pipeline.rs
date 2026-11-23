@@ -79,8 +79,8 @@ use purge_inventory::runner::{ProcessHost, RunError, RunOptions, RunReport, RunR
 use purge_inventory::verify_gone::{self, VerifyTarget};
 use purge_model::{
     AnchorKind, AnchorRef, BaselineTrust, Candidate, Fingerprint, InstallScope, InstallerKind,
-    InventoryDoc, InventoryEntry, OsInfo, ProgramId, RawFlags, ResidueDoc, ScanMode, ScanWarning,
-    Target, VerifyGone, View, WritableBy,
+    InventoryDoc, InventoryEntry, MsiContext, OsInfo, ProgramId, RawFlags, ResidueDoc, ScanMode,
+    ScanWarning, Target, VerifyGone, View, WritableBy,
 };
 use purge_plan::decide::{DecideCtx, Limits, M1bDecide, bundle_known, colliding_ids};
 use purge_plan::emit::{Built, build};
@@ -92,7 +92,8 @@ use purge_scan::framework::{
 use purge_source::filesystem::FileSystemSource;
 use purge_source::registry::RegistrySource;
 use purge_source::sysobj::MsiTables;
-use purge_source::types::SourceError;
+use purge_source::system::SystemSource;
+use purge_source::types::{MsiProductState, SourceError};
 use purge_win::env::{EnvMap, expand_with};
 
 pub use purge_harvest::harvest::Sources;
@@ -767,8 +768,13 @@ pub fn uninstall_commands(
     env: &BTreeMap<String, String>,
 ) -> UninstallCommands {
     let map: EnvMap = env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    // A bare System32 host is resolved before expansion, in both commands: the quiet one may be a
+    // vendor's `QuietUninstallString` (`MsiExec.exe /X{GUID} /qn`) or generated from a bare one.
     let expanded = |command: QuietCommand| QuietCommand {
-        exe: expand_with(&command.exe, &map),
+        exe: expand_with(
+            &system_host_path(&command.exe).unwrap_or_else(|| command.exe.clone()),
+            &map,
+        ),
         args: expand_with(&command.args, &map),
         ..command
     };
@@ -779,7 +785,7 @@ pub fn uninstall_commands(
         .filter(|s| !s.is_empty())
         .and_then(|s| purge_win::cmdline::split(s).ok())
         .map(|split| QuietCommand {
-            exe: system_host_path(&split.exe).unwrap_or(split.exe),
+            exe: split.exe,
             args: split.args,
             generated: false,
             kind: entry.installer_kind,
@@ -809,6 +815,65 @@ fn system_host_path(exe: &str) -> Option<String> {
     HOST_EXECUTABLES
         .contains(&name.as_str())
         .then(|| format!(r"%SystemRoot%\System32\{name}"))
+}
+
+/// The directories a running process must be under to count as the program's own (the "close these
+/// first" list of `uninstall.prepare`, medium engine and broker alike): its `InstallLocation`, and
+/// the directory of each command the entry names, except a Windows host (`msiexec`, `rundll32`,
+/// `regsvr32`, `cmd`) and anything in the Windows directory `windows_dir` or below it. An MSI's
+/// command is `C:\Windows\System32\msiexec.exe`, and its folder made every System32 process (sihost,
+/// svchost, ctfmon...) "still running from the program's folder", a warning "Check again" could
+/// never clear (M3 e2e chain, 7-Zip). An empty `windows_dir` leaves only the host rule.
+pub fn running_roots(
+    entry: &InventoryEntry,
+    commands: &UninstallCommands,
+    windows_dir: &str,
+) -> Vec<String> {
+    let windows_dir = windows_dir
+        .trim_end_matches(['\\', '/'])
+        .to_ascii_lowercase();
+    let in_windows = |dir: &str| {
+        let dir = dir.trim_end_matches(['\\', '/']).to_ascii_lowercase();
+        !windows_dir.is_empty()
+            && (dir == windows_dir
+                || dir
+                    .strip_prefix(windows_dir.as_str())
+                    .is_some_and(|rest| rest.starts_with(['\\', '/'])))
+    };
+    let mut roots: Vec<String> = Vec::new();
+    let mut push = |root: String| {
+        let root = root.trim_end_matches(['\\', '/']).to_owned();
+        if !root.is_empty() && !roots.iter().any(|r| r.eq_ignore_ascii_case(&root)) {
+            roots.push(root);
+        }
+    };
+    if let Some(location) = entry.install_location.as_deref() {
+        if !in_windows(location) {
+            push(location.to_owned());
+        }
+    }
+    for command in [commands.command.as_ref(), commands.quiet.as_ref()]
+        .into_iter()
+        .flatten()
+    {
+        if HOST_EXECUTABLES.contains(&file_name_lower(&command.exe).as_str()) {
+            continue;
+        }
+        if let Some(parent) = Path::new(&command.exe).parent() {
+            let parent = parent.to_string_lossy().into_owned();
+            if !in_windows(&parent) {
+                push(parent);
+            }
+        }
+    }
+    roots
+}
+
+/// The Windows directory of this PC (`%SystemRoot%`, else `%windir%`), for [`running_roots`].
+pub fn windows_dir() -> String {
+    std::env::var("SystemRoot")
+        .or_else(|_| std::env::var("windir"))
+        .unwrap_or_default()
 }
 
 /// Where the uninstaller of `entry` runs (M3 design 3.2, ENGINE_PLAN §4.4): the broker for a
@@ -841,7 +906,12 @@ fn system_host_path(exe: &str) -> Option<String> {
 ///   it runs is itself a host or has no extension, the command text can run a second program (`&`,
 ///   `|`, ...), or cmd's quote handling could cut the program somewhere else (`/s`, more than two
 ///   quotes, a quoted program with `(`, `)`, `@` and the like in it).
-/// - `msiexec` with a ProductCode and no package path stays admin-only (it runs the cached package).
+/// - `msiexec` with a ProductCode and no package path stays admin-only (it runs the cached package)
+///   only when that ProductCode is the entry's own, the only `{GUID}` in the arguments, and Windows
+///   Installer has it per-machine and in neither per-user context of this user
+///   ([`machine_only_product`]). Windows Installer resolves a ProductCode per-user first, and
+///   `HKCU\Software\Microsoft\Installer` is the user's to write: an elevated `msiexec /x {GUID}` could
+///   otherwise open a package the user registered (Fable review of the bare-msiexec route fix, H1).
 ///
 /// Every absolute path in the arguments that exists and fails the run rule makes the route medium too;
 /// the value of a `NAME=value` token and each `;`-separated part are judged as well
@@ -849,6 +919,7 @@ fn system_host_path(exe: &str) -> Option<String> {
 pub fn route(
     entry: &InventoryEntry,
     fs: &dyn FileSystemSource,
+    sys: &dyn SystemSource,
     env: &BTreeMap<String, String>,
     machine_env: &BTreeMap<String, String>,
 ) -> purge_rpc::methods::Route {
@@ -883,10 +954,11 @@ pub fn route(
     let exes_admin_only = exes
         .iter()
         .all(|exe| fs.is_admin_only_executable(exe) == Ok(true));
+    let machine_product = machine_only_product(entry, sys);
     let loads_admin_only = [commands.command.as_ref(), commands.quiet.as_ref()]
         .into_iter()
         .flatten()
-        .all(|command| command_loads_admin_only(command, fs));
+        .all(|command| command_loads_admin_only(command, fs, machine_product.as_deref()));
     if exes_admin_only && loads_admin_only {
         purge_rpc::methods::Route::Broker
     } else {
@@ -1162,7 +1234,11 @@ fn first_operand_filtered(tokens: &[&str]) -> Option<String> {
 
 /// Whether the file `command` is told to load, if any, is writable by administrators alone. A known
 /// host whose load path cannot be found or worked out is not provably safe.
-fn command_loads_admin_only(command: &QuietCommand, fs: &dyn FileSystemSource) -> bool {
+fn command_loads_admin_only(
+    command: &QuietCommand,
+    fs: &dyn FileSystemSource,
+    machine_product: Option<&str>,
+) -> bool {
     let tokens = arg_tokens(&command.args);
     let tokens: Vec<&str> = tokens.iter().map(String::as_str).collect();
     // Every path in the arguments must be one a standard user cannot supply (`argument_path_admin_only`).
@@ -1196,9 +1272,38 @@ fn command_loads_admin_only(command: &QuietCommand, fs: &dyn FileSystemSource) -
         // client-chosen file (it runs the cached package). Everything else is undetermined: `cmd`
         // without `/d` or running another host, an interpreter or more than one
         // program, and a load path that is missing from the arguments (review M3-R2 M2).
-        return file_name_lower(&command.exe) == "msiexec.exe";
+        return file_name_lower(&command.exe) == "msiexec.exe"
+            && machine_product.is_some_and(|code| msiexec_names_only(&command.args, code));
     };
     is_absolute_path(&load) && fs.is_admin_only_executable(&load) == Ok(true)
+}
+
+/// The entry's ProductCode when Windows Installer has it installed per-machine and in neither
+/// per-user context of the user this process queries (the interactive user for the medium engine, the
+/// broker's own account, which is the one an elevated `msiexec` reads). `None` when the entry names no
+/// ProductCode, the state cannot be read, or any per-user context knows the product: then the cached
+/// package is not provably the machine's.
+fn machine_only_product(entry: &InventoryEntry, sys: &dyn SystemSource) -> Option<String> {
+    let code = entry.product_code.as_deref()?;
+    let states = sys.msi_product_state_all(code).ok()?;
+    let state = |context| {
+        states
+            .iter()
+            .find(|s| s.context == context)
+            .map(|s| s.state)
+    };
+    let machine = state(MsiContext::Machine) == Some(MsiProductState::Default);
+    let user_free = [MsiContext::UserManaged, MsiContext::UserUnmanaged]
+        .into_iter()
+        .all(|context| matches!(state(context), Some(MsiProductState::Unknown)));
+    (machine && user_free).then(|| code.to_owned())
+}
+
+/// Whether the `msiexec` arguments name exactly one `{GUID}` and it is `code` (case-insensitive).
+fn msiexec_names_only(args: &str, code: &str) -> bool {
+    args.matches('{').count() == 1
+        && purge_win::cmdline::find_braced_guid(args)
+            .is_some_and(|guid| guid.eq_ignore_ascii_case(code))
 }
 
 /// The parts of an argument token that may name a program: each part [`path_parts`] gives (the
@@ -3040,7 +3145,7 @@ mod tests {
         for file in ADMIN_ONLY_FILES {
             builder = builder.file(file, 1).admin_only_writable(file, true);
         }
-        builder
+        builder = builder
             .file(r"C:\Windows\System32\cmd.exe", 1)
             .file(r"C:\Windows\System32\rundll32.exe", 1)
             .file(r"C:\Windows\System32\msiexec.exe", 1)
@@ -3060,14 +3165,87 @@ mod tests {
             .file(r"C:\ProgramData\Vendor,x\evil.msi", 1)
             .file(r"C:\ProgramData\Vendor,x\evil.cmd", 1)
             .file(r"C:\ProgramData\Vendor,x\evil.dll", 1)
-            .admin_only_writable(r"C:\ProgramData\Vendor,x", false)
+            .admin_only_writable(r"C:\ProgramData\Vendor,x", false);
+        // Both test ProductCodes are installed per-machine and unknown to the user (the cached package
+        // is the machine's); `USER_MSI` is registered for the user as well.
+        for code in [TEST_MSI, SEVEN_ZIP_MSI, USER_MSI] {
+            builder = builder
+                .msi_state(code, MsiContext::Machine, MsiProductState::Default)
+                .msi_state(code, MsiContext::UserManaged, MsiProductState::Unknown)
+                .msi_state(code, MsiContext::UserUnmanaged, MsiProductState::Unknown);
+        }
+        builder
+            .msi_state(
+                USER_MSI,
+                MsiContext::UserUnmanaged,
+                MsiProductState::Default,
+            )
             .build()
     }
+
+    const TEST_MSI: &str = "{11111111-1111-1111-1111-111111111111}";
+    const SEVEN_ZIP_MSI: &str = "{23170F69-40C1-2702-2408-000001000000}";
+    const USER_MSI: &str = "{33333333-3333-3333-3333-333333333333}";
 
     fn route_entry(uninstall: &str) -> InventoryEntry {
         let mut entry = entry("App_is1", "App");
         entry.uninstall_string = Some(uninstall.to_owned());
+        // The ProductCode the msiexec tests name; other commands never look at it.
+        entry.product_code = Some(TEST_MSI.to_owned());
         entry
+    }
+
+    #[test]
+    fn msiexec_by_product_code_is_broker_only_for_the_entrys_own_machine_only_product() {
+        let fs = route_fixture();
+        let machine = env(&[("SystemRoot", r"C:\Windows")]);
+        let msiexec = |args: &str, code: Option<&str>| {
+            let mut entry = route_entry(&format!(r#""C:\Windows\System32\msiexec.exe" {args}"#));
+            entry.product_code = code.map(str::to_owned);
+            route(&entry, &fs, &fs, &machine, &machine)
+        };
+        assert_eq!(
+            msiexec(&format!("/x {TEST_MSI} /qn"), Some(TEST_MSI)),
+            purge_rpc::methods::Route::Broker
+        );
+        for (args, code, why) in [
+            (
+                format!("/x {TEST_MSI} /qn"),
+                None,
+                "the entry names no ProductCode",
+            ),
+            (
+                format!("/x {SEVEN_ZIP_MSI} /qn"),
+                Some(TEST_MSI),
+                "another product's code",
+            ),
+            (
+                format!("/x {TEST_MSI} {SEVEN_ZIP_MSI} /qn"),
+                Some(TEST_MSI),
+                "a second GUID in the arguments",
+            ),
+            (
+                format!("/x {USER_MSI} /qn"),
+                Some(USER_MSI),
+                "the user has it registered too",
+            ),
+            (
+                "/x {44444444-4444-4444-4444-444444444444} /qn".to_owned(),
+                Some("{44444444-4444-4444-4444-444444444444}"),
+                "Windows Installer does not know it",
+            ),
+            (
+                r"/x relative\pkg /qn".to_owned(),
+                Some(TEST_MSI),
+                "no ProductCode at all",
+            ),
+        ] {
+            assert_eq!(
+                msiexec(&args, code),
+                purge_rpc::methods::Route::Medium,
+                "{why}: {args}"
+            );
+        }
     }
 
     fn env(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
@@ -3086,19 +3264,19 @@ mod tests {
             r#""C:\Windows\System32\cmd.exe" /d /c "%ProgramData%\Vendor\uninstall.cmd""#,
         );
         assert_eq!(
-            route(&command, &fs, &user, &machine),
+            route(&command, &fs, &fs, &user, &machine),
             purge_rpc::methods::Route::Medium,
             "a value in HKCU\\Environment changed the expanded command"
         );
         assert_eq!(
-            route(&command, &fs, &machine, &machine),
+            route(&command, &fs, &fs, &machine, &machine),
             purge_rpc::methods::Route::Broker
         );
 
         let undefined =
             route_entry(r#""C:\Windows\System32\cmd.exe" /d /c "%X%\Vendor\uninstall.cmd""#);
         assert_eq!(
-            route(&undefined, &fs, &machine, &machine),
+            route(&undefined, &fs, &fs, &machine, &machine),
             purge_rpc::methods::Route::Medium,
             "a reference neither map defines stays medium"
         );
@@ -3114,7 +3292,7 @@ mod tests {
             r#""C:\Program Files\App\unins000.exe" --config "C:\Users\tester\AppData\Local\App\evil.ini""#,
         ] {
             assert_eq!(
-                route(&route_entry(command), &fs, &machine, &machine),
+                route(&route_entry(command), &fs, &fs, &machine, &machine),
                 purge_rpc::methods::Route::Medium,
                 "{command}"
             );
@@ -3124,6 +3302,7 @@ mod tests {
                 &route_entry(
                     r#""C:\Windows\System32\cmd.exe" /d /c "C:\ProgramData\Vendor\uninstall.cmd""#
                 ),
+                &fs,
                 &fs,
                 &machine,
                 &machine
@@ -3137,6 +3316,7 @@ mod tests {
                     r#""C:\Windows\System32\cmd.exe" /d /c "C:\ProgramData\Vendor\missing.cmd""#
                 ),
                 &fs,
+                &fs,
                 &machine,
                 &machine
             ),
@@ -3148,6 +3328,7 @@ mod tests {
                 &route_entry(
                     r#""C:\Windows\System32\msiexec.exe" /x {11111111-1111-1111-1111-111111111111} /qn"#
                 ),
+                &fs,
                 &fs,
                 &machine,
                 &machine
@@ -3166,6 +3347,7 @@ mod tests {
         let machine = env(&[("PROGRAMDATA", r"C:\ProgramData")]);
         route(
             &route_entry(&format!(r#""{exe}" {args}"#)),
+            &route_fixture(),
             &route_fixture(),
             &machine,
             &machine,
@@ -3287,7 +3469,7 @@ mod tests {
         ] {
             let entry = msi_entry(uninstall);
             assert_eq!(
-                route(&entry, &fs, &machine, &machine),
+                route(&entry, &fs, &fs, &machine, &machine),
                 purge_rpc::methods::Route::Broker,
                 "{uninstall}"
             );
@@ -3298,11 +3480,26 @@ mod tests {
                 "the command shown and run names System32, never a bare name: {uninstall}"
             );
         }
+        // A vendor's QuietUninstallString with a bare msiexec is resolved too (review M1).
+        let mut quiet = msi_entry("MsiExec.exe /I{23170F69-40C1-2702-2408-000001000000}");
+        quiet.quiet_uninstall_string =
+            Some("MsiExec.exe /X{23170F69-40C1-2702-2408-000001000000} /qn".to_owned());
+        assert_eq!(
+            uninstall_commands(&quiet, &machine)
+                .quiet
+                .as_ref()
+                .map(|c| c.exe.as_str()),
+            Some(r"C:\Windows\System32\msiexec.exe")
+        );
+        assert_eq!(
+            route(&quiet, &fs, &fs, &machine, &machine),
+            purge_rpc::methods::Route::Broker
+        );
         // Still medium: a per-user entry, and a user environment that moves SystemRoot.
         let mut per_user = msi_entry("MsiExec.exe /I{23170F69-40C1-2702-2408-000001000000}");
         per_user.hive_sid = Some("S-1-5-21-1-2-3-1001".to_owned());
         assert_eq!(
-            route(&per_user, &fs, &machine, &machine),
+            route(&per_user, &fs, &fs, &machine, &machine),
             purge_rpc::methods::Route::Medium
         );
         let planted = env(&[
@@ -3312,6 +3509,7 @@ mod tests {
         assert_eq!(
             route(
                 &msi_entry("MsiExec.exe /I{23170F69-40C1-2702-2408-000001000000}"),
+                &fs,
                 &fs,
                 &planted,
                 &machine
@@ -3355,8 +3553,62 @@ mod tests {
         let fs = route_fixture();
         let machine = env(&[("SystemRoot", r"C:\Windows")]);
         assert_eq!(
-            route(&route_entry("unins000.exe /S"), &fs, &machine, &machine),
+            route(
+                &route_entry("unins000.exe /S"),
+                &fs,
+                &fs,
+                &machine,
+                &machine
+            ),
             purge_rpc::methods::Route::Medium
+        );
+    }
+
+    fn qc(exe: &str) -> QuietCommand {
+        QuietCommand {
+            exe: exe.to_owned(),
+            args: String::new(),
+            generated: false,
+            kind: InstallerKind::Unknown,
+        }
+    }
+
+    #[test]
+    fn running_roots_leave_out_windows_hosts_and_the_windows_directory() {
+        let mut entry = entry("App_is1", "App");
+        // An MSI: msiexec in System32, no install location: nothing is "the program's folder".
+        let msi = UninstallCommands {
+            command: Some(qc(r"C:\Windows\System32\msiexec.exe")),
+            quiet: Some(qc(r"C:\WINDOWS\system32\MsiExec.exe")),
+        };
+        assert!(running_roots(&entry, &msi, r"C:\Windows").is_empty());
+        assert!(
+            running_roots(&entry, &msi, "").is_empty(),
+            "the host rule holds without a Windows directory"
+        );
+        // An old uninstaller in the Windows directory itself (IsUninst.exe) is no root either.
+        let windows = UninstallCommands {
+            command: Some(qc(r"C:\Windows\IsUninst.exe")),
+            quiet: None,
+        };
+        assert!(running_roots(&entry, &windows, r"C:\Windows\").is_empty());
+        // The install location and a real program folder stay; a sibling of Windows is not inside it.
+        entry.install_location = Some(r"C:\Program Files\7-Zip\".to_owned());
+        let app = UninstallCommands {
+            command: Some(qc(r"C:\Program Files\7-Zip\Uninstall.exe")),
+            quiet: Some(qc(r"C:\WindowsApps2\Vendor\unins000.exe")),
+        };
+        assert_eq!(
+            running_roots(&entry, &app, r"C:\Windows"),
+            vec![
+                r"C:\Program Files\7-Zip".to_owned(),
+                r"C:\WindowsApps2\Vendor".to_owned()
+            ]
+        );
+        entry.install_location = Some(r"C:\Windows\System32".to_owned());
+        assert!(
+            running_roots(&entry, &msi, r"C:\Windows").is_empty(),
+            "an install location inside Windows is not a program folder"
         );
     }
 

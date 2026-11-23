@@ -47,9 +47,7 @@ use purge_identity::kbdata::Kb;
 use purge_inventory::quiet::QuietCommand;
 use purge_inventory::runner::{LiveHost, RunOptions};
 use purge_inventory::verify_gone::{self, VerifyTarget};
-use purge_model::{
-    Candidate, FileTime, Fingerprint, InventoryEntry, ProgramId, Target, VerifyGone,
-};
+use purge_model::{Candidate, FileTime, Fingerprint, ProgramId, Target, VerifyGone};
 use purge_rpc::error::{ErrorData, ErrorObject, IdKind, Refusal};
 use purge_rpc::methods::PipeCall;
 use purge_rpc::methods::{
@@ -601,7 +599,7 @@ fn prepare<H: FlowHandler>(
             .doc
             .entry(program)
             .ok_or_else(|| gone(IdKind::Program))?;
-        let route = pipeline::route(entry, sources.fs, &env, &machine_env);
+        let route = pipeline::route(entry, sources.fs, sources.sys, &env, &machine_env);
         // A machine-scope command is expanded with the machine environment only. The broker starts
         // such a command (or shows what would run), so a value in `HKCU\Environment` must never choose
         // its executable or arguments (review M3-R2 B1). A per-user program keeps the interactive
@@ -622,7 +620,7 @@ fn prepare<H: FlowHandler>(
         let signer = signer_of(sources, &commands);
         let running = running_under(
             &sources.sys.processes().unwrap_or_default(),
-            &running_roots(entry, &commands),
+            &pipeline::running_roots(entry, &commands, &pipeline::windows_dir()),
         );
 
         let window_start = crate::purge::system_now();
@@ -732,30 +730,6 @@ fn signer_of(sources: Sources<'_>, commands: &UninstallCommands) -> Option<Strin
         .into_iter()
         .flatten()
         .find_map(|command| sources.fs.signer_cn(&command.exe).ok().flatten())
-}
-
-/// The directories a running process must be under to count as the program's own: its
-/// `InstallLocation`, and the directory of each command the entry names.
-fn running_roots(entry: &InventoryEntry, commands: &UninstallCommands) -> Vec<String> {
-    let mut roots: Vec<String> = Vec::new();
-    let mut push = |root: String| {
-        let root = root.trim_end_matches(['\\', '/']).to_owned();
-        if !root.is_empty() && !roots.iter().any(|r| r.eq_ignore_ascii_case(&root)) {
-            roots.push(root);
-        }
-    };
-    if let Some(location) = entry.install_location.as_deref() {
-        push(location.to_owned());
-    }
-    for command in [commands.command.as_ref(), commands.quiet.as_ref()]
-        .into_iter()
-        .flatten()
-    {
-        if let Some(parent) = Path::new(&command.exe).parent() {
-            push(parent.to_string_lossy().into_owned());
-        }
-    }
-    roots
 }
 
 /// Processes whose image lies under one of `roots` (case-insensitive, like the rest of the paths).
