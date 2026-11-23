@@ -30,6 +30,10 @@
 //!   `SystemRestore|LastIndex`, `DsmSvc\State|SessionNumber`, the `System Volume Information` mtime; see
 //!   `is_engine_rp_created`); (engine-fw) only when the journal has a `Done` `DeleteFirewallRule`: the wfascim WMI
 //!   tracing key, `SharedAccess\Epoch|Epoch` and `wfpdiag.etl`, additions and changes only (`is_engine_fw_delete`);
+//!   (broker-exit) what Windows records when purge-broker.exe exits after a completed execute: its bam
+//!   `UserSettings\<sid>` value (name ending `\Program Files\Purge\purge-broker.exe`) and its Compatibility
+//!   Assistant `Store` value (named `C:\Program Files\Purge\purge-broker.exe`), additions and changes only
+//!   (`is_broker_exit`; a null run's declined consent never ends the broker in its window, RIG.md §17.1);
 //!   (ambient) the ambient set: with an M2 set (`purge.rig.m2ambient/1`) only the exact op and
 //!   record seen in the null runs, or its token pattern, never a subtree; (parent) a directory whose only change is
 //!   its LastWriteTime, or a key whose only changes are LastWriteTime / value count / subkey count, when an
@@ -353,7 +357,8 @@ pub struct Counts {
     pub inconsistencies: u64,
     /// Records of diff(before, after).
     pub diff_records: u64,
-    /// Authorised diff records by reason: op, store, rig, pending-rename, ambient, parent.
+    /// Authorised diff records by reason: op, store, rig, pending-rename, engine-rm, engine-rp, engine-fw,
+    /// broker-exit, ambient, parent, ...
     pub authorised: BTreeMap<String, u64>,
 }
 
@@ -777,6 +782,62 @@ fn is_engine_rp(c: &Change) -> bool {
         && s[3].eq_ignore_ascii_case("Services")
         && s[4].eq_ignore_ascii_case("VSS")
         && s[5].eq_ignore_ascii_case("Diag")
+}
+
+/// The broker's image path as the Background Activity Moderator names it (a `\Device\HarddiskVolumeN` prefix):
+/// a bam value name must end with this.
+const BROKER_BAM_SUFFIX: &str = "\\Program Files\\Purge\\purge-broker.exe";
+/// The broker's image path as the Program Compatibility Assistant names it (the value name, exactly).
+const BROKER_EXE: &str = "C:\\Program Files\\Purge\\purge-broker.exe";
+/// The Program Compatibility Assistant's store key below `HKU\<sid>`.
+const PCA_STORE: [&str; 7] =
+    ["Software", "Microsoft", "Windows NT", "CurrentVersion", "AppCompatFlags", "Compatibility Assistant", "Store"];
+
+/// What Windows records when purge-broker.exe exits: a completed execute ends the broker inside the gate's exec
+/// window (`ExitReason::CompletedChange`, bins/purge-broker/src/lifetime.rs), a declined consent does not, so a
+/// null run of the e2e flow never sees these and they cannot come from the ambient set (RIG.md §17.1). Values
+/// only, changed (`~`) or added (`+`), never a removal:
+/// - `HKLM\SYSTEM\<control set>\Services\bam\State\UserSettings\<sid>`, a value whose name ends with
+///   `\Program Files\Purge\purge-broker.exe` (bam's per-user last-run record, named by the device path);
+/// - `HKU\<sid>\Software\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Compatibility Assistant\Store`, the
+///   value named exactly `C:\Program Files\Purge\purge-broker.exe` (the Program Compatibility Assistant's record).
+///
+/// Any other image name stays collateral; the keys' LastWriteTime / value count are left to the parent rule.
+fn is_broker_exit(c: &Change) -> bool {
+    if c.rec != 'V' || !matches!(c.op, '~' | '+') {
+        return false;
+    }
+    let Some(name) = c.name.as_deref() else { return false };
+    let is_sid = |s: &str| {
+        s.len() > 4
+            && s.is_char_boundary(4)
+            && s[..4].eq_ignore_ascii_case("S-1-")
+            && s[4..].bytes().all(|b| b.is_ascii_digit() || b == b'-')
+    };
+    // The bam name is the NT device path of the image: `\Device\HarddiskVolume<n>` and then the path on the volume.
+    let bam_prefix_ok = |p: &str| {
+        const DEV: &str = r"\Device\HarddiskVolume";
+        p.len() > DEV.len()
+            && p.is_char_boundary(DEV.len())
+            && p[..DEV.len()].eq_ignore_ascii_case(DEV)
+            && p[DEV.len()..].bytes().all(|b| b.is_ascii_digit())
+    };
+    if let Some(r) = system_cs_rest(&c.path) {
+        let n = BROKER_BAM_SUFFIX.len();
+        return r.len() == 5
+            && segs_eq(&r[..4], &["Services", "bam", "State", "UserSettings"])
+            && is_sid(r[4])
+            && name.len() > n
+            && name.is_char_boundary(name.len() - n)
+            && name[name.len() - n..].eq_ignore_ascii_case(BROKER_BAM_SUFFIX)
+            && bam_prefix_ok(&name[..name.len() - n]);
+    }
+    let s: Vec<&str> = c.path.split('\\').collect();
+    s.len() == 9
+        && (s[0].eq_ignore_ascii_case("HKU") || s[0].eq_ignore_ascii_case("HKEY_USERS"))
+        && is_sid(s[1])
+        && segs_eq(&s[2..], &PCA_STORE)
+        && name.eq_ignore_ascii_case(BROKER_EXE)
 }
 
 /// `HKLM\SYSTEM\<CurrentControlSet|ControlSetNNN>\<rest...>`: the segments after the control set, or None.
@@ -1519,6 +1580,8 @@ pub fn check(cx: &Ctx) -> Result<ExecdiffReport> {
             Some("engine-rp")
         } else if fw_deleted && is_engine_fw_delete(c) {
             Some("engine-fw")
+        } else if is_broker_exit(c) {
+            Some("broker-exit")
         } else if cx.ambient.and_then(|m| m.matches_change(c, &t)).is_some() {
             Some("ambient")
         } else if stale_dir_time(c, before_ft) {
@@ -1904,6 +1967,7 @@ mod tests {
         "C:\\cr",
         "HKLM\\SOFTWARE",
         "HKLM\\SYSTEM\\CurrentControlSet",
+        "HKU\\S-1-5-21-1\\Software",
     ];
     const Q: &str = "C:\\ProgramData\\Purge\\Quarantine\\20261115T101502Z-9f3a6c1d2b7e4a50";
 
@@ -1914,6 +1978,8 @@ mod tests {
         drop_keep_value: bool,
         moved_file_stays: bool,
         canary_size: Option<u64>,
+        /// Extra records written into the before (false) and after (true) snapshot.
+        extra: Option<fn(&mut String, bool)>,
     }
 
     fn before_text(t: &mut String) {
@@ -1962,8 +2028,16 @@ mod tests {
     }
 
     fn snaps(v: &Var) -> (Snap, Snap) {
-        let a = snap_with_roots(ROOTS, before_text);
+        let a = snap_with_roots(ROOTS, |t| {
+            before_text(t);
+            if let Some(f) = v.extra {
+                f(t, false);
+            }
+        });
         let b = snap_with_roots(ROOTS, |t| {
+            if let Some(f) = v.extra {
+                f(t, true);
+            }
             write_d(t, "C:\\Program Files", 0x10, 1, 0);
             write_d(t, R, 0x10, 1, 0);
             // Moved out: the parent's mtime changes.
@@ -2268,6 +2342,125 @@ mod tests {
         for c in &no {
             assert!(!is_engine_fw_delete(c), "{c:?}");
         }
+    }
+
+    const BAM: &str = "HKLM\\SYSTEM\\CurrentControlSet\\Services\\bam\\State\\UserSettings\\S-1-5-21-1";
+    const BAM_BROKER: &str = "\\Device\\HarddiskVolume3\\Program Files\\Purge\\purge-broker.exe";
+    const PCA: &str = "HKU\\S-1-5-21-1\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Compatibility Assistant\\Store";
+
+    #[test]
+    fn broker_exit_is_the_brokers_bam_and_pca_values_added_or_changed() {
+        let yes = [
+            chgv('~', BAM, BAM_BROKER),
+            chgv('+', BAM, BAM_BROKER),
+            chgv('~', &BAM.replace("CurrentControlSet", "ControlSet001"), BAM_BROKER),
+            chgv('~', BAM, "\\Device\\HarddiskVolume12\\PROGRAM FILES\\purge\\PURGE-BROKER.EXE"),
+            chgv('~', PCA, "C:\\Program Files\\Purge\\purge-broker.exe"),
+            chgv('+', PCA, "c:\\program files\\purge\\purge-broker.exe"),
+            chgv('+', &PCA.replace("HKU\\", "HKEY_USERS\\"), "C:\\Program Files\\Purge\\purge-broker.exe"),
+        ];
+        for c in &yes {
+            assert!(is_broker_exit(c), "{c:?}");
+        }
+        let no = [
+            // A removal never.
+            chgv('-', BAM, BAM_BROKER),
+            chgv('-', PCA, "C:\\Program Files\\Purge\\purge-broker.exe"),
+            // Another image: cmd.exe, the UI, the engine, a look-alike name or folder.
+            chgv('~', BAM, "\\Device\\HarddiskVolume3\\Windows\\System32\\cmd.exe"),
+            chgv('~', BAM, "\\Device\\HarddiskVolume3\\Program Files\\Purge\\Purge.exe"),
+            chgv('~', BAM, "\\Device\\HarddiskVolume3\\Program Files\\Purge\\purge-engine.exe"),
+            chgv('~', BAM, "\\Device\\HarddiskVolume3\\Program Files\\Purge\\purge-broker.exe.bak"),
+            chgv('~', BAM, "\\Device\\HarddiskVolume3\\Program Files\\PurgeX\\purge-broker.exe"),
+            chgv('~', BAM, "\\Program Files\\Purge\\purge-broker.exe"),
+            chgv('~', BAM, "\\Device\\HarddiskVolume4\\Users\\x\\Program Files\\Purge\\purge-broker.exe"),
+            chgv('~', BAM, "\\Device\\HarddiskVolume\\Program Files\\Purge\\purge-broker.exe"),
+            chgv('~', BAM, "\\Device\\Mup\\Program Files\\Purge\\purge-broker.exe"),
+            chgv('~', PCA, "C:\\Windows\\System32\\cmd.exe"),
+            chgv('~', PCA, "D:\\Program Files\\Purge\\purge-broker.exe"),
+            chgv('~', PCA, "C:\\Program Files\\Purge\\purge-broker.exe.x"),
+            chgv('~', PCA, "\\Device\\HarddiskVolume3\\Program Files\\Purge\\purge-broker.exe"),
+            // Other places: bam's other keys, another SID shape, a deeper key, the store's parent, HKLM.
+            chgv('~', "HKLM\\SYSTEM\\CurrentControlSet\\Services\\bam\\State\\UserSettings", BAM_BROKER),
+            chgv('~', "HKLM\\SYSTEM\\CurrentControlSet\\Services\\bam\\State\\UserSettings\\x", BAM_BROKER),
+            chgv('~', &format!("{BAM}\\Sub"), BAM_BROKER),
+            chgv('~', "HKLM\\SYSTEM\\CurrentControlSet\\Services\\dam\\State\\UserSettings\\S-1-5-21-1", BAM_BROKER),
+            chgv('~', "HKLM\\SYSTEM\\ControlSetX01\\Services\\bam\\State\\UserSettings\\S-1-5-21-1", BAM_BROKER),
+            chgv('~', &PCA.replace("\\Store", ""), "C:\\Program Files\\Purge\\purge-broker.exe"),
+            chgv('~', &format!("{PCA}\\Sub"), "C:\\Program Files\\Purge\\purge-broker.exe"),
+            chgv('~', &PCA.replace("HKU\\S-1-5-21-1", "HKLM"), "C:\\Program Files\\Purge\\purge-broker.exe"),
+            chgv('~', &PCA.replace("S-1-5-21-1", "x"), "C:\\Program Files\\Purge\\purge-broker.exe"),
+            chgv('~', &PCA.replace("S-1-5-21-1", "S-1-5-21-1_Classes"), "C:\\Program Files\\Purge\\purge-broker.exe"),
+            chgv('~', "HKLM\\SYSTEM\\CurrentControlSet\\Services\\bam\\State\\UserSettings\\S-1-5-x", BAM_BROKER),
+            // Keys and files are never covered (the key's LastWriteTime is the parent rule's).
+            chgx('~', 'K', BAM, &["lwt 1->2"]),
+            chgx('~', 'K', PCA, &["lwt 1->2", "n_values 1->2"]),
+            chg('+', 'K', PCA),
+            chg('~', 'F', "C:\\Program Files\\Purge\\purge-broker.exe"),
+        ];
+        for c in &no {
+            assert!(!is_broker_exit(c), "{c:?}");
+        }
+    }
+
+    /// The broker's exit records in the snapshots: before (`after` false) and after. bam value changed, the PCA
+    /// value added (its key's LastWriteTime / value count change with it).
+    fn broker_exit_snaps(t: &mut String, after: bool) {
+        let (lwt, nv, h) = if after { (2, 1, 2) } else { (1, 0, 1) };
+        write_k(t, BAM, lwt, Some(2), Some(0));
+        write_v(t, BAM, BAM_BROKER, 3, 24, h, "x");
+        write_v(t, BAM, "SequenceNumber", 4, 4, 9, "1");
+        write_k(t, PCA, lwt, Some(nv), Some(0));
+        if after {
+            write_v(t, PCA, "C:\\Program Files\\Purge\\purge-broker.exe", 3, 48, 7, "x");
+        }
+    }
+
+    #[test]
+    fn broker_exit_records_are_authorised_and_their_keys_by_the_parent_rule() {
+        let r = run(Case { var: Var { extra: Some(broker_exit_snaps), ..Default::default() }, ..Default::default() });
+        assert!(r.ok, "{:#?}", (&r.counts, &r.collateral, &r.unexplained));
+        assert_eq!((r.counts.collateral, r.counts.unexplained), (0, 0), "{:#?}", (&r.collateral, &r.unexplained));
+        assert_eq!(r.counts.authorised.get("broker-exit").copied(), Some(2), "{:?}", r.counts.authorised);
+        // Both keys' LastWriteTime (and the PCA key's value count) are parents of an authorised value.
+        let base = run(Case::default());
+        let parents = |x: &ExecdiffReport| x.counts.authorised.get("parent").copied().unwrap_or(0);
+        assert_eq!(parents(&r), parents(&base) + 2, "{:?}", r.counts.authorised);
+    }
+
+    /// A removed broker value and a changed value of another image: collateral, with their keys.
+    fn broker_exit_wrong_snaps(t: &mut String, after: bool) {
+        let lwt = if after { 2 } else { 1 };
+        write_k(t, BAM, lwt, Some(if after { 1 } else { 2 }), Some(0));
+        if !after {
+            write_v(t, BAM, BAM_BROKER, 3, 24, 1, "x");
+        }
+        write_v(t, BAM, "\\Device\\HarddiskVolume3\\Windows\\System32\\cmd.exe", 3, 24, lwt, "x");
+        write_k(t, PCA, lwt, Some(1), Some(0));
+        write_v(t, PCA, "C:\\Windows\\System32\\cmd.exe", 3, 48, lwt, "x");
+    }
+
+    #[test]
+    fn broker_exit_never_covers_a_removal_or_another_image() {
+        let r =
+            run(Case { var: Var { extra: Some(broker_exit_wrong_snaps), ..Default::default() }, ..Default::default() });
+        assert!(!r.ok);
+        assert_eq!(r.counts.authorised.get("broker-exit"), None, "{:?}", r.counts.authorised);
+        let got: Vec<(String, String, Option<String>)> =
+            r.collateral.iter().map(|c| (c.change.clone(), c.path.clone(), c.name.clone())).collect();
+        for want in [
+            ("-V", BAM, Some(BAM_BROKER)),
+            ("~V", BAM, Some("\\Device\\HarddiskVolume3\\Windows\\System32\\cmd.exe")),
+            ("~V", PCA, Some("C:\\Windows\\System32\\cmd.exe")),
+            ("~K", BAM, None),
+            ("~K", PCA, None),
+        ] {
+            assert!(
+                got.iter().any(|g| g.0 == want.0 && g.1.eq_ignore_ascii_case(want.1) && g.2.as_deref() == want.2),
+                "{want:?} not collateral: {got:#?}"
+            );
+        }
+        assert_eq!(r.counts.collateral, 5, "{got:#?}");
     }
 
     struct Case {

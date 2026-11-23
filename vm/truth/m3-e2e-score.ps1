@@ -18,8 +18,16 @@
     default `cargo xtask` from the repo root).
 
   Fail-closed: every row needs its evidence; a missing file, step, record or field is a FAIL of that row, never a pass.
-  -Apps scores a subset (the result then says "not a gate score"). Prints one line per row, writes
-  <evidence>\score-m3-e2e.json, exits 0 (PASS, gate), 1 (FAIL), 2 (usage) or 3 (every row passes but a subset).
+  The ambient set (vm\RIG.md section 17.1): -AmbientFile, default the committed set of the run's VM (summary.json vm:
+  Inbound truth\m3-e2e-ambient.json, Purge-CleanPro truth\m3-e2e-ambient-cleanpro.json). Rows: the set itself (schema
+  purge.rig.m2ambient/1, at least $E2eMinNullRuns distinct null runs, each id <prefix><k>-m3-e2e-<executing app>, no
+  fixture name in any record or pattern), its provenance (the null runs' VM and snapshot == summary.json's, and the
+  engine / broker / UI SHA-256 == summary.json binaries when recorded) and, per executing app, host.json ambient.sha256
+  == e2e.json ambient declared.sha256 == guest_sha256 == the set's SHA-256 (the gate's execdiff used that very file,
+  not the M2 set) and execdiff.json inputs.ambient set. score-m3-e2e.json records the ambient file and its SHA-256.
+  -Apps scores a subset and -AmbientFile naming another file than the VM's committed set scores against it; either way
+  the result says "not a gate score". Prints one line per row, writes <evidence>\score-m3-e2e.json, exits 0 (PASS,
+  gate), 1 (FAIL), 2 (usage) or 3 (every row passes, but -Apps or -AmbientFile made it not a gate score).
   The self-test builds a passing synthetic evidence directory from the expectations, checks it passes, then checks
   that each of a list of single defects (and an empty or missing directory) fails.
 #>
@@ -32,6 +40,7 @@ param(
     [string[]] $Apps = @(),
     [string] $RigTool = '',
     [string] $Xtask = '',
+    [string] $AmbientFile = '',
     [Parameter(ValueFromRemainingArguments = $true)] $Rest
 )
 $ErrorActionPreference = 'Stop'
@@ -65,6 +74,58 @@ function Get-E2eShotNames($AppDef, [bool]$Undo) {
     $n += '07-move-waiting', '08-consent-plan', '09-result'
     if ($Undo) { $n += '10-undo-waiting', '11-consent-undo', '12-undone' }
     $n
+}
+
+# The m3-e2e ambient set (RIG.md section 17.1). Same fixture expression as vm\rig-m3.ps1 $M3E2eFixtureRx, same minimum
+# as $M3E2eMinNullRuns; a null run id is <prefix><k>-m3-e2e-<app> (rig-m3.ps1 Get-M3E2eNullRunName).
+$E2eFixtureRx = '(?i)purgeexec|programdata\\+purge|purgee2emsi|\.purge(\\)?-q'
+$E2eMinNullRuns = 6
+$E2eNullRunRx = '\A[a-z0-9][a-z0-9_.-]*[0-9]-m3-e2e-([a-z0-9][a-z0-9-]*)\z'
+
+# The committed set of the run's VM (summary.json vm) in $TruthDir (default vm\truth), or $null for a VM that has none.
+function Get-E2eAmbientPath($Sum, [string]$TruthDir = $PSScriptRoot) {
+    $vm = $(if ($Sum -and (Has $Sum 'vm')) { "$($Sum.vm)" } else { 'Inbound-Win11-Test' })
+    $leaf = switch -CaseSensitive ($vm) { 'Inbound-Win11-Test' { 'm3-e2e-ambient.json' } 'Purge-CleanPro' { 'm3-e2e-ambient-cleanpro.json' } default { $null } }
+    if ($leaf) { Join-Path $TruthDir $leaf } else { $null }
+}
+
+# Why the set's provenance (rig-m3.ps1 Invoke-M3E2eBuildAmbient) does not match the gate run's summary.json: the VM and
+# the snapshot always, the binaries' SHA-256 when summary.json records them (binaries). None: it matches.
+function Test-E2eAmbientProvenance($Set, $Sum) {
+    if (-not $Set) { return @() }
+    $p = $(if (Has $Set 'provenance') { $Set.provenance } else { $null })
+    if (-not $p) { return @('the set records no provenance') }
+    if (-not $Sum) { return @('no summary.json to compare the provenance with') }
+    $why = @()
+    foreach ($f in 'vm', 'snapshot') {
+        if (-not (Has $p $f) -or -not (Has $Sum $f) -or "$($p.$f)" -cne "$($Sum.$f)") { $why += "$f '$(if (Has $p $f) { $p.$f })', the run's '$(if (Has $Sum $f) { $Sum.$f })'" }
+    }
+    if (-not (Has $Sum 'binaries')) { $why += 'the run records no binaries (summary.json)' }
+    else {
+        foreach ($f in 'engine_sha256', 'broker_sha256', 'ui_sha256') {
+            $have = $(if (Has $p $f) { "$($p.$f)" } else { '' }); $want = $(if (Has $Sum.binaries $f) { "$($Sum.binaries.$f)" } else { '' })
+            if (-not $want -or $have -cne $want) { $why += "$f $(if ($have) { $have.Substring(0, [Math]::Min(12, $have.Length)) } else { 'none' }), the run's $(if ($want) { $want.Substring(0, [Math]::Min(12, $want.Length)) } else { 'none' })" }
+        }
+    }
+    $why
+}
+
+# Why the parsed set $Set is not an m3-e2e ambient set built from null runs; none: it is.
+function Test-E2eAmbientSet($Set, $X) {
+    if (-not $Set) { return @('missing or unreadable') }
+    $why = @()
+    if ("$($Set.schema)" -cne 'purge.rig.m2ambient/1') { $why += "schema '$($Set.schema)'" }
+    $exec = @(Arr $X.apps | Where-Object { "$($_.kind)" -in 'app', 'fixture' } | ForEach-Object { "$($_.id)" })
+    $ids = @(Arr $Set.runs | ForEach-Object { "$($_.id)" })
+    $badIds = @($ids | Where-Object { $m = [regex]::Match($_, $E2eNullRunRx); -not $m.Success -or $exec -cnotcontains $m.Groups[1].Value })
+    if ($badIds.Count) { $why += "run ids not of a null run: $($badIds -join ', ')" }
+    $distinct = @($ids | Select-Object -Unique).Count
+    if ($distinct -lt $E2eMinNullRuns) { $why += "$distinct distinct null run(s), want at least $E2eMinNullRuns" }
+    $all = @(@(Arr $Set.records) + @(Arr $Set.patterns))
+    foreach ($r in Arr $Set.runs) { $all += @(Arr $r.records) + @(Arr $r.patterns) }
+    $hits = @($all | Where-Object { "$_" -match $E2eFixtureRx } | ForEach-Object { "$_" } | Select-Object -Unique)
+    if ($hits.Count) { $why += "names fixtures: $(@($hits | Select-Object -First 3) -join ' | ')" }
+    $why
 }
 
 function Get-Step($E2e, [string]$Name) { if ($E2e -and (Has $E2e 'steps') -and $E2e.steps.PSObject.Properties[$Name]) { $E2e.steps.$Name } else { $null } }
@@ -174,7 +235,7 @@ function Test-Timings([string]$Id, $T, $X, [bool]$Scan, [bool]$Harvest) {
     }
 }
 
-function Test-App([string]$Ev, $A, $X, $Score, [bool]$Undo) {
+function Test-App([string]$Ev, $A, $X, $Score, [bool]$Undo, [string]$AmbSha = '') {
     $id = "$($A.id)"
     $dir = Join-Path $Ev $id
     $e2e = Read-J (Join-Path $dir 'guest\e2e.json')
@@ -253,6 +314,17 @@ function Test-App([string]$Ev, $A, $X, $Score, [bool]$Undo) {
     $ed = Read-J (Join-Path $dir 'guest\execdiff.json')
     $col = $(if ($ed -and $ed.counts) { $ed.counts })
     Row "$id collateral 0" ($col -and (Has $col 'collateral') -and [int]$col.collateral -eq 0 -and [int]$col.guard_escapes -eq 0) $(if ($col) { "collateral $($col.collateral), guard_escapes $($col.guard_escapes), unexplained $($col.unexplained), missing_effects $($col.missing_effects)" } else { 'no execdiff.json' })
+    # execdiff ran with --ambient (inputs.ambient): without it every Windows record of the window would be judged alone.
+    $edAmb = $(if ($ed -and (Has $ed 'inputs') -and (Has $ed.inputs 'ambient')) { "$($ed.inputs.ambient)" } else { '' })
+    Row "$id execdiff --ambient given (inputs.ambient)" ([bool]$edAmb) $(if ($edAmb) { $edAmb } else { 'execdiff.json inputs.ambient is null' })
+    # The ambient set that execdiff used: the host pushed the committed m3-e2e set and the guest copy is that file.
+    $hs = $(if ($host_ -and (Has $host_ 'ambient')) { "$($host_.ambient.sha256)" } else { '' })
+    $ga = $(if (Has $e2e 'ambient') { $e2e.ambient } else { $null })
+    $ds = $(if ($ga -and (Has $ga 'declared')) { "$($ga.declared.sha256)" } else { '' })
+    $gs = $(if ($ga) { "$($ga.guest_sha256)" } else { '' })
+    $aOk = [bool]($AmbSha -and $hs -ceq $AmbSha -and $ds -ceq $AmbSha -and $gs -ceq $AmbSha)
+    $short = { param($s) if ($s) { "$s".Substring(0, [Math]::Min(12, "$s".Length)) } else { 'none' } }
+    Row "$id ambient set pushed (host == guest == committed m3-e2e set)" $aOk "committed $(& $short $AmbSha), host $(& $short $hs), declared $(& $short $ds), guest $(& $short $gs)"
     Test-Timings $id (Read-J (Join-Path $dir 'timings.json')) $X $true (@(Arr $X.gates.harvest_apps) -contains $id)
     if ($Undo) {
         $uu = Get-Step $e2e 'ui-undo'; $ua = Get-Step $e2e 'consent-approve-undo'; $ud = Get-Step $e2e 'ui-wait-undone'
@@ -268,10 +340,25 @@ function Test-App([string]$Ev, $A, $X, $Score, [bool]$Undo) {
     }
 }
 
-function Invoke-Score([string]$Ev, $X, [string[]]$Only = @(), [switch]$Quiet) {
+function Invoke-Score([string]$Ev, $X, [string[]]$Only = @(), [switch]$Quiet, [string]$Ambient = '', [string]$TruthDir = $PSScriptRoot) {
     $script:Rows = New-Object System.Collections.ArrayList
     $sum = Read-J (Join-Path $Ev 'summary.json')
     Row 'evidence summary.json' ($null -ne $sum) $(if (-not $sum) { 'missing or unreadable' })
+    # The ambient set (RIG.md section 17.1): the committed set of the run's VM; -AmbientFile naming another file scores,
+    # but is not a gate score.
+    $ambCommitted = Get-E2eAmbientPath $sum $TruthDir
+    $full = { param($p) if ($p) { try { $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($p) } catch { "$p" } } else { '' } }
+    $ambPath = & $full $(if ($Ambient) { $Ambient } else { $ambCommitted })
+    $ambIsCommitted = [bool]($ambCommitted -and (& $full $ambPath) -ieq (& $full $ambCommitted))
+    $ambSha = ''
+    if ($ambPath -and (Test-Path -LiteralPath $ambPath -PathType Leaf)) { $ambSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $ambPath).Hash.ToLowerInvariant() }
+    $ambRec = [ordered]@{ file = $ambPath; sha256 = $(if ($ambSha) { $ambSha } else { $null }); committed = $ambIsCommitted }
+    $ambSet = $(if ($ambSha) { Read-J $ambPath } else { $null })
+    $ambWhy = @(Test-E2eAmbientSet $ambSet $X)
+    Row "ambient set: m3-e2e null runs (schema, >= $E2eMinNullRuns null runs, no fixture names)" ($ambSha -and $ambWhy.Count -eq 0) "$ambPath$(if ($ambWhy.Count) { ': ' + ($ambWhy -join '; ') })"
+    $provWhy = @(Test-E2eAmbientProvenance $ambSet $sum)
+    Row 'ambient provenance == this run (vm, snapshot; binaries when recorded)' ($ambSet -and $provWhy.Count -eq 0) $(if (-not $ambSet) { 'no set' } else { $provWhy -join '; ' })
+    if ($ambWhy.Count -or $provWhy.Count) { $ambSha = '' }
     $apps = @(Arr $X.apps)
     $only = @($Only | Where-Object { $_ })
     if ($only.Count) { $apps = @($apps | Where-Object { $only -contains "$($_.id)" }) }
@@ -284,15 +371,16 @@ function Invoke-Score([string]$Ev, $X, [string[]]$Only = @(), [switch]$Quiet) {
         $okUac = ($uacs.Count -eq 1 -and $uacs[0] -in '0', '5' -and -not ($sum.uac_on -eq $true -and $uacs[0] -ne '5'))
         Row 'UAC recorded, one value for the run (0 silent, 5 prompt)' $okUac ($uacs -join ',')
     }
-    foreach ($a in $apps) { Test-App $Ev $a $X $score ($undo -contains "$($a.id)") }
+    foreach ($a in $apps) { Test-App $Ev $a $X $score ($undo -contains "$($a.id)") $ambSha }
     $undone = @($apps | Where-Object { $undo -contains "$($_.id)" } | Where-Object { $n = "$($_.id) undo_fidelity 100 %"; @($script:Rows | Where-Object { $_.row -eq $n -and $_.ok }).Count -eq 1 })
     Row 'at least one app undone through the UI with undo_fidelity 100 %' ($undone.Count -gt 0) (@($undone | ForEach-Object { $_.id }) -join ',')
     $pass = (@($script:Rows | Where-Object { -not $_.ok }).Count -eq 0) -and $script:Rows.Count -gt 0
     if (-not $Quiet) {
         foreach ($r in $script:Rows) { Write-Host ("{0} {1}{2}" -f $(if ($r.ok) { 'PASS' } else { 'FAIL' }), $r.row, $(if ($r.detail) { "  ($($r.detail))" } else { '' })) }
     }
-    $gate = ($only.Count -eq 0)
-    [ordered]@{ schema = 'purge.rig.m3e2e-score/1'; evidence = $Ev; pass = $pass; gate = $gate; apps = @($apps | ForEach-Object { $_.id }); rows = @($script:Rows) }
+    $gate = ($only.Count -eq 0 -and $ambIsCommitted)
+    $notGate = @($(if ($only.Count) { 'a subset of the apps (-Apps)' }), $(if (-not $ambIsCommitted) { "another ambient file than the VM's committed set (-AmbientFile $ambPath)" }) | Where-Object { $_ })
+    [ordered]@{ schema = 'purge.rig.m3e2e-score/1'; evidence = $Ev; pass = $pass; gate = $gate; not_gate = $notGate; ambient = $ambRec; apps = @($apps | ForEach-Object { $_.id }); rows = @($script:Rows) }
 }
 
 # ------------------------------------------------------------------------------------------------ self-test
@@ -300,14 +388,24 @@ function Invoke-Score([string]$Ev, $X, [string[]]$Only = @(), [switch]$Quiet) {
 function New-PassEvidence($X, [string]$Dir) {
     New-Item -ItemType Directory -Force $Dir | Out-Null
     $undo = @(Arr $X.undo_apps)
-    $sum = [ordered]@{ schema = 'purge.rig.m3e2e.summary/1'; run = 'selftest'; uac_on = $false; undo_apps = $undo; apps = @() }
+    $bins = [ordered]@{ engine_sha256 = ('e' * 64); broker_sha256 = ('b' * 64); ui_sha256 = ('d' * 64) }
+    $sum = [ordered]@{ schema = 'purge.rig.m3e2e.summary/1'; run = 'selftest'; vm = 'Inbound-Win11-Test'; snapshot = 'rig-base'; uac_on = $false; binaries = $bins; undo_apps = $undo; apps = @() }
     $score = [ordered]@{ schema = 'purge.rig.score/1'; apps = @() }
+    # A synthetic ambient set of 6 null runs, as the VM's committed set in the evidence dir (the self-test scores with
+    # -TruthDir <dir>); every app records its hash.
+    $amb = Join-Path $Dir 'm3-e2e-ambient.json'
+    Write-J ([ordered]@{ schema = 'purge.rig.m2ambient/1'; note = 'selftest'
+                         runs = @(1..6 | ForEach-Object { [ordered]@{ id = "en$_-m3-e2e-vscode"; records = @('~F:C:\WINDOWS\Prefetch\TASKLIST.EXE-2448BC7D.pf'); patterns = @() } })
+                         records = @('~F:C:\WINDOWS\Prefetch\TASKLIST.EXE-2448BC7D.pf'); patterns = @()
+                         provenance = [ordered]@{ campaign = 'null-selftest'; vm = 'Inbound-Win11-Test'; snapshot = 'rig-base'; engine_sha256 = $bins.engine_sha256
+                                                  broker_sha256 = $bins.broker_sha256; ui_sha256 = $bins.ui_sha256; null_wait = 10 } }) $amb
+    $ambSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $amb).Hash.ToLowerInvariant()
     foreach ($a in Arr $X.apps) {
         $id = "$($a.id)"; $ad = Join-Path $Dir $id; $gd = Join-Path $ad 'guest'
         New-Item -ItemType Directory -Force $gd | Out-Null
         $isUndo = ($undo -contains $id)
         $shots = @(Get-E2eShotNames $a $isUndo | ForEach-Object { [IO.File]::WriteAllBytes((Join-Path $ad "$_.png"), [byte[]](137, 80, 78, 71)); [ordered]@{ name = $_; file = "$_.png"; bytes = 4 } })
-        Write-J ([ordered]@{ app = $id; pulled = $true; shots = $shots }) (Join-Path $ad 'host.json')
+        Write-J ([ordered]@{ app = $id; pulled = $true; shots = $shots; ambient = [ordered]@{ file = $amb; sha256 = $ambSha } }) (Join-Path $ad 'host.json')
         $steps = [ordered]@{
             'ui-start' = [ordered]@{ ok = $true }; 'ui-uninstall' = [ordered]@{ ok = $true; state = 'confirm' }
             'ui-confirm' = [ordered]@{ ok = $true; route = "$($a.route)" }
@@ -331,7 +429,8 @@ function New-PassEvidence($X, [string]$Dir) {
                 $steps['consent-approve-plan'] = [ordered]@{ ok = $true }
                 $steps['ui-wait-result'] = [ordered]@{ ok = $true; state = 'result'; title = 'Moved 2 items to quarantine' }
                 $steps['capture-exec'] = [ordered]@{ ok = $true; report_state = 'Committed'; compare = [ordered]@{ equal = $true; cli_n = 2; ui_n = 2; missing = @(); extra = @() } }
-                Write-J ([ordered]@{ ok = $true; counts = [ordered]@{ collateral = 0; guard_escapes = 0; unexplained = 0; missing_effects = 0 } }) (Join-Path $gd 'execdiff.json')
+                Write-J ([ordered]@{ ok = $true; counts = [ordered]@{ collateral = 0; guard_escapes = 0; unexplained = 0; missing_effects = 0 }
+                                     inputs = [ordered]@{ ambient = 'C:\cr\bin\m2-ambient.json' } }) (Join-Path $gd 'execdiff.json')
                 if ($isUndo) {
                     $steps['ui-undo'] = [ordered]@{ ok = $true; state = 'prompt' }
                     $steps['consent-approve-undo'] = [ordered]@{ ok = $true }
@@ -346,7 +445,8 @@ function New-PassEvidence($X, [string]$Dir) {
             $harv = $(if (@(Arr $X.gates.harvest_apps) -contains $id) { @([ordered]@{ after_uac_ms = 2100 }) } else { @([ordered]@{ after_uac_ms = 900 }) })
             Write-J ([ordered]@{ schema = 'purge.broker-timings/1'; brokers = @([ordered]@{ harvests = $harv; scans = @([ordered]@{ cold = $true; duration_ms = 4200; first_progress_ms = 12 }) }) }) (Join-Path $ad 'timings.json')
         }
-        Write-J ([ordered]@{ schema = 'purge.rig.m3e2e.app/1'; app = $id; kind = "$($a.kind)"; uac = [ordered]@{ ConsentPromptBehaviorAdmin = 0 }; steps = $steps }) (Join-Path $gd 'e2e.json')
+        Write-J ([ordered]@{ schema = 'purge.rig.m3e2e.app/1'; app = $id; kind = "$($a.kind)"; uac = [ordered]@{ ConsentPromptBehaviorAdmin = 0 }; steps = $steps
+                             null_run = $false; ambient = [ordered]@{ declared = [ordered]@{ sha256 = $ambSha }; guest = 'C:\cr\bin\m2-ambient.json'; guest_sha256 = $ambSha } }) (Join-Path $gd 'e2e.json')
     }
     Write-J $sum (Join-Path $Dir 'summary.json')
     Write-J $score (Join-Path $Dir 'score-rigtool.json')
@@ -389,8 +489,45 @@ function Get-E2eDefects {
         @{ name = 'no undo app'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'summary.json') { param($d) $d.undo_apps = @() } } },
         @{ name = 'UAC on, a prompt not answered by scancode'; act = { param($ev) Set-E2eUacOn $ev; Edit-E2eJson (Join-Path $ev 'git\host.json') { param($d) $d.uac_keys.run = @() } } },
         @{ name = 'UAC on, no screenshot of the prompt'; act = { param($ev) Set-E2eUacOn $ev; Remove-Item -LiteralPath (Join-Path $ev 'npp\02u-uac-1-prompt.png') } },
-        @{ name = 'UAC silent, but a prompt was answered'; act = { param($ev) Edit-E2eJson (Join-Path $ev '7zip\host.json') { param($d) $d | Add-Member -NotePropertyName uac_keys -NotePropertyValue ([pscustomobject]@{ run = @('alt-y') }) -Force } } }
+        @{ name = 'UAC silent, but a prompt was answered'; act = { param($ev) Edit-E2eJson (Join-Path $ev '7zip\host.json') { param($d) $d | Add-Member -NotePropertyName uac_keys -NotePropertyValue ([pscustomobject]@{ run = @('alt-y') }) -Force } } },
+        # The ambient set (RIG.md section 17.1): the run's records, then the set itself (re-hashed into every record,
+        # so only the set check can fail).
+        @{ name = 'ambient set not recorded by the host (vscode)'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'vscode\host.json') { param($d) $d.PSObject.Properties.Remove('ambient') } } },
+        @{ name = 'ambient set of another hash pushed (git)'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'git\host.json') { param($d) $d.ambient.sha256 = ('0' * 64) } } },
+        @{ name = 'ambient guest copy differs (npp)'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'npp\guest\e2e.json') { param($d) $d.ambient.guest_sha256 = ('1' * 64) } } },
+        @{ name = 'ambient guest copy missing (execapp)'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'execapp\guest\e2e.json') { param($d) $d.ambient.guest_sha256 = $null } } },
+        @{ name = 'ambient declared hash missing (7zip)'; act = { param($ev) Edit-E2eJson (Join-Path $ev '7zip\guest\e2e.json') { param($d) $d.ambient.declared = $null } } },
+        @{ name = 'ambient set file missing'; act = { param($ev) Remove-Item -LiteralPath (Join-Path $ev 'm3-e2e-ambient.json') } },
+        @{ name = 'ambient set from 5 null runs'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'm3-e2e-ambient.json') { param($d) $d.runs = @($d.runs | Select-Object -First 5) }; Set-E2eAmbientHash $ev } },
+        @{ name = 'ambient set with one run twice (5 distinct)'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'm3-e2e-ambient.json') { param($d) $d.runs[5].id = $d.runs[0].id }; Set-E2eAmbientHash $ev } },
+        @{ name = 'ambient set with a gate run'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'm3-e2e-ambient.json') { param($d) $d.runs[0].id = 'e2e-20261123-065615' }; Set-E2eAmbientHash $ev } },
+        @{ name = 'ambient set with a null run of a failing uninstaller'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'm3-e2e-ambient.json') { param($d) $d.runs[0].id = 'en1-m3-e2e-msi1603' }; Set-E2eAmbientHash $ev } },
+        @{ name = 'ambient set naming a fixture (record)'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'm3-e2e-ambient.json') { param($d) $d.records = @($d.records) + '-K:HKLM\SOFTWARE\PurgeE2eMsi\1603' }; Set-E2eAmbientHash $ev } },
+        @{ name = 'ambient set naming the store (run pattern)'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'm3-e2e-ambient.json') { param($d) $d.runs[2].patterns = @('^\~F:C:\\ProgramData\\Purge\\sessions\\[0-9a-f]{16}$') }; Set-E2eAmbientHash $ev } },
+        @{ name = 'ambient set of another schema'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'm3-e2e-ambient.json') { param($d) $d.schema = 'purge.rig.ambient/1' }; Set-E2eAmbientHash $ev } },
+        @{ name = 'ambient set naming a .purge-q (record)'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'm3-e2e-ambient.json') { param($d) $d.records = @($d.records) + '~D:D:\.purge-q' }; Set-E2eAmbientHash $ev } },
+        @{ name = 'execdiff ran without the ambient set (inputs.ambient null, git)'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'git\guest\execdiff.json') { param($d) $d.inputs.ambient = $null } } },
+        @{ name = 'execdiff.json without inputs (npp)'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'npp\guest\execdiff.json') { param($d) $d.PSObject.Properties.Remove('inputs') } } },
+        # Provenance: the set built on another VM, snapshot or binaries than the gate run (or recording none).
+        @{ name = 'ambient set without provenance'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'm3-e2e-ambient.json') { param($d) $d.PSObject.Properties.Remove('provenance') }; Set-E2eAmbientHash $ev } },
+        @{ name = 'ambient set from another VM'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'm3-e2e-ambient.json') { param($d) $d.provenance.vm = 'Purge-CleanPro' }; Set-E2eAmbientHash $ev } },
+        @{ name = 'ambient set from another snapshot'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'm3-e2e-ambient.json') { param($d) $d.provenance.snapshot = 'm3-uac-on' }; Set-E2eAmbientHash $ev } },
+        @{ name = 'ambient set from another engine'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'm3-e2e-ambient.json') { param($d) $d.provenance.engine_sha256 = ('f' * 64) }; Set-E2eAmbientHash $ev } },
+        @{ name = 'ambient set from another broker'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'm3-e2e-ambient.json') { param($d) $d.provenance.broker_sha256 = ('f' * 64) }; Set-E2eAmbientHash $ev } },
+        @{ name = 'ambient set from another UI'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'm3-e2e-ambient.json') { param($d) $d.provenance.ui_sha256 = ('f' * 64) }; Set-E2eAmbientHash $ev } },
+        @{ name = 'gate run on another snapshot than the set'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'summary.json') { param($d) $d.snapshot = 'm3-uac-on' } } },
+        @{ name = 'gate run summary without a snapshot'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'summary.json') { param($d) $d.PSObject.Properties.Remove('snapshot') } } }
     )
+}
+
+# After an edit of the synthetic ambient set: its new SHA-256 into every app's host and guest records.
+function Set-E2eAmbientHash([string]$Ev) {
+    $sha = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $Ev 'm3-e2e-ambient.json')).Hash.ToLowerInvariant()
+    foreach ($d in @(Get-ChildItem -LiteralPath $Ev -Directory)) {
+        $h = Join-Path $d.FullName 'host.json'; $g = Join-Path $d.FullName 'guest\e2e.json'
+        if (Test-Path -LiteralPath $h) { Edit-E2eJson $h { param($x) $x.ambient.sha256 = $sha } }
+        if (Test-Path -LiteralPath $g) { Edit-E2eJson $g { param($x) $x.ambient.declared.sha256 = $sha; $x.ambient.guest_sha256 = $sha } }
+    }
 }
 
 # Turns a passing evidence directory into a passing UAC-on run: every app at 5, its prompt answered with Alt+Y and shot.
@@ -412,18 +549,33 @@ function Invoke-SelfTest {
     $script:checks = 0; $script:fails = 0
     function Check([string]$Name, [bool]$Cond) { $script:checks++; if ($Cond) { Write-Host "ok   $Name" } else { $script:fails++; Write-Host "FAIL $Name" } }
     try {
+        $amb = { param($d) Join-Path $d 'm3-e2e-ambient.json' }
         $ev = Join-Path $root 'pass'
         New-PassEvidence $X $ev
-        $r = Invoke-Score $ev $X -Quiet
+        $r = Invoke-Score $ev $X -Quiet -TruthDir $ev
         Check 'synthetic pass passes' ($r.pass -and $r.gate)
         if (-not $r.pass) { foreach ($row in $r.rows) { if (-not $row.ok) { Write-Host "       $($row.row): $($row.detail)" } } }
-        $sub = Invoke-Score $ev $X @('npp') -Quiet
+        Check 'the ambient rows are scored (the set, and one per executing app)' (@($r.rows | Where-Object { $_.row -like '*ambient set*' }).Count -eq 1 + @(Arr $X.apps | Where-Object { "$($_.kind)" -in 'app', 'fixture' }).Count)
+        $sub = Invoke-Score $ev $X @('npp') -Quiet -TruthDir $ev
         Check 'a subset passes but is not a gate score' ($sub.pass -and -not $sub.gate)
         $on = Join-Path $root 'uac-on'
         New-PassEvidence $X $on; Set-E2eUacOn $on
-        $r2 = Invoke-Score $on $X -Quiet
+        $r2 = Invoke-Score $on $X -Quiet -TruthDir $on
         Check 'a UAC-on run answered by scancode passes' $r2.pass
         if (-not $r2.pass) { foreach ($row in $r2.rows) { if (-not $row.ok) { Write-Host "       $($row.row): $($row.detail)" } } }
+        $re = Join-Path $root 'rehash'
+        New-PassEvidence $X $re; Set-E2eAmbientHash $re
+        Check 'a re-hashed unchanged set still passes (the helper of the set defects)' (Invoke-Score $re $X -Quiet -TruthDir $re).pass
+        Check 'the score records the ambient file and its SHA-256' ("$($r.ambient.file)" -eq (& $amb $ev) -and "$($r.ambient.sha256)" -ceq (Get-FileHash -Algorithm SHA256 -LiteralPath (& $amb $ev)).Hash.ToLowerInvariant() -and $r.ambient.committed -eq $true)
+        # -AmbientFile: the committed file itself is a gate score; another file (here a copy) scores, but is not one.
+        $same = Invoke-Score $ev $X -Quiet -TruthDir $ev -Ambient (& $amb $ev)
+        Check '-AmbientFile naming the committed set is a gate score' ($same.pass -and $same.gate)
+        $cp = Join-Path $root 'other-ambient.json'; Copy-Item -LiteralPath (& $amb $ev) -Destination $cp
+        $oth = Invoke-Score $ev $X -Quiet -TruthDir $ev -Ambient $cp
+        Check '-AmbientFile naming another file: rows pass, not a gate score, the file recorded' ($oth.pass -and -not $oth.gate -and "$($oth.ambient.file)" -eq $cp -and $oth.ambient.committed -eq $false -and "$($oth.not_gate -join ' ')" -match 'AmbientFile')
+        $nb = Join-Path $root 'no-binaries'
+        New-PassEvidence $X $nb; Edit-E2eJson (Join-Path $nb 'summary.json') { param($d) $d.PSObject.Properties.Remove('binaries') }
+        Check 'a summary without binaries is refused (provenance)' (-not (Invoke-Score $nb $X -Quiet -TruthDir $nb).pass)
         $empty = Join-Path $root 'empty'; New-Item -ItemType Directory -Force $empty | Out-Null
         Check 'empty evidence fails' (-not (Invoke-Score $empty $X -Quiet).pass)
         Check 'missing directory fails' (-not (Invoke-Score (Join-Path $root 'none') $X -Quiet).pass)
@@ -436,7 +588,7 @@ function Invoke-SelfTest {
             $dir = Join-Path $root ([guid]::NewGuid().ToString('N'))
             New-PassEvidence $X $dir
             & $d.act $dir
-            Check "defect '$($d.name)' fails" (-not (Invoke-Score $dir $X -Quiet).pass)
+            Check "defect '$($d.name)' fails" (-not (Invoke-Score $dir $X -Quiet -TruthDir $dir).pass)
         }
     } finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
     Write-Host "m3-e2e-score self-test: $($script:checks - $script:fails)/$($script:checks) ok"
@@ -451,9 +603,9 @@ if (-not $Evidence) { Write-Host 'usage: m3-e2e-score.ps1 -Evidence <dir> [-Coll
 $X = Get-Content -LiteralPath $ExpectFile -Raw | ConvertFrom-Json
 $only = @($Apps | ForEach-Object { "$_" -split ',' } | Where-Object { $_ })
 if ($Collect) { Invoke-Collect $Evidence $X }
-$res = Invoke-Score $Evidence $X $only
+$res = Invoke-Score $Evidence $X $only -Ambient $AmbientFile
 if (Test-Path -LiteralPath $Evidence -PathType Container) { Write-J $res (Join-Path $Evidence 'score-m3-e2e.json') }
 if (-not $res.pass) { Write-Host 'm3-e2e: FAIL'; exit 1 }
-if (-not $res.gate) { Write-Host 'm3-e2e: every row passes, but a subset of the apps: not a gate score'; exit 3 }
+if (-not $res.gate) { Write-Host "m3-e2e: every row passes, but $($res.not_gate -join ' and '): not a gate score"; exit 3 }
 Write-Host 'm3-e2e: PASS'
 exit 0

@@ -32,16 +32,25 @@
     ui-undo, ui-wait-undone, capture-undo       Undo all, the undone page, deep C, fidelity (undo_fidelity)
     fail-check   (msi1603, msi3010) ARP entry, sessions, quarantine and the fixture key after the uninstaller ran
     finish       broker timing lines (broker-timings.ps1), the UI closed, e2e.json, the zip
+  Null run (-NullRun on every phase; the host's m3-e2e-null): the same phases, but in place of consent-approve -Step plan
+    consent-cancel -Step plan [-WaitSec <n>]   the plan dialog's Cancel (m3sec press, button IDCANCEL), then <n> idle
+                 seconds (the gate's execution time; step null-wait); capture-exec then takes snap B and deep B, checks
+                 that no session was made and keeps the pair as snap-a.tsv.gz / snap-b.tsv.gz for the host's ambient set.
 #>
 param(
     [Parameter(Mandatory)]
     [ValidateSet('setup', 'prepare', 'ui-start', 'ui-uninstall', 'uac-front', 'ui-await-confirm', 'ui-confirm', 'consent-wait', 'consent-approve',
-                 'ui-wait-scan', 'capture-post', 'ui-move', 'ui-wait-result', 'capture-exec', 'ui-undo', 'ui-wait-undone',
+                 'consent-cancel', 'ui-wait-scan', 'capture-post', 'ui-move', 'ui-wait-result', 'capture-exec', 'ui-undo', 'ui-wait-undone',
                  'capture-undo', 'fail-check', 'finish')]
     [string] $Phase,
     [Parameter(Mandatory)] [string] $App,
     [ValidateSet('', 'run', 'plan', 'undo')] [string] $Step = '',
-    [int] $WaitSec = 0
+    [int] $WaitSec = 0,
+    # A null run (vm\RIG.md section 17.1): every phase of it carries -NullRun; the plan consent is cancelled (consent-cancel)
+    # instead of approved, so nothing is executed, and capture-exec keeps the window's snapshot pair for the host.
+    [switch] $NullRun,
+    # setup of a gate run: the SHA-256 of the ambient set the host pushed (C:\cr\bin\m2-ambient.json).
+    [string] $AmbientSha = ''
 )
 . C:\cr\guest\riglib.ps1
 . C:\cr\guest\apps.ps1
@@ -262,11 +271,22 @@ function Install-E2eMsi($Fx) {
 
 # ------------------------------------------------------------------------------------------------- phases
 
-Log "== phase $Phase app=$App$(if ($Step) { " step=$Step" })"
+Log "== phase $Phase app=$App$(if ($Step) { " step=$Step" })$(if ($NullRun) { ' null' })"
 $st = Read-State
+# A null run and a gate run never mix (RIG.md section 17.1): after prepare, every phase's -NullRun must equal prepare's.
+if ($Phase -notin 'setup', 'prepare' -and $st.PSObject.Properties['null_run'] -and [bool]$st.null_run -ne [bool]$NullRun) {
+    Log "!! phase $Phase -NullRun:$([bool]$NullRun), but prepare ran with null_run=$($st.null_run)"
+    "M3E REFUSED $App phase=$Phase null=$([bool]$NullRun) prepared_null=$($st.null_run)"
+    return
+}
+if ($AmbientSha -and ($NullRun -or $Phase -ne 'setup' -or $AmbientSha -cnotmatch '\A[0-9a-f]{64}\z')) { throw "bad -AmbientSha '$AmbientSha' (setup of a gate run only)" }
 switch ($Phase) {
     'setup' {
-        $rec = [ordered]@{ t = (NowIso); build = $null; install = @(); uac = (Get-UacValues); edge = $null; telemetry = $null }
+        $rec = [ordered]@{ t = (NowIso); build = $null; install = @(); uac = (Get-UacValues); edge = $null; telemetry = $null; null_run = [bool]$NullRun }
+        # The ambient set execdiff will use (riglib $RigM2Ambient, pushed by the host; none in a null run): the hash the
+        # host declared and the guest copy's own hash (the scorer requires both equal to the committed file's).
+        $rec.ambient = [ordered]@{ declared = $(if ($AmbientSha) { [ordered]@{ sha256 = $AmbientSha } } else { $null }); guest = $RigM2Ambient
+                                   guest_sha256 = $(if (Test-Path -LiteralPath $RigM2Ambient -PathType Leaf) { (Get-FileHash -Algorithm SHA256 -LiteralPath $RigM2Ambient).Hash.ToLowerInvariant() } else { $null }) }
         # The display never sleeps: VBoxManage screenshotpng fails (E_FAIL) while the guest display is off.
         $null = & powercfg.exe /change monitor-timeout-ac 0 2>&1
         $fw = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319'
@@ -291,9 +311,12 @@ switch ($Phase) {
         }
         try { $rec.edge = Suspend-EdgeUpdate } catch { $rec.edge = "error: $($_.Exception.Message)" }
         $rec.telemetry = Suspend-M2Telemetry
+        # A gate run has the declared set in the guest; a null run has none.
+        if ($NullRun) { if ($rec.ambient.guest_sha256) { Log '!! a null run found an ambient set in the guest'; $ok = $false } }
+        elseif (-not $AmbientSha -or $rec.ambient.guest_sha256 -cne $AmbientSha) { Log "!! ambient set: declared '$AmbientSha', guest copy '$($rec.ambient.guest_sha256)'"; $ok = $false }
         $rec.ok = [bool]$ok
         Write-JsonFile $rec (Join-Path $AD 'setup.json') 8
-        "M3E SETUP $(if ($ok) { 'OK' } else { 'FAIL' }) app=$App build=$($rec.build) uac_admin=$($rec.uac.ConsentPromptBehaviorAdmin)"
+        "M3E SETUP $(if ($ok) { 'OK' } else { 'FAIL' }) app=$App build=$($rec.build) uac_admin=$($rec.uac.ConsentPromptBehaviorAdmin) null=$([bool]$NullRun) ambient=$($rec.ambient.guest_sha256)"
     }
 
     'prepare' {
@@ -301,7 +324,7 @@ switch ($Phase) {
         $null = New-RunDir $Run
         $runRec = [ordered]@{ schema = 'purge.rig.run/1'; id = $App; run = $Run; kind = 'm3-e2e'; computer = $env:COMPUTERNAME; sid = $RigUserSid; user_sid = $RigUserSid
                               started = (NowIso); finished = $null; main = $null; pre = @(); install = $null; launch = $null; entries_created = @(); entries_left = @() }
-        $state = [ordered]@{ app = $App; kind = $kind; label = $App; t0 = (NowIso); program = $null; ok = $false; error = $null }
+        $state = [ordered]@{ app = $App; kind = $kind; label = $App; t0 = (NowIso); program = $null; ok = $false; error = $null; null_run = [bool]$NullRun }
         try {
             $A = $null
             if ($kind -eq 'app') {
@@ -502,6 +525,8 @@ switch ($Phase) {
 
     'consent-approve' {
         if (-not $Step) { throw 'consent-approve needs -Step' }
+        # A null run approves the uninstall (run) only: its plan consent is cancelled and it is never undone.
+        if ($NullRun -and $Step -ne 'run') { "M3E REFUSED $App consent-approve $Step in a null run"; return }
         $rec = New-E2eStep "consent-approve-$Step"
         $bp = Get-BrokerPid
         $rec.broker_pid = $bp
@@ -515,6 +540,34 @@ switch ($Phase) {
         Set-StateValue $st "t_approved_$Step" (NowIso)
         Save-State $st; Save-Step $rec "consent-approve-$Step"
         "M3E APPROVE $App $Step ok=$($rec.ok) broker=$bp enabled=$(if ($rec.press) { $rec.press.button_enabled }) gone=$(if ($rec.press) { -not $rec.press.dialog_alive_after })"
+    }
+
+    'consent-cancel' {
+        # The null run's place of consent-approve -Step plan (RIG.md section 17.1): the same m3sec press from high, on
+        # the dialog's Cancel (IDCANCEL, the TaskDialog's common button), no tick; then the gate's execution time idle.
+        if (-not $NullRun -or $Step -ne 'plan') { "M3E REFUSED $App consent-cancel is for the plan consent of a null run"; return }
+        # The host's -NullWaitSec, unchanged (1..600; no default here: a missing wait is a host fault).
+        if ($WaitSec -lt 1 -or $WaitSec -gt 600) { "M3E REFUSED $App consent-cancel -WaitSec $WaitSec is not 1..600"; return }
+        $rec = New-E2eStep "consent-cancel-$Step"
+        $bp = Get-BrokerPid
+        $rec.broker_pid = $bp
+        if ($bp) {
+            $spec = [ordered]@{ out = (Join-Path $AD "press-$Step.json"); broker_pid = $bp; tick = $false; button = 2; arm_wait_ms = 1600; wait_ms = 30000 }
+            Write-JsonFile $spec (Join-Path $AD "press-spec-$Step.json") 4
+            $null = Invoke-Sec @('press', (Join-Path $AD "press-spec-$Step.json")) 90
+            $rec.press = Read-Json $spec.out
+            $rec.ok = [bool]($rec.press -and $rec.press.found -and [int]$rec.press.pressed -eq 2 -and -not $rec.press.dialog_alive_after)
+        }
+        Set-StateValue $st "t_cancelled_$Step" (NowIso)
+        Save-State $st; Save-Step $rec "consent-cancel-$Step"
+        $nw = New-E2eStep 'null-wait'
+        $nw.seconds = $WaitSec
+        $nw.start = NowIso
+        Start-Sleep -Seconds $nw.seconds
+        $nw.end = NowIso
+        $nw.ok = $true
+        Save-Step $nw 'null-wait'
+        "M3E CANCEL $App $Step ok=$($rec.ok) broker=$bp gone=$(if ($rec.press) { -not $rec.press.dialog_alive_after }) null_wait=$($nw.seconds)"
     }
 
     'ui-wait-scan' {
@@ -594,7 +647,9 @@ switch ($Phase) {
             $safeDefault = @(Get-M2DefaultSelection $plan)
             $items = @(@($sc.items) | ForEach-Object { $_ } | Where-Object { $_ -and $ids -contains "$($_.id)" })
             $keys = @($items | ForEach-Object { Get-E2eTargetKey $_.target })
-            $rec.cli = [ordered]@{ plan = 'run\plan-purge.json'; items = $si.Count; preselected_n = $ids.Count; preselected_keys = $keys; safe_default_n = $safeDefault.Count }
+            # Every plan item's key, preselected or not (a null run's ambient set must name none of them, RIG.md 17.1).
+            $planKeys = @($si | ForEach-Object { Get-E2eTargetKey $_.target })
+            $rec.cli = [ordered]@{ plan = 'run\plan-purge.json'; items = $si.Count; preselected_n = $ids.Count; preselected_keys = $keys; plan_keys = $planKeys; safe_default_n = $safeDefault.Count }
             Set-StateValue $st 'cli' $rec.cli
             Write-JsonFile (New-E2eDeepScope @($items | ForEach-Object { $_.target })) (Join-Path $W 'deepscope.json') 12
             $rec.settle = Wait-M2BootSettle -MaxSec 300 -MinUptimeSec 180
@@ -646,7 +701,8 @@ switch ($Phase) {
         $rec.title = Get-E2eName (Find-E2eById $win 'ResultTitleText')
         $rec.detail_text = Get-E2eName (Find-E2eById $win 'ResultDetailText')
         $rec.undo_offered = [bool](Find-E2eById $win 'UndoAllButton')
-        $rec.ok = ($watch.state -eq 'result')
+        # A null run cancelled the plan consent: the page says nothing was moved.
+        $rec.ok = ($watch.state -eq $(if ($NullRun) { 'declined' } else { 'result' }))
         Save-Step $rec 'ui-wait-result'
         "M3E RESULT $App state=$($watch.state) title=$($rec.title -replace '\s', '_') undo=$($rec.undo_offered)"
     }
@@ -658,6 +714,14 @@ switch ($Phase) {
             $null = Invoke-M2Deep @((Join-Path $W 'deepscope.json')) (Join-Path $AD 'deep-b.json')
             $new = @(Get-M2Sessions | Where-Object { @($st.sessions_before) -notcontains $_ })
             $rec.sessions_new = $new
+            $rec.null = [bool]$NullRun
+            if ($NullRun) {
+                # A null run: nothing may have executed (no new session); the window's snapshot pair goes to the host
+                # (finish zips it; the host renames it snap-<run>-a / -b.tsv.gz for rigtool ambient --m2 --added).
+                if ($new.Count) { throw "a null run made a session: $($new -join ', ')" }
+                foreach ($s in 'a', 'b') { Copy-Item -LiteralPath (Join-Path $W "snap-$s.tsv.gz") -Destination (Join-Path $AD "snap-$s.tsv.gz") -Force }
+                $rec.ok = $true
+            } else {
             $session = $(if ($new.Count) { $new[$new.Count - 1] } else { $null })
             Set-StateValue $st 'session' $session
             if (-not $session) { throw 'no new session under C:\ProgramData\Purge\sessions' }
@@ -676,9 +740,10 @@ switch ($Phase) {
             $rec.compare = Compare-E2eSets @($st.cli.preselected_keys) @($exec.items | ForEach-Object { $_.key })
             $rec.report_state = $exec.state
             $rec.ok = $true
+            }
         } catch { $rec.detail = $_.Exception.Message; Log "!! capture-exec: $($rec.detail)" }
         Save-State $st; Save-Step $rec 'capture-exec'
-        "M3E CAPTURE-EXEC $App ok=$($rec.ok) session=$($st.session) equal=$(if ($rec.compare) { $rec.compare.equal }) collateral=$(if ($rec.execdiff) { $rec.execdiff.counts.collateral }) error=$($rec.detail)"
+        "M3E CAPTURE-EXEC $App ok=$($rec.ok) null=$([bool]$NullRun) session=$($st.session) equal=$(if ($rec.compare) { $rec.compare.equal }) collateral=$(if ($rec.execdiff) { $rec.execdiff.counts.collateral }) error=$($rec.detail)"
     }
 
     'ui-undo' {
@@ -763,9 +828,11 @@ switch ($Phase) {
         Get-ProcList | Where-Object { $_.path -and $_.path -ieq $UiExe } | ForEach-Object { Stop-Process -Id $_.pid -Force -ErrorAction SilentlyContinue }
         $steps = [ordered]@{}
         foreach ($f in @(Get-ChildItem -LiteralPath $AD -Filter 'step-*.json' -File | Sort-Object LastWriteTimeUtc)) { $steps[$f.BaseName.Substring(5)] = Read-Json $f.FullName }
+        $setup = Read-Json (Join-Path $AD 'setup.json')
         $doc = [ordered]@{
             schema = 'purge.rig.m3e2e.app/1'; app = $App; kind = (Get-E2eKind $App); label = $st.label; t0 = $st.t0; ended = (NowIso); uac = (Get-UacValues)
-            setup = (Read-Json (Join-Path $AD 'setup.json')); state = $st; steps = $steps
+            null_run = [bool]$NullRun; ambient = $(if ($setup) { $setup.ambient } else { $null })
+            setup = $setup; state = $st; steps = $steps
             run = (Read-Json (Join-Path $RD 'run.json')); executed = (Read-Json (Join-Path $RD 'executed.json'))
             files = [ordered]@{ execdiff = (Test-Path -LiteralPath (Join-Path $AD 'execdiff.json')); fidelity = (Test-Path -LiteralPath (Join-Path $AD 'fidelity.json'))
                                 timings = (Test-Path -LiteralPath (Join-Path $AD 'timings.jsonl')); plan = (Test-Path -LiteralPath (Join-Path $RD 'plan-purge.json')) }
