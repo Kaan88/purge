@@ -194,7 +194,8 @@ coincides with a key a Windows build ships; absence, the side that would add Lik
 4. Lifting the cap (design §8.5): the drift run or the R5 proxy false-absent list (review BL-RM S3) is a precondition
    there, deferred from this gate (ruling 2026-11-23).
 5. R5 S4: 24 of 168 inbox packages failed to parse on the host (`appx.rs`), from gate M; still open.
-6. The two engine regressions of 3.4 (uninstaller working directory, the S-1-5-18 classes link): fixed and re-run in
+6. The two engine regressions of 3.4: fixed (de5c25a; the link is `HKUS-1-5-18` itself, to `.DEFAULT`), Fable-approved,
+   and `fx-m1b-vcredist`/`fx-m1b-python` match the M1b gate plans; full re-run in
    the M3 gate (B10).
 7. Design §5 still says "2-vCPU VM" for the W4 budget; the rig VMs have 4 CPUs (the budget was set for 4, ruling
    2026-11-23). Fix the text with the next design edit.
