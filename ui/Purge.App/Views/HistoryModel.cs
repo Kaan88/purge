@@ -189,7 +189,8 @@ public sealed class HistoryEntryModel(HistoryItem item)
 /// <param name="Broker">The live broker; null when it was not started.</param>
 /// <param name="Cancelled">The user said No at the Windows prompt or "Not now" at the explanation.</param>
 /// <param name="Message">Why it was not started, for the bar.</param>
-public sealed record HistoryBrokerLaunch(IHistoryBroker? Broker, bool Cancelled, string Message);
+/// <param name="DeclinedExplanation">With <paramref name="Cancelled"/>: it was "Not now", so no Windows prompt was shown.</param>
+public sealed record HistoryBrokerLaunch(IHistoryBroker? Broker, bool Cancelled, string Message, bool DeclinedExplanation = false);
 
 /// <summary>
 /// The History page's view model. The list is <c>history.index</c> from the medium engine, so opening the page never
@@ -259,6 +260,9 @@ public sealed class HistoryViewModel
 
     /// <summary>The Windows prompt was cancelled; the view shows the cancelled bar.</summary>
     public bool PromptCancelled { get; private set; }
+
+    /// <summary>With <see cref="PromptCancelled"/>: the user chose "Not now", so no Windows prompt was shown.</summary>
+    public bool PromptDeclined { get; private set; }
 
     /// <summary>The last restore's outcome title, or null.</summary>
     public string? RestoreTitle { get; private set; }
@@ -559,7 +563,11 @@ public sealed class HistoryViewModel
         await DropBrokerAsync();
         var launch = await _launch(ct);
         if (launch.Broker is { } broker) return _broker = broker;
-        if (launch.Cancelled) PromptCancelled = true;
+        if (launch.Cancelled)
+        {
+            PromptCancelled = true;
+            PromptDeclined = launch.DeclinedExplanation;
+        }
         else ActionError = launch.Message;
         return null;
     }

@@ -16,18 +16,13 @@ public static class ElevationPrompts
     public static bool Explained { get; private set; }
 
     /// <summary>
-    /// True when the last <see cref="ConfirmFirstElevationAsync"/> ended with "Not now": the Windows prompt was never
-    /// shown, so the bar must not say the user cancelled it.
-    /// </summary>
-    public static bool DeclinedExplanation { get; private set; }
-
-    /// <summary>
     /// Explains the Windows prompt the first time Purge asks for it. True to go on to the prompt; false for "Not now".
-    /// After the first time it returns true at once.
+    /// After the first time it returns true at once. A caller that gets false says so in its launch result
+    /// (<c>DeclinedExplanation</c>), so the bar does not claim a cancelled Windows prompt; no state is kept here for
+    /// it, because two routes can ask at once.
     /// </summary>
     public static async Task<bool> ConfirmFirstElevationAsync(XamlRoot root, ElementTheme theme)
     {
-        DeclinedExplanation = false;
         if (Explained) return true;
         var dialog = new ContentDialog
         {
@@ -48,11 +43,7 @@ public static class ElevationPrompts
             DefaultButton = ContentDialogButton.Primary,
         };
         var answer = await dialog.ShowAsync();
-        if (answer != ContentDialogResult.Primary)
-        {
-            DeclinedExplanation = true;
-            return false;
-        }
+        if (answer != ContentDialogResult.Primary) return false;
         Explained = true;
         return true;
     }

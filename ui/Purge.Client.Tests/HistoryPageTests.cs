@@ -177,9 +177,24 @@ public sealed class HistoryPageTests
         await vm.ShowItemsAsync();
 
         Assert.True(vm.PromptCancelled);
+        Assert.False(vm.PromptDeclined);
         Assert.Null(vm.Items);
         Assert.Null(vm.ActionError);
         Assert.False(vm.Busy);
+    }
+
+    [Fact]
+    public async Task NotNowAtTheExplanationIsADeclinedPrompt()
+    {
+        var vm = new HistoryViewModel(_ => Task.FromResult(GitIndex()),
+            _ => Task.FromResult(new HistoryBrokerLaunch(null, true, "", DeclinedExplanation: true)));
+        await vm.LoadAsync();
+
+        await vm.ShowItemsAsync();
+
+        Assert.True(vm.PromptCancelled);
+        Assert.True(vm.PromptDeclined);
+        Assert.Null(vm.Items);
     }
 
     [Fact]

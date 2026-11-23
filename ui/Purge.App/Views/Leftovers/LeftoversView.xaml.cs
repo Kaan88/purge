@@ -68,9 +68,9 @@ public sealed partial class LeftoversView : UserControl, ILeftoversPage
     /// </summary>
     public void Show(LeftoversRequest request)
     {
-        if (IsChanging && !ReferenceEquals(request.Broker, _ownedBroker))
+        if (IsChanging)
         {
-            if (request.Broker is { } refused) _ = refused.DisposeAsync().AsTask();
+            if (request.Broker is { } refused && !ReferenceEquals(refused, _ownedBroker)) _ = refused.DisposeAsync().AsTask();
             return;
         }
         var previous = _ownedBroker;
@@ -101,8 +101,17 @@ public sealed partial class LeftoversView : UserControl, ILeftoversPage
 
     private void OnViewModelChanged() => DispatcherQueue.TryEnqueue(Refresh);
 
+    private bool _wasChanging;
+
     private void Refresh()
     {
+        // One broker at a time: the Programs page's checks and a scan the Uninstall page holds wait for a change to
+        // end, so they hear when it starts and ends.
+        if (IsChanging != _wasChanging)
+        {
+            _wasChanging = IsChanging;
+            MainWindow.Instance.OnLeftoversChangingChanged();
+        }
         if (_vm is not { } vm) return;
         var name = vm.ProgramName.Length > 0 ? vm.ProgramName : _request?.ProgramName ?? "";
         TitleText.Text = name.Length > 0 ? $"Leftovers of {name}" : "Leftovers";

@@ -38,8 +38,14 @@ public sealed partial class UninstallView : UserControl
     private bool _wasBusy;
 
     // A scan that could not go to the Leftovers page because that page was applying another change. The controller
-    // keeps its broker meanwhile, and the bar's "Show leftovers" tries the hand-off again.
+    // keeps its broker meanwhile; the hand-off is tried again when that change ends, and by the bar's "Show leftovers".
     private UninstallOutcome? _heldOutcome;
+
+    // The program whose held scan a new uninstall closed, for a bar that says so; null when there is none.
+    private string? _droppedHeld;
+
+    /// <summary>The tooltip of an action that waits for a removed program's leftovers check (one broker at a time).</summary>
+    private const string CheckRunningHint = "A leftovers check is running on the Programs page. Try again when it has finished.";
 
     private sealed class StepRow(TextBlock glyph, TextBlock title, TextBlock detail)
     {
@@ -55,8 +61,8 @@ public sealed partial class UninstallView : UserControl
         _controller.Changed += () => DispatcherQueue.TryEnqueue(Render);
         _controller.ConfirmationRequested += OnConfirmationRequested;
         _controller.Completed += OnCompleted;
-        _controller.AdminPromptCancelled += () => DispatcherQueue.TryEnqueue(
-            () => MainWindow.Instance.ShowAdminPromptCancelled());
+        _controller.AdminPromptCancelled += declined => DispatcherQueue.TryEnqueue(
+            () => MainWindow.Instance.ShowAdminPromptCancelled(declined));
 
         BuildStepper();
         BuildChoices();
@@ -65,6 +71,18 @@ public sealed partial class UninstallView : UserControl
 
     /// <summary>True while the pipeline runs a step (the Programs page's removed-program check waits meanwhile).</summary>
     public bool IsBusy => _controller.IsBusy;
+
+    /// <summary>A removed program's leftovers check started or ended: the actions that start a broker follow it.</summary>
+    public void OnCheckRunningChanged() => DispatcherQueue.TryEnqueue(Render);
+
+    /// <summary>The Leftovers page started or finished a change: a held scan goes there once it has finished.</summary>
+    public void OnLeftoversChangingChanged() => DispatcherQueue.TryEnqueue(() =>
+    {
+        if (_heldOutcome is { } held && !LeftoversNavigator.IsChanging) HandOff(held);
+    });
+
+    /// <summary>True while a removed program's leftovers check runs: Retry, Force, Start over and the choices wait.</summary>
+    private static bool CheckRunning => MainWindow.Instance.CheckRunning;
 
     /// <summary>Starts the pipeline for a program chosen on the Programs page.</summary>
     public void Begin(UninstallTarget target)
@@ -78,7 +96,7 @@ public sealed partial class UninstallView : UserControl
         try
         {
             if (!await MainWindow.Instance.ConfirmFirstElevationAsync())
-                return new UninstallLaunch(UninstallLaunchState.Cancelled, null, "", null);
+                return new UninstallLaunch(UninstallLaunchState.Cancelled, null, "", null, DeclinedExplanation: true);
             var result = await BrokerLauncher.LaunchAsync(BrokerLauncher.PathBesideApp(), ct);
             var exitCode = result.ExitCode is { } code ? (uint)code : (uint?)null;
             return result.Status switch
@@ -182,7 +200,7 @@ public sealed partial class UninstallView : UserControl
             if (controller.IsBusy != _wasBusy)
             {
                 _wasBusy = controller.IsBusy;
-                MainWindow.Instance.Programs.OnUninstallBusyChanged();
+                MainWindow.Instance.Programs.OnBrokerUsersChanged();
             }
             FooterText.Text = controller.Target is null
                 ? controller.GuideText
@@ -228,18 +246,24 @@ public sealed partial class UninstallView : UserControl
         var what = names.Count == 0 ? "A program" : string.Join(", ", names);
         RunningText.Text = what + (running.Count == 1 ? " is still running" : $" ({running.Count} processes) is still running")
                            + " from the program's folder. Its files are in use.";
-        RunningRetry.IsEnabled = !_controller.IsBusy;
+        var checkRunning = CheckRunning;
+        RunningRetry.IsEnabled = !_controller.IsBusy && !checkRunning;
+        ToolTipService.SetToolTip(RunningRetry, checkRunning ? CheckRunningHint : null);
     }
 
     private void RenderChoices()
     {
         var controller = _controller;
-        QuietSwitch.IsEnabled = controller.QuietAvailable && !controller.IsBusy;
+        var checkRunning = CheckRunning;
+        var hint = checkRunning ? CheckRunningHint : null;
+        QuietSwitch.IsEnabled = controller.QuietAvailable && !controller.IsBusy && !checkRunning;
+        ToolTipService.SetToolTip(QuietSwitch, hint);
+        ToolTipService.SetToolTip(RestorePointBox, hint);
         if (QuietSwitch.IsOn != controller.Quiet) QuietSwitch.IsOn = controller.Quiet;
         QuietNote.Text = controller.QuietAvailable
             ? "Quiet mode skips the program's own dialogs. Purge never answers \"Keep my settings?\" for you."
             : "This program names no quiet uninstaller, so its own dialogs will appear.";
-        RestorePointBox.IsEnabled = !controller.IsBusy;
+        RestorePointBox.IsEnabled = !controller.IsBusy && !checkRunning;
         var wanted = (int)controller.RestorePoint;
         if (RestorePointBox.SelectedIndex != wanted) RestorePointBox.SelectedIndex = wanted;
     }
@@ -249,17 +273,37 @@ public sealed partial class UninstallView : UserControl
         BarsHost.Children.Clear();
         foreach (var notice in _controller.Notices)
             BarsHost.Children.Add(BuildBar(notice));
-        if (_heldOutcome is { } held && !ReferenceEquals(held, _controller.CompletedOutcome)) _heldOutcome = null;
+        // A new uninstall (or Start over) reset the pipeline while a scan waited: that scan is gone, so say so.
+        if (_heldOutcome is { } held && !ReferenceEquals(held, _controller.CompletedOutcome)) DropHeld(held);
         if (_heldOutcome is { } waiting)
         {
+            // The broker ends after ten minutes without a request (bins/purge-broker/src/lifetime.rs, IDLE_LIMIT),
+            // and the held scan with it.
             var bar = BuildBar(new UninstallNotice(UninstallNoticeKind.Warning, "The scan is ready.",
-                "The Leftovers page is still applying another change, so this scan waits here. Nothing was moved."));
+                "The Leftovers page is still applying another change, so this scan waits here and opens there when that "
+                + "change has finished. It is kept for about 10 minutes; after that, start the uninstall again. Nothing was moved."));
             var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 8, 0, 0) };
             actions.Children.Add(ActionButton("Show leftovers", () => HandOff(waiting)));
             bar.Content = actions;
             bar.IsClosable = false;
             BarsHost.Children.Add(bar);
         }
+        if (_droppedHeld is { } dropped)
+        {
+            var bar = BuildBar(new UninstallNotice(UninstallNoticeKind.Info, "The waiting scan was closed.",
+                $"A new uninstall started, so the scan of {dropped} that waited for the Leftovers page was closed. "
+                + "Nothing was moved."));
+            bar.Closed += (_, _) => _droppedHeld = null;
+            BarsHost.Children.Add(bar);
+        }
+    }
+
+    /// <summary>Forgets a held scan the pipeline no longer has and keeps a bar that says so.</summary>
+    private void DropHeld(UninstallOutcome held)
+    {
+        _heldOutcome = null;
+        var name = held.Target.ProgramName;
+        _droppedHeld = name.Length > 0 ? name : "the last program";
     }
 
     private InfoBar BuildBar(UninstallNotice notice)
@@ -279,12 +323,13 @@ public sealed partial class UninstallView : UserControl
             RequestedTheme = MainWindow.Instance.ActualTheme,
         };
         var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 8, 0, 0) };
+        // Each of these can start the broker; while a removed program's check has one, they wait.
         if (notice.CanForce)
-            actions.Children.Add(ActionButton("Run forced cleanup", () => _ = _controller.ForceAsync()));
+            actions.Children.Add(BrokerActionButton("Run forced cleanup", () => _ = _controller.ForceAsync()));
         if (notice.CanRetry)
-            actions.Children.Add(ActionButton("Retry", () => _ = _controller.RetryAsync()));
+            actions.Children.Add(BrokerActionButton("Retry", () => _ = _controller.RetryAsync()));
         if (notice.CanStartOver)
-            actions.Children.Add(ActionButton("Start over", () => _ = _controller.StartOverAsync()));
+            actions.Children.Add(BrokerActionButton("Start over", () => _ = _controller.StartOverAsync()));
         if (actions.Children.Count > 0) bar.Content = actions;
         return bar;
     }
@@ -297,7 +342,26 @@ public sealed partial class UninstallView : UserControl
         return button;
     }
 
-    private void OnRecheck(object sender, RoutedEventArgs e) => _ = _controller.RecheckAsync();
+    /// <summary>An action that can start the broker: disabled, with a tooltip, while a removed program's check runs.</summary>
+    private static Button BrokerActionButton(string text, Action action)
+    {
+        var button = ActionButton(text, () =>
+        {
+            if (!CheckRunning) action();
+        });
+        if (CheckRunning)
+        {
+            button.IsEnabled = false;
+            ToolTipService.SetToolTip(button, CheckRunningHint);
+        }
+        return button;
+    }
+
+    private void OnRecheck(object sender, RoutedEventArgs e)
+    {
+        if (CheckRunning) return;
+        _ = _controller.RecheckAsync();
+    }
 
     private void OnQuietToggled(object sender, RoutedEventArgs e)
     {
@@ -459,17 +523,20 @@ public sealed partial class UninstallView : UserControl
 
     /// <summary>
     /// Hands the scan and the live broker to the Leftovers page. While that page applies another change its link must
-    /// not be replaced, so the scan waits here (the controller keeps the broker) behind a "Show leftovers" bar.
+    /// not be replaced, so the scan waits here (the controller keeps the broker) behind a "Show leftovers" bar, and is
+    /// handed over by itself when that change ends (<see cref="OnLeftoversChangingChanged"/>).
     /// </summary>
     private void HandOff(UninstallOutcome outcome)
     {
         if (!ReferenceEquals(outcome, _controller.CompletedOutcome))
         {
             // The pipeline started again meanwhile: this scan is no longer the one on the page.
-            _heldOutcome = null;
+            if (_heldOutcome is { } held) DropHeld(held);
             Render();
             return;
         }
+        // A newer scan is in: the bar about an older one that was closed has said what it had to.
+        _droppedHeld = null;
         if (LeftoversNavigator.IsChanging)
         {
             _heldOutcome = outcome;

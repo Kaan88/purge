@@ -99,9 +99,10 @@ public sealed partial class MainWindow : Window
 
     /// <summary>
     /// Shows the bar for a Windows prompt that did not lead to the broker over the top of the page (built on first
-    /// use): "You cancelled the Windows prompt", or "Not started" when the user chose "Not now" at the explanation.
+    /// use): "You cancelled the Windows prompt", or "Not started" when the user chose "Not now" at the explanation
+    /// (<paramref name="declinedExplanation"/>, carried by the route's own launch result).
     /// </summary>
-    public void ShowAdminPromptCancelled(Action? tryAgain = null)
+    public void ShowAdminPromptCancelled(bool declinedExplanation, Action? tryAgain = null)
     {
         if (_barHost is null && ContentCard.Parent is Grid grid)
         {
@@ -111,7 +112,7 @@ public sealed partial class MainWindow : Window
         }
         if (_barHost is null) return;
         _barHost.Children.Clear();
-        var bar = ElevationPrompts.CancelledBar(Root.ActualTheme, ElevationPrompts.DeclinedExplanation, tryAgain);
+        var bar = ElevationPrompts.CancelledBar(Root.ActualTheme, declinedExplanation, tryAgain);
         bar.Closed += (s, _) => _barHost.Children.Remove(s);
         _barHost.Children.Add(bar);
     }
@@ -128,6 +129,25 @@ public sealed partial class MainWindow : Window
 
     /// <summary>True while the Uninstall pipeline (if built) runs a step; the removed-program check waits meanwhile.</summary>
     public bool UninstallBusy => _views.TryGetValue("queue", out var view) && view is UninstallView { IsBusy: true };
+
+    /// <summary>True while a removed program's leftovers check runs; the Uninstall page's actions wait meanwhile.</summary>
+    public bool CheckRunning => _programs.CheckRunning;
+
+    /// <summary>
+    /// The Leftovers page started or finished applying a change: the removed rows' buttons follow it, and a scan the
+    /// Uninstall page holds for that page is handed over once the change is done. UI thread.
+    /// </summary>
+    public void OnLeftoversChangingChanged()
+    {
+        _programs.OnBrokerUsersChanged();
+        if (_views.TryGetValue("queue", out var view) && view is UninstallView uninstall) uninstall.OnLeftoversChangingChanged();
+    }
+
+    /// <summary>A removed program's leftovers check started or ended: the Uninstall page's actions follow it. UI thread.</summary>
+    public void OnCheckRunningChanged()
+    {
+        if (_views.TryGetValue("queue", out var view) && view is UninstallView uninstall) uninstall.OnCheckRunningChanged();
+    }
 
     /// <summary>S2, built on first use; the Uninstall click on Programs starts its pipeline.</summary>
     public UninstallView OpenUninstall()

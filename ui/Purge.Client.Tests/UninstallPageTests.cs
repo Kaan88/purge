@@ -117,12 +117,12 @@ public sealed class UninstallPageTests
     {
         var controller = Controller(new UninstallLaunch(UninstallLaunchState.Cancelled, null,
             "You cancelled the Windows prompt. Nothing was changed."), new ScriptedMedium());
-        var cancelled = false;
-        controller.AdminPromptCancelled += () => cancelled = true;
+        bool? declined = null;
+        controller.AdminPromptCancelled += d => declined = d;
 
         await controller.BeginAsync(Target).WaitAsync(TimeSpan.FromSeconds(5));
 
-        Assert.True(cancelled);
+        Assert.False(declined); // raised, and it was the Windows prompt
         Assert.Equal(UninstallLaunchState.Cancelled, controller.LaunchState);
         var notice = Assert.Single(controller.Notices);
         Assert.Equal(UninstallNoticeKind.Info, notice.Kind);
@@ -133,16 +133,33 @@ public sealed class UninstallPageTests
     }
 
     [Fact]
+    public async Task Not_now_at_the_explanation_reaches_the_bar_as_declined()
+    {
+        var controller = Controller(new UninstallLaunch(UninstallLaunchState.Cancelled, null, "", null,
+            DeclinedExplanation: true), new ScriptedMedium());
+        bool? declined = null;
+        controller.AdminPromptCancelled += d => declined = d;
+
+        await controller.BeginAsync(Target).WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.True(declined);
+        Assert.Equal("Administrator permission was not given.", Assert.Single(controller.Notices).Title);
+    }
+
+    [Fact]
     public async Task A_standard_user_is_told_an_administrator_account_is_needed()
     {
         var controller = Controller(new UninstallLaunch(UninstallLaunchState.NotAdministrator, null,
-            "Purge needs an administrator account to remove programs for all users."), new ScriptedMedium());
+            "This needs an administrator account; this account is a standard user."), new ScriptedMedium());
 
         await controller.BeginAsync(Target).WaitAsync(TimeSpan.FromSeconds(5));
 
         var notice = Assert.Single(controller.Notices);
         Assert.Equal(UninstallNoticeKind.Error, notice.Kind);
-        Assert.Contains("administrator account", notice.Title, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("administrator account", notice.Message, StringComparison.OrdinalIgnoreCase);
+        // The title and the launcher's sentence are read together; the title does not say it a second time.
+        Assert.DoesNotContain("administrator account", notice.Title, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("remove programs", notice.Message, StringComparison.OrdinalIgnoreCase);
         Assert.False(notice.CanStartOver);
         Assert.Equal(StepState.Failed, controller.StateOf(UninstallStep.Record));
     }
