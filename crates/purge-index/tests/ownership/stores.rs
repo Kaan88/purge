@@ -2,6 +2,7 @@
 
 use purge_index::ownership::{
     BurnProviderRef, INSTALLER_FOLDERS, MACHINE_DEPENDENCIES, SHARED_DLL_UNKNOWN, SHARED_DLLS,
+    user_hive_name,
 };
 use purge_source::types::RegData;
 
@@ -161,4 +162,181 @@ fn burn_providers_in_keeps_each_record_in_its_hive() {
             ("{VICTIM}".to_owned(), false)
         ]
     );
+}
+
+/// The target of the link `HKU\S-1-5-18` on a real machine.
+const DEFAULT_HIVE_TARGET: &str = r"\Registry\User\.Default";
+const SYSTEM_DEPS: &str = r"HKU\S-1-5-18\Software\Classes\Installer\Dependencies";
+const DEFAULT_DEPS: &str = r"HKU\.DEFAULT\Software\Classes\Installer\Dependencies";
+
+/// A machine as Windows makes it: `HKU\S-1-5-18` is a registry link to the `.DEFAULT` hive, listed
+/// among the loaded user hives, and every path through it is refused.
+fn machine_with_system_link() -> Fixture {
+    let mut fx = base();
+    fx.add_key(&format!(
+        r"{MACHINE_DEPENDENCIES}\Vendor.Runtime,v1\Dependents\{{BUNDLE-1}}"
+    ));
+    fx.add_key(r"HKU\.DEFAULT\Software\Classes\Local Settings");
+    fx.set_link(r"HKU\S-1-5-18", DEFAULT_HIVE_TARGET);
+    fx
+}
+
+/// `HKU\S-1-5-18` is the link to `.DEFAULT` (VM runs blx-m1b-vcredist and blx-m1b-python: the read of
+/// `HKU\S-1-5-18\Software\Classes\Installer\Dependencies` was refused and the Burn area was incomplete
+/// on every machine). LocalSystem's records are read in the `.DEFAULT` hive, by its own name, and are
+/// records of the user `S-1-5-18`; the area is complete.
+#[test]
+fn local_system_dependencies_are_read_in_the_default_hive() {
+    let mut fx = machine_with_system_link();
+    let ix = build_refusing_links(&fx);
+    assert!(ix.stats().complete("burn"), "{:?}", ix.stats().errors);
+    assert!(ix.stats().errors.is_empty(), "{:?}", ix.stats().errors);
+    assert_eq!(ix.burn_dependents("Vendor.Runtime,v1"), &["{BUNDLE-1}"]);
+
+    // A record LocalSystem holds is found, in its hive.
+    fx.add_key(&format!(
+        r"{DEFAULT_DEPS}\Vendor.Runtime,v1\Dependents\{{SYSTEM-BUNDLE}}"
+    ));
+    fx.add_key(&format!(
+        r"{DEFAULT_DEPS}\System.Pkg\Dependents\{{SYSTEM-BUNDLE}}"
+    ));
+    let ix = build_refusing_links(&fx);
+    assert!(ix.stats().complete("burn"), "{:?}", ix.stats().errors);
+    assert_eq!(
+        ix.burn_dependents("Vendor.Runtime,v1"),
+        &["{BUNDLE-1}", "{SYSTEM-BUNDLE}"]
+    );
+    let records: Vec<_> = ix
+        .burn_providers()
+        .filter(|(provider, _)| *provider == "System.Pkg")
+        .flat_map(|(_, records)| records.to_vec())
+        .collect();
+    assert_eq!(
+        records,
+        vec![("{SYSTEM-BUNDLE}".to_owned(), Some("S-1-5-18".to_owned()))]
+    );
+    // A machine bundle still sees the machine's records only (R2a S6).
+    assert!(ix.burn_providers_in("{SYSTEM-BUNDLE}", None).is_empty());
+}
+
+/// `user_hive_name` names the default hive only for the one link Windows defines. The target is
+/// compared ignoring case and a trailing `\` or NUL; nothing else matches (review of 7026a8c).
+#[test]
+fn user_hive_name_matches_only_the_default_hive_link() {
+    let named = |sid: &str, target: Option<&str>| {
+        let mut fx = base();
+        if let Some(target) = target {
+            fx.set_link(r"HKU\S-1-5-18", target);
+        }
+        user_hive_name(&LinkRefusing(&fx), sid)
+    };
+    for target in [
+        DEFAULT_HIVE_TARGET,
+        r"\REGISTRY\USER\.DEFAULT",
+        r"\Registry\User\.Default\",
+        "\\Registry\\User\\.Default\0",
+    ] {
+        assert_eq!(named("S-1-5-18", Some(target)), ".DEFAULT", "{target:?}");
+        assert_eq!(named("s-1-5-18", Some(target)), ".DEFAULT", "{target:?}");
+    }
+    for target in [
+        r"\Registry\User\.Default\Software",
+        r"\Registry\User\.DefaultX",
+        r"\Registry\User\S-1-5-21-9-9-9-1001",
+        r"\Registry\Machine\Software",
+    ] {
+        assert_eq!(named("S-1-5-18", Some(target)), "S-1-5-18", "{target:?}");
+    }
+    // No link, a key that cannot be read, another SID: the name stays.
+    assert_eq!(named("S-1-5-18", None), "S-1-5-18");
+    assert_eq!(
+        user_hive_name(&LinkRefusing(&Fixture::default()), "S-1-5-18"),
+        "S-1-5-18"
+    );
+    assert_eq!(named("S-1-5-19", Some(DEFAULT_HIVE_TARGET)), "S-1-5-19");
+}
+
+/// Without the link `S-1-5-18` is read as the hive it names, and `.DEFAULT` is not read in its place.
+#[test]
+fn a_system_hive_that_is_no_link_is_read_where_it_is() {
+    let mut fx = base();
+    fx.add_key(&format!(r"{SYSTEM_DEPS}\Own.Pkg\Dependents\{{B-1}}"));
+    fx.add_key(&format!(r"{DEFAULT_DEPS}\Default.Pkg\Dependents\{{B-2}}"));
+    let ix = build_refusing_links(&fx);
+    assert!(ix.stats().complete("burn"), "{:?}", ix.stats().errors);
+    assert_eq!(ix.burn_dependents("Own.Pkg"), &["{B-1}"]);
+    assert!(ix.burn_dependents("Default.Pkg").is_empty());
+}
+
+/// Only the link Windows defines is named at its target. Any other link on the way to a dependency
+/// root is not followed and leaves the Burn area incomplete, as before.
+#[test]
+fn any_other_link_leaves_the_burn_area_incomplete() {
+    let user_classes = format!(r"HKU\{USER}_Classes");
+    type Change = Box<dyn Fn(&mut Fixture)>;
+    let cases: Vec<(&str, Change, String)> = vec![
+        (
+            "HKU\\S-1-5-18 links somewhere else",
+            Box::new(|fx| fx.set_link(r"HKU\S-1-5-18", r"\Registry\User\S-1-5-21-9-9-9-1001")),
+            SYSTEM_DEPS.to_owned(),
+        ),
+        (
+            "HKU\\S-1-5-18 links below the default hive",
+            Box::new(|fx| fx.set_link(r"HKU\S-1-5-18", r"\Registry\User\.Default\Software")),
+            SYSTEM_DEPS.to_owned(),
+        ),
+        (
+            "another service account is a link to the default hive",
+            Box::new(|fx| fx.set_link(r"HKU\S-1-5-19", DEFAULT_HIVE_TARGET)),
+            r"HKU\S-1-5-19\Software\Classes\Installer\Dependencies".to_owned(),
+        ),
+        (
+            "a user's classes hive is a link to the default hive",
+            Box::new(|fx| fx.set_link(&format!(r"HKU\{USER}_Classes"), DEFAULT_HIVE_TARGET)),
+            format!(r"{user_classes}\Installer\Dependencies"),
+        ),
+        (
+            "a link inside the default hive",
+            Box::new(|fx| {
+                fx.set_link(
+                    r"HKU\.DEFAULT\Software\Classes",
+                    r"\Registry\Machine\Software\Classes",
+                )
+            }),
+            DEFAULT_DEPS.to_owned(),
+        ),
+        (
+            "a link inside a user's classes hive",
+            Box::new(|fx| {
+                fx.set_link(
+                    &format!(r"HKU\{USER}_Classes\Installer"),
+                    r"\Registry\Machine\Software\Classes\Installer",
+                )
+            }),
+            format!(r"{user_classes}\Installer\Dependencies"),
+        ),
+        (
+            "a link above the machine's records",
+            Box::new(|fx| {
+                fx.set_link(
+                    r"HKLM\SOFTWARE\Classes\Installer",
+                    r"\Registry\Machine\Software\Elsewhere",
+                )
+            }),
+            MACHINE_DEPENDENCIES.to_owned(),
+        ),
+    ];
+    for (what, change, refused) in cases {
+        let mut fx = machine_with_system_link();
+        fx.add_key(&format!(r"{user_classes}\Installer\Dependencies"));
+        change(&mut fx);
+        let ix = build_refusing_links(&fx);
+        assert!(!ix.stats().complete("burn"), "{what}");
+        let want = format!("{refused}: reparse point not traversed");
+        assert!(
+            ix.stats().errors.contains(&want),
+            "{what}: {:?}",
+            ix.stats().errors
+        );
+    }
 }

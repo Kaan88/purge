@@ -61,7 +61,7 @@
 use purge_guard::canon::canon_key;
 use purge_guard::deny::{BurnLink, SharedComponents};
 use purge_guard::prefix;
-use purge_index::ownership::{MACHINE_DEPENDENCIES, area, pack_guid};
+use purge_index::ownership::{MACHINE_DEPENDENCIES, area, pack_guid, user_hive_name};
 use purge_model::{
     Action, BurnFacts, BurnLinked, BurnPackage, Candidate, Category, Evidence, EvidenceKind, Facts,
     Harm, ManifestKind, Scope, Target,
@@ -257,7 +257,10 @@ struct DepRoot {
 /// - a **per-user** bundle (its entry in a user's hive): the machine's and that user's own, both offered;
 ///   no other user's hive is read (another user's records of the same bundle are that user's install);
 /// - a **machine** bundle: the machine's, offered; then the Classes of every loaded user hive, read only
-///   to find other dependents.
+///   to find other dependents. LocalSystem's are read in `HKU\.DEFAULT` when `HKU\S-1-5-18` is the
+///   registry link to that hive ([`user_hive_name`]), as the ownership index reads them: a path through
+///   the link is refused, and that would leave every provider's dependents unknown on every machine.
+///   Only these never-offered roots are named so; a bundle's own hive is read as its entry names it.
 fn dependency_roots(ctx: &ScanCtx<'_>) -> Vec<DepRoot> {
     let user_root = |sid: &str, offer: bool| {
         let input = format!(r"HKU\{sid}\Software\Classes\Installer\Dependencies");
@@ -277,7 +280,10 @@ fn dependency_roots(ctx: &ScanCtx<'_>) -> Vec<DepRoot> {
         return roots;
     }
     match ctx.reg.loaded_user_sids() {
-        Ok(sids) => roots.extend(sids.iter().map(|sid| user_root(sid, false))),
+        Ok(sids) => roots.extend(
+            sids.iter()
+                .map(|sid| user_root(&user_hive_name(ctx.reg, sid), false)),
+        ),
         Err(e) => roots.push(DepRoot {
             path: Err(format!("loaded user hives: {e}")),
             offer: false,

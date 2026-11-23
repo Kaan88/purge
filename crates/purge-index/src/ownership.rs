@@ -77,6 +77,46 @@ pub const INSTALLER_FOLDERS: &str =
 /// The machine's Burn/MSI dependency providers.
 pub const MACHINE_DEPENDENCIES: &str = r"HKLM\SOFTWARE\Classes\Installer\Dependencies";
 
+/// The hive of the LocalSystem account under `HKU`.
+pub const DEFAULT_HIVE: &str = ".DEFAULT";
+
+/// The target of the registry link `HKU\S-1-5-18`: the kernel name of [`DEFAULT_HIVE`].
+const DEFAULT_HIVE_LINK_TARGET: &str = r"\Registry\User\.Default";
+
+/// The hive under `HKU` that holds the keys of the loaded user `sid`: `sid` itself, except
+/// [`DEFAULT_HIVE`] for LocalSystem when `HKU\S-1-5-18` is the registry link to that hive.
+///
+/// `HKU\S-1-5-18` is not a hive: Windows makes it a registry link to `\Registry\User\.Default`
+/// (checked with `REG_OPTION_OPEN_LINK` on Windows 11 26100; the 26340 guest refuses every path below
+/// it the same way). `loaded_user_sids` lists it all the same, and the sources never go through a link,
+/// so a read of `HKU\S-1-5-18\<anything>` ends in [`SourceError::ReparsePoint`]. A reader that must
+/// know every user's records (the Burn dependency records, whose miss makes the whole area unknown)
+/// asks here for the hive and reads LocalSystem's keys where they are, by the hive's own name. That is
+/// the rule `HKLM\SYSTEM\CurrentControlSet` → `ControlSet00N` follows: the one link Windows defines
+/// is named at its target, and no link is followed.
+///
+/// The exception is exactly this: the name is `S-1-5-18`, the key `HKU\S-1-5-18` is a link, and its
+/// target is `\Registry\User\.Default` (compared ignoring case and a trailing `\` or NUL). Anything else (another SID that is a link, another target, a
+/// link below the hive, a key that cannot be read) gives `sid` back, and the read of it fails as it
+/// always did.
+pub fn user_hive_name(reg: &dyn RegistrySource, sid: &str) -> String {
+    let sid = sid.trim();
+    let is_default_alias = sid.eq_ignore_ascii_case(MACHINE_SID)
+        && reg.key_info(&format!("HKU\\{sid}")).is_ok_and(|info| {
+            info.is_link
+                && info.link_target.is_some_and(|target| {
+                    target
+                        .trim_end_matches(['\\', '\0'])
+                        .eq_ignore_ascii_case(DEFAULT_HIVE_LINK_TARGET)
+                })
+        });
+    if is_default_alias {
+        DEFAULT_HIVE.to_owned()
+    } else {
+        sid.to_owned()
+    }
+}
+
 /// The value name that marks a permanent component, kept in the client list as found.
 pub const PERMANENT_CLIENT: &str = "00000000000000000000000000000000";
 
@@ -903,7 +943,10 @@ impl OwnershipIndex {
         match inp.reg.loaded_user_sids() {
             Ok(sids) => {
                 for sid in sids {
-                    let input = format!("HKU\\{sid}\\Software\\Classes\\Installer\\Dependencies");
+                    // LocalSystem's records are read in `.DEFAULT` when `HKU\S-1-5-18` is the link
+                    // to it; they stay records of the user `S-1-5-18`.
+                    let hive = user_hive_name(inp.reg, &sid);
+                    let input = format!("HKU\\{hive}\\Software\\Classes\\Installer\\Dependencies");
                     match purge_guard::canon::canon_key(&input, None, env, None) {
                         Ok(k) => roots.push((k.key_path(), Some(sid))),
                         Err(e) => self.stats.mark(area::BURN, format!("{input}: {e}")),

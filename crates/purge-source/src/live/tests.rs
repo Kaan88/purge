@@ -236,6 +236,38 @@ fn classes_of_a_hive_without_a_classes_hive_are_read_in_place() {
     println!("classes keys read in place: {read}");
 }
 
+/// `HKU\S-1-5-18` is not a hive: it is Windows' registry link to the `.DEFAULT` hive, and it is listed
+/// among the loaded user hives. The link key itself is read; a path through it is refused, and the
+/// same key is read in `.DEFAULT`. (`purge_index::ownership::user_hive_name` relies on exactly this
+/// to read LocalSystem's dependency records where they are.)
+#[test]
+fn local_system_hive_is_the_link_to_the_default_hive() {
+    let live = LiveRegistry::new();
+    assert!(
+        live.loaded_user_sids()
+            .unwrap()
+            .iter()
+            .any(|sid| sid == "S-1-5-18")
+    );
+    let info = live.key_info(r"HKU\S-1-5-18").unwrap();
+    assert!(info.is_link, "{info:?}");
+    let target = info.link_target.unwrap();
+    assert!(
+        target.eq_ignore_ascii_case(r"\Registry\User\.Default"),
+        "{target}"
+    );
+    assert_eq!(
+        live.subkeys(r"HKU\S-1-5-18\Software"),
+        Err(SourceError::ReparsePoint)
+    );
+    assert_eq!(
+        live.subkeys(r"HKU\S-1-5-18\Software\Classes\Installer\Dependencies"),
+        Err(SourceError::ReparsePoint)
+    );
+    assert!(!live.key_info(r"HKU\.DEFAULT").unwrap().is_link);
+    assert!(!live.subkeys(r"HKU\.DEFAULT\Software").unwrap().is_empty());
+}
+
 /// `KeyInfo` without the field a walker leaves out.
 fn walk_facts(info: &crate::types::KeyInfo) -> (u64, u32, u32, bool, Option<String>) {
     (

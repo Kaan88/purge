@@ -9,8 +9,10 @@
 //! 2. Record the Authenticode signer CN of the uninstaller exe, and the routing facts of §4.4
 //!    ([`Routing`]: how the engine runs and whether the entry should run at medium integrity). The routing
 //!    rule is **recorded, not enforced** in M1a: the CLI runs the command with its own token. An elevated
-//!    start gets the machine environment plus the profile variables and the uninstaller's own directory,
-//!    never the engine's environment or working directory (review M3-R2 S4).
+//!    start gets the machine environment plus the profile variables, never the engine's environment
+//!    (review M3-R2 S4), and starts in the system directory, never in the uninstaller's own folder
+//!    (`neutral_working_dir`); only when the system directory is not admin-only does it keep the
+//!    engine's working directory, with a warning.
 //! 3. List running processes whose image is under the app's roots. M1a does not close or terminate them
 //!    (`WM_CLOSE` and termination need consent, M2/M3); they only appear in [`RunDoc::processes`].
 //! 4. Start the command inside a Job object with breakaway disallowed, so NSIS/Inno copies re-launched from
@@ -447,6 +449,44 @@ fn admin_only_path(path: &str, fs: &dyn FileSystemSource) -> String {
         .join(";")
 }
 
+/// The working directory of an elevated uninstaller: `<SystemRoot>\System32`, with `SystemRoot` taken
+/// from `env`, the machine environment the uninstaller is started with, when that is an admin-only
+/// directory. `None` when it is not: the uninstaller then inherits the engine's working directory
+/// (the broker's is its own install directory, `start::restrict_working_directory`).
+///
+/// Why the system directory and not the uninstaller's own folder (which 65347f2 chose for review
+/// M3-R2 S4):
+///
+/// - A process holds its working directory open for as long as it lives. The uninstaller of a Burn
+///   bundle is `<Package Cache>\{bundle}\<setup>.exe` and removes that folder at the end of its run;
+///   started with the folder as working directory it cannot, schedules the removal for the next boot
+///   (`PendingFileRenameOperations`) and leaves an empty `Package Cache\{bundle}` behind (VM runs
+///   blx-m1b-vcredist and blx-m1b-python, 2026-11-22). The same holds for any uninstaller that
+///   deletes the folder it lives in. The system directory is never inside what an uninstaller removes.
+/// - S4 asks that the directory is not one a medium process chose and that nothing is resolved through
+///   it. The system directory is named by `HKLM`, is admin-only (checked here) and is already searched
+///   by `CreateProcess` for a bare name and by the DLL loader, so as working directory it adds no
+///   place to either search. (A 32-bit uninstaller sees relative paths in it redirected to SysWOW64,
+///   which is just as admin-only.)
+/// - When the system directory is not admin-only the engine's own working directory is kept, with a
+///   warning: the broker's is its install directory, an elevated CLI engine's is the admin's shell.
+/// - An `UninstallString` names no working directory, so whoever starts it (Settings, Control Panel,
+///   a deployment tool) starts it in a directory of its own choosing and an uninstaller cannot rely on
+///   starting in its own folder; its own directory is searched for its DLLs whatever the working
+///   directory is. No special case for an installer kind is kept.
+fn neutral_working_dir(
+    env: &BTreeMap<String, String>,
+    fs: &dyn FileSystemSource,
+) -> Option<String> {
+    let root = env
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("SYSTEMROOT"))
+        .map(|(_, value)| value.trim_end_matches('\\'))
+        .filter(|root| !root.is_empty())?;
+    let dir = format!(r"{root}\System32");
+    (Path::new(&dir).is_absolute() && fs.is_admin_only_writable(&dir) == Ok(true)).then_some(dir)
+}
+
 /// Runs the quiet uninstall command of `req.entry` and waits for it (see the module documentation).
 ///
 /// `reg`, `fs` and `sys` are read before and after the run (environment, signer, routing, the ARP key while
@@ -492,14 +532,21 @@ pub fn run_uninstall(
     // (review M3-R2 S4). A medium run keeps the engine's own environment: that is the user's.
     let elevated = sys.elevated();
     let clean_environment = elevated.then(|| uninstaller_environment(sys, fs));
-    let working_dir = elevated
-        .then(|| Path::new(&command.exe).parent())
-        .flatten()
-        .filter(|dir| !dir.as_os_str().is_empty())
-        .map(Path::to_path_buf);
+    // The working directory is the system directory, never the uninstaller's own folder
+    // (`neutral_working_dir`).
+    let working_dir = clean_environment
+        .as_ref()
+        .and_then(|env| neutral_working_dir(env, fs));
+    if elevated && working_dir.is_none() {
+        log.warnings.push(
+            "the system directory is not known or not admin-only; the uninstaller starts in the \
+             engine's working directory"
+                .to_owned(),
+        );
+    }
     let spawn = SpawnContext {
         environment: clean_environment.as_ref(),
-        current_dir: working_dir.as_deref(),
+        current_dir: working_dir.as_deref().map(Path::new),
     };
 
     let t_start = host.now();
@@ -1079,7 +1126,7 @@ mod tests {
     }
 
     #[test]
-    fn an_elevated_run_gets_the_machine_environment_and_the_uninstaller_directory() {
+    fn an_elevated_run_gets_the_machine_environment_and_the_system_directory() {
         let mut c = Case::new(secs(1), 0, Some(0));
         c.fixture.add_dir(r"C:\Windows\system32");
         c.fixture
@@ -1099,6 +1146,7 @@ mod tests {
             ),
             ("PROGRAMDATA", r"C:\ProgramData"),
             ("COMSPEC", r"C:\Windows\system32\cmd.exe"),
+            ("SYSTEMROOT", r"C:\Windows"),
         ]
         .into_iter()
         .map(|(k, v)| (k.to_owned(), v.to_owned()))
@@ -1106,6 +1154,7 @@ mod tests {
         facts.env = [
             ("PATH", r"C:\Users\tester\bin"),
             ("PROGRAMDATA", r"C:\Users\tester\planted"),
+            ("SYSTEMROOT", r"C:\Users\tester\planted"),
             ("USERPROFILE", r"C:\Users\tester"),
         ]
         .into_iter()
@@ -1155,9 +1204,114 @@ mod tests {
         );
         assert_eq!(
             current_dir.as_deref(),
-            Some(std::path::Path::new(r"C:\Program Files\App")),
-            "the working directory is the uninstaller's own"
+            Some(std::path::Path::new(r"C:\Windows\System32")),
+            "the working directory is the machine's system directory, not the uninstaller's own \
+             and not one the user's environment names"
         );
+    }
+
+    /// The spawn context of an elevated run of `exe` on a machine whose machine environment names
+    /// `system_root`, and the run's warnings.
+    fn elevated_spawn(exe: &str, system_root: Option<&str>) -> (SpawnRecord, Vec<String>) {
+        let mut c = Case::new(secs(1), 0, Some(0));
+        c.fixture.add_dir(r"C:\Windows\System32");
+        c.fixture.add_dir(r"C:\Users\tester\System32");
+        c.fixture.add_file(exe, 100);
+        c.fixture
+            .set_admin_only_roots(vec![r"C:\ProgramData".into(), r"C:\Windows".into()]);
+        let facts = c.fixture.system_mut();
+        facts.elevated = true;
+        facts.machine_env = [("COMSPEC", r"C:\Windows\system32\cmd.exe")]
+            .into_iter()
+            .chain(system_root.map(|root| ("SystemRoot", root)))
+            .map(|(k, v)| (k.to_owned(), v.to_owned()))
+            .collect();
+        let frozen = QuietCommand {
+            exe: exe.into(),
+            args: "/uninstall /quiet".into(),
+            generated: false,
+            kind: InstallerKind::Inno,
+        };
+        let req = RunRequest {
+            entry: &c.entry,
+            main_exes: &[],
+            roots: &[],
+            before: None,
+            command: Some(&frozen),
+        };
+        let report = run_uninstall(
+            &mut c.host,
+            &c.fixture,
+            &c.fixture,
+            &c.fixture,
+            &req,
+            &c.opts,
+        )
+        .unwrap();
+        (
+            c.host.spawn_contexts.first().expect("a spawn").clone(),
+            report.warnings,
+        )
+    }
+
+    /// A Burn bundle's uninstaller lives in the folder it removes (`Package Cache\{bundle}`). Started
+    /// with that folder as working directory it cannot remove it (VM runs blx-m1b-vcredist and
+    /// blx-m1b-python). An elevated run starts in the system directory instead, wherever the
+    /// uninstaller is.
+    #[test]
+    fn an_elevated_run_never_starts_in_the_uninstaller_folder() {
+        for exe in [
+            r"C:\ProgramData\Package Cache\{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}\VC_redist.x64.exe",
+            r"C:\Users\tester\AppData\Local\Package Cache\{e9b7c837-1e5d-4f56-9d8e-0c4b0f9d0b0a}\python-3.12.8-amd64.exe",
+            UNINS,
+        ] {
+            let ((_, current_dir), warnings) = elevated_spawn(exe, Some(r"C:\Windows\"));
+            let dir = current_dir.unwrap_or_else(|| panic!("{exe}: no working directory"));
+            assert_eq!(dir, std::path::Path::new(r"C:\Windows\System32"), "{exe}");
+            // Not the uninstaller's folder and not a folder above it (the drive root aside).
+            for folder in std::path::Path::new(exe).ancestors().skip(1) {
+                assert!(
+                    folder.parent().is_none() || !dir.starts_with(folder),
+                    "{exe}: starts in {}",
+                    dir.display()
+                );
+            }
+            assert!(
+                !warnings.iter().any(|w| w.contains("working directory")),
+                "{warnings:?}"
+            );
+        }
+    }
+
+    /// Without a system directory that is known and admin-only the run inherits the engine's working
+    /// directory and says so; it never falls back to the uninstaller's folder or to a directory a
+    /// user can write.
+    #[test]
+    fn an_elevated_run_without_a_trusted_system_directory_inherits_and_warns() {
+        let exe = r"C:\ProgramData\Package Cache\{d8bbe9f9-7c5b-42c6-b715-9ee898a2e515}\VC_redist.x64.exe";
+        for system_root in [
+            None,
+            Some(""),
+            Some(r"C:\Users\tester"),
+            Some(r"C:\Missing"),
+            Some("Windows"),
+        ] {
+            let ((environment, current_dir), warnings) = elevated_spawn(exe, system_root);
+            assert!(environment.is_some(), "{system_root:?}");
+            assert_eq!(current_dir, None, "{system_root:?}");
+            assert!(
+                warnings.iter().any(|w| w.contains("working directory")),
+                "{system_root:?}: {warnings:?}"
+            );
+        }
+    }
+
+    /// A medium run keeps the engine's environment and working directory: both are the user's.
+    #[test]
+    fn a_medium_run_inherits_the_working_directory() {
+        let mut c = Case::new(secs(1), 0, Some(0));
+        c.run();
+        assert_eq!(c.host.spawn_contexts, vec![(None, None)]);
     }
 
     #[test]

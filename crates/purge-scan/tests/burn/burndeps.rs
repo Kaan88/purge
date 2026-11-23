@@ -260,6 +260,70 @@ fn unreadable_root_offers_no_provider_key() {
     assert!(suggestions(&found).is_empty());
 }
 
+/// On a real machine `HKU\S-1-5-18` is a registry link to the `.DEFAULT` hive and is listed among the
+/// loaded user hives. A path through it is refused, which left the dependents of every provider
+/// unknown (VM runs blx-m1b-vcredist and blx-m1b-python: no provider key, no suggestion). The scanner
+/// and the ownership index read LocalSystem's records in `.DEFAULT` instead, so the machine reads as
+/// one without the link does.
+#[test]
+fn local_system_link_does_not_hide_the_dependents() {
+    let mut w = World::new();
+    let plain = run(&w);
+    w.fixture
+        .add_key(r"HKU\.DEFAULT\Software\Classes\Local Settings");
+    w.fixture
+        .set_link(r"HKU\S-1-5-18", r"\Registry\User\.Default");
+    let found = w.run_refusing_links(&Scanner);
+    assert_eq!(found, plain);
+    assert!(find(&found, &key(format!(r"{DEPS}\AppBundle_Core"))).is_some());
+    assert_eq!(suggestions(&found).len(), 1);
+
+    // A dependent LocalSystem recorded is seen there: Core's provider key is kept, never offered from
+    // that hive; the bundle's own entry in the machine's records still is.
+    let system_core =
+        r"HKU\.DEFAULT\Software\Classes\Installer\Dependencies\AppBundle_Core".to_owned();
+    w.fixture
+        .add_key(&format!(r"{system_core}\Dependents\{OTHER_BUNDLE}"));
+    let found = w.run_refusing_links(&Scanner);
+    assert!(find(&found, &key(format!(r"{DEPS}\AppBundle_Core"))).is_none());
+    assert!(find(&found, &dependents_entry("AppBundle_Core")).is_some());
+    assert!(
+        !found
+            .iter()
+            .any(|c| format!("{:?}", c.target).contains(".DEFAULT")),
+        "{found:?}"
+    );
+}
+
+/// Only that link is named at its target. With `HKU\S-1-5-18` linking anywhere else, or a link inside
+/// the `.DEFAULT` hive, the root is refused and nothing but the bundle's own entries is offered.
+#[test]
+fn any_other_link_on_a_user_root_offers_no_provider_key() {
+    for (link, target) in [
+        (r"HKU\S-1-5-18", r"\Registry\User\S-1-5-21-9-9-9-1001"),
+        (r"HKU\S-1-5-19", r"\Registry\User\.Default"),
+        (
+            r"HKU\.DEFAULT\Software\Classes",
+            r"\Registry\Machine\Software\Classes",
+        ),
+    ] {
+        let mut w = World::new();
+        w.fixture
+            .set_link(r"HKU\S-1-5-18", r"\Registry\User\.Default");
+        w.fixture.set_link(link, target);
+        let found = w.run_refusing_links(&Scanner);
+        assert!(
+            find(&found, &dependents_entry("AppBundle_Core")).is_some(),
+            "{link}"
+        );
+        assert!(
+            find(&found, &key(format!(r"{DEPS}\AppBundle_Core"))).is_none(),
+            "{link}"
+        );
+        assert!(suggestions(&found).is_empty(), "{link}");
+    }
+}
+
 // ---------------------------------------------------------------------------------------------------------
 // (c) Related products
 // ---------------------------------------------------------------------------------------------------------
