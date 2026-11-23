@@ -23,8 +23,6 @@
 //! No token is changed and no privilege is enabled: the engine already runs with the user's token, and
 //! the job and its creation belong to `purge-inventory`'s [`ProcessHost`].
 
-use std::path::Path;
-
 use purge_inventory::runner::{ProcessHost, RunOptions};
 use purge_model::{InventoryEntry, ProgramId};
 use purge_rpc::error::{ErrorData, ErrorObject, IdKind};
@@ -145,7 +143,10 @@ pub fn route_info(entry: &InventoryEntry, sources: Sources<'_>) -> Result<RouteI
         .flatten()
         .find_map(|command| sources.fs.signer_cn(&command.exe).ok().flatten());
     let processes = sources.sys.processes().unwrap_or_default();
-    let running = running_under(&processes, &running_roots(entry, &commands));
+    let running = running_under(
+        &processes,
+        &pipeline::running_roots(entry, &commands, &pipeline::windows_dir()),
+    );
     Ok(RouteInfo {
         route,
         command,
@@ -153,30 +154,6 @@ pub fn route_info(entry: &InventoryEntry, sources: Sources<'_>) -> Result<RouteI
         signer,
         running,
     })
-}
-
-/// The directories a running process must be under to count as the program's own: its
-/// `InstallLocation`, and the directory of each command the entry names.
-fn running_roots(entry: &InventoryEntry, commands: &pipeline::UninstallCommands) -> Vec<String> {
-    let mut roots: Vec<String> = Vec::new();
-    let mut push = |root: String| {
-        let root = root.trim_end_matches(['\\', '/']).to_owned();
-        if !root.is_empty() && !roots.iter().any(|r| r.eq_ignore_ascii_case(&root)) {
-            roots.push(root);
-        }
-    };
-    if let Some(location) = entry.install_location.as_deref() {
-        push(location.to_owned());
-    }
-    for command in [commands.command.as_ref(), commands.quiet.as_ref()]
-        .into_iter()
-        .flatten()
-    {
-        if let Some(parent) = Path::new(&command.exe).parent() {
-            push(parent.to_string_lossy().into_owned());
-        }
-    }
-    roots
 }
 
 /// Processes whose image lies under one of `roots` (case-insensitive, like the rest of the paths).

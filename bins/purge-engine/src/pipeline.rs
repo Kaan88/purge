@@ -789,6 +789,65 @@ pub fn uninstall_commands(
     UninstallCommands { command, quiet }
 }
 
+/// The directories a running process must be under to count as the program's own (the "close these
+/// first" list of `uninstall.prepare`, medium engine and broker alike): its `InstallLocation`, and
+/// the directory of each command the entry names, except a Windows host (`msiexec`, `rundll32`,
+/// `regsvr32`, `cmd`) and anything in the Windows directory `windows_dir` or below it. An MSI's
+/// command is `C:\Windows\System32\msiexec.exe`, and its folder made every System32 process (sihost,
+/// svchost, ctfmon...) "still running from the program's folder", a warning "Check again" could
+/// never clear (M3 e2e chain, 7-Zip). An empty `windows_dir` leaves only the host rule.
+pub fn running_roots(
+    entry: &InventoryEntry,
+    commands: &UninstallCommands,
+    windows_dir: &str,
+) -> Vec<String> {
+    let windows_dir = windows_dir
+        .trim_end_matches(['\\', '/'])
+        .to_ascii_lowercase();
+    let in_windows = |dir: &str| {
+        let dir = dir.trim_end_matches(['\\', '/']).to_ascii_lowercase();
+        !windows_dir.is_empty()
+            && (dir == windows_dir
+                || dir
+                    .strip_prefix(windows_dir.as_str())
+                    .is_some_and(|rest| rest.starts_with(['\\', '/'])))
+    };
+    let mut roots: Vec<String> = Vec::new();
+    let mut push = |root: String| {
+        let root = root.trim_end_matches(['\\', '/']).to_owned();
+        if !root.is_empty() && !roots.iter().any(|r| r.eq_ignore_ascii_case(&root)) {
+            roots.push(root);
+        }
+    };
+    if let Some(location) = entry.install_location.as_deref() {
+        if !in_windows(location) {
+            push(location.to_owned());
+        }
+    }
+    for command in [commands.command.as_ref(), commands.quiet.as_ref()]
+        .into_iter()
+        .flatten()
+    {
+        if HOST_EXECUTABLES.contains(&file_name_lower(&command.exe).as_str()) {
+            continue;
+        }
+        if let Some(parent) = Path::new(&command.exe).parent() {
+            let parent = parent.to_string_lossy().into_owned();
+            if !in_windows(&parent) {
+                push(parent);
+            }
+        }
+    }
+    roots
+}
+
+/// The Windows directory of this PC (`%SystemRoot%`, else `%windir%`), for [`running_roots`].
+pub fn windows_dir() -> String {
+    std::env::var("SystemRoot")
+        .or_else(|_| std::env::var("windir"))
+        .unwrap_or_default()
+}
+
 /// Where the uninstaller of `entry` runs (M3 design 3.2, ENGINE_PLAN §4.4): the broker for a
 /// machine-scope entry whose uninstaller path has admin-only ancestors, medium otherwise.
 ///
@@ -3238,6 +3297,54 @@ mod tests {
             ),
             purge_rpc::methods::Route::Broker,
             "msiexec with a ProductCode is unchanged"
+        );
+    }
+
+    fn qc(exe: &str) -> QuietCommand {
+        QuietCommand {
+            exe: exe.to_owned(),
+            args: String::new(),
+            generated: false,
+            kind: InstallerKind::Unknown,
+        }
+    }
+
+    #[test]
+    fn running_roots_leave_out_windows_hosts_and_the_windows_directory() {
+        let mut entry = entry("App_is1", "App");
+        // An MSI: msiexec in System32, no install location: nothing is "the program's folder".
+        let msi = UninstallCommands {
+            command: Some(qc(r"C:\Windows\System32\msiexec.exe")),
+            quiet: Some(qc(r"C:\WINDOWS\system32\MsiExec.exe")),
+        };
+        assert!(running_roots(&entry, &msi, r"C:\Windows").is_empty());
+        assert!(
+            running_roots(&entry, &msi, "").is_empty(),
+            "the host rule holds without a Windows directory"
+        );
+        // An old uninstaller in the Windows directory itself (IsUninst.exe) is no root either.
+        let windows = UninstallCommands {
+            command: Some(qc(r"C:\Windows\IsUninst.exe")),
+            quiet: None,
+        };
+        assert!(running_roots(&entry, &windows, r"C:\Windows\").is_empty());
+        // The install location and a real program folder stay; a sibling of Windows is not inside it.
+        entry.install_location = Some(r"C:\Program Files\7-Zip\".to_owned());
+        let app = UninstallCommands {
+            command: Some(qc(r"C:\Program Files\7-Zip\Uninstall.exe")),
+            quiet: Some(qc(r"C:\WindowsApps2\Vendor\unins000.exe")),
+        };
+        assert_eq!(
+            running_roots(&entry, &app, r"C:\Windows"),
+            vec![
+                r"C:\Program Files\7-Zip".to_owned(),
+                r"C:\WindowsApps2\Vendor".to_owned()
+            ]
+        );
+        entry.install_location = Some(r"C:\Windows\System32".to_owned());
+        assert!(
+            running_roots(&entry, &msi, r"C:\Windows").is_empty(),
+            "an install location inside Windows is not a program folder"
         );
     }
 
