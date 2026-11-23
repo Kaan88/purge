@@ -196,7 +196,7 @@ public sealed class HistoryPageTests
         Assert.Equal("Put back, with conflicts", vm.RestoreTitle);
         Assert.Equal(
             [
-                @"C:\ProgramData\Git\cache1: was deleted from quarantine, so it cannot be put back",
+                @"C:\ProgramData\Git\cache1: what Purge kept of it was deleted, so it cannot be put back",
                 @"C:\Program Files\Git: DestinationExists",
             ],
             vm.RestoreLines);

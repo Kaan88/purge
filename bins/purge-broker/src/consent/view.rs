@@ -1451,6 +1451,12 @@ pub const DELETE_NOW_WARNING: &str = "This is before the retention date. Until t
     these items, and Undo can put them back. Once they are deleted here, Undo and History can no \
     longer restore them.";
 
+/// [`DELETE_NOW_WARNING`] for a dialog that names one item.
+pub const DELETE_NOW_WARNING_ONE: &str = concat!(
+    "This is before the retention date. Until then Purge keeps this item, and Undo can put it ",
+    "back. Once it is deleted here, Undo and History can no longer restore it."
+);
+
 /// The confirmation code of a "Delete now" dialog: over the same ids as the purge dialog's, and
 /// never the same code, so the two cannot be taken for each other.
 fn delete_now_code(units: &[PurgeUnit<'_>]) -> ConfirmCode {
@@ -1484,7 +1490,12 @@ fn delete_now_view(
             ),
             size(counts.bytes),
         ),
-        DELETE_NOW_WARNING.to_owned(),
+        if single || units.len() == 1 {
+            DELETE_NOW_WARNING_ONE
+        } else {
+            DELETE_NOW_WARNING
+        }
+        .to_owned(),
     ];
     if !flags.is_plain() {
         summary.push(LEGEND.to_owned());

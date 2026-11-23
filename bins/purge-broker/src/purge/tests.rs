@@ -1010,7 +1010,8 @@ fn assert_says_delete_now(text: &str) {
     assert!(text.contains("retention"), "{text}");
     assert!(text.contains("This cannot be undone."), "{text}");
     assert!(
-        text.contains("Undo and History can no longer restore them"),
+        text.contains("Undo and History can no longer restore them")
+            || text.contains("Undo and History can no longer restore it"),
         "{text}"
     );
 }

@@ -18,10 +18,11 @@ use purge_win::taskdialog::{self, Icon as DialogIcon};
 use super::dialog::{self, PRIMARY};
 use super::text::{LINE_COST, Stamp};
 use super::view::{
-    ConflictKind, ConsentView, DELETE_NOW_WARNING, Facts, OTHER_SHOWN, PAGE_CHARS, PAGE_ENTRIES,
-    PurgeUnit, Reason, RecoverFacts, RecoverKind, RestoreFacts, UninstallFacts, Variant, ViewError,
-    split_purge, view, view_delete_now, view_delete_now_user_data, view_purge,
-    view_purge_user_data, view_recover, view_restore, view_uninstall,
+    ConflictKind, ConsentView, DELETE_NOW_WARNING, DELETE_NOW_WARNING_ONE, Facts, OTHER_SHOWN,
+    PAGE_CHARS, PAGE_ENTRIES, PurgeUnit, Reason, RecoverFacts, RecoverKind, RestoreFacts,
+    UninstallFacts, Variant, ViewError, split_purge, view, view_delete_now,
+    view_delete_now_user_data, view_purge, view_purge_user_data, view_recover, view_restore,
+    view_uninstall,
 };
 
 // ---------------------------------------------------------------------------------------------------
@@ -1715,7 +1716,10 @@ fn delete_now_keeps_user_data_apart_and_refuses_backups() {
         "Delete this user data now, before its retention ends? This cannot be undone."
     );
     assert_eq!(v.button, "Delete 1 item now, for good");
-    assert_eq!(v.summary[1], DELETE_NOW_WARNING);
+    assert_eq!(v.summary[1], DELETE_NOW_WARNING_ONE);
+    assert!(
+        DELETE_NOW_WARNING_ONE.contains("this item") && !DELETE_NOW_WARNING_ONE.contains("them")
+    );
     assert_eq!(v.attention.len(), 1);
     assert!(v.attention[0].reasons.contains(&Reason::UserData));
     assert_eq!(

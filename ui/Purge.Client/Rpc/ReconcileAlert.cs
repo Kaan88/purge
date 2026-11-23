@@ -15,6 +15,6 @@ public static class ReconcileAlert
     /// with "Delete now") is said in words; every other conflict keeps its kind.
     /// </summary>
     public static string Text(ConflictRow conflict) => conflict.Conflict.Kind == "Expired"
-        ? $"{conflict.DisplayName}: was deleted from quarantine, so it cannot be put back"
+        ? $"{conflict.DisplayName}: what Purge kept of it was deleted, so it cannot be put back"
         : $"{conflict.DisplayName}: {conflict.Conflict.Kind}";
 }
