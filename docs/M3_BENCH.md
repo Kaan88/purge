@@ -26,10 +26,10 @@ once the first frame has been presented. The markers, in launch order:
 | `programs_ctor` | `ProgramsView` built and attached. |
 | `rows_set` | `ItemsSource`/selection prepared (before `Activate()` when the reply is in). When the reply comes in only during the title bar wait, it is marked after `w_titlebar`. |
 | `first_row` | First list container realized (`ContainerContentChanging`). Since the pre-layout of the Programs page (see *Launch path*) this comes before `w_titlebar` and `Activate()` when the reply was in at `rows_set`, so it no longer shows that the first frame has rows (see `first_row_live`). |
-| `first_row_live` | The first layout pass after the `MainWindow` constructor (the live layout `Activate()` starts, not the pre-layout) that finds a realized row container in the list. Reported, no gate. |
-| `rows_at_tick` | A count, not a time: the row containers with a height in the list's items panel at `first_tick`. In the app's line only; `cargo xtask bench-launch` does not read it. |
 | `w_titlebar` | `ExtendsContentIntoTitleBar` and `SetTitleBar` done. Since branch `m3-launch-perf` this is the last step of the `MainWindow` constructor, after `rows_set`, not after `w_backdrop`. |
+| `first_row_live` | The first layout pass after the `MainWindow` constructor (the live layout `Activate()` starts, not the pre-layout) that finds a realized row container in the list. Reported, no gate. |
 | `first_tick` | First `CompositionTarget.Rendering` tick. |
+| `rows_at_tick` | A count, not a time: the row containers with a height in the list's items panel at `first_tick`. In the app's line only; `cargo xtask bench-launch` does not read it. |
 | `presented` | After `DwmFlush()` on the dispatcher thread, i.e. the next committed frame after `first_tick`. |
 | `names_visible` | The presented frame with rows: `presented` itself when `first_row` came before it (the stub, and a real list that was in by then), else `DwmFlush()` after the frame that follows `first_row`. Gated in `--real-engine` only. |
 | `icons_visible` | The first screenful of rows (list height / 40 px) has its icons settled: applied from the atlas or the engine, or answered without one (that row keeps its tile); then `DwmFlush()`. Live engine only (the stub sends no icons). A failed icon request never marks it. |

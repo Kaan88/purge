@@ -269,7 +269,7 @@ function Get-M3CiVerdict($Doc) {
     elseif ($u.timed_out) { $why += 'ui: timed out' }
     elseif (-not $u.trx) { $why += "ui: no TRX (exit $($u.exit))" }
     elseif ($u.exit -ne 0 -or $u.failed -gt 0) { $why += "ui: exit $($u.exit), $($u.failed) failed$(if (@($u.failing).Count) { ' (' + (@($u.failing) -join ', ') + ')' })" }
-    elseif ($u.total -lt 1) { $why += 'ui: no test ran' }
+    elseif ($u.total -lt 1 -or $u.passed -lt 1) { $why += 'ui: no test ran' }
     elseif ($u.passed + $u.not_executed -ne $u.total) { $why += "ui: $($u.passed) passed + $($u.not_executed) not executed of $($u.total) (an aborted or partial run)" }
     elseif (-not $u.sha_match) { $why += 'ui: the guest''s assembly SHA-256 differs from the host build' }
     if ($u -and -not $u.skipped) { foreach ($x in @($u.support)) { if (-not $x.sha_match) { $why += "ui support $($x.label): the guest's SHA-256 differs from the host build" } } }
@@ -730,6 +730,10 @@ if ($vmRun) {
     # A VM run binds a commit: the tests read the tracked working tree, so a tracked change is refused before anything
     # is built. Untracked paths are not mirrored (only tracked files and Get-M3CiRepoExtras), so they are only recorded.
     try { $wt0 = Get-M3CiWorktreeState $script:RepoRoot } catch { Stop-M3Ci 2 "REFUSED: $($_.Exception.Message)" }
+    # An untracked file under crates\, tools\ or ui\ is built in (cargo tests/bins/build.rs, SDK-style csproj globs)
+    # although it is not part of the commit: refused like a tracked change (review of ec2776a).
+    $srcUntracked = @($wt0.untracked | Where-Object { "$_" -match '^(crates|tools|ui|bins)/' })
+    if ($srcUntracked.Count -and -not $CI.allow_dirty) { Stop-M3Ci 2 "REFUSED: untracked file(s) in the build tree ($($srcUntracked.Count), first: $($srcUntracked[0])); commit or remove them, or pass -AllowDirty" }
     if ($wt0.tracked.Count -and -not $CI.allow_dirty) { Stop-M3Ci 2 "REFUSED: the checkout has tracked changes ($($wt0.tracked.Count) path(s), first: $($wt0.tracked[0])); commit, or pass -AllowDirty" }
 }
 $script:CiVmStarted = $false
