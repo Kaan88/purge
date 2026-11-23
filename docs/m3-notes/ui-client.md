@@ -34,7 +34,7 @@ same newline framing and the same `RpcJsonContext` DTOs.
 4. **Account pre-check.** `TokenElevationType` `Limited` (split administrator) or an elevated `Full`/`Default`
    token may launch; a non-elevated `Default` token is `NotAdministrator` and starts nothing.
 5. **UAC.** `ShellExecuteExW("runas")` runs on a dedicated STA thread with `SEE_MASK_NOCLOSEPROCESS |
-   SEE_MASK_NOASYNC`, owner = the caller's window, `SW_SHOWNORMAL` (the broker has no window of its own, so
+   SEE_MASK_NOASYNC`, no owner window (hwnd 0; DECISIONS 2026-11-23 "UAC prompt owner"), `SW_SHOWNORMAL` (the broker has no window of its own, so
    nothing appears apart from its dialogs; S7). Error 1223 is `BrokerLaunchStatus.Cancelled`, which
    feeds `Purge.App/Shell/ElevationPrompts.CancelledBar`; the launcher shows nothing itself.
 6. **Exit before the pipe.** The connect loop polls for 10 s; if the process has exited, the result carries its exit

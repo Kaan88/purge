@@ -143,7 +143,8 @@ Inputs:
 **Elevation mechanics** (in the UI):
 - The UI calls `ShellExecuteExW("runas", purge-engine.exe --broker --pipe <name> --parent <pid> --parent-ctime <filetime>)`.
   - It runs on a dedicated STA background thread with `SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI`.
-  - `hwnd = WindowNative.GetWindowHandle(mainWindow)`, so the prompt appears in the foreground.
+  - `hwnd = 0` (no owner window; superseded 2026-11-23, DECISIONS "UAC prompt owner": with the main window as the
+    owner the prompt was observed parked on the taskbar on the M3 rig).
 - Error 1223 shows an InfoBar ("You cancelled the admin prompt"); it is not an engine error.
 - Elevation is requested **when the user clicks Uninstall, before the S2 confirm dialog**. The broker builds its index while the user reads the dialog.
 

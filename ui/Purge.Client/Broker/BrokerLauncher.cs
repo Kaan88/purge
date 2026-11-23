@@ -139,9 +139,9 @@ public static partial class BrokerLauncher
     /// <summary>
     /// Starts <c>purge-broker.exe</c> elevated, waits for its pipe, and verifies the server before returning it.
     /// A cancelled Windows prompt is <see cref="BrokerLaunchStatus.Cancelled"/>; nothing is shown or started at app
-    /// start. The prompt gets no owner window: with Purge's window as the owner (the call runs on a separate STA
-    /// thread), Windows parked the prompt as a flashing taskbar button even with Purge in the foreground; without an
-    /// owner it came up on the secure desktop (M3 e2e on the VM, 2026-11-23, DECISIONS "UAC prompt owner").
+    /// start. The prompt gets no owner window (hwnd 0, as Process.Start "runas" does). With Purge's window as the
+    /// owner (the call runs on a separate STA thread) the prompt was observed parked as a flashing taskbar button on
+    /// the M3 rig although Purge was in the foreground; see DECISIONS 2026-11-23 "UAC prompt owner".
     /// </summary>
     public static async Task<BrokerLaunchResult> LaunchAsync(string brokerPath, CancellationToken ct = default)
     {
