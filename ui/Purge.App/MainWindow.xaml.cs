@@ -278,8 +278,6 @@ public sealed partial class MainWindow : Window
         for (var i = 0; i < n; i++) PinInfoBars(VisualTreeHelper.GetChild(node, i));
     }
 
-    public nint Hwnd => WinRT.Interop.WindowNative.GetWindowHandle(this);
-
     public void SetProgramsCount(int count) => ProgramsCount.Text = count.ToString(System.Globalization.CultureInfo.CurrentCulture);
 
     public ElementTheme Theme => Root.RequestedTheme;

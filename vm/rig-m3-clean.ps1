@@ -154,8 +154,14 @@ function Invoke-M3CleanPhase($Step) {
 
 function Save-M3CleanShot([string]$Name) {
     $f = Join-Path $MC.evidence "$Name.png"
-    $r = Invoke-VBox @('controlvm', $MC.vm, 'screenshotpng', $f)
-    $ok = ($r.code -eq 0 -and (Test-Path -LiteralPath $f))
+    # screenshotpng fails (E_FAIL) while the guest display is off: retry after a Shift tap that wakes it.
+    for ($try = 1; $try -le 3; $try++) {
+        $r = Invoke-VBox @('controlvm', $MC.vm, 'screenshotpng', $f)
+        $ok = ($r.code -eq 0 -and (Test-Path -LiteralPath $f))
+        if ($ok) { break }
+        $null = Invoke-VBox @('controlvm', $MC.vm, 'keyboardputscancode', '2a', 'aa')
+        Start-Sleep -Seconds 2
+    }
     if ($ok) { Write-RigLog "  screenshot $Name.png ($((Get-Item $f).Length) bytes)" } else { Write-RigLog "  !! screenshot $Name failed: $($r.out -join ' ')" }
     [void]$script:MCShots.Add([ordered]@{ name = $Name; file = $(if ($ok) { "$Name.png" }); bytes = $(if ($ok) { (Get-Item $f).Length } else { 0 }); t = (Get-Date).ToString('o') })
 }

@@ -1872,7 +1872,7 @@ powershell -NoProfile -File vm\truth\m3-sec-score.ps1 --self-test
   row uses it). `-Check` must pass for both. The data root is the machine's `C:\ProgramData\Purge` either way.
 - **The rig client** (`client <spec.json>`) does what `BrokerLauncher` does: the UI's own account pre-check is
   recorded (`precheck`: `limited_admin`, `elevated`, `standard_user`), a 128-bit pipe name, `ShellExecuteExW("runas",
-  SEE_MASK_NOCLOSEPROCESS)` on an STA thread (owner = its window when it has one), the server pid check
+  SEE_MASK_NOCLOSEPROCESS)` on an STA thread (no owner window, as `BrokerLauncher` since 2026-11-23), the server pid check
   (`GetNamedPipeServerProcessId` against the launched process), `SECURITY_IDENTIFICATION`, `engine.hello` first,
   JSON-RPC lines. Before each consent request it writes `ready-<k>.json` and waits for `go-<k>` from the agent, calls
   `AllowSetForegroundWindow(broker)`, and files `consent.shown` in `consent-shown-<k>.json` and the answer in

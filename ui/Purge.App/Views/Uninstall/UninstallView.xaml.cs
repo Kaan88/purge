@@ -71,7 +71,7 @@ public sealed partial class UninstallView : UserControl
         {
             if (!await MainWindow.Instance.ConfirmFirstElevationAsync())
                 return new UninstallLaunch(UninstallLaunchState.Cancelled, null, "", null);
-            var result = await BrokerLauncher.LaunchAsync(BrokerLauncher.PathBesideApp(), MainWindow.Instance.Hwnd, ct);
+            var result = await BrokerLauncher.LaunchAsync(BrokerLauncher.PathBesideApp(), ct);
             var exitCode = result.ExitCode is { } code ? (uint)code : (uint?)null;
             return result.Status switch
             {

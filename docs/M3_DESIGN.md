@@ -106,7 +106,7 @@ check "the client". The server side sets the DACL at high integrity and can iden
 serves.
 
 1. The UI makes a 128-bit random name and starts `purge-broker.exe --pipe <name> --parent <pid> --parent-ctime
-   <filetime>` with `ShellExecuteExW("runas")` on an STA thread (`SEE_MASK_NOCLOSEPROCESS`, owner = main window).
+   <filetime>` with `ShellExecuteExW("runas")` on an STA thread (`SEE_MASK_NOCLOSEPROCESS`, no owner window (hwnd 0), see DECISIONS 2026-11-23 "UAC prompt owner").
 2. The broker runs its start checks (3.4). Then it creates `\\.\pipe\purge-<name>` with
    `FILE_FLAG_FIRST_PIPE_INSTANCE`, `PIPE_REJECT_REMOTE_CLIENTS`, one instance, DACL = the broker's user SID and
    SYSTEM. If the name exists already, it exits.

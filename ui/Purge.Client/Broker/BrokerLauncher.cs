@@ -139,10 +139,11 @@ public static partial class BrokerLauncher
     /// <summary>
     /// Starts <c>purge-broker.exe</c> elevated, waits for its pipe, and verifies the server before returning it.
     /// A cancelled Windows prompt is <see cref="BrokerLaunchStatus.Cancelled"/>; nothing is shown or started at app
-    /// start. <paramref name="ownerWindow"/> is passed as the prompt's owner.
+    /// start. The prompt gets no owner window (hwnd 0, as Process.Start "runas" does). With Purge's window as the
+    /// owner (the call runs on a separate STA thread) the prompt was observed parked as a flashing taskbar button on
+    /// the M3 rig although Purge was in the foreground; see DECISIONS 2026-11-23 "UAC prompt owner".
     /// </summary>
-    public static async Task<BrokerLaunchResult> LaunchAsync(string brokerPath, nint ownerWindow = default,
-        CancellationToken ct = default)
+    public static async Task<BrokerLaunchResult> LaunchAsync(string brokerPath, CancellationToken ct = default)
     {
         if (!OperatingSystem.IsWindows())
             return BrokerLaunchResult.Failed(BrokerLaunchStatus.CannotStart, "The administrator part is a Windows program.");
@@ -163,7 +164,7 @@ public static partial class BrokerLauncher
             $"--pipe {pipeName} --parent {pid} --parent-ctime {creationTime}");
         var directory = Path.GetDirectoryName(brokerPath) ?? AppContext.BaseDirectory;
 
-        var shell = await RunOnStaThreadAsync(() => RunShell(brokerPath, arguments, directory, ownerWindow)).ConfigureAwait(false);
+        var shell = await RunOnStaThreadAsync(() => RunShell(brokerPath, arguments, directory)).ConfigureAwait(false);
         if (!shell.Ok) return ClassifyShellFailure(shell.Error);
         if (shell.Process == 0)
             return BrokerLaunchResult.Failed(BrokerLaunchStatus.CannotStart,
@@ -314,7 +315,7 @@ public static partial class BrokerLauncher
         return done.Task;
     }
 
-    private static unsafe ShellLaunch RunShell(string brokerPath, string arguments, string directory, nint ownerWindow)
+    private static unsafe ShellLaunch RunShell(string brokerPath, string arguments, string directory)
     {
         var size = (uint)sizeof(ShellExecuteInfo);
         fixed (char* verb = "runas")
@@ -326,7 +327,7 @@ public static partial class BrokerLauncher
             {
                 cbSize = size,
                 fMask = SeeMaskNoCloseProcess | SeeMaskNoAsync,
-                hwnd = ownerWindow,
+                hwnd = 0, // no owner: see LaunchAsync
                 lpVerb = verb,
                 lpFile = file,
                 lpParameters = parameters,

@@ -32,7 +32,7 @@ public sealed partial class VaultView : UserControl
         {
             if (!await MainWindow.Instance.ConfirmFirstElevationAsync())
                 return new VaultBrokerLaunch(null, true, "");
-            var result = await BrokerLauncher.LaunchAsync(BrokerLauncher.PathBesideApp(), MainWindow.Instance.Hwnd, ct);
+            var result = await BrokerLauncher.LaunchAsync(BrokerLauncher.PathBesideApp(), ct);
             return result.Status switch
             {
                 BrokerLaunchStatus.Started when result.Session is { } session =>
