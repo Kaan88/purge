@@ -14,6 +14,72 @@ needed is either already there or small.
 
 ---
 
+## 0. Toolkit readiness checklist (the precondition for the port)
+
+**Decision (user, 2026-11-25):** the Purge port starts only when the shared toolkit is completely ready. Until then
+Purge keeps shipping WinUI, and M3 finishes on WinUI. "Ready" means every item below is on `main` of
+`Kaan88/markdown-shared-rs` with CI green on Windows. Purge then pins one `main` rev and never needs a feature branch.
+Ids **P1-P..** are new and are proposed as roadmap rows; W/L/X ids are the toolkit's own (`docs/ROADMAP.md` on
+`feat/anim`). Sizes: S = a day or two, M = about a week, L = several weeks.
+
+### A. Merge to `main` (what exists already)
+
+Of the toolkit's 36k-line `feat/anim` branch (`e08f3dc`), Purge needs these modules. They depend on each other, so
+merging the whole branch is the simplest route. If you would rather merge in slices, these are the ones Purge
+needs, in this order:
+
+| # | Module(s) on `feat/anim` | Why Purge needs it |
+|---|---|---|
+| A1 | `tokens.rs`, `anim.rs` + `anim/*`, `gfx/shapes.rs`, the `gfx.rs` / `glyph.rs` / `check.rs` / `segments.rs` / `overlay.rs` / `menu.rs` / `place.rs` / `platform.rs` / `plan.rs` changes | the base the rest builds on: tokens and HC, Expander motion, the vault's days-left ring |
+| A2 | `focus.rs` (W2), `cursor.rs` (W4), `commands.rs` (keymap) | Tab order and dialog scopes, Ctrl+F, column-resize cursors |
+| A3 | `rows.rs` changes, `select.rs`, `table.rs`, `scroll.rs` changes, `viewport.rs` (L3), `sections.rs` (L2), `grid.rs` | the Programs list (multi-select, sorted columns), Leftovers' grouped list, History's horizontal strip |
+| A4 | `slider.rs` (progress, indeterminate bar, spinner), `splitter.rs` | uninstall and scan progress, vault usage bars, the details pane split |
+| A5 | `mdshared-app/src/fmt.rs` | sizes and dates ("1.2 GB", "3 days ago") |
+| A6 | Dependabot PRs #3-#7 (parley 0.13, windows-sys 0.61, libloading 0.9, x11rb 0.14, notify 8.2.2) | merge or close before Purge pins, so Purge does not start on versions that are about to change |
+
+Not needed by Purge; merge them or not as you like: `knob`, `meter`, `waveform`, `spectrum`, `seek`, `cover`,
+`thumbs`, `media_session`, `tray`, `notify`, `window_state`, `submenu`, `mdshared-text/image.rs`, the whole
+`mdshared-term` crate, `mdshared-app/pool.rs`. The closed `feat/classic-widgets` (PR #8) isn't needed either.
+
+**Before or while merging:**
+- **Open a PR from `feat/anim`.** CI has never run on it: CI runs only on `main` pushes and PRs.
+- **Fix the red Linux and macOS `cargo test` on `main`,** or mark those jobs as non-blocking. Purge itself only
+  needs Windows to be green.
+- **The toolkit rule "a piece reaches `main` only once an application uses it"** can't be met by Purge, because
+  Purge only starts after the merge. Proposal: a toolkit example `examples/purge_shape.rs` counts as that consumer.
+  It is one window with a 2,000-row multi-select list, a search field, a grouped list, a dialog and AccessKit (the
+  spike in §5 step 1). Alternatively, mdmix counts if it already uses these modules.
+
+### B. Build (what doesn't exist yet)
+
+| # | Item | Size | Done when |
+|---|---|---|---|
+| B1 | **W8 Accessibility**, Windows UIA at Purge's scope (AccessKit behind `a11y`) | L | A UIA client run against `purge_shape` (PowerShell `System.Windows.Automation`, as in `vm/guest/m3-e2e-ui.ps1`) can: find elements by **AutomationId** (author id) and by name; **Invoke** buttons; **Toggle** check boxes; **SelectionItem** select list rows; **ScrollItem** scroll a virtualized row into view; read **RangeValue** of a progress bar; **ExpandCollapse** an expander; and see a dialog as a window with its buttons. Narrator reads names, check states and "row 5 of 2,000". The list reports its full row count while realizing only visible rows. Focus changes raise UIA focus events. |
+| B2 | **W1 window host**, single-window minimum | L | One undecorated window with min size; Mica and frost; scale changes; damage-only present; one wake-up for animation, caret, tooltips and an app channel (`EventLoopProxy`, for engine replies); the first frame is drawn hidden then shown, with no white flash; the AccessKit adapter is plugged in. No tabs, no multiple windows. (Purge could own this loop instead, but with "completely ready" it belongs in shared.) |
+| B3 | **W5 extension:** the system's high-contrast colours | S | Under Windows HC, the tokens use the active scheme's `GetSysColor` colours (window, text, highlight, hotlight, gray text, button face/text), and Mica / Acrylic / frost are turned off. Switching HC while running repaints. |
+| B4 | **X8 caret blink** | S | Text fields blink at the system rate (`GetCaretBlinkTime`, off when it is infinite) and wake the loop only while focused. |
+| P1 | **Selector bar with N options** (tabs) | S | `segments` with any count; keyboard arrows; one UIA tab or radio item each. |
+| P2 | **InfoBar** (extends `notice`) | S | Info / success / warning / error colours and glyphs; title, message and up to two action buttons; close button; several stacked; in-page, not only at the top. |
+| P3 | **Expander** | S | A header with a chevron, an animated body (respects reduced motion), and the UIA ExpandCollapse state. |
+| P4 | **Dropdown (ComboBox) and toggle switch,** standalone | S | Usable outside `settings::Form`; the dropdown opens a `menu` under itself; keyboard operable. |
+| P5 | **Hyperlink button** | S | Underlined on hover, hand cursor, Invoke in UIA. |
+| P6 | **Anchored flyout card** | S | Arbitrary content (text, a check box, a button) in a card placed like `Menu::around`; Esc and click-outside close it; it is its own focus scope. |
+| P7 | **Read-only selectable text** | M | Drag, double-click and Shift-select in a non-editable paragraph (wrap and monospace); Ctrl+C; a context-menu Copy; UIA Text pattern optional. |
+| P8 | **Named-mutex single instance** in `mdshared-app` (optional) | S | A second launch brings the first window forward through a named mutex and `FindWindow`, with no TCP listener. Only needed if Purge wants single instance. Today's loopback-TCP `single` must not be used by Purge. |
+
+### C. Checks that the ready toolkit meets Purge's gates
+
+| # | Check | Pass |
+|---|---|---|
+| C1 | Launch: `purge_shape` with the real `purge-engine --stdio` program list, timed with `cargo xtask bench-launch` on the laptop | names visible ≤ 400 ms (today WinUI takes about 450 ms); a bare winit+softbuffer window replaces `BareWinUI` as the "bare + 60 ms" reference |
+| C2 | The UIA run from B1, on the host (no VM needed) | every action listed in B1 works |
+| C3 | Size | `purge_shape` release exe under 10 MB |
+
+When A, B and C are all done, the Purge-side steps start (§5 steps 3-6). §5 step 1 (the spikes) becomes C1/C2 above,
+and §5 step 2 is this checklist.
+
+---
+
 ## 1. What the toolkit is
 
 **Repo and scope.** `Kaan88/markdown-shared-rs` is a Cargo workspace (edition 2024, MIT). "Shared" means the whole
