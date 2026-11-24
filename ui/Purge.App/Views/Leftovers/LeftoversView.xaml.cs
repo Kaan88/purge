@@ -94,8 +94,37 @@ public sealed partial class LeftoversView : UserControl, ILeftoversPage
             return;
         }
         var broker = new LeftoversBroker(request.Broker.Rpc) { AllowForeground = request.Broker.AllowForeground };
-        Use(new LeftoversViewModel(broker, request.Broker.AllowForeground, CurrentUserSid()));
+        Use(new LeftoversViewModel(broker, request.Broker.AllowForeground, CurrentUserSid(), RelaunchAsync));
         _ = _vm!.ShowRequestAsync(request);
+    }
+
+    /// <summary>
+    /// A new broker for "Put back all" after the page's link ended (a completed move ends the broker): the admin
+    /// explanation, UAC, then the link, as History and the vault start theirs. The page owns the new session.
+    /// </summary>
+    private async Task<LeftoversBrokerLaunch> RelaunchAsync(CancellationToken ct)
+    {
+        try
+        {
+            if (!await MainWindow.Instance.ConfirmFirstElevationAsync())
+                return new LeftoversBrokerLaunch(null, true, "", DeclinedExplanation: true);
+            var result = await BrokerLauncher.LaunchAsync(BrokerLauncher.PathBesideApp(), ct);
+            if (result.Status == BrokerLaunchStatus.Started && result.Session is { } session)
+            {
+                var previous = _ownedBroker;
+                _ownedBroker = session;
+                if (previous is not null && !ReferenceEquals(previous, session)) _ = previous.DisposeAsync().AsTask();
+                var broker = new LeftoversBroker(session.Rpc) { AllowForeground = session.AllowForeground };
+                return new LeftoversBrokerLaunch(broker, false, "", AllowForeground: session.AllowForeground);
+            }
+            return result.Status == BrokerLaunchStatus.Cancelled
+                ? new LeftoversBrokerLaunch(null, true, result.Message)
+                : new LeftoversBrokerLaunch(null, false, result.Message);
+        }
+        catch (Exception e) when (e is not OutOfMemoryException and not OperationCanceledException)
+        {
+            return new LeftoversBrokerLaunch(null, false, e.Message);
+        }
     }
 
     /// <summary>The app's (unelevated, signed-in) user, so registry rows under that SID read "Your account".</summary>
@@ -570,7 +599,8 @@ public sealed partial class LeftoversView : UserControl, ILeftoversPage
         if (_vm is null) return;
         if (_vm.UndoOpensHistory)
         {
-            // After a delete step, or when this page's broker has ended: History shows what can still be put back.
+            // After a delete step: History shows item by item what can still be put back. A link that has ended is
+            // not a reason here: the view model starts a new broker for the undo itself.
             MainWindow.Instance.Navigate("history");
             return;
         }

@@ -110,9 +110,11 @@ public sealed class BrokerClientTests
         await using var rpc = BrokerRpcClient.Over(peer.Client, ownsStream: true);
         var error = await Assert.ThrowsAsync<BrokerLinkException>(() => rpc.HelloAsync());
         Assert.Contains("ended", error.Message);
+        Assert.False(error.NotSent, "the request went out before the link ended: what it did is unknown");
         Assert.False(rpc.IsLive);
-        // Later calls fail at once instead of waiting for a reply that cannot come.
-        await Assert.ThrowsAsync<BrokerLinkException>(() => rpc.HelloAsync());
+        // Later calls fail at once instead of waiting for a reply that cannot come, and say nothing was sent.
+        var later = await Assert.ThrowsAsync<BrokerLinkException>(() => rpc.HelloAsync());
+        Assert.True(later.NotSent);
     }
 
     [Fact]

@@ -397,6 +397,157 @@ public sealed class LeftoversPageTests
         Assert.Null(declined.Error);
     }
 
+    /// <summary>A page that moved one item over <paramref name="broker"/> and has a launcher for a new broker.</summary>
+    private static async Task<LeftoversViewModel> MovedWithLauncher(ScriptedBroker broker,
+        Func<CancellationToken, Task<LeftoversBrokerLaunch>> launch)
+    {
+        broker.Rows.Add(Row(1, pre: true));
+        var vm = new LeftoversViewModel(broker, relaunch: launch);
+        await vm.ScanAsync("s-1", null, forced: false);
+        await vm.MoveAsync();
+        Assert.Equal(LeftoversPhase.Result, vm.Phase);
+        return vm;
+    }
+
+    /// <summary>
+    /// DECISIONS 2026-11-24 (A): a completed move ends the broker, so "Put back all" over the dead link starts a new
+    /// broker in place (the admin explanation, UAC), then sends <c>undo.run</c> for the session over the new one, and
+    /// the "Put back" result shows on the same page. Nothing goes into the dead link, and History is not opened.
+    /// </summary>
+    [Fact]
+    public async Task PutBackAllOverAnEndedLinkStartsANewBrokerAndUndoesOnThePage()
+    {
+        var first = new ScriptedBroker();
+        var second = new ScriptedBroker();
+        var launches = 0;
+        var foreground = 0;
+        var vm = await MovedWithLauncher(first, _ =>
+        {
+            launches++;
+            return Task.FromResult(new LeftoversBrokerLaunch(second, false, "", AllowForeground: () => foreground++));
+        });
+        first.IsLive = false;
+        Assert.False(vm.UndoOpensHistory);
+        Assert.True(vm.CanUndo);
+
+        var titles = new List<string>();
+        vm.Changed += () => titles.Add(vm.WaitingTitle);
+        await vm.UndoAllAsync();
+
+        Assert.Equal(1, launches);
+        Assert.Equal(0, first.UndoCalls);
+        Assert.Equal(1, second.UndoCalls);
+        Assert.Equal(1, foreground);
+        Assert.Equal(LeftoversPhase.Undone, vm.Phase);
+        Assert.Equal("Put back", vm.UndoTitle);
+        Assert.Null(vm.Error);
+        Assert.Contains(LeftoversViewModel.UndoStartingTitle, titles);
+        Assert.Contains(LeftoversViewModel.UndoWaitingTitle, titles);
+        // The new broker's prompt reports to the page.
+        second.RaiseConsentShown("Z9Y8-X7W6");
+        Assert.Equal("Z9Y8-X7W6", vm.Code);
+    }
+
+    /// <summary>
+    /// The broker refuses because it is closing after the move (its drain), or the request could not be written:
+    /// nothing was done, so the page starts a new broker and puts back over it, never "cannot tell what was put back".
+    /// </summary>
+    [Fact]
+    public async Task PutBackAllWhileTheBrokerIsClosingStartsANewBroker()
+    {
+        foreach (Exception refusal in new Exception[]
+                 {
+                     new BrokerRpcException(-32000, "runtime", "the broker is closing"),
+                     new BrokerLinkException("The administrator part is not running.", notSent: true),
+                 })
+        {
+            var first = new ScriptedBroker { UndoHook = _ => Task.FromException<UndoResult>(refusal) };
+            var second = new ScriptedBroker();
+            var vm = await MovedWithLauncher(first, _ => Task.FromResult(new LeftoversBrokerLaunch(second, false, "")));
+            await vm.UndoAllAsync();
+            Assert.Equal(1, first.UndoCalls);
+            Assert.Equal(1, second.UndoCalls);
+            Assert.Equal(LeftoversPhase.Undone, vm.Phase);
+            Assert.Null(vm.Error);
+        }
+
+        // Without a launcher, the same refusal says that nothing was put back: no "Interrupted".
+        var lone = new ScriptedBroker
+        {
+            UndoHook = _ => Task.FromException<UndoResult>(new BrokerLinkException("gone", notSent: true)),
+        };
+        lone.Rows.Add(Row(1, pre: true));
+        var page = new LeftoversViewModel(lone);
+        await page.ScanAsync("s-1", null, forced: false);
+        await page.MoveAsync();
+        await page.UndoAllAsync();
+        Assert.Equal(LeftoversPhase.Result, page.Phase);
+        Assert.StartsWith("Nothing was put back", page.Error);
+        Assert.DoesNotContain("cannot tell", page.Error);
+    }
+
+    /// <summary>
+    /// The admin explanation declined ("Not now") or UAC cancelled: nothing is sent, the page stays on its result and
+    /// says "Not put back: administrator permission was not given." — never an interrupted restore.
+    /// </summary>
+    [Fact]
+    public async Task PutBackAllWithoutAdminPermissionSaysNothingWasPutBack()
+    {
+        foreach (var launch in new[]
+                 {
+                     new LeftoversBrokerLaunch(null, true, "", DeclinedExplanation: true),
+                     new LeftoversBrokerLaunch(null, true, "The Windows prompt was cancelled."),
+                 })
+        {
+            var first = new ScriptedBroker();
+            var vm = await MovedWithLauncher(first, _ => Task.FromResult(launch));
+            first.IsLive = false;
+            await vm.UndoAllAsync();
+            Assert.Equal(0, first.UndoCalls);
+            Assert.Equal(LeftoversPhase.Result, vm.Phase);
+            Assert.Equal("Not put back: administrator permission was not given.", vm.Info);
+            Assert.Null(vm.Error);
+            Assert.True(vm.CanUndo, "the button is offered again");
+        }
+
+        // A launch that failed names its reason, still on the result page.
+        var failed = new ScriptedBroker();
+        var page = await MovedWithLauncher(failed, _ => Task.FromResult(new LeftoversBrokerLaunch(null, false, "broker missing")));
+        failed.IsLive = false;
+        await page.UndoAllAsync();
+        Assert.Equal(LeftoversPhase.Result, page.Phase);
+        Assert.Equal("Not put back: the administrator part could not be started. broker missing", page.Error);
+    }
+
+    /// <summary>After a delete step that deleted something, "Put back…" still routes to History, launcher or not.</summary>
+    [Fact]
+    public async Task AfterADeleteStepTheUndoButtonStillRoutesToHistoryWithALauncher()
+    {
+        var broker = new ScriptedBroker();
+        broker.Rows.Add(Row(1, pre: true));
+        var result = Complete(3, 0, "sess-1");
+        result.DeleteAfter = new DeleteAfter { Outcome = DeleteAfterOutcome.Deleted, Purged = 2 };
+        broker.DeleteHook = (_, _) => Task.FromResult(result);
+        var launches = 0;
+        var vm = new LeftoversViewModel(broker, relaunch: _ =>
+        {
+            launches++;
+            return Task.FromResult(new LeftoversBrokerLaunch(new ScriptedBroker(), false, ""));
+        });
+        await vm.ScanAsync("s-1", null, forced: false);
+        vm.DeleteAfter = true;
+        await vm.MoveAsync();
+        foreach (var live in new[] { true, false })
+        {
+            broker.IsLive = live;
+            Assert.True(vm.UndoOpensHistory);
+            await vm.UndoAllAsync();
+            Assert.Equal(0, broker.UndoCalls);
+            Assert.Equal(0, launches);
+            Assert.Equal("Open History & undo to put back what this cleanup still holds.", vm.Info);
+        }
+    }
+
     [Fact]
     public async Task TheWaitingStateSaysWhenTheSecondPromptIsTheOneToConfirm()
     {
@@ -802,10 +953,13 @@ public sealed class LeftoversPageTests
 
         public int UndoCalls { get; private set; }
 
+        /// <summary>What <c>undo.run</c> answers; null: a complete undo.</summary>
+        public Func<string, Task<UndoResult>>? UndoHook { get; set; }
+
         public Task<UndoResult> UndoAsync(string session, IProgress<Progress>? progress, CancellationToken ct)
         {
             UndoCalls++;
-            return Task.FromResult(new UndoResult { Outcome = Outcome.Complete, Conflicts = [] });
+            return UndoHook?.Invoke(session) ?? Task.FromResult(new UndoResult { Outcome = Outcome.Complete, Conflicts = [] });
         }
 
         public Task<OutcomeResult> RetryHeldAsync(string session, CancellationToken ct) =>

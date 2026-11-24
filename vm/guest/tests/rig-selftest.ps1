@@ -1961,7 +1961,8 @@ function Invoke-M2Script([string]$Script, [string]$Arguments = '', [int]$Timeout
     Check 'm3-e2e: the app list is the expectations list, in order' (($ids -join ',') -eq 'vscode,vscode-user,git,firefox-tb,npp,7zip,execapp,msi1603,msi3010') ($ids -join ',')
     Check 'm3-e2e: seven executing apps (G6), the two failing uninstallers' (@($x.apps | Where-Object { $_.kind -in 'app', 'fixture' }).Count -eq 7 -and @($x.apps | Where-Object { $_.kind -like 'fail-*' }).Count -eq 2)
     Check 'm3-e2e: exactly one medium-route app (vscode-user)' ((@($x.apps | Where-Object { $_.route -eq 'medium' } | ForEach-Object { $_.id }) -join ',') -eq 'vscode-user')
-    Check 'm3-e2e: the design gates (harvest 2x the walk floor and 20 s, 10 s, 100 ms)' ([double]$x.gates.harvest_floor_factor -eq 2 -and [int]$x.gates.harvest_cap_ms -eq 20000 -and -not $x.gates.PSObject.Properties['harvest_after_uac_ms'] -and [int]$x.gates.scan_ms -eq 10000 -and [int]$x.gates.first_progress_ms -eq 100)
+    Check 'm3-e2e: the design gates (harvest 2x the walk floor and 20 s, scan 1.5x the walk floor and 20 s, 100 ms)' ([double]$x.gates.harvest_floor_factor -eq 2 -and [int]$x.gates.harvest_cap_ms -eq 20000 -and -not $x.gates.PSObject.Properties['harvest_after_uac_ms'] -and
+        [double]$x.gates.scan_floor_factor -eq 1.5 -and [int]$x.gates.scan_cap_ms -eq 20000 -and -not $x.gates.PSObject.Properties['scan_ms'] -and [int]$x.gates.first_progress_ms -eq 100)
     Check 'm3-e2e: -Apps keeps the named apps in list order' ((@(Get-M3E2eApps -ExpectFile $expect -Only @('msi1603', 'npp') | ForEach-Object { $_.id }) -join ',') -eq 'npp,msi1603')
     $threw = $false; try { $null = Get-M3E2eApps -ExpectFile $expect -Only @('nope') } catch { $threw = $true }
     Check 'm3-e2e: an unknown -Apps name throws' $threw
@@ -2061,7 +2062,10 @@ function Invoke-M2Script([string]$Script, [string]$Arguments = '', [int]$Timeout
     $threw = 0
     foreach ($b in @({ New-M3E2ePhaseText 'setup' 'npp' -AmbientSha ('AB' * 32) }, { New-M3E2ePhaseText 'setup' 'npp' -AmbientSha "x'; y" }, { New-M3E2ePhaseText 'setup' 'npp' -AmbientSha $sha -NullRun })) { try { $null = & $b } catch { $threw++ } }
     Check 'm3-e2e: a bad SHA-256, quotes, or a hash on a null run are refused' ($threw -eq 3) "$threw of 3"
-    Check 'm3-e2e null: null apps default to vscode, a failing uninstaller is refused' ((@(Get-M3E2eNullApps -ExpectFile $expect | ForEach-Object { $_.id }) -join ',') -eq 'vscode' -and $(try { $null = Get-M3E2eNullApps -ExpectFile $expect -Only @('msi3010'); $false } catch { $true }))
+    # DECISIONS 2026-11-24 (D): the gate's executing apps, the medium route (vscode-user) among them.
+    $nullApps = @(Get-M3E2eNullApps -ExpectFile $expect)
+    Check 'm3-e2e null: null apps default to the gate''s executing apps (vscode-user on the medium route), a failing uninstaller is refused' ((@($nullApps | ForEach-Object { $_.id }) -join ',') -eq 'vscode,vscode-user,git,firefox-tb,execapp' -and
+        ((@($nullApps | Where-Object { "$($_.route)" -eq 'medium' } | ForEach-Object { $_.id }) -join ',') -eq 'vscode-user') -and $(try { $null = Get-M3E2eNullApps -ExpectFile $expect -Only @('msi3010'); $false } catch { $true }))
 
     # guest_null_window_replaces_exec: one window function for gate and null runs; apart from the plan consent's
     # answer (approve / cancel with the null wait) the two traces are equal.
@@ -2128,7 +2132,25 @@ function Invoke-M2Script([string]$Script, [string]$Arguments = '', [int]$Timeout
     $appFn = [regex]::Match($hostText, '(?s)\nfunction Invoke-M3E2eApp\(.*?\n\}').Value
     $plain = @([regex]::Matches($appFn, "Invoke-M3E2ePhase '([a-z-]+)'") | ForEach-Object { $_.Groups[1].Value })
     Check 'm3-e2e fail fast: Invoke-M3E2eApp calls Invoke-M3E2ePhase only for setup, prepare, the scan, fail-check and finish' ((($plain | Sort-Object -Unique) -join ',') -ceq 'fail-check,finish,prepare,setup,ui-wait-scan') ($plain -join ',')
-    Check 'm3-e2e fail fast: the undo steps fail fast and are skipped for an empty plan' ($appFn -match "(?s)if \(\`$Undo -and \`$rec\.empty_plan\) \{.*undo_skipped.*\} elseif \(\`$Undo\) \{\s+\`$null = Invoke-M3E2eStep 'ui-undo'" -and $appFn -match "Invoke-M3E2eStep 'capture-undo'")
+    Check 'm3-e2e fail fast: the undo steps fail fast and are skipped for an empty plan' ($appFn -match "(?s)if \(\`$Undo -and \`$rec\.empty_plan\) \{.*undo_skipped.*\} elseif \(\`$Undo\) \{\s+\`$l = Invoke-M3E2eStep 'ui-undo'.*'continue-focused'.*Send-M3Keys 'space'.*Invoke-M3E2eUac '10u-uac'" -and $appFn -match "Invoke-M3E2eStep 'capture-undo'")
+    # The guest's ui-undo (DECISIONS 2026-11-24): any "Confirm ... Purge security prompt" title, and fail fast on an
+    # interrupted restore or a refusal instead of waiting out its timeout.
+    $undoPhase = [regex]::Match([IO.File]::ReadAllText((Join-Path $Guest 'm3-e2e.ps1')), "(?s)\n    'ui-undo' \{.*?\n    \}").Value
+    Check 'm3-e2e ui-undo: loose prompt title, interrupted and refused end the wait, the relaunch Continue is focused' (
+        $undoPhase -match [regex]::Escape("-like 'Confirm*Purge security prompt*'") -and $undoPhase -match "return 'interrupted'" -and
+        $undoPhase -match '\*ended during the restore\*' -and $undoPhase -match "return 'refused'" -and $undoPhase -match "Find-E2eDialogButton \`$win 'Continue'" -and
+        $undoPhase -notmatch [regex]::Escape("-contains 'Confirm in the Purge security prompt.'"))
+    # Setup (DECISIONS 2026-11-24, C): Windows' background task families paused next to Edge / telemetry, outside any
+    # -NullRun branch (gate and null runs alike), recorded in setup.json (and so e2e.json setup.background).
+    $e2eText = [IO.File]::ReadAllText((Join-Path $Guest 'm3-e2e.ps1'))
+    $setupPhase = [regex]::Match($e2eText, "(?s)\n    'setup' \{.*?\n    \}").Value
+    $bgList = [regex]::Match($e2eText, '(?s)\$E2eBackgroundTasks = @\((.*?)\n\)').Groups[1].Value
+    Check 'm3-e2e setup: background tasks paused for gate and null runs alike, the list as decided, recorded' (
+        $setupPhase -match '(?m)^        \$rec\.telemetry = Suspend-M2Telemetry\s*\r?\n(\s*#[^\n]*\n)*        \$rec\.background = Suspend-E2eBackgroundTasks' -and
+        $setupPhase -match 'background = \$null' -and
+        ((@([regex]::Matches($bgList, "path = '([^']+)'; name = '([^']+)'") | ForEach-Object { $_.Groups[1].Value + $_.Groups[2].Value }) -join '|') -ceq
+            '\Microsoft\Windows\UpdateOrchestrator\*|\Microsoft\Windows\Device Information\Device|\Microsoft\Windows\Flighting\OneSettings\RefreshCache|\Microsoft\Windows\PushToInstall\*|\Microsoft\Windows\Application Experience\*') -and
+        $e2eText -match "Stop-Service -Name 'UsoSvc'")
     Check 'm3-e2e fail fast: the catch records the failed step; finish and the pull stay in finally' ($appFn -match 'rec\.failed_step = \$script:E2eFailedStep' -and $appFn -match "(?s)\} finally \{.*Invoke-M3E2ePhase 'finish'")
 
     # MSI smoke: which fixtures a smoke line lets through.
@@ -2247,7 +2269,7 @@ exit 0
 '@)
     $env:RIG_RIGTOOL = $stub
     $out = Join-Path $Work 'm3e2e-ambient.json'
-    $M3.ambient = $out; $M3.count = 6; $M3.apps = @(); $M3.prefix = ''
+    $M3.ambient = $out; $M3.count = 6; $M3.apps = @('vscode'); $M3.prefix = ''   # the fixtures are vscode null runs (the default is the gate's five apps)
     [IO.File]::WriteAllText((Join-Path $Work 'stub-records.txt'), "~F:C:\WINDOWS\Prefetch\TASKLIST.EXE-2448BC7D.pf`r`n+F:C:\Users\tester\AppData\Local\Comms\Unistore\data\AggregateCache.uca")
     $mkRun = { param($k, $e2eAct = $null)
         $r = Get-M3E2eNullRunName $k 'vscode'
@@ -2329,10 +2351,10 @@ exit 0
         $mkV = { param($p, $n, $h) "V`t$(& $esc $p)`t$(& $esc $n)`t4`t4`t$('{0:x16}' -f $h)`tx" }
         $bam = 'HKLM\SYSTEM\CurrentControlSet\Services\bam\State\UserSettings\S-1-5-21-1'
         $pca = 'HKU\S-1-5-21-1\Software\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Compatibility Assistant\Store'
-        $snapBase = @((& $mkD 'C:\Windows\Prefetch' 1), (& $mkF 'C:\Windows\Prefetch\TASKLIST.EXE-2448BC7D.pf' 100 1), (& $mkF 'C:\Windows\Prefetch\OTHER.EXE-11111111.pf' 100 1),
+        $snapBase = @((& $mkD 'C:\Windows\Prefetch' 1), (& $mkF 'C:\Windows\Prefetch\TASKLIST.EXE-2448BC7D.pf' 100 1), (& $mkF 'C:\Windows\Prefetch\OTHER.EXE-11111111.ini' 100 1),
                   (& $mkD 'C:\ProgramData\Purge' 1), (& $mkD 'C:\ProgramData\Purge\sessions' 1), (& $mkK 'HKLM\SOFTWARE\ChurnSelftest' 1 1), (& $mkV 'HKLM\SOFTWARE\ChurnSelftest' 'Counter' 1))
         # The null window: Windows churn, the broker's writer.lock and the store dirs' mtimes.
-        $churnFor = { param($om) @((& $mkD 'C:\Windows\Prefetch' 1), (& $mkF 'C:\Windows\Prefetch\TASKLIST.EXE-2448BC7D.pf' 200 2), (& $mkF 'C:\Windows\Prefetch\OTHER.EXE-11111111.pf' 100 $om),
+        $churnFor = { param($om) @((& $mkD 'C:\Windows\Prefetch' 1), (& $mkF 'C:\Windows\Prefetch\TASKLIST.EXE-2448BC7D.pf' 200 2), (& $mkF 'C:\Windows\Prefetch\OTHER.EXE-11111111.ini' 100 $om),
                    (& $mkK 'HKLM\SOFTWARE\ChurnSelftest' 2 1), (& $mkV 'HKLM\SOFTWARE\ChurnSelftest' 'Counter' 2)) }
         $churn = & $churnFor 1
         $nullAfter = $churn + @((& $mkD 'C:\ProgramData\Purge' 2), (& $mkD 'C:\ProgramData\Purge\sessions' 2), (& $mkF 'C:\ProgramData\Purge\sessions\writer.lock' 0 2))
@@ -2344,7 +2366,7 @@ exit 0
         }
         $env:RIG_RIGTOOL = $real
         $realSet = Join-Path $rr 'm3-e2e-ambient.json'
-        $M3.ambient = $realSet; $M3.count = 6; $M3.apps = @(); $M3.prefix = ''
+        $M3.ambient = $realSet; $M3.count = 6; $M3.apps = @('vscode'); $M3.prefix = ''
         $msg = $null; try { $null = Invoke-M3E2eBuildAmbient } catch { $msg = $_.Exception.Message }
         $rs = Read-M3Json $realSet
         Check 'm3-e2e ambient (real rigtool): 6 null runs build; the store records dropped, the provenance written' (-not $msg -and $rs -and @($rs.records).Count -eq 3 -and
@@ -2372,8 +2394,10 @@ exit 0
             [pscustomobject]@{ exit = $LASTEXITCODE; doc = (Read-M3Json $o) } }
         $g1 = & $runExec $gateAfter 'clean'
         $c1 = $(if ($g1.doc) { $g1.doc.counts })
+        # The rewritten TASKLIST .pf is execdiff's own windows-prefetch rule now (DECISIONS 2026-11-24, E), ahead of the
+        # set; the other churn is the set's. OTHER.EXE-11111111.ini sits in Prefetch but is no .pf: never covered.
         Check 'm3-e2e ambient (real rigtool): execdiff loads the rewritten set: churn ambient, broker exit authorised, collateral 0' ($g1.exit -eq 0 -and $c1 -and [int]$c1.collateral -eq 0 -and [int]$c1.unexplained -eq 0 -and
-            [int]$c1.authorised.ambient -eq 3 -and [int]$c1.authorised.'broker-exit' -eq 2 -and [int]$c1.authorised.store -ge 2 -and "$($g1.doc.inputs.ambient)" -eq $realSet) "exit $($g1.exit); $(if ($c1) { ConvertTo-Json $c1 -Compress -Depth 4 }); collateral $(if ($g1.doc) { ConvertTo-Json @($g1.doc.collateral) -Compress -Depth 4 })"
+            [int]$c1.authorised.ambient -eq 2 -and [int]$c1.authorised.'windows-prefetch' -eq 1 -and [int]$c1.authorised.'broker-exit' -eq 2 -and [int]$c1.authorised.store -ge 2 -and "$($g1.doc.inputs.ambient)" -eq $realSet) "exit $($g1.exit); $(if ($c1) { ConvertTo-Json $c1 -Compress -Depth 4 }); collateral $(if ($g1.doc) { ConvertTo-Json @($g1.doc.collateral) -Compress -Depth 4 })"
         $g2 = & $runExec (@(& $churnFor 3) + @($gateAfter | Select-Object -Skip @($churn).Count)) 'extra'
         Check 'm3-e2e ambient (real rigtool): a change the null runs never saw stays collateral' ($g2.exit -ne 0 -and $g2.doc -and [int]$g2.doc.counts.collateral -eq 1 -and "$(@($g2.doc.collateral)[0].path)" -match 'OTHER\.EXE') "exit $($g2.exit)"
         # Nothing preselected: the rig's empty journal and report (New-E2eEmptyExecDocs, as the guest's capture-exec

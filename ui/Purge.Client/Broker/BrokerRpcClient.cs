@@ -24,7 +24,16 @@ public sealed class BrokerRpcException(int code, string? kind, string message, E
 }
 
 /// <summary>The link to the broker broke: it could not be written to, or it ended.</summary>
-public sealed class BrokerLinkException(string message) : Exception(message);
+/// <param name="message">Why, in a sentence for the UI.</param>
+/// <param name="notSent">True when the request never went out: the link had already ended, or writing it failed.</param>
+public sealed class BrokerLinkException(string message, bool notSent = false) : Exception(message)
+{
+    /// <summary>
+    /// The request was never written to the broker (the link had ended before, or the write failed), so the broker
+    /// did nothing for it. False means it may have been received: what it did is unknown.
+    /// </summary>
+    public bool NotSent { get; } = notSent;
+}
 
 /// <summary>One notification the broker sent (for example <c>baseline.changed</c> or <c>scan.progress</c>).</summary>
 /// <param name="Method">The method name; notifications carry no id.</param>
@@ -85,11 +94,12 @@ public sealed class BrokerRpcClient : IAsyncDisposable
     {
         var id = Interlocked.Increment(ref _nextId);
         var pending = new Pending();
-        if (_closedReason is { } closed) throw new BrokerLinkException(closed);
+        if (_closedReason is { } closed) throw new BrokerLinkException(closed, notSent: true);
         _pending[id] = pending;
         try
         {
-            Send(id, method, parameters);
+            try { Send(id, method, parameters); }
+            catch (BrokerLinkException e) { throw new BrokerLinkException(e.Message, notSent: true); }
             // The reader may have failed between the check above and the registration.
             if (_closedReason is { } late) pending.Fail(new BrokerLinkException(late));
             using var registration = ct.Register(() =>

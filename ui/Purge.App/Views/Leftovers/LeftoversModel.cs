@@ -202,6 +202,13 @@ public sealed class AttentionModel
 }
 
 /// <summary>
+/// How a broker launch for the Leftovers page ended (the view maps <c>BrokerLauncher</c> onto this), as the History and
+/// Vault pages have it. <paramref name="AllowForeground"/> lets the new broker's dialogs come to the front.
+/// </summary>
+public sealed record LeftoversBrokerLaunch(ILeftoversBroker? Broker, bool Cancelled, string Message,
+    bool DeclinedExplanation = false, Action? AllowForeground = null);
+
+/// <summary>
 /// The Leftovers page's state machine and rules: paging, tick rules, re-tick after a re-scan,
 /// <c>plan.create</c> refusals, the waiting state and the result page (design 6.4, 7a S3, 8.1).
 /// It never claims an item was moved before <c>plan.execute</c> returned.
@@ -217,8 +224,14 @@ public sealed class LeftoversViewModel : INotifyPropertyChanged
     /// <summary>The broker's largest <c>scan.candidates</c> page.</summary>
     public const int CandidatePageSize = 500;
 
-    private readonly ILeftoversBroker _broker;
-    private readonly Action? _allowForeground;
+    private ILeftoversBroker _broker;
+    private Action? _allowForeground;
+
+    /// <summary>
+    /// Starts a new broker for this page (the admin explanation, UAC), for "Put back all" after the page's own link
+    /// ended: a completed <c>plan.execute</c> ends the broker (DECISIONS 2026-11-24). Null: none can be started.
+    /// </summary>
+    private readonly Func<CancellationToken, Task<LeftoversBrokerLaunch>>? _relaunch;
     private string? _sessionId;
     private string? _programId;
     private bool _forced;
@@ -231,14 +244,32 @@ public sealed class LeftoversViewModel : INotifyPropertyChanged
     /// <summary>The signed-in user's SID, so registry rows under it read "Your account"; null names no account.</summary>
     private readonly string? _currentUserSid;
 
-    public LeftoversViewModel(ILeftoversBroker broker, Action? allowForeground = null, string? currentUserSid = null)
+    public LeftoversViewModel(ILeftoversBroker broker, Action? allowForeground = null, string? currentUserSid = null,
+        Func<CancellationToken, Task<LeftoversBrokerLaunch>>? relaunch = null)
     {
         _broker = broker;
         _allowForeground = allowForeground;
         _currentUserSid = currentUserSid;
+        _relaunch = relaunch;
         _context = SynchronizationContext.Current;
-        _broker.ConsentShown += shown => OnContext(() => OnConsentShown(shown));
-        _broker.BaselineChanged += changed => OnContext(() => OnBaselineChanged(changed));
+        _onConsentShown = shown => OnContext(() => OnConsentShown(shown));
+        _onBaselineChanged = changed => OnContext(() => OnBaselineChanged(changed));
+        Attach(_broker);
+    }
+
+    private readonly Action<ConsentShown> _onConsentShown;
+    private readonly Action<BaselineChanged> _onBaselineChanged;
+
+    private void Attach(ILeftoversBroker broker)
+    {
+        broker.ConsentShown += _onConsentShown;
+        broker.BaselineChanged += _onBaselineChanged;
+    }
+
+    private void Detach(ILeftoversBroker broker)
+    {
+        broker.ConsentShown -= _onConsentShown;
+        broker.BaselineChanged -= _onBaselineChanged;
     }
 
     /// <summary>Runs a broker notification's handler on the model's context (the UI thread in the app).</summary>
@@ -383,9 +414,19 @@ public sealed class LeftoversViewModel : INotifyPropertyChanged
     /// <summary>
     /// The undo button opens History & undo instead of running <c>undo.run</c> from this page: after a delete step
     /// that deleted something (History shows item by item what can still be put back), and whenever this page's
-    /// broker link has ended (a finished cleanup ends the broker; History starts a new one).
+    /// broker link has ended and the page cannot start a new one. With a launcher a dead link is no reason: "Put back
+    /// all" starts a new broker in place (DECISIONS 2026-11-24), as History and the vault do.
     /// </summary>
-    public bool UndoOpensHistory => Result is { } result && (DeletedAfter(result) || !_broker.IsLive);
+    public bool UndoOpensHistory => Result is { } result && (DeletedAfter(result) || !_broker.IsLive && _relaunch is null);
+
+    /// <summary>The waiting title of "Put back all" while the broker's restore prompt is the next thing to answer.</summary>
+    public const string UndoWaitingTitle = "Confirm putting it back in the Purge security prompt.";
+
+    /// <summary>The waiting title of "Put back all" while a new broker is being started (admin explanation, UAC).</summary>
+    public const string UndoStartingTitle = "Starting the administrator part to put it back…";
+
+    /// <summary>The page's answer when the admin explanation or UAC was declined for "Put back all".</summary>
+    public const string UndoNotPermitted = "Not put back: administrator permission was not given.";
 
     /// <summary>The line the footer shows instead of its one-prompt hint while <see cref="DeleteAfter"/> is ticked.</summary>
     public const string TwoPromptsHint = "You'll confirm twice in the Purge security prompt: the move, then the delete";
@@ -921,7 +962,12 @@ public sealed class LeftoversViewModel : INotifyPropertyChanged
         };
     }
 
-    /// <summary><c>undo.run</c> for everything the result's session moved.</summary>
+    /// <summary>
+    /// <c>undo.run</c> for everything the result's session moved. When the page's link has ended (a completed
+    /// <c>plan.execute</c> ends the broker), or the broker refuses because it is closing, a new broker is started first
+    /// (the admin explanation, UAC) and then the broker's restore prompt is asked for, all on this page. A request that
+    /// never reached a broker is never reported as "ended while putting things back".
+    /// </summary>
     public async Task UndoAllAsync(CancellationToken ct = default)
     {
         if (_busy || Result is not { Session.Length: > 0 } result) return;
@@ -940,19 +986,39 @@ public sealed class LeftoversViewModel : INotifyPropertyChanged
         Code = null;
         Attention.Clear();
         Phase = LeftoversPhase.Waiting;
-        WaitingTitle = "Confirm putting it back in the Purge security prompt.";
+        WaitingTitle = UndoWaitingTitle;
         WaitingDetail = "Nothing has been put back yet.";
         Notify();
         try
         {
-            _allowForeground?.Invoke();
+            var relaunched = false;
+            if (!_broker.IsLive)
+            {
+                if (!await RelaunchForUndoAsync(ct)) return;
+                relaunched = true;
+            }
             var undoTarget = result.Session;
             var progress = new Progress<ProgressDto>(p =>
             {
                 WaitingDetail = p.Phase;
                 Changed?.Invoke();
             });
-            var undo = await _broker.UndoAsync(undoTarget, progress, ct);
+            UndoResult undo;
+            while (true)
+            {
+                try
+                {
+                    _allowForeground?.Invoke();
+                    undo = await _broker.UndoAsync(undoTarget, progress, ct);
+                    break;
+                }
+                catch (Exception e) when (!relaunched && _relaunch is not null && NeverReachedABroker(e))
+                {
+                    // The broker was closing after the move, or had just ended: nothing was done; start a new one.
+                    if (!await RelaunchForUndoAsync(ct)) return;
+                    relaunched = true;
+                }
+            }
             Undo = undo;
             UndoConflictLines.Clear();
             foreach (var conflict in undo.Conflicts)
@@ -970,6 +1036,12 @@ public sealed class LeftoversViewModel : INotifyPropertyChanged
             Phase = LeftoversPhase.Result;
             Info = "Nothing was put back: the prompt was cancelled.";
         }
+        catch (Exception ex) when (NeverReachedABroker(ex))
+        {
+            // Nothing reached a broker that could act on it: say so, never "cannot tell what was put back".
+            Phase = LeftoversPhase.Result;
+            Error = "Nothing was put back: the administrator part had already ended. Open History & undo to put it back.";
+        }
         catch (BrokerLinkException)
         {
             Phase = LeftoversPhase.Interrupted;
@@ -983,9 +1055,60 @@ public sealed class LeftoversViewModel : INotifyPropertyChanged
         }
         finally
         {
+            // A launch that was cancelled (the token) leaves nothing sent: back to the result.
+            if (Phase == LeftoversPhase.Waiting) Phase = LeftoversPhase.Result;
             _busy = false;
             Notify();
         }
+    }
+
+    /// <summary>
+    /// The request never reached a broker that could act on it: the link had ended before it was written, or the
+    /// broker refused it because it is closing after a completed change ("the broker is closing").
+    /// </summary>
+    private static bool NeverReachedABroker(Exception e) =>
+        e is BrokerLinkException { NotSent: true }
+        || e is BrokerRpcException { Kind: "runtime" } r && r.Message.Contains("is closing", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Starts a new broker for "Put back all" and makes it the page's link. False when none was started: the page is
+    /// back on its result with the reason (declined: <see cref="UndoNotPermitted"/>), and nothing was sent.
+    /// </summary>
+    private async Task<bool> RelaunchForUndoAsync(CancellationToken ct)
+    {
+        if (_relaunch is null)
+        {
+            Phase = LeftoversPhase.Result;
+            Info = "Open History & undo to put back what this cleanup still holds.";
+            return false;
+        }
+        WaitingTitle = UndoStartingTitle;
+        WaitingDetail = "Nothing has been put back yet. Purge asks for administrator permission first.";
+        Notify();
+        LeftoversBrokerLaunch launch;
+        try
+        {
+            launch = await _relaunch(ct);
+        }
+        catch (Exception e) when (e is not OutOfMemoryException and not OperationCanceledException)
+        {
+            launch = new LeftoversBrokerLaunch(null, false, e.Message);
+        }
+        if (launch.Broker is not { } broker)
+        {
+            Phase = LeftoversPhase.Result;
+            if (launch.Cancelled) Info = UndoNotPermitted;
+            else Error = "Not put back: the administrator part could not be started. " + launch.Message;
+            return false;
+        }
+        Detach(_broker);
+        _broker = broker;
+        Attach(_broker);
+        if (launch.AllowForeground is { } allow) _allowForeground = allow;
+        WaitingTitle = UndoWaitingTitle;
+        WaitingDetail = "Nothing has been put back yet.";
+        Notify();
+        return true;
     }
 
     /// <summary><c>journal.retry_held</c>: tries the items a partial run left locked.</summary>

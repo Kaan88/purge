@@ -34,6 +34,8 @@
 //!   `UserSettings\<sid>` value (name ending `\Program Files\Purge\purge-broker.exe`) and its Compatibility
 //!   Assistant `Store` value (named `C:\Program Files\Purge\purge-broker.exe`), additions and changes only
 //!   (`is_broker_exit`; a null run's declined consent never ends the broker in its window, RIG.md §17.1);
+//!   (windows-prefetch) ambient-class Windows bookkeeping: a `<drive>:\Windows\Prefetch\*.pf` file changed in size
+//!   and/or LastWriteTime only, never added or removed (`is_windows_prefetch`; Purge's file ops only remove);
 //!   (ambient) the ambient set: with an M2 set (`purge.rig.m2ambient/1`) only the exact op and
 //!   record seen in the null runs, or its token pattern, never a subtree; (parent) a directory whose only change is
 //!   its LastWriteTime, or a key whose only changes are LastWriteTime / value count / subkey count, when an
@@ -840,6 +842,29 @@ fn is_broker_exit(c: &Change) -> bool {
         && name.eq_ignore_ascii_case(BROKER_EXE)
 }
 
+/// Windows' prefetch bookkeeping (DECISIONS 2026-11-24, E): a file directly in `<drive>:\Windows\Prefetch` whose
+/// name ends in `.pf`, changed (`~`) only in its size and/or LastWriteTime. The prefetcher rewrites the trace of any
+/// process that ran in the window (`SVCHOST.EXE-C5EEC15E.pf` in e2e-final3 git), whatever its 8-hex-digit hash;
+/// Purge's file ops only ever produce removals, so an addition, a removal, a kind / attribute / reparse change or a
+/// file elsewhere is never covered and stays collateral.
+fn is_windows_prefetch(c: &Change) -> bool {
+    if c.rec != 'F' || c.op != '~' || c.changes.is_empty() {
+        return false;
+    }
+    if !c.changes.iter().all(|x| x.starts_with("size ") || x.starts_with("mtime ")) {
+        return false;
+    }
+    let s: Vec<&str> = c.path.split('\\').collect();
+    let drive = |d: &str| d.len() == 2 && d.as_bytes()[0].is_ascii_alphabetic() && d.as_bytes()[1] == b':';
+    s.len() == 4
+        && drive(s[0])
+        && s[1].eq_ignore_ascii_case("Windows")
+        && s[2].eq_ignore_ascii_case("Prefetch")
+        && s[3].len() > 3
+        && s[3].is_char_boundary(s[3].len() - 3)
+        && s[3][s[3].len() - 3..].eq_ignore_ascii_case(".pf")
+}
+
 /// `HKLM\SYSTEM\<CurrentControlSet|ControlSetNNN>\<rest...>`: the segments after the control set, or None.
 fn system_cs_rest(path: &str) -> Option<Vec<&str>> {
     let s: Vec<&str> = path.split('\\').collect();
@@ -1582,6 +1607,8 @@ pub fn check(cx: &Ctx) -> Result<ExecdiffReport> {
             Some("engine-fw")
         } else if is_broker_exit(c) {
             Some("broker-exit")
+        } else if is_windows_prefetch(c) {
+            Some("windows-prefetch")
         } else if cx.ambient.and_then(|m| m.matches_change(c, &t)).is_some() {
             Some("ambient")
         } else if stale_dir_time(c, before_ft) {
@@ -2461,6 +2488,77 @@ mod tests {
             );
         }
         assert_eq!(r.counts.collateral, 5, "{got:#?}");
+    }
+
+    const PF: &str = "C:\\WINDOWS\\Prefetch\\SVCHOST.EXE-C5EEC15E.pf";
+
+    #[test]
+    fn windows_prefetch_is_a_pf_file_in_prefetch_changed_in_size_or_mtime_only() {
+        let yes = [
+            chgx('~', 'F', PF, &["size 3482->4105", "mtime 1->2"]),
+            chgx('~', 'F', PF, &["mtime 1->2"]),
+            chgx('~', 'F', PF, &["size 1->2"]),
+            chgx('~', 'F', "c:\\windows\\prefetch\\PURGE-BROKER.EXE-0A1B2C3D.PF", &["mtime 1->2"]),
+            chgx('~', 'F', "D:\\Windows\\Prefetch\\NOTEPAD.EXE-12345678.pf", &["mtime 1->2"]),
+        ];
+        for c in &yes {
+            assert!(is_windows_prefetch(c), "{c:?}");
+        }
+        let no = [
+            // Added or removed: never (Purge's file ops only remove, so a removal must stay visible).
+            chg('+', 'F', PF),
+            chg('-', 'F', PF),
+            // Another change than size / LastWriteTime, or none recorded.
+            chgx('~', 'F', PF, &["attrs 20->21"]),
+            chgx('~', 'F', PF, &["mtime 1->2", "reparse 0->a0000003"]),
+            chgx('~', 'F', PF, &["kind F->D"]),
+            chgx('~', 'F', PF, &[]),
+            // Not a file, not a .pf, not directly in Prefetch, not the Windows folder.
+            chgx('~', 'D', "C:\\WINDOWS\\Prefetch", &["mtime 1->2"]),
+            chgx('~', 'D', PF, &["mtime 1->2"]),
+            chgx('~', 'F', "C:\\WINDOWS\\Prefetch\\Layout.ini", &["mtime 1->2"]),
+            chgx('~', 'F', "C:\\WINDOWS\\Prefetch\\ReadyBoot\\Trace1.fx", &["mtime 1->2"]),
+            chgx('~', 'F', "C:\\WINDOWS\\Prefetch\\Sub\\X.EXE-12345678.pf", &["mtime 1->2"]),
+            chgx('~', 'F', "C:\\WINDOWS\\Prefetch\\X.pf.bak", &["mtime 1->2"]),
+            chgx('~', 'F', "C:\\Users\\x\\Windows\\Prefetch\\X.EXE-12345678.pf", &["mtime 1->2"]),
+            chgx('~', 'F', "C:\\Program Files\\Prefetch\\X.EXE-12345678.pf", &["mtime 1->2"]),
+            chgx('~', 'F', "\\\\?\\C:\\Windows\\Prefetch\\X.EXE-12345678.pf", &["mtime 1->2"]),
+            chgx('~', 'F', "C:\\Windows\\Prefetch\\.pf", &["mtime 1->2"]),
+        ];
+        for c in &no {
+            assert!(!is_windows_prefetch(c), "{c:?}");
+        }
+    }
+
+    /// A prefetch trace rewritten in the window, and one added and one removed beside it.
+    fn prefetch_snaps(t: &mut String, after: bool) {
+        write_d(t, "C:\\WINDOWS", 0x10, 1, 0);
+        write_d(t, "C:\\WINDOWS\\Prefetch", 0x10, 1, 0);
+        write_f(t, PF, if after { 4105 } else { 3482 }, 0x20, if after { 2 } else { 1 }, 0);
+    }
+
+    fn prefetch_added_removed_snaps(t: &mut String, after: bool) {
+        prefetch_snaps(t, after);
+        let name = if after { "NEW.EXE-11111111.pf" } else { "OLD.EXE-22222222.pf" };
+        write_f(t, &format!("C:\\WINDOWS\\Prefetch\\{name}"), 10, 0x20, 1, 0);
+    }
+
+    #[test]
+    fn windows_prefetch_changes_are_authorised_additions_and_removals_are_not() {
+        let r = run(Case { var: Var { extra: Some(prefetch_snaps), ..Default::default() }, ..Default::default() });
+        assert!(r.ok, "{:#?}", (&r.counts, &r.collateral, &r.unexplained));
+        assert_eq!((r.counts.collateral, r.counts.unexplained), (0, 0), "{:#?}", (&r.collateral, &r.unexplained));
+        assert_eq!(r.counts.authorised.get("windows-prefetch").copied(), Some(1), "{:?}", r.counts.authorised);
+
+        let r = run(Case {
+            var: Var { extra: Some(prefetch_added_removed_snaps), ..Default::default() },
+            ..Default::default()
+        });
+        assert!(!r.ok);
+        assert_eq!(r.counts.authorised.get("windows-prefetch").copied(), Some(1), "{:?}", r.counts.authorised);
+        let got: Vec<(String, String)> = r.collateral.iter().map(|c| (c.change.clone(), c.path.clone())).collect();
+        assert!(got.iter().any(|g| g.0 == "-F" && g.1.ends_with("OLD.EXE-22222222.pf")), "{got:#?}");
+        assert!(r.unexplained.iter().any(|u| u.path.ends_with("NEW.EXE-11111111.pf")), "{:#?}", r.unexplained);
     }
 
     struct Case {

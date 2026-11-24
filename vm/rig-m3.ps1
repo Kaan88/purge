@@ -61,11 +61,12 @@
   never the M2 set, and refuses to start without it (-AmbientFile, default the VM's: Inbound truth\m3-e2e-ambient.json,
   Purge-CleanPro truth\m3-e2e-ambient-cleanpro.json):
 
-    .\vm\rig-m3.ps1 -Mode m3-e2e-null -Count 6 -Engine ... -Broker ... -UiPublish ... [-Apps vscode] [-NullWaitSec 10]
-    #   -Count rounds per -Apps app (default vscode), each from a fresh restore: runs <prefix><k>-m3-e2e-<app> (-RunPrefix,
+    .\vm\rig-m3.ps1 -Mode m3-e2e-null -Count 2 -Engine ... -Broker ... -UiPublish ... [-Apps vscode] [-NullWaitSec 10]
+    #   -Count rounds per -Apps app (default the gate's executing apps vscode, vscode-user, git, firefox-tb, execapp,
+    #   $M3E2eNullDefaultApps: -Count 2 is 10 null runs; the set needs 6 in all), each from a fresh restore: runs <prefix><k>-m3-e2e-<app> (-RunPrefix,
     #   default en), the gate's flow with the plan consent cancelled and -NullWaitSec idle seconds in place of the
     #   execution (the same window, Invoke-M3E2eWindow), then rigtool `ambient --m2 --added --null` over vm\runs\<run>\
-    .\vm\rig-m3.ps1 -Mode m3-e2e-ambient -Count 6 [-Apps vscode]    # host only: rebuild the file from those runs
+    .\vm\rig-m3.ps1 -Mode m3-e2e-ambient -Count 2 [-Apps vscode]    # host only: rebuild the file from those runs
 #>
 [CmdletBinding()]
 param(
@@ -811,7 +812,14 @@ function Invoke-M3E2eApp($AppDef, [bool]$Undo, [string]$Base, [string]$Dir = '',
                     Write-RigLog "  !! $id is an undo app, but nothing was preselected: no undo (the scorer fails it)"
                     $script:M3Fail = $true
                 } elseif ($Undo) {
-                    $null = Invoke-M3E2eStep 'ui-undo' $id -TimeoutSec 900 -Shot '10-undo-waiting'
+                    $l = Invoke-M3E2eStep 'ui-undo' $id -TimeoutSec 900 -Shot '10-undo-waiting'
+                    # "Put back all" starts a new broker when the move ended the page's one (DECISIONS 2026-11-24): an
+                    # admin explanation not yet shown in this UI process gets a real key on its focused Continue (as
+                    # ui-uninstall), then its UAC prompt; consent-wait / -approve find the newest purge-broker.
+                    if ((Get-M3E2eField $l 'state') -eq 'continue-focused') {
+                        $null = Send-M3Keys 'space'
+                        $rec.uac_keys.undo_continue = 'space'
+                    }
                     $rec.uac_keys.undo = @(Invoke-M3E2eUac '10u-uac' $id 'undo')
                     $null = Invoke-M3E2eStep 'consent-wait' $id 'undo' -WaitSec 300 -TimeoutSec 900 -Shot '11-consent-undo'
                     $null = Invoke-M3E2eStep 'consent-approve' $id 'undo' -TimeoutSec 600
@@ -1054,9 +1062,14 @@ function Assert-M3E2eGateRunName([string]$Name) {
 }
 
 # The executing apps a null campaign runs (-Apps, default vscode): a failing uninstaller has no exec window.
+# The null campaign's default apps (DECISIONS 2026-11-24, D): the gate's executing apps, both routes. vscode-user is
+# the medium route (no run consent; the broker starts at Move), whose window holds Windows' MuiCache / bam /
+# UserAssist entries for purge-broker.exe that broker-route null runs never see.
+$M3E2eNullDefaultApps = @('vscode', 'vscode-user', 'git', 'firefox-tb', 'execapp')
+
 function Get-M3E2eNullApps([string]$ExpectFile = $M3E2eExpect, [string[]]$Only = @()) {
     $only = @($Only | Where-Object { $_ })
-    if (-not $only.Count) { $only = @('vscode') }
+    if (-not $only.Count) { $only = $M3E2eNullDefaultApps }
     $apps = @(Get-M3E2eApps -ExpectFile $ExpectFile -Only $only)
     foreach ($a in $apps) { if ("$($a.kind)" -notin 'app', 'fixture') { throw "app '$($a.id)' executes nothing (kind $($a.kind)); no null run" } }
     $apps

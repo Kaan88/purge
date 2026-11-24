@@ -2250,13 +2250,19 @@ powershell -NoProfile -File vm\truth\m3-e2e-score.ps1 --self-test
   `undo_fidelity` 100 %."
 - G6: "End to end: 7 apps, executed set equals the preselected set of the rig plan, `danger` 0, `collateral` 0,
   `undo_fidelity` 100 %". G7: "Medium route: the per-user uninstaller ran at medium integrity; a broker-route program is
-  refused by the medium engine and the reverse". G12: "Engine timing: harvest at most 2x the walk floor of the same run and 20 s (9.1), scan 10 s, first progress
-  100 ms".
+  refused by the medium engine and the reverse". G12: "Engine timing: harvest at most 2x the walk floor of the same run and 20 s (9.1), scan at most 1.5x the walk
+  floor of the same run and 20 s (9.1), first progress 100 ms".
 - 9.1: "Harvest complete after the UAC click, VS Code | at most 2x the bare registry-walk floor measured on the same
-  machine in the same run; absolute sanity cap 20 s"; "Post-uninstall scan, cold broker | 10 s; first progress
-  within 100 ms" (measured as 9.1 says, from the broker's timing marks: `harvest_complete` of `uninstall.prepare` since
+  machine in the same run; absolute sanity cap 20 s"; "Post-uninstall scan, cold broker | at most 1.5x the bare
+  registry-walk floor measured on the same machine in the same run (taken at finish); absolute sanity cap 20 s; first
+  progress within 100 ms" (DECISIONS 2026-11-24, as the harvest row of 2026-11-23: the scan walks the same reference
+  scope, so an absolute time measured the machine; e2e-final3 had 9.2 to 10.1 s against floors of 7.4 to 8.7 s) (measured as 9.1 says, from the broker's timing marks: `harvest_complete` of `uninstall.prepare` since
   the broker process was created; `scan_complete - scan_start` and `first_progress - scan_start` of its first
   `leftovers.scan`; the floor is `floor_ms` of the guest's `walk-floor.json`, the installed engine's `walk-floor`).
+  **Timing chains run on a quiet host** (DECISIONS 2026-11-24): the VM's vCPUs share the host, so a gate run whose
+  G12 rows count is started with nothing else heavy on the host (no build, no second VM, no other rig campaign); a
+  timing row failed on a busy host is rerun on a quiet one, not explained away: the floor is taken at finish, so
+  host load during the scan alone is not in it.
 - B7 failed uninstallers: 1603 is reported as a failure (the error bar with the exit code) and nothing is purged; 3010
   is reported as restart-needed (the "A restart is needed." bar) and is not a failure.
 
@@ -2286,7 +2292,13 @@ are fixed. Built in the guest at install time; the rig self-test builds both on 
 
 **Flow per app** (host phases, a screenshot after each step into `<evidence>\<app>\NN-<step>.png`):
 `setup` (m3sec.exe built, `install.ps1 -SkipBuild` with the release engine, the broker and the real UI as
-`C:\Program Files\Purge\Purge.exe`, Edge update and telemetry paused) - `prepare` (pre-apps, Defender idle, lists/snap
+`C:\Program Files\Purge\Purge.exe`, Edge update and telemetry paused, and Windows' background task families paused
+for the run (`Suspend-E2eBackgroundTasks`, DECISIONS 2026-11-24: the scheduled tasks `\Microsoft\Windows\UpdateOrchestrator\*`,
+`\Microsoft\Windows\Device Information\Device` (Census), `\Microsoft\Windows\Flighting\OneSettings\RefreshCache`,
+`\Microsoft\Windows\PushToInstall\*` and `\Microsoft\Windows\Application Experience\*` disabled, a running one stopped
+first, and the Update Orchestrator service UsoSvc stopped and set to Disabled where Windows allows it; what was
+disabled, and each refusal, in `setup.json` / `e2e.json` `setup.background`; the same for gate and null runs, undone by
+the next snapshot restore) - `prepare` (pre-apps, Defender idle, lists/snap
 0, install or plant, launch at medium, lists/snap 1, rig CLI `inventory` and `harvest <program id> -o fp.json`) -
 `ui-start` (the UI at medium through a one-shot task; `ProgramList` scrolled page by page with ScrollPattern until the
 row whose text is the ARP DisplayName is realized, then SelectionItemPattern.Select; `01-programs-row`) - `ui-uninstall`
@@ -2301,15 +2313,22 @@ every text seen on the way is kept; the uninstaller processes started meanwhile 
 `m3sec procinfo`; `06-scan-done`) - executing apps: `capture-post` (lists/snap 2, run.json `entries_left`, the rig CLI
 `scan --fp fp.json --mode post|forced` of the same machine state -> `plan-purge.json`, its preselected set (every
 preselected, non-Blocked item, as the review page ticks it), the deep scope of those targets, the settle wait, snap A,
-deep A) - `ui-move` (`MoveButton` invoked; waits for "Confirm in the Purge security prompt."; `07-move-waiting`) -
+deep A) - `ui-move` (`MoveButton` invoked; waits for a "Confirm ... Purge security prompt" title; `07-move-waiting`) -
 `consent-wait plan` (`08-consent-plan`), `consent-approve plan` - `ui-wait-result` (`ResultTitleText`; `09-result`) -
 `capture-exec` (snap B, deep B, the new session's `journal.jsonl` and `report.json` copied, `rigtool execdiff` with the
 m3-e2e ambient set (section 17.1) -> `execdiff.json`, the executed set = every item of the session's report, compared by target key with
-the CLI's preselected set -> `run\executed.json`) - undo app: `ui-undo` (`UndoAllButton`; `10-undo-waiting`),
+the CLI's preselected set -> `run\executed.json`) - undo app: `ui-undo` (`UndoAllButton`; `10-undo-waiting`). The
+completed move ended the page's broker (`ExitReason::CompletedChange`), so "Put back all" starts a new one in place
+(DECISIONS 2026-11-24): the first-elevation explanation when this UI process has not shown it (its `Continue` focused,
+state `continue-focused`, the host presses Space), then its UAC prompt (`10u-uac`, as `02u-uac`), then the restore
+consent of the new broker (`consent-wait` / `-approve` take the newest `purge-broker`). `ui-undo` waits for any
+"Confirm ... Purge security prompt" title (state `prompt`), the UAC prompt (`uac`) or the undone page, and fails fast
+on an interrupted restore ("ended during the restore" / "ended while putting things back", state `interrupted`) and
+on a refusal ("Not put back: ...", "Nothing was put back ...", a refused bar; state `refused`) - then
 `consent-wait undo` (`11-consent-undo`), `consent-approve undo`, `ui-wait-undone` (`UndoTitleText` "Put back";
 `12-undone`), `capture-undo` (deep C, `rigtool fidelity` deep A / deep C over the journal -> `fidelity.json`) - failing
 uninstallers: `fail-check` (ARP entry, fixture key, new sessions, quarantine listing; the pipeline page stays shown for
-`07-failure`) - `finish` (the broker's timing lines of the run, `broker-timings.ps1`; the walk floor of the G12 harvest row,
+`07-failure`) - `finish` (the broker's timing lines of the run, `broker-timings.ps1`; the walk floor of the G12 harvest and scan rows,
 `purge-engine walk-floor -o walk-floor.json` with the installed engine, read-only, three walks; the UI closed; `e2e.json` with
 every step record; the rigtool run directory copied in as `run\`; zipped and pulled to `<evidence>\<app>\guest\`). A
 phase that throws still gets `finish` and the pull; the scorer fails the missing rows.
@@ -2374,7 +2393,7 @@ its flow; the UI steps (row, Uninstall, confirm, uninstall consent on the broker
 review, Move, plan consent, result "Moved ..."; **executed set == the CLI's preselected set** (by target key, both
 non-empty); session `Committed`; **danger 0** (rigtool tool `ui`: `danger_offered` and `danger_preselected` 0; tool
 `purge`: `danger_blocking` 0); **collateral 0** (`execdiff.json` `collateral` and `guard_escapes` 0); G12 cold scan
-<= 10 s and first progress <= 100 ms, harvest after UAC <= 2 x `floor_ms` of the app's `guest\walk-floor.json`
+<= 1.5 x `floor_ms` and <= 20 s, first progress <= 100 ms, harvest after UAC <= 2 x `floor_ms` of the app's `guest\walk-floor.json`
 (missing, not elevated or without a positive time: FAIL) and <= 20 s for `vscode` and `vscode-user`; the undo app: undo
 through the UI and **undo_fidelity 100 %** (`fidelity.json` ok, every row pass). `msi1603`: the failure bar with exit
 code 1603, the scan never reached (no review, no Move, no result), no new session, quarantine unchanged, the ARP entry
@@ -2423,14 +2442,18 @@ that never saw the UI, the consent dialog or the broker. As M1b did for its exec
 the e2e gets an ambient set from null runs of its own flow:
 
     $env:VMPWFILE = '<guest password file>'
-    .\vm\rig-m3.ps1 -Mode m3-e2e-null -Count 6 -Engine <release engine> -Broker <release broker> -UiPublish <ui publish>
-    #   6 runs en<k>-m3-e2e-vscode, k = 1..6, each from a fresh restore of rig-base; then host rigtool
+    .\vm\rig-m3.ps1 -Mode m3-e2e-null -Count 2 -Engine <release engine> -Broker <release broker> -UiPublish <ui publish>
+    #   2 runs en<k>-m3-e2e-<app>, k = 1..2, of each default app (vscode, vscode-user, git, firefox-tb, execapp: 10
+    #   runs; the set needs 6 in all), each from a fresh restore of rig-base; then host rigtool
     #   `ambient --m2 --added --null vm\runs\en1-m3-e2e-vscode ...` -> vm\truth\m3-e2e-ambient.json
-    .\vm\rig-m3.ps1 -Mode m3-e2e-ambient -Count 6      # host only: rebuild the file from those runs
+    .\vm\rig-m3.ps1 -Mode m3-e2e-ambient -Count 2      # host only: rebuild the file from those runs (same -Apps)
     .\vm\rig-m3.ps1 -Mode m3-e2e -Engine ... -Broker ... -UiPublish ...   # the gate pushes it (below)
 
-- **A null run** is the gate's flow for one executing app (`-Apps`, default `vscode`; a failing uninstaller has no exec
-  window and is refused), every guest phase with `-NullRun`: setup, prepare (install, launch, harvest), the UI from the
+- **A null run** is the gate's flow for one executing app (`-Apps`, default the gate's executing apps `vscode`,
+  `vscode-user`, `git`, `firefox-tb`, `execapp` (`$M3E2eNullDefaultApps`, DECISIONS 2026-11-24): `vscode-user` is the
+  medium route, whose window holds Windows' MuiCache / bam / UserAssist records for purge-broker.exe, started at Move,
+  that broker-route null runs never see; it has no run consent, and its plan consent is cancelled as in every null run;
+  a failing uninstaller has no exec window and is refused), every guest phase with `-NullRun`: setup, prepare (install, launch, harvest), the UI from the
   program row through Uninstall, UAC, confirm, the uninstall consent (approved: the uninstaller runs), the scan, the
   review page, `capture-post` (the rig CLI plan, settle wait, snap A, deep A). Then the window (next point). Evidence
   goes to `E:\purge-build\gate-evidence\m3-e2e-null\<-RunName>\<run>\<app>\`; the host then moves the window's snapshot
@@ -2438,7 +2461,7 @@ the e2e gets an ambient set from null runs of its own flow:
   (`purge.rig.m3e2e.null/1`). Run names `<prefix><k>-m3-e2e-<app>` (`-RunPrefix`, default `en`); `-NullWaitSec` (default
   10 s, 1..600, refused otherwise on the host and passed to the guest unchanged, which refuses another value and has no
   default: the VS Code run's approve-to-result time was about 8 s of execution plus the job overhead) is the idle
-  time in place of the execution. A fixed idle and null runs of `vscode` only are fail-closed for anything else: a
+  time in place of the execution. A fixed idle and null runs of the listed apps only are fail-closed for anything else: a
   gate execution that runs longer than the idle, or another app's window, can show Windows records the null runs never
   saw, and those stay collateral (rerun the null campaign with a longer `-NullWaitSec` or `-Apps` rather than widen
   the set). No ambient set is pushed to a null run (the guest's setup fails if it finds one), it
@@ -2466,6 +2489,11 @@ the e2e gets an ambient set from null runs of its own flow:
   under `HKU\<sid>\Software\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Compatibility Assistant\Store`, each added
   or changed only (the keys' LastWriteTime / value count then pass by the parent rule). A removal, or the value of any
   other image (cmd.exe, Purge.exe, purge-engine.exe), stays collateral (Rust unit tests in `execdiff.rs`).
+  **Prefetch** (DECISIONS 2026-11-24): the prefetcher rewrites the `.pf` trace of whatever ran in the window
+  (`SVCHOST.EXE-C5EEC15E.pf` in e2e-final3 git), so execdiff authorises, as ambient-class Windows bookkeeping
+  `windows-prefetch` (`is_windows_prefetch`), a file directly in `<drive>:\Windows\Prefetch` named `*.pf` and changed
+  (`~F`) in size and/or LastWriteTime only, whatever its 8-hex-digit hash. Purge's file ops only remove, so an added or
+  removed `.pf`, another change (attributes, kind, reparse) or another file stays collateral.
 - **The build** (`Invoke-M3E2eBuildAmbient`, the same refusals as `Invoke-XBuildAmbient`): each run dir must hold its
   snapshot pair and pass `Test-M3E2eNullRunDoc` (host run.json: schema, run, app, `null_run.null`, finished, no host
   error, pulled, the null name shape; guest e2e.json: `state.null_run`, steps `capture-post`, `ui-move`,

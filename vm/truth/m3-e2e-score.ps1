@@ -257,15 +257,23 @@ function Get-WalkFloor($F) {
     @{ ms = $ms; why = '' }
 }
 
-# G12 rows from <app>\timings.json (purge.broker-timings/1): the broker's cold scan (duration, first progress) and,
-# for the harvest apps, harvest complete after the UAC click: at most harvest_floor_factor times the walk floor of the
-# same run ($Floor, <app>\guest\walk-floor.json) and at most harvest_cap_ms.
+# G12 rows from <app>\timings.json (purge.broker-timings/1): the broker's cold scan, at most scan_floor_factor times
+# the walk floor of the same run ($Floor, <app>\guest\walk-floor.json, taken at finish) and at most scan_cap_ms
+# (DECISIONS 2026-11-24), its first progress, and, for the harvest apps, harvest complete after the UAC click: at most
+# harvest_floor_factor times the same walk floor and at most harvest_cap_ms.
 function Test-Timings([string]$Id, $T, $X, [bool]$Scan, [bool]$Harvest, $Floor = $null) {
     $b = @(Arr $T.brokers)
     if ($Scan) {
         $s = @($b | ForEach-Object { Arr $_.scans } | Where-Object { $_.cold -eq $true }) | Select-Object -First 1
         $dur = $(if ($s) { Num $s.duration_ms }); $fp = $(if ($s) { Num $s.first_progress_ms })
-        Row "$Id G12 scan, cold broker <= $($X.gates.scan_ms) ms" ($null -ne $dur -and $dur -le [double]$X.gates.scan_ms) $(if ($null -eq $dur) { 'no cold scan timing' } else { "$dur ms" })
+        # Relative to the run's own registry walk floor, as the harvest row (DECISIONS 2026-11-24, F): the scan walks
+        # the same reference scope, so an absolute time measures the machine, not the engine.
+        $sFactor = Num $X.gates.scan_floor_factor; $sCap = Num $X.gates.scan_cap_ms
+        $sfl = Get-WalkFloor $Floor
+        $sRelOk = ($null -ne $dur -and $null -ne $sfl.ms -and $null -ne $sFactor -and $sFactor -gt 0 -and $dur -le $sFactor * $sfl.ms)
+        $sRelDetail = $(if ($null -eq $dur) { 'no cold scan timing' } elseif ($null -eq $sfl.ms) { "$dur ms; $($sfl.why)" } else { "$dur ms / floor $($sfl.ms) ms = $([math]::Round($dur / $sfl.ms, 2))" })
+        Row "$Id G12 scan, cold broker <= $sFactor x the walk floor" $sRelOk $sRelDetail
+        Row "$Id G12 scan, cold broker <= $sCap ms (sanity cap)" ($null -ne $dur -and $null -ne $sCap -and $sCap -gt 0 -and $dur -le $sCap) $(if ($null -eq $dur) { 'no cold scan timing' } else { "$dur ms" })
         Row "$Id G12 first progress <= $($X.gates.first_progress_ms) ms" ($null -ne $fp -and $fp -le [double]$X.gates.first_progress_ms) $(if ($null -eq $fp) { 'no first_progress timing' } else { "$fp ms" })
     }
     if ($Harvest) {
@@ -344,7 +352,7 @@ function Test-App([string]$Ev, $A, $X, $Score, [bool]$Undo, [string]$AmbSha = ''
             $gone = ($scan -and "$($scan.state)" -in 'review', 'empty' -and $fc -and $fc.arp_present -eq $false -and $fc.fixture_key_present -eq $false)
             Row "$id uninstall done, scan reached" $gone $(if ($fc) { "scan=$($scan.state) arp=$($fc.arp_present) key=$($fc.fixture_key_present)" } else { 'no fail-check' })
             Row "$id nothing executed" ($fc -and @(Arr $fc.sessions_new).Count -eq 0 -and -not (Get-Step $e2e 'ui-move')) $(if ($fc) { "sessions_new=$(@(Arr $fc.sessions_new).Count)" })
-            Test-Timings $id (Read-J (Join-Path $dir 'timings.json')) $X $true $false
+            Test-Timings $id (Read-J (Join-Path $dir 'timings.json')) $X $true $false (Read-J (Join-Path $dir 'guest\walk-floor.json'))
             return
         }
     }
@@ -545,6 +553,12 @@ function Get-E2eDefects {
         @{ name = 'no first-progress mark (git)'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'git\timings.json') { param($d) $d.brokers[0].scans[0].first_progress_ms = $null } } },
         @{ name = 'first progress 150 ms (npp)'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'npp\timings.json') { param($d) $d.brokers[0].scans[0].first_progress_ms = 150 } } },
         @{ name = 'cold scan 12 s (firefox-tb)'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'firefox-tb\timings.json') { param($d) $d.brokers[0].scans[0].duration_ms = 12000 } } },
+        @{ name = 'cold scan just over 1.5x the walk floor, under the cap (git)'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'git\timings.json') { param($d) $d.brokers[0].scans[0].duration_ms = 9001 } } },
+        @{ name = 'cold scan under 1.5x the walk floor, just over the cap (7zip)'; act = { param($ev) Edit-E2eJson (Join-Path $ev '7zip\guest\walk-floor.json') { param($d) $d.floor_ms = 14000 }; Edit-E2eJson (Join-Path $ev '7zip\timings.json') { param($d) $d.brokers[0].scans[0].duration_ms = 20001 } } },
+        @{ name = 'cold scan of e2e-final3 vscode: 21190 ms against a floor of 8067 ms (vscode)'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'vscode\guest\walk-floor.json') { param($d) $d.floor_ms = 8067 }; Edit-E2eJson (Join-Path $ev 'vscode\timings.json') { param($d) $d.brokers[0].scans[0].duration_ms = 21190 } } },
+        @{ name = 'walk floor missing for a scan-only app (npp)'; act = { param($ev) Remove-Item -LiteralPath (Join-Path $ev 'npp\guest\walk-floor.json') } },
+        @{ name = 'walk floor missing for the restart-needed fixture (msi3010)'; act = { param($ev) Remove-Item -LiteralPath (Join-Path $ev 'msi3010\guest\walk-floor.json') } },
+        @{ name = 'no cold scan timing (execapp)'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'execapp\timings.json') { param($d) $d.brokers[0].scans[0].cold = $false } } },
         @{ name = 'harvest over twice the walk floor (vscode-user)'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'vscode-user\timings.json') { param($d) $d.brokers[0].harvests[0].after_uac_ms = 12100 } } },
         @{ name = 'harvest within twice the floor but over the cap (vscode)'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'vscode\guest\walk-floor.json') { param($d) $d.floor_ms = 15000 }; Edit-E2eJson (Join-Path $ev 'vscode\timings.json') { param($d) $d.brokers[0].harvests[0].after_uac_ms = 20100 } } },
         @{ name = 'walk floor missing (vscode)'; act = { param($ev) Remove-Item -LiteralPath (Join-Path $ev 'vscode\guest\walk-floor.json') } },
@@ -717,6 +731,23 @@ function Invoke-SelfTest {
         Check 'a harvest of exactly twice the walk floor passes' $r3.pass
         Check 'the harvest rows name the floor and the cap' (@($r3.rows | Where-Object { "$($_.row)" -like 'vscode G12 harvest after UAC <= 2 x the walk floor' -and "$($_.detail)" -eq '12000 ms / floor 6000 ms = 2' }).Count -eq 1 -and @($r3.rows | Where-Object { "$($_.row)" -like 'vscode G12 harvest after UAC <= 20000 ms (sanity cap)' }).Count -eq 1)
         Check 'an app outside harvest_apps has no harvest row' (@($r3.rows | Where-Object { "$($_.row)" -like 'git G12 harvest*' }).Count -eq 0)
+        # The scan row is relative too (DECISIONS 2026-11-24): exactly 1.5x the floor passes (9 s against 6 s; the old
+        # row was 10 s absolute, so 9 s passed it too), and with a floor of 14 s exactly the 20 s cap passes; msi3010 12.1 s against 8.067 s is under 1.5x.
+        $srel = Join-Path $root 'scan-relative'
+        New-PassEvidence $X $srel
+        Edit-E2eJson (Join-Path $srel 'git\timings.json') { param($d) $d.brokers[0].scans[0].duration_ms = 9000 }
+        Edit-E2eJson (Join-Path $srel 'npp\guest\walk-floor.json') { param($d) $d.floor_ms = 14000 }
+        Edit-E2eJson (Join-Path $srel 'npp\timings.json') { param($d) $d.brokers[0].scans[0].duration_ms = 20000 }
+        Edit-E2eJson (Join-Path $srel 'msi3010\guest\walk-floor.json') { param($d) $d.floor_ms = 8067 }
+        Edit-E2eJson (Join-Path $srel 'msi3010\timings.json') { param($d) $d.brokers[0].scans[0].duration_ms = 12100 }
+        $r7 = Invoke-Score $srel $X -Quiet -TruthDir $srel
+        Check 'a cold scan of exactly 1.5x the walk floor, or of the 20 s cap under 1.5x the floor, passes' $r7.pass
+        if (-not $r7.pass) { foreach ($row in $r7.rows) { if (-not $row.ok) { Write-Host "       $($row.row): $($row.detail)" } } }
+        Check 'the scan rows name the floor and the cap, for every scanned app' (
+            @($r7.rows | Where-Object { "$($_.row)" -eq 'git G12 scan, cold broker <= 1.5 x the walk floor' -and "$($_.detail)" -eq '9000 ms / floor 6000 ms = 1.5' }).Count -eq 1 -and
+            @($r7.rows | Where-Object { "$($_.row)" -eq 'npp G12 scan, cold broker <= 20000 ms (sanity cap)' -and $_.ok }).Count -eq 1 -and
+            @($r7.rows | Where-Object { "$($_.row)" -eq 'msi3010 G12 scan, cold broker <= 1.5 x the walk floor' -and $_.ok }).Count -eq 1 -and
+            @($r7.rows | Where-Object { "$($_.row)" -like '* G12 scan, cold broker <= 10000 ms' }).Count -eq 0)
         $on = Join-Path $root 'uac-on'
         New-PassEvidence $X $on; Set-E2eUacOn $on
         $r2 = Invoke-Score $on $X -Quiet -TruthDir $on

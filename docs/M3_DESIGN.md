@@ -507,7 +507,7 @@ Rules:
 | Cold after reboot, bare metal | 1.0 s p50 on the dev host, N at least 5 |
 | VM | functional only; WARP numbers reported |
 | Harvest complete after the UAC click, VS Code | at most 2x the bare registry-walk floor measured on the same machine in the same run; absolute sanity cap 20 s |
-| Post-uninstall scan, cold broker | 10 s; first progress within 100 ms |
+| Post-uninstall scan, cold broker | at most 1.5x the bare registry-walk floor measured on the same machine in the same run (taken at finish); absolute sanity cap 20 s; first progress within 100 ms |
 | S3 page open, 2,000-item fixture | reported, no gate yet |
 
 No broker and no UAC at launch. The baseline build never runs at launch, only in a started broker.
@@ -550,6 +550,11 @@ on the same machine with nothing done to what is read:
   much again as the walk for everything else it does (start checks, pipe, anchors, indexes, testing every value); the
   cap keeps a machine with a slow floor from passing a harvest nobody would wait for, and bounds a floor that was
   itself disturbed.
+- **The scan row too** (DECISIONS 2026-11-24): the post-uninstall scan walks the same reference scope, so its old
+  absolute 10 s measured the machine as the harvest's 3 s did (e2e-final3: 9.2 to 10.1 s against floors of 7.4 to
+  8.7 s). Gate: `scan_complete - scan_start <= 1.5 x floor_ms` of the same `walk-floor.json`, and `<= 20,000 ms`.
+  The factor is smaller than the harvest's: the scan has no start checks or pipe in it, only the walk and its
+  scanners. First progress stays 100 ms. Timing chains run on a quiet host (vm/RIG.md section 17).
 - **Why a verb of the release engine and not a `rig-exec` verb, an xtask or rigtool:** `m3-e2e` installs the release
   engine and broker (`install.ps1` refuses a `rig-exec` engine), so a `rig-exec` verb is not on the VM in the run that
   needs it; xtask runs on the host; rigtool is a project of its own with its own registry reader, so its walk would be
@@ -672,7 +677,7 @@ checklist of six steps with screenshots.
 | G9 | Recovery and expiry through consent; user-data items one by one; a declined dialog changes nothing | `m3-recover`, purge rows |
 | G10 | BL-R1 S4 closed: planted environment directories are ignored; a copy outside the system volume or in a user-writable directory refuses to start | `m3-broker` |
 | G11 | Starts on clean Windows | `m3-clean-start` |
-| G12 | Engine timing: harvest at most 2x the walk floor of the same run and 20 s (9.1), scan 10 s, first progress 100 ms | broker timings and `walk-floor.json` in the e2e rows |
+| G12 | Engine timing: harvest at most 2x the walk floor of the same run and 20 s (9.1), scan at most 1.5x the walk floor of the same run and 20 s (9.1), first progress 100 ms | broker timings and `walk-floor.json` in the e2e rows |
 | G13 | Regression: the M1b scan gate and the executor gate still pass on the M3 commit (rig CLI, `rig-exec`) | existing gate scripts |
 | G14 | Reviews R1, R2, R3 have no open blocker; every finding has a disposition | `docs/reviews/m3/` |
 

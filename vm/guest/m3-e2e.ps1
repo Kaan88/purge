@@ -150,6 +150,54 @@ function Test-E2eSecureDesktop {
 
 # (Get-E2eTargetKey and Compare-E2eSets live in m3-e2e-ui.ps1, which the scorer and the self-test load too.)
 
+# Windows' own background task families that wrote into exec windows of e2e-final3 (DECISIONS 2026-11-24, C): the
+# update orchestrator, Census, OneSettings, PushToInstall and Application Experience. Disabled for the run in setup,
+# next to the Edge update and telemetry pause, identically for gate and null runs (setup has no -NullRun branch for
+# it). The snapshot restore of the next run undoes it; e2e.json carries what was disabled (setup.background).
+$E2eBackgroundTasks = @(
+    @{ path = '\Microsoft\Windows\UpdateOrchestrator\'; name = '*' }
+    @{ path = '\Microsoft\Windows\Device Information\'; name = 'Device' }
+    @{ path = '\Microsoft\Windows\Flighting\OneSettings\'; name = 'RefreshCache' }
+    @{ path = '\Microsoft\Windows\PushToInstall\'; name = '*' }
+    @{ path = '\Microsoft\Windows\Application Experience\'; name = '*' }
+)
+
+# Disables $E2eBackgroundTasks, stops their running instances, and stops the Update Orchestrator service (UsoSvc, set to
+# Disabled where Windows allows it: its startup type is protected on some builds, which is recorded, not fatal). Never
+# throws; returns the record for setup.json / e2e.json `background`.
+function Suspend-E2eBackgroundTasks {
+    $r = [ordered]@{ t = (NowIso); tasks = @(); service = $null; errors = @() }
+    foreach ($spec in $E2eBackgroundTasks) {
+        $found = @(Get-ScheduledTask -TaskPath $spec.path -TaskName $spec.name -ErrorAction SilentlyContinue)
+        if (-not $found.Count -and $spec.name -ne '*') { $r.tasks += [pscustomobject][ordered]@{ path = "$($spec.path)$($spec.name)"; present = $false; state_before = $null; state_after = $null; error = $null } }
+        foreach ($t in $found) {
+            $rec = [ordered]@{ path = "$($t.TaskPath)$($t.TaskName)"; present = $true; state_before = "$($t.State)"; state_after = $null; error = $null }
+            try {
+                if ("$($t.State)" -eq 'Running') { $null = Stop-ScheduledTask -TaskPath $t.TaskPath -TaskName $t.TaskName -ErrorAction Stop }
+                $d = Disable-ScheduledTask -TaskPath $t.TaskPath -TaskName $t.TaskName -ErrorAction Stop
+                $rec.state_after = "$($d.State)"
+            } catch { $rec.error = $_.Exception.Message; $r.errors += "task $($rec.path): $($rec.error)" }
+            $r.tasks += [pscustomobject]$rec
+        }
+    }
+    $svc = [ordered]@{ name = 'UsoSvc'; state_before = $null; start_before = $null; state_after = $null; start_after = $null; error = $null }
+    try {
+        $s = Get-CimInstance Win32_Service -Filter "Name='UsoSvc'" -ErrorAction Stop
+        if ($s) {
+            $svc.state_before = "$($s.State)"; $svc.start_before = "$($s.StartMode)"
+            try { Set-Service -Name 'UsoSvc' -StartupType Disabled -ErrorAction Stop } catch { $svc.error = "startup type: $($_.Exception.Message)" }
+            if ("$($s.State)" -ne 'Stopped') { Stop-Service -Name 'UsoSvc' -Force -ErrorAction Stop; (Get-Service -Name 'UsoSvc').WaitForStatus('Stopped', [TimeSpan]::FromSeconds(30)) }
+            $s = Get-CimInstance Win32_Service -Filter "Name='UsoSvc'" -ErrorAction Stop
+            $svc.state_after = "$($s.State)"; $svc.start_after = "$($s.StartMode)"
+        }
+    } catch { $svc.error = "$(if ($svc.error) { $svc.error + '; ' })$($_.Exception.Message)" }
+    if ($svc.error) { $r.errors += "service UsoSvc: $($svc.error)" }
+    $r.service = [pscustomobject]$svc
+    $dis = @($r.tasks | Where-Object { $_.state_after -eq 'Disabled' })
+    Log "background pause: $($dis.Count) of $(@($r.tasks | Where-Object { $_.present }).Count) tasks disabled ($(@($dis | ForEach-Object { $_.path }) -join ', ')); UsoSvc $($svc.state_before)/$($svc.start_before) -> $($svc.state_after)/$($svc.start_after)$(if ($r.errors.Count) { ' !! ' + ($r.errors -join ' | ') })"
+    $r
+}
+
 # A deep scope (purge.rig.deepscope/0) over plan targets: services, tasks and firewall rules by name, the rest as targets.
 function New-E2eDeepScope($Targets) {
     $svc = @(); $tasks = @(); $rules = @(); $rest = @()
@@ -322,7 +370,7 @@ if ($Phase -notin 'setup', 'prepare' -and $st.PSObject.Properties['null_run'] -a
 if ($AmbientSha -and ($NullRun -or $Phase -ne 'setup' -or $AmbientSha -cnotmatch '\A[0-9a-f]{64}\z')) { throw "bad -AmbientSha '$AmbientSha' (setup of a gate run only)" }
 switch ($Phase) {
     'setup' {
-        $rec = [ordered]@{ t = (NowIso); build = $null; install = @(); uac = (Get-UacValues); edge = $null; telemetry = $null; null_run = [bool]$NullRun }
+        $rec = [ordered]@{ t = (NowIso); build = $null; install = @(); uac = (Get-UacValues); edge = $null; telemetry = $null; background = $null; null_run = [bool]$NullRun }
         # The ambient set execdiff will use (riglib $RigM2Ambient, pushed by the host; none in a null run): the hash the
         # host declared and the guest copy's own hash (the scorer requires both equal to the committed file's).
         $rec.ambient = [ordered]@{ declared = $(if ($AmbientSha) { [ordered]@{ sha256 = $AmbientSha } } else { $null }); guest = $RigM2Ambient
@@ -351,6 +399,8 @@ switch ($Phase) {
         }
         try { $rec.edge = Suspend-EdgeUpdate } catch { $rec.edge = "error: $($_.Exception.Message)" }
         $rec.telemetry = Suspend-M2Telemetry
+        # The same for gate and null runs: no -NullRun branch (DECISIONS 2026-11-24, C).
+        $rec.background = Suspend-E2eBackgroundTasks
         # A gate run has the declared set in the guest; a null run has none.
         if ($NullRun) { if ($rec.ambient.guest_sha256) { Log '!! a null run found an ambient set in the guest'; $ok = $false } }
         elseif (-not $AmbientSha -or $rec.ambient.guest_sha256 -cne $AmbientSha) { Log "!! ambient set: declared '$AmbientSha', guest copy '$($rec.ambient.guest_sha256)'"; $ok = $false }
@@ -751,7 +801,7 @@ switch ($Phase) {
             Set-StateValue $st 't_move' (NowIso)
             $watch = Watch-E2eWindow $win {
                 $t = Get-E2eTexts $win
-                if ($t -contains 'Confirm in the Purge security prompt.') { return 'prompt' }
+                if ($t | Where-Object { $_ -like 'Confirm*Purge security prompt*' }) { return 'prompt' }
                 if (Find-E2eById $win 'ResultTitleText') { return 'result' }
                 if ($t | Where-Object { $_ -like '*cannot be quarantined*' }) { return 'refused' }
                 $null
@@ -849,19 +899,35 @@ switch ($Phase) {
         $w = Wait-E2eElement { Find-E2eById $win 'UndoAllButton' } 60 -Enabled
         $rec.retries = $w.retries
         if ($w.el) {
+            $rec.broker_before = Get-BrokerPid
             $rec.invoked = Invoke-E2eElement $w.el
+            $script:continued = $null
+            # "Put back all" over the link a completed move ended starts a new broker in place (DECISIONS 2026-11-24):
+            # the admin explanation (only when this UI process has not shown it yet; its Continue is focused here and
+            # pressed by the host with a real key, as in ui-uninstall), the UAC prompt, then the restore consent. The
+            # waiting title is matched loosely (it reads "Confirm putting it back in the Purge security prompt." at
+            # c787d0b); the page's refusals and an interrupted restore end the wait at once (fail fast).
             $watch = Watch-E2eWindow $win {
+                if ($script:continued -eq 'Focus') { return 'continue-focused' }
                 if (Test-ConsentUp) { return 'uac' }
-                $t = Get-E2eTexts $win
-                if ($t -contains 'Confirm in the Purge security prompt.') { return 'prompt' }
                 if (Find-E2eById $win 'UndoTitleText') { return 'undone' }
+                $t = Get-E2eTexts $win
+                if ($t | Where-Object { $_ -like '*ended during the restore*' -or $_ -like '*ended while putting things back*' -or $_ -like '*cannot tell what was put back*' }) { return 'interrupted' }
+                if ($t | Where-Object { $_ -like 'Not put back:*' -or $_ -like 'Nothing was put back*' -or $_ -like 'Open History & undo to put back*' -or $_ -eq 'The administrator part refused or failed.' }) { return 'refused' }
+                if ($t | Where-Object { $_ -like 'Confirm*Purge security prompt*' }) { return 'prompt' }
                 $null
-            } 300
-            $rec.state = $watch.state; $rec.seen = $watch.seen
-            $rec.ok = ($watch.state -in 'prompt', 'uac')
+            } 300 -Each {
+                if (-not $script:continued) {
+                    $c = Find-E2eDialogButton $win 'Continue'
+                    if ($c) { try { $c.SetFocus(); $script:continued = 'Focus' } catch { $script:continued = Invoke-E2eElement $c } }
+                }
+            }
+            $rec.state = $watch.state; $rec.seen = $watch.seen; $rec.continue = $script:continued
+            $rec.waiting_title = Get-E2eName (Find-E2eById $win 'WaitingTitleText')
+            $rec.ok = ($watch.state -in 'prompt', 'uac', 'continue-focused')
         } else { $rec.detail = 'UndoAllButton not found or not enabled' }
         Save-Step $rec 'ui-undo'
-        "M3E UI-UNDO $App ok=$($rec.ok) state=$($rec.state) uac=$(if ($rec.state -eq 'uac') { 'up' } else { 'none' })"
+        "M3E UI-UNDO $App ok=$($rec.ok) state=$($rec.state) uac=$(if ($rec.state -eq 'uac') { 'up' } elseif ($rec.state -eq 'continue-focused') { 'after-key' } else { 'none' }) broker_before=$($rec.broker_before)"
     }
 
     'ui-wait-undone' {
