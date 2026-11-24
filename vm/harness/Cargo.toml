@@ -8,7 +8,7 @@ publish = false
 # compiled straight from ..\..\..\draft_clone\src via #[path] without modifying them.
 
 [dependencies]
-winreg = "0.52"
+winreg = "0.56"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_Storage_FileSystem", "Win32_System_Environment"] }
