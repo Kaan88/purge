@@ -164,11 +164,14 @@ $E2eBackgroundTasks = @(
     @{ path = '\Microsoft\Windows\Windows Defender\'; name = '*' }
 )
 
+# Services stopped for the run besides UsoSvc and W32Time (DECISIONS 2026-11-24, e2e-final6).
+$E2eBackgroundServices = @('DoSvc', 'wuauserv', 'WaaSMedicSvc')
+
 # Disables $E2eBackgroundTasks, stops their running instances, and stops the Update Orchestrator service (UsoSvc, set to
 # Disabled where Windows allows it: its startup type is protected on some builds, which is recorded, not fatal). Never
 # throws; returns the record for setup.json / e2e.json `background`.
 function Suspend-E2eBackgroundTasks {
-    $r = [ordered]@{ t = (NowIso); tasks = @(); service = $null; time_service = $null; errors = @() }
+    $r = [ordered]@{ t = (NowIso); tasks = @(); service = $null; time_service = $null; services = @(); errors = @() }
     foreach ($spec in $E2eBackgroundTasks) {
         $found = @(Get-ScheduledTask -TaskPath $spec.path -TaskName $spec.name -ErrorAction SilentlyContinue)
         if (-not $found.Count -and $spec.name -ne '*') { $r.tasks += [pscustomobject][ordered]@{ path = "$($spec.path)$($spec.name)"; present = $false; state_before = $null; state_after = $null; error = $null } }
@@ -211,8 +214,28 @@ function Suspend-E2eBackgroundTasks {
     } catch { $tsvc.error = "$(if ($tsvc.error) { $tsvc.error + '; ' })$($_.Exception.Message)" }
     if ($tsvc.error) { $r.errors += "service W32Time: $($tsvc.error)" }
     $r.time_service = [pscustomobject]$tsvc
+    # More Windows services whose own bookkeeping landed in a window: Delivery Optimization's usage statistics under
+    # S-1-5-20 (e2e-final6 execapp), and Windows Update with its medic service (the update burst of e2e-final3). Each is
+    # stopped and set to Disabled for the run where Windows allows it (WaaSMedicSvc is protected on most builds: the
+    # refusal is recorded, never fatal).
+    $r.services = @()
+    foreach ($name in $E2eBackgroundServices) {
+        $x = [ordered]@{ name = $name; state_before = $null; start_before = $null; state_after = $null; start_after = $null; error = $null }
+        try {
+            $s = Get-CimInstance Win32_Service -Filter "Name='$name'" -ErrorAction Stop
+            if ($s) {
+                $x.state_before = "$($s.State)"; $x.start_before = "$($s.StartMode)"
+                try { Set-Service -Name $name -StartupType Disabled -ErrorAction Stop } catch { $x.error = "startup type: $($_.Exception.Message)" }
+                if ("$($s.State)" -ne 'Stopped') { Stop-Service -Name $name -Force -ErrorAction Stop; (Get-Service -Name $name).WaitForStatus('Stopped', [TimeSpan]::FromSeconds(30)) }
+                $s = Get-CimInstance Win32_Service -Filter "Name='$name'" -ErrorAction Stop
+                $x.state_after = "$($s.State)"; $x.start_after = "$($s.StartMode)"
+            }
+        } catch { $x.error = "$(if ($x.error) { $x.error + '; ' })$($_.Exception.Message)" }
+        if ($x.error) { $r.errors += "service ${name}: $($x.error)" }
+        $r.services += [pscustomobject]$x
+    }
     $dis = @($r.tasks | Where-Object { $_.state_after -eq 'Disabled' })
-    Log "background pause: $($dis.Count) of $(@($r.tasks | Where-Object { $_.present }).Count) tasks disabled ($(@($dis | ForEach-Object { $_.path }) -join ', ')); UsoSvc $($svc.state_before)/$($svc.start_before) -> $($svc.state_after)/$($svc.start_after); W32Time $($tsvc.state_before) -> $($tsvc.state_after)$(if ($r.errors.Count) { ' !! ' + ($r.errors -join ' | ') })"
+    Log "background pause: $($dis.Count) of $(@($r.tasks | Where-Object { $_.present }).Count) tasks disabled ($(@($dis | ForEach-Object { $_.path }) -join ', ')); UsoSvc $($svc.state_before)/$($svc.start_before) -> $($svc.state_after)/$($svc.start_after); W32Time $($tsvc.state_before) -> $($tsvc.state_after); $(@($r.services | ForEach-Object { "$($_.name) $($_.state_before) -> $($_.state_after)" }) -join '; ')$(if ($r.errors.Count) { ' !! ' + ($r.errors -join ' | ') })"
     $r
 }
 
