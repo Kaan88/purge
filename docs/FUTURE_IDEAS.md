@@ -34,4 +34,5 @@ Collected from discussions with the user. Each needs its own design and a Fable 
 
 ## Other
 
-- Footprint section: a WizTree-like disk map; per-app cache cleaning for installed apps (no generic cleaner).
+- ~~Footprint section: a WizTree-like disk map; per-app cache cleaning for installed apps.~~ Dropped by the user on
+  2026-11-24: Purge stays an uninstaller, not a disk analyser or a BleachBit-style cleaner.
