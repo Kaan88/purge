@@ -36,6 +36,9 @@
 //!   (`is_broker_exit`; a null run's declined consent never ends the broker in its window, RIG.md §17.1);
 //!   (windows-prefetch) ambient-class Windows bookkeeping: a `<drive>:\Windows\Prefetch\*.pf` file changed in size
 //!   and/or LastWriteTime only, never added or removed (`is_windows_prefetch`; Purge's file ops only remove);
+//!   (windows-service-stats) changes in place, never additions or removals, under three Windows-owned keys:
+//!   Delivery Optimization's S-1-5-20 `Usage`, W32Time `SecureTimeLimits`, AuthRoot `AutoUpdate` values
+//!   (`is_windows_service_stats`);
 //!   (ambient) the ambient set: with an M2 set (`purge.rig.m2ambient/1`) only the exact op and
 //!   record seen in the null runs, or its token pattern, never a subtree; (parent) a directory whose only change is
 //!   its LastWriteTime, or a key whose only changes are LastWriteTime / value count / subkey count, when an
@@ -865,6 +868,30 @@ fn is_windows_prefetch(c: &Change) -> bool {
         && s[3][s[3].len() - 3..].eq_ignore_ascii_case(".pf")
 }
 
+/// Windows services' own statistics, changed in place by a Windows writer on its own timer (e2e-final5..7, each in a
+/// different app's window): Delivery Optimization's `HKU\S-1-5-20\...\DeliveryOptimization\Usage` key and values,
+/// Windows Time's `Services\W32Time\SecureTimeLimits` key and subkeys and their values, and the root-certificate
+/// updater's `SystemCertificates\AuthRoot\AutoUpdate` values. Changes (`~`) only: an added or removed key or value there
+/// stays collateral. Purge never writes these keys; stopping the services in setup did not help (DoSvc is
+/// trigger-started and its startup type is protected).
+fn is_windows_service_stats(c: &Change) -> bool {
+    if c.op != '~' || !(c.rec == 'K' || c.rec == 'V') {
+        return false;
+    }
+    let s: Vec<&str> = c.path.split('\\').collect();
+    const DO: [&str; 8] = ["HKU", "S-1-5-20", "Software", "Microsoft", "Windows", "CurrentVersion", "DeliveryOptimization", "Usage"];
+    const AR: [&str; 6] = ["HKLM", "SOFTWARE", "Microsoft", "SystemCertificates", "AuthRoot", "AutoUpdate"];
+    if segs_eq(&s, &DO) || (c.rec == 'V' && segs_eq(&s, &AR)) {
+        return true;
+    }
+    system_cs_rest(&c.path).is_some_and(|rest| {
+        rest.len() >= 3
+            && rest[0].eq_ignore_ascii_case("Services")
+            && rest[1].eq_ignore_ascii_case("W32Time")
+            && rest[2].eq_ignore_ascii_case("SecureTimeLimits")
+    })
+}
+
 /// `HKLM\SYSTEM\<CurrentControlSet|ControlSetNNN>\<rest...>`: the segments after the control set, or None.
 fn system_cs_rest(path: &str) -> Option<Vec<&str>> {
     let s: Vec<&str> = path.split('\\').collect();
@@ -1609,6 +1636,8 @@ pub fn check(cx: &Ctx) -> Result<ExecdiffReport> {
             Some("broker-exit")
         } else if is_windows_prefetch(c) {
             Some("windows-prefetch")
+        } else if is_windows_service_stats(c) {
+            Some("windows-service-stats")
         } else if cx.ambient.and_then(|m| m.matches_change(c, &t)).is_some() {
             Some("ambient")
         } else if stale_dir_time(c, before_ft) {
@@ -2491,6 +2520,43 @@ mod tests {
     }
 
     const PF: &str = "C:\\WINDOWS\\Prefetch\\SVCHOST.EXE-C5EEC15E.pf";
+
+    #[test]
+    fn windows_service_stats_are_changes_to_the_three_windows_keys_only() {
+        const DO: &str = "HKU\\S-1-5-20\\Software\\Microsoft\\Windows\\CurrentVersion\\DeliveryOptimization\\Usage";
+        const ST: &str = "HKLM\\SYSTEM\\CurrentControlSet\\Services\\W32Time\\SecureTimeLimits";
+        const AR: &str = "HKLM\\SOFTWARE\\Microsoft\\SystemCertificates\\AuthRoot\\AutoUpdate";
+        let run_time = format!("{ST}\\RunTime");
+        let yes = [
+            chgx('~', 'K', DO, &["lwt 1->2"]),
+            chgx('~', 'V', DO, &["hash 1->2"]),
+            chgx('~', 'K', ST, &["lwt 1->2"]),
+            chgx('~', 'V', &run_time, &["hash 1->2"]),
+            chgx('~', 'V', "HKLM\\SYSTEM\\ControlSet001\\Services\\W32Time\\SecureTimeLimits\\RunTime", &["hash 1->2"]),
+            chgx('~', 'V', AR, &["hash 1->2"]),
+        ];
+        for c in &yes {
+            assert!(is_windows_service_stats(c), "{c:?}");
+        }
+        let no = [
+            // Added or removed: never.
+            chg('+', 'V', DO),
+            chg('-', 'K', DO),
+            chg('+', 'K', &run_time),
+            chg('-', 'V', AR),
+            // A file, the AutoUpdate key itself, neighbours, parents, another account's Delivery Optimization.
+            chgx('~', 'F', "C:\\Windows\\SoftwareDistribution\\DeliveryOptimization\\x", &["mtime 1->2"]),
+            chgx('~', 'K', AR, &["lwt 1->2"]),
+            chgx('~', 'V', "HKLM\\SOFTWARE\\Microsoft\\SystemCertificates\\AuthRoot\\Certificates", &["hash 1->2"]),
+            chgx('~', 'V', "HKU\\S-1-5-20\\Software\\Microsoft\\Windows\\CurrentVersion\\DeliveryOptimization", &["hash 1->2"]),
+            chgx('~', 'V', "HKU\\S-1-5-21-1-2-3-1000\\Software\\Microsoft\\Windows\\CurrentVersion\\DeliveryOptimization\\Usage", &["hash 1->2"]),
+            chgx('~', 'V', "HKLM\\SYSTEM\\CurrentControlSet\\Services\\W32Time\\Config", &["hash 1->2"]),
+            chgx('~', 'V', "HKLM\\SYSTEM\\CurrentControlSet\\Services\\W32Time", &["hash 1->2"]),
+        ];
+        for c in &no {
+            assert!(!is_windows_service_stats(c), "{c:?}");
+        }
+    }
 
     #[test]
     fn windows_prefetch_is_a_pf_file_in_prefetch_changed_in_size_or_mtime_only() {

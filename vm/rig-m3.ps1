@@ -844,7 +844,19 @@ function Invoke-M3E2eApp($AppDef, [bool]$Undo, [string]$Base, [string]$Dir = '',
                     $g = Join-Path $script:E2eDir 'guest'
                     if (Test-Path -LiteralPath $g) { Remove-Item -LiteralPath $g -Recurse -Force }
                     Expand-Archive -LiteralPath $zip -DestinationPath $g
-                    Remove-Item -LiteralPath $zip -Force
+                    # e2e-final7 npp: a snapshot came back with a bad gzip CRC (one digit changed). Every .gz must
+                    # decompress whole; else the zip is pulled once more, and a second failure is recorded, not hidden.
+                    $bad = @(Get-M3BadGzip $g)
+                    if ($bad.Count) {
+                        Write-RigLog "  !! corrupt after the pull: $($bad -join ', '); pulling the guest zip again"
+                        Remove-Item -LiteralPath $zip, $g -Recurse -Force -ErrorAction SilentlyContinue
+                        $c = Invoke-Guest @('copyfrom', "C:\cr\out\m3-e2e-$id.zip", $zip)
+                        if ($c.code -eq 0) { Expand-Archive -LiteralPath $zip -DestinationPath $g }
+                        $bad = @(Get-M3BadGzip $g)
+                        $rec.repulled = $true
+                        if ($bad.Count) { $rec.corrupt = $bad; Write-RigLog "  !! still corrupt after the second pull: $($bad -join ', ')"; $script:M3Fail = $true }
+                    }
+                    Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
                     $rec.pulled = $true
                     Write-RigLog "  guest outputs in $g"
                 } else { Write-RigLog "  !! copyfrom of the guest zip failed: $($c.out -join ' ')"; $script:M3Fail = $true }
@@ -970,6 +982,20 @@ function Invoke-M3E2e {
 $M3E2eFixtureRx = '(?i)purgeexec|programdata\\+purge|purgee2emsi|\.purge(\\)?-q'
 # Distinct null runs a set must come from (m3-e2e-score.ps1 $E2eMinNullRuns is the same number).
 $M3E2eMinNullRuns = 6
+
+# The .gz files under $Dir that do not decompress whole (a bad CRC or a truncated stream), relative to $Dir.
+function Get-M3BadGzip([string]$Dir) {
+    if (-not (Test-Path -LiteralPath $Dir)) { return @('(no guest folder)') }
+    foreach ($f in @(Get-ChildItem -LiteralPath $Dir -Recurse -File -Filter '*.gz')) {
+        $fs = $null
+        try {
+            $fs = [IO.File]::OpenRead($f.FullName)
+            $gz = New-Object IO.Compression.GZipStream($fs, [IO.Compression.CompressionMode]::Decompress)
+            $buf = New-Object byte[] 1048576
+            while ($gz.Read($buf, 0, $buf.Length) -gt 0) { }
+        } catch { $f.FullName.Substring($Dir.Length).TrimStart('\') } finally { if ($fs) { $fs.Dispose() } }
+    }
+}
 
 function Get-M3Sha256File([string]$Path) { (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant() }
 function Read-M3Json([string]$Path) {
