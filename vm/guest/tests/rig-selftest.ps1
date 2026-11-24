@@ -2150,7 +2150,7 @@ function Invoke-M2Script([string]$Script, [string]$Arguments = '', [int]$Timeout
         $setupPhase -match 'background = \$null' -and
         ((@([regex]::Matches($bgList, "path = '([^']+)'; name = '([^']+)'") | ForEach-Object { $_.Groups[1].Value + $_.Groups[2].Value }) -join '|') -ceq
             '\Microsoft\Windows\UpdateOrchestrator\*|\Microsoft\Windows\Device Information\Device|\Microsoft\Windows\Flighting\OneSettings\RefreshCache|\Microsoft\Windows\PushToInstall\*|\Microsoft\Windows\Application Experience\*|\Microsoft\Windows\Windows Defender\*') -and
-        $e2eText -match "Stop-Service -Name 'UsoSvc'")
+        $e2eText -match "Stop-Service -Name 'UsoSvc'" -and $e2eText -match "Stop-Service -Name 'W32Time'" -and $e2eText -match 'time_service = \[pscustomobject\]\$tsvc')
     Check 'm3-e2e fail fast: the catch records the failed step; finish and the pull stay in finally' ($appFn -match 'rec\.failed_step = \$script:E2eFailedStep' -and $appFn -match "(?s)\} finally \{.*Invoke-M3E2ePhase 'finish'")
 
     # MSI smoke: which fixtures a smoke line lets through.

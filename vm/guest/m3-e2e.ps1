@@ -168,7 +168,7 @@ $E2eBackgroundTasks = @(
 # Disabled where Windows allows it: its startup type is protected on some builds, which is recorded, not fatal). Never
 # throws; returns the record for setup.json / e2e.json `background`.
 function Suspend-E2eBackgroundTasks {
-    $r = [ordered]@{ t = (NowIso); tasks = @(); service = $null; errors = @() }
+    $r = [ordered]@{ t = (NowIso); tasks = @(); service = $null; time_service = $null; errors = @() }
     foreach ($spec in $E2eBackgroundTasks) {
         $found = @(Get-ScheduledTask -TaskPath $spec.path -TaskName $spec.name -ErrorAction SilentlyContinue)
         if (-not $found.Count -and $spec.name -ne '*') { $r.tasks += [pscustomobject][ordered]@{ path = "$($spec.path)$($spec.name)"; present = $false; state_before = $null; state_after = $null; error = $null } }
@@ -195,8 +195,24 @@ function Suspend-E2eBackgroundTasks {
     } catch { $svc.error = "$(if ($svc.error) { $svc.error + '; ' })$($_.Exception.Message)" }
     if ($svc.error) { $r.errors += "service UsoSvc: $($svc.error)" }
     $r.service = [pscustomobject]$svc
+    # Windows Time: rig-base's clock is days behind at every restore, so its secure time seeding rewrites
+    # W32Time\SecureTimeLimits values at random points after boot (e2e-final3 execapp, e2e-final5 7zip). Stopped and set
+    # to Disabled for the run (the restore brings it back); recorded like UsoSvc, never fatal.
+    $tsvc = [ordered]@{ name = 'W32Time'; state_before = $null; start_before = $null; state_after = $null; start_after = $null; error = $null }
+    try {
+        $s = Get-CimInstance Win32_Service -Filter "Name='W32Time'" -ErrorAction Stop
+        if ($s) {
+            $tsvc.state_before = "$($s.State)"; $tsvc.start_before = "$($s.StartMode)"
+            try { Set-Service -Name 'W32Time' -StartupType Disabled -ErrorAction Stop } catch { $tsvc.error = "startup type: $($_.Exception.Message)" }
+            if ("$($s.State)" -ne 'Stopped') { Stop-Service -Name 'W32Time' -Force -ErrorAction Stop; (Get-Service -Name 'W32Time').WaitForStatus('Stopped', [TimeSpan]::FromSeconds(30)) }
+            $s = Get-CimInstance Win32_Service -Filter "Name='W32Time'" -ErrorAction Stop
+            $tsvc.state_after = "$($s.State)"; $tsvc.start_after = "$($s.StartMode)"
+        }
+    } catch { $tsvc.error = "$(if ($tsvc.error) { $tsvc.error + '; ' })$($_.Exception.Message)" }
+    if ($tsvc.error) { $r.errors += "service W32Time: $($tsvc.error)" }
+    $r.time_service = [pscustomobject]$tsvc
     $dis = @($r.tasks | Where-Object { $_.state_after -eq 'Disabled' })
-    Log "background pause: $($dis.Count) of $(@($r.tasks | Where-Object { $_.present }).Count) tasks disabled ($(@($dis | ForEach-Object { $_.path }) -join ', ')); UsoSvc $($svc.state_before)/$($svc.start_before) -> $($svc.state_after)/$($svc.start_after)$(if ($r.errors.Count) { ' !! ' + ($r.errors -join ' | ') })"
+    Log "background pause: $($dis.Count) of $(@($r.tasks | Where-Object { $_.present }).Count) tasks disabled ($(@($dis | ForEach-Object { $_.path }) -join ', ')); UsoSvc $($svc.state_before)/$($svc.start_before) -> $($svc.state_after)/$($svc.start_after); W32Time $($tsvc.state_before) -> $($tsvc.state_after)$(if ($r.errors.Count) { ' !! ' + ($r.errors -join ' | ') })"
     $r
 }
 
