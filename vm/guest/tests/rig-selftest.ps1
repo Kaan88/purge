@@ -2491,6 +2491,7 @@ exit 0
     $ErrorActionPreference = 'Stop'
     Check 'm3-e2e-ui: a row of the name' (Test-E2eRowText "Notepad++ (64-bit x64)`r`nNotepad++ Team" 'Notepad++ (64-bit x64)')
     Check 'm3-e2e-ui: a row with the new tag' (Test-E2eRowText "7-Zip 24.08 (x64 edition)new`nIgor Pavlov" '7-Zip 24.08 (x64 edition)')
+    Check 'm3-e2e-ui: a row with the spaced new tag (0293f8f)' ((Test-E2eRowText "Git  new`r`nThe Git Development Community" 'Git') -and (Get-E2eRowName "Git  new`r`nx") -eq 'Git' -and -not (Test-E2eRowText 'Git  newer' 'Git'))
     Check 'm3-e2e-ui: the user VS Code is not the system one' (-not (Test-E2eRowText "Microsoft Visual Studio Code (User)new`nMicrosoft Corporation" 'Microsoft Visual Studio Code'))
     Check 'm3-e2e-ui: a longer name is not the row' (-not (Test-E2eRowText 'Gitnew' 'Git ') -and -not (Test-E2eRowText 'GitHub Desktop' 'Git'))
     Check 'm3-e2e-ui: the row name drops the tag' ((Get-E2eRowName "Gitnew`r`nThe Git Development Community") -eq 'Git')

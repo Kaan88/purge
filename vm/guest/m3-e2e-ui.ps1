@@ -19,14 +19,16 @@ function Test-E2eRowText([string]$Text, [string]$Name) {
     if (-not $Text -or -not $Name) { return $false }
     if (-not $Text.StartsWith($Name, [StringComparison]::OrdinalIgnoreCase)) { return $false }
     $rest = $Text.Substring($Name.Length)
-    if ($rest.StartsWith('new', [StringComparison]::Ordinal)) { $rest = $rest.Substring(3) }
+    # The "new" tag: "Gitnew" before 0293f8f, "Git  new" since (the UI run put spaces before the badge).
+    $tag = $rest.TrimStart(' ')
+    if ($tag.StartsWith('new', [StringComparison]::Ordinal)) { $rest = $tag.Substring(3) }
     return ($rest.Length -eq 0 -or $rest[0] -eq "`r" -or $rest[0] -eq "`n")
 }
 
 # Pure: the first line of a row text without the "new" tag (what the scorer records as the row seen).
 function Get-E2eRowName([string]$Text) {
     $first = (("$Text" -split "`r?`n")[0])
-    if ($first.EndsWith('new', [StringComparison]::Ordinal)) { $first = $first.Substring(0, $first.Length - 3) }
+    if ($first.EndsWith('new', [StringComparison]::Ordinal)) { $first = $first.Substring(0, $first.Length - 3).TrimEnd(' ') }
     $first
 }
 
