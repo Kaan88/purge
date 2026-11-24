@@ -258,6 +258,12 @@ pub struct ScopeBuilder {
     localappdata: Option<String>,
 }
 
+/// An unresolved `{user-sid}` / `{localappdata}` placeholder. A brace alone is not one: a CLSID or other GUID key
+/// (`...\CLSID\{9E3B5D17-...}`) is a real key (chain e2e-final4 skipped execapp's InprocServer32 value on `{`).
+fn has_placeholder(s: &str) -> bool {
+    s.contains("{user-sid}") || s.contains("{localappdata}")
+}
+
 impl ScopeBuilder {
     pub fn new(sid: Option<&str>, localappdata: Option<&str>) -> ScopeBuilder {
         ScopeBuilder {
@@ -289,7 +295,7 @@ impl ScopeBuilder {
         let s = self.subst(spec);
         let (body, d) = split_spec(&s);
         let p = canon::canon_path(&snap_expand(body));
-        if !is_abs_path(&p) || p.contains('{') {
+        if !is_abs_path(&p) || has_placeholder(&p) {
             self.warn(format!("not an absolute path, skipped: {spec}"));
             return;
         }
@@ -300,7 +306,7 @@ impl ScopeBuilder {
         let s = self.subst(spec);
         let (body, d) = split_spec(&s);
         let k = canon::canon_reg(body, self.sid.as_deref());
-        if !(k.starts_with("HKLM") || k.starts_with("HKU\\")) || k.contains('{') {
+        if !(k.starts_with("HKLM") || k.starts_with("HKU\\")) || has_placeholder(&k) {
             self.warn(format!("not a HKLM or HKU key, skipped: {spec}"));
             return;
         }
@@ -309,7 +315,7 @@ impl ScopeBuilder {
 
     pub fn value(&mut self, key: &str, name: &str) {
         let k = canon::canon_reg(&self.subst(key), self.sid.as_deref());
-        if !(k.starts_with("HKLM") || k.starts_with("HKU\\")) || k.contains('{') {
+        if !(k.starts_with("HKLM") || k.starts_with("HKU\\")) || has_placeholder(&k) {
             self.warn(format!("not a HKLM or HKU key, skipped: {key}"));
             return;
         }
@@ -1698,6 +1704,23 @@ pub(crate) mod testenv {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_guid_key_or_path_is_kept_and_a_placeholder_is_skipped() {
+        let mut b = ScopeBuilder::new(None, None);
+        b.key(r"HKLM\SOFTWARE\Classes\CLSID\{9E3B5D17-4C2A-4F0B-8E61-7A2C5B9D0F34}\InprocServer32@0");
+        b.value(r"HKLM\SOFTWARE\Classes\CLSID\{9E3B5D17-4C2A-4F0B-8E61-7A2C5B9D0F34}\InprocServer32", "");
+        b.path(r"C:\ProgramData\{1F2E3D4C-0000-1111-2222-333344445555}");
+        assert_eq!(b.scope.keys.len(), 1, "{:?}", b.scope.warnings);
+        assert_eq!(b.scope.values.len(), 1, "{:?}", b.scope.warnings);
+        assert_eq!(b.scope.paths.len(), 1, "{:?}", b.scope.warnings);
+        assert!(b.scope.warnings.is_empty(), "{:?}", b.scope.warnings);
+        // Without a SID / LOCALAPPDATA the placeholders stay and are skipped.
+        b.key(r"HKU\{user-sid}\Software\X");
+        b.path(r"{localappdata}\X");
+        assert_eq!((b.scope.keys.len(), b.scope.paths.len()), (1, 1));
+        assert_eq!(b.scope.warnings.len(), 2);
+    }
 
     #[test]
     fn spec_depths() {
