@@ -160,6 +160,8 @@ $E2eBackgroundTasks = @(
     @{ path = '\Microsoft\Windows\Flighting\OneSettings\'; name = 'RefreshCache' }
     @{ path = '\Microsoft\Windows\PushToInstall\'; name = '*' }
     @{ path = '\Microsoft\Windows\Application Experience\'; name = '*' }
+    # e2e-final4: vscode-user's 25 collateral were one Defender cache-maintenance / cleanup / signature-fallback burst.
+    @{ path = '\Microsoft\Windows\Windows Defender\'; name = '*' }
 )
 
 # Disables $E2eBackgroundTasks, stops their running instances, and stops the Update Orchestrator service (UsoSvc, set to

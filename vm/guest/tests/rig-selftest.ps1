@@ -2149,7 +2149,7 @@ function Invoke-M2Script([string]$Script, [string]$Arguments = '', [int]$Timeout
         $setupPhase -match '(?m)^        \$rec\.telemetry = Suspend-M2Telemetry\s*\r?\n(\s*#[^\n]*\n)*        \$rec\.background = Suspend-E2eBackgroundTasks' -and
         $setupPhase -match 'background = \$null' -and
         ((@([regex]::Matches($bgList, "path = '([^']+)'; name = '([^']+)'") | ForEach-Object { $_.Groups[1].Value + $_.Groups[2].Value }) -join '|') -ceq
-            '\Microsoft\Windows\UpdateOrchestrator\*|\Microsoft\Windows\Device Information\Device|\Microsoft\Windows\Flighting\OneSettings\RefreshCache|\Microsoft\Windows\PushToInstall\*|\Microsoft\Windows\Application Experience\*') -and
+            '\Microsoft\Windows\UpdateOrchestrator\*|\Microsoft\Windows\Device Information\Device|\Microsoft\Windows\Flighting\OneSettings\RefreshCache|\Microsoft\Windows\PushToInstall\*|\Microsoft\Windows\Application Experience\*|\Microsoft\Windows\Windows Defender\*') -and
         $e2eText -match "Stop-Service -Name 'UsoSvc'")
     Check 'm3-e2e fail fast: the catch records the failed step; finish and the pull stay in finally' ($appFn -match 'rec\.failed_step = \$script:E2eFailedStep' -and $appFn -match "(?s)\} finally \{.*Invoke-M3E2ePhase 'finish'")
 
