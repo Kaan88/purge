@@ -34,12 +34,13 @@ use purge_ui_model::pipeline::{LaunchResult, LaunchState, RemovedRequest};
 use purge_ui_model::programs::page::{IconWanted, ProgramsRequest};
 use purge_ui_model::programs::{EngineState, ProgramEntry, ProgramIcon};
 
+mod flow;
 // ---- UI-PAGES2: the History and Quarantine pages (`pages2`) ----
 mod pages2;
 
 use crate::icons::{self, Atlas};
 use crate::markers;
-use crate::model::{Model, Page};
+use crate::model::Model;
 
 /// How the window starts.
 #[derive(Debug, Clone)]
@@ -98,7 +99,7 @@ fn launch_result(f: LaunchFailure) -> Result<LaunchResult, CallError> {
 
 /// Who holds the one broker session. The broker serves one client at a time, so the pages take
 /// turns.
-// The Uninstall and Leftovers pages take the broker when they are wired (UI-PAGES).
+// Every page takes the broker through `launch_for` (link/flow.rs).
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Owner {
@@ -114,10 +115,11 @@ pub enum Owner {
     Vault,
 }
 
-/// The one broker session, and the launch of it while one runs.
+/// The one broker session, and the launch of it while one runs. The session is a
+/// [`BrokerClient`], or with sample data the [`crate::sample_broker::SampleBroker`].
 #[derive(Default)]
 pub struct BrokerHub {
-    session: Option<(Owner, Arc<BrokerClient>)>,
+    session: Option<(Owner, Arc<dyn Broker>)>,
     launching: Option<(Owner, Launch)>,
 }
 
@@ -164,13 +166,30 @@ impl BrokerHub {
         };
         self.launching = None;
         if let Ok(client) = result {
-            self.session = Some((owner, client.clone()));
+            let client: Arc<dyn Broker> = client.clone();
+            self.session = Some((owner, client));
         }
         Some(owner)
     }
 
+    /// Gives `owner` a session made without a launch (the sample broker). A session another
+    /// page held is ended first.
+    pub fn adopt(&mut self, owner: Owner, session: Arc<dyn Broker>) {
+        if let Some((_, old)) = self.session.replace((owner, session)) {
+            old.close();
+        }
+    }
+
+    /// Who holds a live session, if any page does.
+    pub fn holder(&self) -> Option<Owner> {
+        self.session
+            .as_ref()
+            .filter(|(_, c)| c.is_live())
+            .map(|(o, _)| *o)
+    }
+
     /// The live session, when `owner` holds it.
-    pub fn session(&self, owner: Owner) -> Option<&Arc<BrokerClient>> {
+    pub fn session(&self, owner: Owner) -> Option<&Arc<dyn Broker>> {
         self.session
             .as_ref()
             .filter(|(o, c)| *o == owner && c.is_live())
@@ -198,9 +217,17 @@ impl BrokerHub {
         }
     }
 
-    /// The broker link ended: no one holds it any more.
-    fn closed(&mut self) {
-        self.session = None;
+    /// The broker link of session `session` ended: whoever held it holds nothing any more. An
+    /// older session's end (a page took a new one since) changes nothing.
+    fn closed(&mut self, session: u64) -> Option<Owner> {
+        match &self.session {
+            Some((o, c)) if c.session() == session || !c.is_live() => {
+                let owner = *o;
+                self.session = None;
+                Some(owner)
+            }
+            _ => None,
+        }
     }
 }
 
@@ -228,6 +255,8 @@ enum Pending {
     Forget,
     CheckStored,
     CheckScan,
+    /// A call of the Uninstall or the Leftovers page (UI-FLOW, `link/flow.rs`).
+    Flow(flow::Call),
 }
 
 /// The icons of the current enrichment still to fetch.
@@ -253,6 +282,8 @@ pub struct Link {
     /// The broker call of the removed-program check in flight.
     check_call: Option<CallId>,
     pub broker: BrokerHub,
+    /// What the uninstall flow last told the Programs page and itself (`link/flow.rs`).
+    flow: flow::Seen,
     /// UI-PAGES2: the History and Quarantine pages' calls.
     pages: pages2::Pages,
 }
@@ -282,6 +313,7 @@ impl Link {
             atlas: Atlas::open(None),
             check_call: None,
             broker: BrokerHub::default(),
+            flow: flow::Seen::default(),
             pages: pages2::Pages::default(),
         }
     }
@@ -318,6 +350,7 @@ impl Link {
                 self.send(model, r);
                 busy = true;
             }
+            busy |= self.flow_pump(model);
             // UI-PAGES2.
             busy |= self.pages_pump(model);
             if !busy {
@@ -373,6 +406,10 @@ impl Link {
                     pr.page.on_check_progress(&progress.phase);
                     pr.sync();
                 }
+                if let Some(Pending::Flow(what)) = self.pending.get(&call) {
+                    let what = *what;
+                    self.flow_progress(model, what, &progress);
+                }
             }
             ClientEvent::ProgramsPatched(patches) => {
                 let r = pr.page.on_late_patches(&patches);
@@ -384,30 +421,29 @@ impl Link {
                 let r = pr.page.set_engine(EngineState::default());
                 pr.take(r);
             }
-            ClientEvent::BrokerClosed { .. } => {
-                self.broker.closed();
-                // UI-PAGES2.
-                self.pages_broker_closed(model);
+            ClientEvent::BrokerClosed { session, .. } => {
+                if let Some(owner) = self.broker.closed(session) {
+                    self.flow_broker_closed(model, owner);
+                }
             }
             ClientEvent::BrokerLaunched { call, result } => {
-                let owner = self.broker.launched(call, &result);
-                // UI-PAGES2.
-                if let Some(o @ (Owner::History | Owner::Vault)) = owner {
-                    self.pages_launched(model, o, &result);
-                    return;
-                }
-                let pr = &mut model.programs;
-                if owner == Some(Owner::Removed) {
+                if let Some(owner) = self.broker.launched(call, &result) {
                     let answer = match result {
                         Ok(_) => Ok(LaunchResult::started()),
                         Err(f) => launch_result(f),
                     };
-                    let r = pr.page.on_check_launch(answer);
-                    pr.take(r);
+                    self.on_launched(model, owner, answer);
                 }
             }
-            // The broker's consent dialog and baseline news are for pages not wired yet.
-            ClientEvent::ConsentShown { .. } | ClientEvent::BaselineChanged(_) => {}
+            ClientEvent::ConsentShown { call, shown } => {
+                if let Some(Pending::Flow(what)) = call.and_then(|c| self.pending.get(&c)) {
+                    let what = *what;
+                    self.flow_consent(model, what, &shown);
+                }
+            }
+            ClientEvent::BaselineChanged(changed) => {
+                model.flow.leftovers.on_baseline_changed(&changed);
+            }
         }
     }
 
@@ -459,6 +495,9 @@ impl Link {
         let Some(what) = self.pending.remove(&call) else {
             return;
         };
+        if let Pending::Flow(what) = what {
+            return self.flow_reply(model, what, result);
+        }
         let pr = &mut model.programs;
         let r = match (what, result) {
             (Pending::List, Ok(Answer::Programs(l))) => pr
@@ -484,6 +523,7 @@ impl Link {
             (Pending::CheckStored, r) => pr.page.on_check_stored(Err(failure(r))),
             (Pending::CheckScan, Ok(Answer::Scan(s))) => pr.page.on_check_scan(Ok(s)),
             (Pending::CheckScan, r) => pr.page.on_check_scan(Err(failure(r))),
+            (Pending::Flow(_), _) => vec![],
         };
         pr.take(r);
     }
@@ -539,13 +579,9 @@ impl Link {
                 }
             }
             ProgramsRequest::Check(check) => self.check(model, check),
-            ProgramsRequest::OpenLeftovers(outcome) => {
-                self.broker.hand_over(Owner::Removed, Owner::Leftovers);
-                model.leftovers_inbox = Some(outcome);
-                model.page = Page::Leftovers;
-            }
+            ProgramsRequest::OpenLeftovers(outcome) => self.show_stored(model, outcome),
             ProgramsRequest::CloseCheckSession => self.broker.close(Owner::Removed),
-            // The Uninstall page is not wired yet: it has no actions to follow the check.
+            // The Uninstall page reads whether a check runs each time it is drawn or acted on.
             ProgramsRequest::CheckRunningChanged => {}
             ProgramsRequest::Uninstall { targets } => {
                 model.open_uninstall(targets);
@@ -625,15 +661,8 @@ impl Link {
             true
         };
         match check {
-            RemovedRequest::Launch => match self.broker.launch(Owner::Removed, self.sink.clone()) {
-                Ok(_) => {}
-                Err(message) => {
-                    let r = pr
-                        .page
-                        .on_check_launch(Ok(LaunchResult::of(LaunchState::CannotStart, message)));
-                    pr.take(r);
-                }
-            },
+            // Through the first-elevation explanation, as every launch (`link/flow.rs`).
+            RemovedRequest::Launch => self.launch_for(model, Owner::Removed),
             RemovedRequest::Stored { program_ids } => {
                 let sent = NonEmpty::new(program_ids).is_some_and(|program_ids| {
                     broker_call(

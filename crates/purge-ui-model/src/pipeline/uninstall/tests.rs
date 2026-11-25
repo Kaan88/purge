@@ -48,6 +48,7 @@ fn a_broker_route_shows_the_brokers_command_and_runs_with_the_same_quiet_choice(
     let confirmation = rig.next_confirmation();
 
     assert_eq!(confirmation.command, QUIET);
+    assert_eq!(confirmation.interactive_command, COMMAND);
     assert_eq!(confirmation.signer.as_deref(), Some("App Signer"));
     assert!(confirmation.quiet_available);
     assert!(
@@ -91,6 +92,7 @@ fn a_medium_route_shows_the_engines_command_runs_it_and_then_the_broker_observes
 
     // The command shown is the medium engine's, because it is the process that runs it.
     assert_eq!(confirmation.command, quiet);
+    assert_eq!(confirmation.interactive_command, interactive);
     assert_eq!(rig.medium.route_calls, 1);
     assert!(
         confirmation

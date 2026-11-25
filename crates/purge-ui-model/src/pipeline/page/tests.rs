@@ -366,9 +366,9 @@ fn the_confirm_dialog_says_what_will_run() {
     assert!(d.quiet_on && d.quiet_enabled);
     assert_eq!(d.quiet_line, format!("Quiet command: {QUIET}"));
     assert_eq!(d.command_for(true), QUIET);
-    // As in the WinUI dialog: `command` is the selected one (the quiet one here), so switching quiet off
-    // still shows it. Kept for parity; reported to the coordinator.
-    assert_eq!(d.command_for(false), QUIET);
+    // Fixed (coordinator's decision): the WinUI dialog kept only the selected command, so switching
+    // quiet off still showed the quiet one; switched off, the dialog now shows the interactive one.
+    assert_eq!(d.command_for(false), COMMAND);
     assert!(
         d.answer(ConfirmButton::CheckAgain, true, RestorePoint::Off)
             .recheck

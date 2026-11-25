@@ -7,7 +7,11 @@
 //! opening a page starts the broker. A page that is left while idle gives its broker back, so the
 //! other pages can have it.
 //!
-//! **With sample data** no broker is ever started: a launch answers "started" at once, the read
+//! Launches go through [`Link::launch_for`] (link/flow.rs): the first-elevation explanation
+//! first (History's words say it only reads), then the Windows prompt; its answer comes back in
+//! [`Link::pages_launched`].
+//!
+//! **With sample data** no real broker is started (the flow's sample session stands in), the read
 //! calls (`history.get`, `journal.pending`, `quarantine.expiring`) are answered from
 //! [`purge_client::sample_history`], and every call that would change the PC (`undo.run`,
 //! `journal.resume`, `journal.rollback`, `quarantine.purge`) answers
@@ -15,13 +19,13 @@
 
 use std::collections::HashMap;
 
-use purge_client::broker::{LaunchFailure, LaunchStatus};
 use purge_client::sample::NOT_LIVE;
-use purge_client::{Answer, Broker, BrokerClient, CallId, ClientError, sample_history};
+use purge_client::{Answer, CallId, ClientError, sample_history};
 use purge_rpc::methods::{NoParams, PipeCall, StdioCall};
 use purge_ui_model::CallError;
 use purge_ui_model::broker_link::BrokerLaunch;
 use purge_ui_model::history::HistoryCall;
+use purge_ui_model::pipeline::{LaunchResult, LaunchState};
 use purge_ui_model::vault::VaultCall;
 
 use super::{Link, Owner, call_error, failure, no_session};
@@ -47,22 +51,6 @@ pub struct Pages {
     pending: HashMap<CallId, Call>,
     /// The page the last pump saw, to read a page's list when it is shown.
     shown: Option<Page>,
-}
-
-/// The first-elevation explanation before a broker launch (the dialog is UI-FLOW's). Until it is
-/// wired, the launch goes on to the Windows prompt at once.
-// TODO(UI-FLOW): show the first-elevation dialog here (`read_only` words it for a read) and answer
-// "Not now" as `BrokerLaunch::declined()`.
-fn before_first_elevation(_owner: Owner, _read_only: bool) -> bool {
-    true
-}
-
-/// A broker launch's failure as the History and Quarantine models see it.
-fn launch_of(f: &LaunchFailure) -> BrokerLaunch {
-    match f.status {
-        LaunchStatus::Cancelled | LaunchStatus::Stopped => BrokerLaunch::cancelled(&f.message),
-        _ => BrokerLaunch::failed(&f.message),
-    }
 }
 
 impl Link {
@@ -119,28 +107,23 @@ impl Link {
                     model.history.take(r);
                 }
             }
-            HistoryCall::Launch { read_only } => {
-                let answer = self.launch(model, owner, read_only);
-                if let Some(launch) = answer {
-                    let r = model.history.page.on_launch(launch);
-                    model.history.take(r);
-                }
-            }
+            // The explanation words History's launch as a read itself (`Elevation::read_only`).
+            HistoryCall::Launch { read_only: _ } => self.launch_for(model, owner),
             HistoryCall::DropBroker => self.drop_broker(owner),
             HistoryCall::AllowForeground => self.allow_foreground(owner),
             HistoryCall::Get(p) => {
-                self.broker_call(model, PipeCall::HistoryGet(p), Call::HistoryGet)
+                self.pages_broker_call(model, PipeCall::HistoryGet(p), Call::HistoryGet)
             }
             HistoryCall::Undo(p) => {
-                self.broker_call(model, PipeCall::UndoRun(p), Call::HistoryUndo)
+                self.pages_broker_call(model, PipeCall::UndoRun(p), Call::HistoryUndo)
             }
             HistoryCall::Resume(p) => {
-                self.broker_call(model, PipeCall::JournalResume(p), Call::HistoryRecover)
+                self.pages_broker_call(model, PipeCall::JournalResume(p), Call::HistoryRecover)
             }
             HistoryCall::Rollback(p) => {
-                self.broker_call(model, PipeCall::JournalRollback(p), Call::HistoryRecover)
+                self.pages_broker_call(model, PipeCall::JournalRollback(p), Call::HistoryRecover)
             }
-            HistoryCall::Pending => self.broker_call(
+            HistoryCall::Pending => self.pages_broker_call(
                 model,
                 PipeCall::JournalPending(NoParams {}),
                 Call::HistoryPending,
@@ -158,20 +141,17 @@ impl Link {
                     model.quarantine.sync();
                 }
             }
-            VaultCall::Launch => {
-                if let Some(launch) = self.launch(model, owner, false) {
-                    let r = model.quarantine.page.on_launch(launch);
-                    model.quarantine.take(r);
-                }
-            }
+            VaultCall::Launch => self.launch_for(model, owner),
             VaultCall::DropBroker => self.drop_broker(owner),
             VaultCall::AllowForeground => self.allow_foreground(owner),
-            VaultCall::Undo(p) => self.broker_call(model, PipeCall::UndoRun(p), Call::VaultUndo),
+            VaultCall::Undo(p) => {
+                self.pages_broker_call(model, PipeCall::UndoRun(p), Call::VaultUndo)
+            }
             VaultCall::Expiring(p) => {
-                self.broker_call(model, PipeCall::QuarantineExpiring(p), Call::VaultExpiring)
+                self.pages_broker_call(model, PipeCall::QuarantineExpiring(p), Call::VaultExpiring)
             }
             VaultCall::Purge(p) => {
-                self.broker_call(model, PipeCall::QuarantinePurge(p), Call::VaultPurge)
+                self.pages_broker_call(model, PipeCall::QuarantinePurge(p), Call::VaultPurge)
             }
         }
     }
@@ -186,39 +166,8 @@ impl Link {
         true
     }
 
-    /// Starts the broker for `owner`. `Some` is the answer now (sample data, or a launch that could
-    /// not start); `None` means the answer comes as a `BrokerLaunched` event.
-    fn launch(&mut self, model: &mut Model, owner: Owner, read_only: bool) -> Option<BrokerLaunch> {
-        if !self.live {
-            // Sample data: nothing is elevated; the read calls are answered from the sample.
-            return Some(BrokerLaunch::started());
-        }
-        if !before_first_elevation(owner, read_only) {
-            return Some(BrokerLaunch::declined());
-        }
-        // The other of these two pages gives its session up first: the broker serves one page.
-        let other = if owner == Owner::History {
-            Owner::Vault
-        } else {
-            Owner::History
-        };
-        if self.broker.session(other).is_some() {
-            self.broker.close(other);
-            match other {
-                Owner::History => model.history.page.on_broker_ended(),
-                _ => model.quarantine.page.on_broker_ended(),
-            }
-        }
-        match self.broker.launch(owner, self.sink.clone()) {
-            Ok(_) => None,
-            Err(message) => Some(BrokerLaunch::failed(message)),
-        }
-    }
-
     fn drop_broker(&mut self, owner: Owner) {
-        if self.live {
-            self.broker.close(owner);
-        }
+        self.broker.close(owner);
     }
 
     fn allow_foreground(&self, owner: Owner) {
@@ -227,7 +176,7 @@ impl Link {
         }
     }
 
-    fn broker_call(&mut self, model: &mut Model, call: PipeCall, what: Call) {
+    fn pages_broker_call(&mut self, model: &mut Model, call: PipeCall, what: Call) {
         if !self.live {
             let answer = sample_answer(&call);
             self.pages_answer(model, what, answer);
@@ -239,7 +188,7 @@ impl Link {
         };
         match self.broker.session(owner).cloned() {
             Some(session) => {
-                let id = BrokerClient::request(&session, call);
+                let id = session.request(call);
                 self.pages.pending.insert(id, what);
             }
             None => self.pages_answer(
@@ -287,22 +236,30 @@ impl Link {
         true
     }
 
-    /// The broker link ended: both pages learn it (the one that held it drops it on its next click).
-    pub(super) fn pages_broker_closed(&mut self, model: &mut Model) {
-        model.history.page.on_broker_ended();
-        model.quarantine.page.on_broker_ended();
+    /// `owner`'s broker link ended (or was taken for another page).
+    pub(super) fn pages_broker_closed(&mut self, model: &mut Model, owner: Owner) {
+        match owner {
+            Owner::History => model.history.page.on_broker_ended(),
+            Owner::Vault => model.quarantine.page.on_broker_ended(),
+            _ => {}
+        }
     }
 
-    /// A launch for one of these pages ended.
+    /// A launch for one of these pages ended (`Err`: Purge stopped it).
     pub(super) fn pages_launched(
         &mut self,
         model: &mut Model,
         owner: Owner,
-        result: &Result<std::sync::Arc<BrokerClient>, LaunchFailure>,
+        answer: Result<LaunchResult, CallError>,
     ) {
-        let launch = match result {
-            Ok(_) => BrokerLaunch::started(),
-            Err(f) => launch_of(f),
+        let launch = match answer {
+            Ok(l) => match l.state {
+                LaunchState::Started => BrokerLaunch::started(),
+                LaunchState::Cancelled if l.declined_explanation => BrokerLaunch::declined(),
+                LaunchState::Cancelled => BrokerLaunch::cancelled(l.message),
+                _ => BrokerLaunch::failed(l.message),
+            },
+            Err(_) => BrokerLaunch::cancelled(""),
         };
         match owner {
             Owner::History => {

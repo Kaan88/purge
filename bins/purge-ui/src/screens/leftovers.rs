@@ -1,78 +1,65 @@
-//! The Leftovers page: what a program left behind, in groups that open and close, each item
-//! with a box, and the evidence for the item that is selected. Only what is certain starts
-//! ticked; the model decides that, and this file only shows it.
+//! The Leftovers page, drawn from `purge-ui-model`'s [`LeftoversModel`] (UI-FLOW): the scan's
+//! groups with their boxes, the band chips and the verdict, the evidence of the selected item, the
+//! footer with Move, the wait for the Purge security prompt, the result and "Put back all". The
+//! model decides what is ticked and what may be moved; this file only shows it.
 
-use mdshared_ui::expander;
 use mdshared_ui::gfx::{Face, Rect};
 use mdshared_ui::glyph;
 use mdshared_ui::infobar::{InfoBar, Severity};
 use mdshared_ui::pane::draw_row_fill;
 use mdshared_ui::scroll::{draw_scrollbar_animated, scrollbar};
+use purge_ui_model::info_bar::Severity as ModelSeverity;
+use purge_ui_model::leftovers::{LeftoversModel, LeftoversPhase, LeftoversRow, Look};
 
-use crate::app::item_no;
-use crate::model::{Leftover, LeftoverPhase, Model, Rating, kb_text};
+use crate::model::Model;
 use crate::ui::{BUTTON_H, Id, LOCK, Role, Style, Tone, Ui, id, ok_ink, within};
 use crate::view::View;
 
 const ROW_H: f32 = 46.0;
+const HEAD_H: f32 = 40.0;
 const FOOTER_H: f32 = 56.0;
 /// The column at the left of the list that holds the boxes.
 const GUTTER: f32 = 30.0;
 
-fn rating_tone(r: Rating) -> Tone {
-    match r {
-        Rating::Safe => Tone::Good,
-        Rating::Likely => Tone::Caution,
-        Rating::Protected => Tone::Outline,
+fn look_tone(l: Look) -> Tone {
+    match l {
+        Look::Safe => Tone::Good,
+        Look::Likely | Look::Weak => Tone::Caution,
+        Look::Protected => Tone::Outline,
     }
 }
 
-fn group_icon(title: &str) -> &'static str {
-    match title {
-        "Registry" => glyph::TABLE,
-        "Services and scheduled tasks" => glyph::TASK,
-        "Shortcuts" => glyph::LINK,
-        _ => glyph::FOLDER,
+fn severity(s: ModelSeverity) -> Severity {
+    match s {
+        ModelSeverity::Informational => Severity::Info,
+        ModelSeverity::Success => Severity::Success,
+        ModelSeverity::Warning => Severity::Warning,
+        ModelSeverity::Error => Severity::Error,
     }
-}
-
-fn user_data(item: &Leftover) -> bool {
-    item.what.starts_with("Profile")
 }
 
 pub fn draw(ui: &mut Ui, m: &Model, v: &mut View, content: Rect) {
     let pal = ui.pal;
     let lk = ui.look;
-    let l = &m.leftovers;
+    let l = &m.flow.leftovers;
     let left = content.x + lk.margin;
     let right = content.right() - lk.margin;
     let y = content.y + 38.0;
 
-    // The title, with the program's tile once there is a program.
-    let program = l.program.and_then(|p| m.programs.all.get(p));
     let mut x = left;
-    if let Some(g) = program {
-        ui.tile(Rect::new(x, y - 18.0, 36.0, 36.0), &g.name, &g.publisher);
+    if let Some(initial) = l.app_initial() {
+        ui.tile(Rect::new(x, y - 18.0, 36.0, 36.0), l.program_name(), "");
+        let _ = initial;
         x += 48.0;
     }
     let mut room = right - x;
-    if l.phase == LeftoverPhase::Review {
+    if l.phase() == LeftoversPhase::Review {
         room = review_buttons(ui, m, right, y) - 16.0 - x;
     }
-    let title = match program {
-        Some(g) => format!("Leftovers of {}", g.name),
-        None => "Leftovers".to_string(),
-    };
-    let sub = match l.phase {
-        LeftoverPhase::Empty => "No scan yet".to_string(),
-        LeftoverPhase::Waiting => "Post-uninstall scan \u{b7} running".to_string(),
-        LeftoverPhase::Review => format!("Post-uninstall scan \u{b7} {} items", l.count()),
-        LeftoverPhase::Moved => "Moved to quarantine".to_string(),
-        LeftoverPhase::Undone => "Put back".to_string(),
-    };
+    let title = l.title();
+    let sub = l.subtitle();
     if lk.stacked {
-        // D1: the scan's line stands under the title, as on every page of this design.
-        let title =
+        let t =
             ui.p.elide(Face::Semibold, lk.h1 - 4.0, &title, room.max(120.0));
         ui.text(
             id("TitleText"),
@@ -80,24 +67,26 @@ pub fn draw(ui: &mut Ui, m: &Model, v: &mut View, content: Rect) {
             lk.h1 - 4.0,
             x,
             y - 8.0,
-            &title,
+            &t,
             pal.text,
             room,
         );
-        let sub = ui.p.elide(Face::Ui, 13.0, &sub, room.max(0.0));
+        ui.say_whole(&title);
+        let s = ui.p.elide(Face::Ui, 13.0, &sub, room.max(0.0));
         ui.text(
             id("SubtitleText"),
             Face::Ui,
             13.0,
             x,
             y + 15.0,
-            &sub,
+            &s,
             pal.muted,
             room,
         );
+        ui.say_whole(&sub);
     } else {
         let sw = ui.p.measure(Face::Ui, 13.0, &sub) + 14.0;
-        let title =
+        let t =
             ui.p.elide(Face::Semibold, lk.h1, &title, (room - sw).max(120.0));
         let tw = ui.text(
             id("TitleText"),
@@ -105,11 +94,12 @@ pub fn draw(ui: &mut Ui, m: &Model, v: &mut View, content: Rect) {
             lk.h1,
             x,
             y,
-            &title,
+            &t,
             pal.text,
             room,
         );
-        let sub =
+        ui.say_whole(&title);
+        let s =
             ui.p.elide(Face::Ui, 13.0, &sub, (room - tw - 14.0).max(0.0));
         ui.text(
             id("SubtitleText"),
@@ -117,10 +107,11 @@ pub fn draw(ui: &mut Ui, m: &Model, v: &mut View, content: Rect) {
             13.0,
             x + tw + 14.0,
             y + lk.h1 * 0.2,
-            &sub,
+            &s,
             pal.muted,
             room,
         );
+        ui.say_whole(&sub);
     }
 
     let top = content.y + 76.0 + (lk.margin - 28.0);
@@ -133,50 +124,68 @@ pub fn draw(ui: &mut Ui, m: &Model, v: &mut View, content: Rect) {
 }
 
 /// The review's two buttons in a title row, laid from `right` with their middle at `cy`:
-/// open or close every group, and tick the Likely items too. Returns where they begin.
+/// open or close every group, and show the weak matches. Returns where they begin.
 pub fn review_buttons(ui: &mut Ui, m: &Model, right: f32, cy: f32) -> f32 {
-    let l = &m.leftovers;
-    let expand = if l.all_open() {
-        "Collapse all"
-    } else {
-        "Expand all"
-    };
-    let likely = l.count_of(Rating::Likely);
-    let weak = if l.likely_ticked() {
-        "Untick the likely ones".to_string()
-    } else {
-        format!("Tick the likely ones too ({likely})")
-    };
+    let l = &m.flow.leftovers;
+    let weak = l.weak_button_text();
     let list = [
-        (id("ExpandButton"), expand, Style::Subtle, None, true),
+        (
+            id("ExpandButton"),
+            l.expand_all_text(),
+            Style::Subtle,
+            None,
+            true,
+        ),
         (
             id("WeakButton"),
             weak.as_str(),
             Style::Subtle,
             None,
-            likely > 0,
+            l.weak_count() > 0,
         ),
     ];
     ui.buttons_right(right, cy - BUTTON_H / 2.0, &list)
 }
 
-/// Everything under the title, for the phase the review is in. `area` is as wide as the page;
+/// The page's bars from `y`; returns the y under them.
+fn bars(ui: &mut Ui, m: &Model, x: f32, mut y: f32, w: f32) -> f32 {
+    for (k, b) in m.flow_leftovers_bars().iter().enumerate() {
+        let mut bar = InfoBar::new(severity(b.severity), &b.title, &b.message).closable(b.closable);
+        let mut ids = Vec::new();
+        if let Some(a) = b.action {
+            bar = bar.action(0, a.text());
+            ids.push(Id("LBarButton", k as u32 + 1));
+        }
+        let close = b.closable.then_some(Id("LBarClose", k as u32 + 1));
+        y = ui.infobar_with(Id("InfoBarHost", k as u32), x, y, w, &bar, close, &ids) + 8.0;
+    }
+    y
+}
+
+/// Everything under the title, for the phase the page is in. `area` is as wide as the page;
 /// the side margins are kept inside it. D2 draws this inside its flow as well.
 pub fn body(ui: &mut Ui, m: &Model, v: &mut View, area: Rect) {
-    match m.leftovers.phase {
-        LeftoverPhase::Empty => empty(ui, area),
-        LeftoverPhase::Waiting => waiting(ui, m, area),
-        LeftoverPhase::Review => review(ui, m, v, area),
-        LeftoverPhase::Moved => moved(ui, m, area),
-        LeftoverPhase::Undone => undone(ui, m, area),
+    let lk = ui.look;
+    let left = area.x + lk.margin;
+    let w = area.w - 2.0 * lk.margin;
+    let y = bars(ui, m, left, area.y, w);
+    let area = Rect::new(area.x, y, area.w, area.bottom() - y);
+    let l = &m.flow.leftovers;
+    match l.phase() {
+        LeftoversPhase::Empty | LeftoversPhase::Interrupted => empty(ui, l, area),
+        LeftoversPhase::Scanning => scanning(ui, l, area),
+        LeftoversPhase::Review => review(ui, m, v, area),
+        LeftoversPhase::Waiting => waiting(ui, l, area),
+        LeftoversPhase::Result => result(ui, l, area),
+        LeftoversPhase::Undone => undone(ui, l, area),
     }
 }
 
-fn empty(ui: &mut Ui, area: Rect) {
+fn empty(ui: &mut Ui, l: &LeftoversModel, area: Rect) {
     let pal = ui.pal;
+    let (title, text) = l.empty_panel().unwrap_or(("", ""));
     let x = area.x + ui.look.margin;
     let w = (area.w - 2.0 * ui.look.margin).min(620.0);
-    let text = "Uninstall a program and Purge lists here what it left behind: files, registry keys, tasks and shortcuts. Nothing is moved until you have seen the list.";
     let th = ui.p.paragraph_height(Face::Ui, 13.0, w - 56.0, text);
     let card = Rect::new(x, area.y, w, 28.0 + 30.0 + th + 16.0 + BUTTON_H + 28.0);
     ui.card(card);
@@ -186,7 +195,7 @@ fn empty(ui: &mut Ui, area: Rect) {
         20.0,
         card.x + 28.0,
         card.y + 40.0,
-        "No scan yet",
+        title,
         pal.text,
         w - 56.0,
     );
@@ -206,11 +215,24 @@ fn empty(ui: &mut Ui, area: Rect) {
         text,
         false,
     );
+    let by = card.y + 58.0 + h + 16.0;
+    let mut bx = card.x + 28.0;
+    if l.phase() == LeftoversPhase::Interrupted {
+        let bw = ui.button_w("Open History & undo", None);
+        ui.button(
+            id("OpenHistory"),
+            Rect::new(bx, by, bw, BUTTON_H),
+            "Open History & undo",
+            Style::Accent,
+            None,
+            true,
+        );
+        bx += bw + 8.0;
+    }
     let bw = ui.button_w("Go to Programs", None);
-    let r = Rect::new(card.x + 28.0, card.y + 58.0 + h + 16.0, bw, BUTTON_H);
     ui.button(
         id("GoPrograms"),
-        r,
+        Rect::new(bx, by, bw, BUTTON_H),
         "Go to Programs",
         Style::Standard,
         None,
@@ -218,33 +240,28 @@ fn empty(ui: &mut Ui, area: Rect) {
     );
 }
 
-fn waiting(ui: &mut Ui, m: &Model, area: Rect) {
+fn scanning(ui: &mut Ui, l: &LeftoversModel, area: Rect) {
     let pal = ui.pal;
-    let name = m
-        .leftovers
-        .program
-        .and_then(|p| m.programs.all.get(p))
-        .map_or("the program", |p| p.name.as_str());
     let w = (area.w - 2.0 * ui.look.margin).min(560.0);
-    let x = area.cx() - w / 2.0;
     let y = area.y + (area.h * 0.28).min(180.0);
-    let title = format!("Looking for leftovers of {name}");
-    let title = ui.p.elide(Face::Semibold, 22.0, &title, w);
-    let tw = ui.p.measure(Face::Semibold, 22.0, &title);
+    let title = l.subtitle();
+    let t = ui.p.elide(Face::Semibold, 22.0, &title, w);
+    let tw = ui.p.measure(Face::Semibold, 22.0, &t);
     ui.text(
-        id("WaitingTitleText"),
+        id("ScanTitleText"),
         Face::Semibold,
         22.0,
         area.cx() - tw / 2.0,
         y,
-        &title,
+        &t,
         pal.text,
         w,
     );
+    ui.say_whole(&title);
     let detail = "Comparing what is there now with what was recorded before the uninstall.";
     let dw = ui.p.measure(Face::Ui, 13.0, detail).min(w);
     ui.text(
-        id("WaitingDetailText"),
+        id("ScanDetailText"),
         Face::Ui,
         13.0,
         area.cx() - dw / 2.0,
@@ -253,145 +270,281 @@ fn waiting(ui: &mut Ui, m: &Model, area: Rect) {
         pal.muted,
         w,
     );
-    let bar = Rect::new(x + (w - 320.0) / 2.0, y + 62.0, 320.0, 4.0);
-    ui.progress(id("WaitingProgress"), bar, None, "Looking for leftovers");
+    let bar = Rect::new(area.cx() - 160.0, y + 62.0, 320.0, 4.0);
+    ui.progress(id("ScanProgress"), bar, None, "Looking for leftovers");
 }
 
-fn result_card(ui: &mut Ui, area: Rect, lines: f32) -> Rect {
-    let x = area.x + ui.look.margin;
-    let w = (area.w - 2.0 * ui.look.margin).min(720.0);
-    let card = Rect::new(x, area.y, w, 28.0 + 40.0 + lines + 20.0 + BUTTON_H + 28.0);
-    ui.card(card);
-    card
-}
-
-fn moved(ui: &mut Ui, m: &Model, area: Rect) {
+/// The wait for the broker's security prompt: what to confirm there, the code its footer shows,
+/// and that nothing has moved yet.
+fn waiting(ui: &mut Ui, l: &LeftoversModel, area: Rect) {
     let pal = ui.pal;
-    let l = &m.leftovers;
-    let (n, kb) = l.moved;
-    let detail = format!(
-        "{} is out of the way. Nothing is deleted yet: every item can be put back from History & undo.",
-        kb_text(kb)
+    let w = (area.w - 2.0 * ui.look.margin).min(620.0);
+    let x = area.cx() - w / 2.0;
+    let mut y = area.y + (area.h * 0.2).min(140.0);
+    ui.p.icon(crate::ui::SHIELD, 30.0, area.cx(), y, pal.accent);
+    y += 40.0;
+    let title = l.waiting_title();
+    let t = ui.p.elide(Face::Semibold, 22.0, title, w);
+    let tw = ui.p.measure(Face::Semibold, 22.0, &t);
+    ui.text(
+        id("WaitingTitleText"),
+        Face::Semibold,
+        22.0,
+        area.cx() - tw / 2.0,
+        y,
+        &t,
+        pal.text,
+        w,
     );
-    let after = if l.delete_after {
-        format!(
-            "They are deleted for good after {} days.",
-            m.quarantine.keep_days
-        )
-    } else {
-        "They stay in quarantine until you empty it.".to_string()
-    };
-    let point = if m.pipeline.restore_point() {
-        "A restore point was made before the uninstall."
-    } else {
-        "No restore point was made: they are switched off."
-    };
-    let w = (area.w - 2.0 * ui.look.margin).min(720.0) - 56.0;
-    let dh = ui.p.paragraph_height(Face::Ui, 14.0, w, &detail);
-    let card = result_card(ui, area, dh + 8.0 + 20.0 + 8.0 + 18.0);
+    ui.say_whole(title);
+    y += 34.0;
+    let code = l.waiting_code_text();
+    let label = format!("Code {code}");
+    let cw = ui.p.measure(Face::Mono, 18.0, &label);
+    ui.text(
+        id("WaitingCodeText"),
+        Face::Mono,
+        18.0,
+        area.cx() - cw / 2.0,
+        y,
+        &label,
+        pal.text,
+        cw + 4.0,
+    );
+    ui.say_whole(&code);
+    y += 30.0;
+    let detail = l.waiting_detail();
+    let h = ui.p.paragraph_height(Face::Ui, 13.0, w, detail);
+    let dw = ui.p.measure(Face::Ui, 13.0, detail).min(w);
+    ui.p.paragraph(
+        Face::Ui,
+        13.0,
+        area.cx() - dw / 2.0,
+        y,
+        w,
+        detail,
+        pal.muted,
+    );
+    ui.reg(
+        id("WaitingDetailText"),
+        Rect::new(x, y, w, h),
+        Role::Text,
+        detail,
+        false,
+    );
+    y += h + 18.0;
+    let bar = Rect::new(area.cx() - 160.0, y, 320.0, 4.0);
+    ui.progress(id("WaitingProgress"), bar, None, title);
+    y += 24.0;
+    if let Some(header) = l.attention_header() {
+        ui.p.text(Face::Semibold, 13.0, x, y, &header, pal.text, w);
+        y += 22.0;
+        for (k, a) in l.attention().iter().enumerate().take(6) {
+            let line = format!("{}  \u{b7}  {}", a.display_name, a.reasons_text());
+            let s = ui.p.elide(Face::Ui, 12.5, &line, w);
+            ui.text(
+                Id("AttentionText", k as u32 + 1),
+                Face::Ui,
+                12.5,
+                x,
+                y,
+                &s,
+                pal.text,
+                w,
+            );
+            ui.say_whole(&line);
+            y += 20.0;
+        }
+    }
+}
+
+fn card_lines(
+    ui: &mut Ui,
+    x: f32,
+    mut y: f32,
+    w: f32,
+    name: &'static str,
+    lines: &[String],
+) -> f32 {
+    let pal = ui.pal;
+    for (k, line) in lines.iter().enumerate() {
+        let h = ui.p.paragraph(Face::Ui, 13.0, x, y, w, line, pal.text);
+        ui.reg(
+            Id(name, k as u32 + 1),
+            Rect::new(x, y, w, h),
+            Role::Text,
+            line,
+            false,
+        );
+        y += h + 4.0;
+    }
+    y
+}
+
+/// The height of `lines` drawn by [`card_lines`].
+fn lines_height(ui: &mut Ui, w: f32, lines: &[String]) -> f32 {
+    lines
+        .iter()
+        .map(|l| ui.p.paragraph_height(Face::Ui, 13.0, w, l) + 4.0)
+        .sum()
+}
+
+fn result(ui: &mut Ui, l: &LeftoversModel, area: Rect) {
+    let pal = ui.pal;
+    let x0 = area.x + ui.look.margin;
+    let cw = (area.w - 2.0 * ui.look.margin).min(720.0);
+    let w = cw - 56.0;
+    let mut need = 28.0 + 44.0 + 10.0 + 14.0 + BUTTON_H + 28.0;
+    need +=
+        ui.p.paragraph_height(Face::Ui, 14.0, w, l.result_detail().unwrap_or(""));
+    need += lines_height(ui, w, l.held_lines()) + lines_height(ui, w, l.failed_lines());
+    for text in [l.delete_after_result(), l.restore_point_text()]
+        .into_iter()
+        .flatten()
+    {
+        need += ui.p.paragraph_height(Face::Ui, 13.0, w, text) + 6.0;
+    }
+    let card = Rect::new(x0, area.y, cw, need.min(area.bottom() - area.y - 12.0));
+    ui.card(card);
+    let old = ui.clip(card.inset(1.0));
     let x = card.x + 28.0;
     let mut y = card.y + 28.0;
-    ui.p.icon(glyph::CHECK, 26.0, x + 13.0, y + 16.0, ok_ink(&pal));
-    let title = format!(
-        "{n} item{} moved to quarantine",
-        if n == 1 { "" } else { "s" }
+    let ink = if l.result_complete() {
+        ok_ink(&pal)
+    } else {
+        pal.text
+    };
+    let icon = if l.result_complete() {
+        glyph::CHECK
+    } else {
+        glyph::WARN
+    };
+    ui.p.icon(
+        icon,
+        26.0,
+        x + 13.0,
+        y + 16.0,
+        if ui.hc { pal.text } else { ink },
     );
+    let title = l.result_title_text();
     ui.text(
         id("ResultTitleText"),
         Face::Semibold,
-        24.0,
+        22.0,
         x + 38.0,
         y + 16.0,
-        &title,
+        title,
         pal.text,
         w - 38.0,
     );
-    y += 40.0;
-    let h = ui.p.paragraph(Face::Ui, 14.0, x, y, w, &detail, pal.text);
+    ui.say_whole(title);
+    y += 44.0;
+    let detail = l.result_detail().unwrap_or("");
+    let h = ui.p.paragraph(Face::Ui, 14.0, x, y, w, detail, pal.text);
     ui.reg(
         id("ResultDetailText"),
-        Rect::new(x, y, w, h),
+        Rect::new(x, y, w, h.max(1.0)),
         Role::Text,
-        &detail,
+        detail,
         false,
     );
-    y += h + 8.0;
-    ui.text(
-        id("DeleteAfterResultText"),
-        Face::Ui,
-        14.0,
-        x,
-        y + 10.0,
-        &after,
-        pal.text,
-        w,
-    );
-    y += 28.0;
-    ui.text(
-        id("RestorePointText"),
-        Face::Ui,
-        13.0,
-        x,
-        y + 9.0,
-        point,
-        pal.muted,
-        w,
-    );
-    y += 18.0 + 20.0;
-    let list = [
-        (
-            id("UndoAllButton"),
-            "Put back all",
-            Style::Standard,
-            Some(glyph::UNDO),
-            true,
-        ),
-        (
-            id("OpenVault"),
-            "Open quarantine",
+    y += h + 10.0;
+    y = card_lines(ui, x, y, w, "HeldText", l.held_lines());
+    y = card_lines(ui, x, y, w, "FailedText", l.failed_lines());
+    if let Some(text) = l.delete_after_result() {
+        let h = ui.p.paragraph(Face::Ui, 13.0, x, y, w, text, pal.text);
+        ui.reg(
+            id("DeleteAfterResultText"),
+            Rect::new(x, y, w, h),
+            Role::Text,
+            text,
+            false,
+        );
+        y += h + 6.0;
+    }
+    if let Some(text) = l.restore_point_text() {
+        let h = ui.p.paragraph(Face::Ui, 13.0, x, y, w, text, pal.muted);
+        ui.reg(
+            id("RestorePointText"),
+            Rect::new(x, y, w, h),
+            Role::Text,
+            text,
+            false,
+        );
+        y += h + 6.0;
+    }
+    y += 14.0;
+    let mut list = vec![(
+        id("UndoAllButton"),
+        l.undo_text(),
+        Style::Standard,
+        Some(glyph::UNDO),
+        l.can_undo(),
+    )];
+    if l.can_retry_held() {
+        list.push((
+            id("RetryHeldButton"),
+            "Try the held items again",
             Style::Standard,
             None,
             true,
-        ),
-        (id("DoneButton"), "Done", Style::Accent, None, true),
-    ];
-    ui.buttons_right(card.right() - 28.0, y, &list);
+        ));
+    }
+    list.push((
+        id("OpenVault"),
+        "Open quarantine",
+        Style::Standard,
+        None,
+        true,
+    ));
+    list.push((id("DoneButton"), "Done", Style::Accent, None, true));
+    ui.buttons_right(
+        card.right() - 28.0,
+        y.min(card.bottom() - BUTTON_H - 20.0),
+        &list,
+    );
+    ui.p.restore(old);
 }
 
-fn undone(ui: &mut Ui, m: &Model, area: Rect) {
+fn undone(ui: &mut Ui, l: &LeftoversModel, area: Rect) {
     let pal = ui.pal;
-    let (n, _) = m.leftovers.moved;
-    let detail = format!(
-        "{n} item{} put back where {} came from. Nothing was deleted, and nothing is in quarantine for this program.",
-        if n == 1 { " was" } else { "s were" },
-        if n == 1 { "it" } else { "they" },
-    );
-    let w = (area.w - 2.0 * ui.look.margin).min(720.0) - 56.0;
-    let dh = ui.p.paragraph_height(Face::Ui, 14.0, w, &detail);
-    let card = result_card(ui, area, dh);
+    let x0 = area.x + ui.look.margin;
+    let cw = (area.w - 2.0 * ui.look.margin).min(720.0);
+    let w = cw - 56.0;
+    let mut need = 28.0 + 44.0 + 10.0 + 14.0 + BUTTON_H + 28.0;
+    need +=
+        ui.p.paragraph_height(Face::Ui, 14.0, w, l.undo_detail().unwrap_or(""));
+    need += lines_height(ui, w, l.undo_conflict_lines());
+    let card = Rect::new(x0, area.y, cw, need.min(area.bottom() - area.y - 12.0));
+    ui.card(card);
+    let old = ui.clip(card.inset(1.0));
     let x = card.x + 28.0;
     let mut y = card.y + 28.0;
     ui.p.icon(glyph::UNDO, 24.0, x + 13.0, y + 16.0, pal.accent);
+    let title = l.undo_title_text();
     ui.text(
         id("UndoTitleText"),
         Face::Semibold,
-        24.0,
+        22.0,
         x + 38.0,
         y + 16.0,
-        "Everything is back where it was",
+        title,
         pal.text,
         w - 38.0,
     );
-    y += 40.0;
-    let h = ui.p.paragraph(Face::Ui, 14.0, x, y, w, &detail, pal.text);
+    ui.say_whole(title);
+    y += 44.0;
+    let detail = l.undo_detail().unwrap_or("");
+    let h = ui.p.paragraph(Face::Ui, 14.0, x, y, w, detail, pal.text);
     ui.reg(
         id("UndoDetailText"),
-        Rect::new(x, y, w, h),
+        Rect::new(x, y, w, h.max(1.0)),
         Role::Text,
-        &detail,
+        detail,
         false,
     );
-    y += h + 20.0;
+    y += h + 10.0;
+    y = card_lines(ui, x, y, w, "ConflictText", l.undo_conflict_lines()) + 14.0;
     let list = [
         (
             id("OpenHistory"),
@@ -402,53 +555,50 @@ fn undone(ui: &mut Ui, m: &Model, area: Rect) {
         ),
         (id("DoneButton"), "Done", Style::Accent, None, true),
     ];
-    ui.buttons_right(card.right() - 28.0, y, &list);
+    ui.buttons_right(
+        card.right() - 28.0,
+        y.min(card.bottom() - BUTTON_H - 20.0),
+        &list,
+    );
+    ui.p.restore(old);
 }
 
 fn review(ui: &mut Ui, m: &Model, v: &mut View, area: Rect) {
     let pal = ui.pal;
     let lk = ui.look;
-    let l = &m.leftovers;
+    let l = &m.flow.leftovers;
     let left = area.x + lk.margin;
     let right = area.right() - lk.margin;
     let w = right - left;
-
-    let bar = InfoBar::new(
-        Severity::Info,
-        "Sample data.",
-        "Nothing was scanned and nothing will be moved: the engine is not connected yet.",
-    )
-    .closable(false);
-    let mut y = ui.infobar(id("InfoBarHost"), left, area.y, w, &bar, None) + 12.0;
+    let mut y = area.y;
 
     let fy = area.bottom() - FOOTER_H;
     let side_w = 330.0_f32.min(w * 0.36);
     let col_w = w - side_w - 16.0;
+    let foot = l.footer();
+    let bands = l.band_summary();
 
-    // What is about to move, by rating.
-    let (n, kb) = l.ticked();
+    // What is about to move, and the bands.
     let card = Rect::new(left, y, col_w, 92.0);
     ui.card(card);
     let inks = ui.rating_inks();
-    let ratings = [Rating::Safe, Rating::Likely, Rating::Protected];
-    let parts: Vec<(f32, _)> = ratings
+    let parts: Vec<(f32, _)> = [bands.safe, bands.likely, bands.protected]
         .iter()
         .zip(inks)
-        .map(|(r, c)| (l.count_of(*r) as f32, c))
+        .map(|(n, c)| (*n as f32, c))
         .collect();
-    let verdict = format!(
-        "{n} item{} \u{b7} {}",
-        if n == 1 { "" } else { "s" },
-        kb_text(kb)
-    );
     let mut cx = card.x + 18.0;
-    // Where the legend's middle is: beside the verdict, or level with the ring.
     let legend_cy = if lk.hero {
-        // D3: the three ratings as one ring, with the count of what is ticked in it.
         let (rx, ry) = (cx + 30.0, card.cy());
         ui.donut(rx, ry, 30.0, 7.0, &parts);
         let mid = Rect::new(rx - 30.0, ry - 30.0, 60.0, 60.0);
-        ui.p.text_center(Face::Semibold, 18.0, mid, &n.to_string(), pal.text);
+        ui.p.text_center(
+            Face::Semibold,
+            18.0,
+            mid,
+            &l.selected_count().to_string(),
+            pal.text,
+        );
         cx += 78.0;
         ui.p.text(
             Face::Semibold,
@@ -465,7 +615,7 @@ fn review(ui: &mut Ui, m: &Model, v: &mut View, area: Rect) {
             20.0,
             cx,
             card.cy() + 9.0,
-            &verdict,
+            &foot.verdict,
             pal.text,
             col_w * 0.5,
         );
@@ -486,49 +636,65 @@ fn review(ui: &mut Ui, m: &Model, v: &mut View, area: Rect) {
             20.0,
             cx,
             card.y + 44.0,
-            &verdict,
+            &foot.verdict,
             pal.text,
             col_w * 0.5,
         );
         ui.parts_bar(Rect::new(cx, card.y + 68.0, col_w - 36.0, 8.0), &parts);
         card.y + 36.0
     };
-    // The legend, laid from the right; the icon says the rating where colour cannot.
-    let names = ["SafePill", "LikelyPill", "ProtectedPill"];
-    let icons = [glyph::CHECK, glyph::WARN, LOCK];
+    ui.say_whole(&foot.verdict);
+    let chips = [
+        (
+            "SafePill",
+            bands.safe_text.as_str(),
+            Tone::Good,
+            glyph::CHECK,
+        ),
+        (
+            "LikelyPill",
+            bands.likely_text.as_str(),
+            Tone::Caution,
+            glyph::WARN,
+        ),
+        (
+            "ProtectedPill",
+            bands.protected_text.as_str(),
+            Tone::Outline,
+            LOCK,
+        ),
+    ];
     let mut lx = card.right() - 18.0;
-    for k in (0..3).rev() {
-        let text = format!("{} {}", l.count_of(ratings[k]), ratings[k].title());
+    for (k, (name, text, tone, icon)) in chips.into_iter().enumerate().rev() {
         if lk.soft {
-            // D1: the legend in the chips the rows use.
-            let cw = ui.chip_w(&text);
+            let cw = ui.chip_w(text);
             lx -= cw;
-            ui.chip(lx, legend_cy, &text, rating_tone(ratings[k]));
+            ui.chip(lx, legend_cy, text, tone);
             ui.reg(
-                id(names[k]),
+                id(name),
                 Rect::new(lx, legend_cy - 10.0, cw, 20.0),
                 Role::Text,
-                &text,
+                text,
                 false,
             );
             lx -= 8.0;
             continue;
         }
-        let tw = ui.p.measure(Face::Ui, 13.0, &text);
+        let tw = ui.p.measure(Face::Ui, 13.0, text);
         lx -= tw;
         ui.text(
-            id(names[k]),
+            id(name),
             Face::Ui,
             13.0,
             lx,
             legend_cy,
-            &text,
+            text,
             pal.text,
             tw + 2.0,
         );
         lx -= 20.0;
         ui.p.icon(
-            icons[k],
+            icon,
             14.0,
             lx + 7.0,
             legend_cy,
@@ -541,54 +707,39 @@ fn review(ui: &mut Ui, m: &Model, v: &mut View, area: Rect) {
     let list = Rect::new(left, y, col_w, fy - 12.0 - y);
     items(ui, m, v, list);
     let pane = Rect::new(right - side_w, card.y, side_w, fy - 12.0 - card.y);
-    evidence(ui, m, pane);
+    evidence(ui, l, pane);
 
-    // The footer: what is ticked, and the one button that moves it.
-    let foot = Rect::new(area.x + 1.0, fy, area.w - 1.0, FOOTER_H);
-    ui.p.fill(foot, pal.bar);
-    ui.divider(foot.x, fy, foot.w);
-    let cy = foot.cy();
-    let count = format!("{n} of {} selected", l.count());
+    // The footer: what is ticked, the delete box, and the one button that moves it.
+    let foot_r = Rect::new(area.x + 1.0, fy, area.w - 1.0, FOOTER_H);
+    ui.p.fill(foot_r, pal.bar);
+    ui.divider(foot_r.x, fy, foot_r.w);
+    let cy = foot_r.cy();
     let cw = ui.text(
         id("FooterCount"),
         Face::Semibold,
         13.0,
         left,
         cy,
-        &count,
+        &foot.count,
         pal.text,
         220.0,
     );
-    let detail = format!(" \u{b7} {}", kb_text(kb));
     let dw = ui.text(
         id("FooterDetail"),
         Face::Ui,
         13.0,
         left + cw,
         cy,
-        &detail,
+        &foot.detail,
         pal.muted,
-        120.0,
+        220.0,
     );
-    let move_label = if n == 0 {
-        "Nothing is ticked".to_string()
-    } else {
-        format!(
-            "Move {n} item{} to quarantine\u{2026}",
-            if n == 1 { "" } else { "s" }
-        )
-    };
-    let mw = ui.button_w(&move_label, None);
-    let skw = ui.button_w("Skip", None);
+    let mw = ui.button_w(&foot.move_text, None);
     let move_r = Rect::new(right - mw, cy - BUTTON_H / 2.0, mw, BUTTON_H);
-    let skip_r = Rect::new(move_r.x - 8.0 - skw, move_r.y, skw, BUTTON_H);
-    // Between the count and the buttons: the box, and the hint when there is room for it.
-    let box_label = format!("Delete for good after {} days", m.quarantine.keep_days);
-    let bw = 26.0 + ui.p.measure(Face::Ui, 12.0, &box_label);
-    let hint = "You'll confirm in the Purge security prompt";
-    let hw = ui.p.measure(Face::Ui, 12.0, hint);
-    let free = skip_r.x - 16.0 - (left + cw + dw + 24.0);
-    let bx = skip_r.x
+    let bw = 26.0 + ui.p.measure(Face::Ui, 12.0, foot.delete_after_text);
+    let hw = ui.p.measure(Face::Ui, 12.0, foot.hint);
+    let free = move_r.x - 16.0 - (left + cw + dw + 24.0);
+    let bx = move_r.x
         - 16.0
         - bw
         - if free >= bw + hw + 20.0 {
@@ -601,164 +752,188 @@ fn review(ui: &mut Ui, m: &Model, v: &mut View, area: Rect) {
             id("DeleteAfterBox"),
             bx,
             cy,
-            Some(l.delete_after),
-            true,
-            &box_label,
+            Some(foot.delete_after),
+            foot.delete_after_enabled,
+            foot.delete_after_text,
         );
-        ui.p.text(Face::Ui, 12.0, bx + 26.0, cy, &box_label, pal.text, bw);
+        ui.p.text(
+            Face::Ui,
+            12.0,
+            bx + 26.0,
+            cy,
+            foot.delete_after_text,
+            pal.text,
+            bw,
+        );
     }
     if free >= bw + hw + 20.0 {
         ui.text(
             id("FooterHint"),
             Face::Ui,
             12.0,
-            skip_r.x - 16.0 - hw,
+            move_r.x - 16.0 - hw,
             cy,
-            hint,
+            foot.hint,
             pal.muted,
             hw + 2.0,
         );
     }
     ui.button(
-        id("SkipButton"),
-        skip_r,
-        "Skip",
-        Style::Standard,
-        None,
-        true,
-    );
-    ui.button(
         id("MoveButton"),
         move_r,
-        &move_label,
+        &foot.move_text,
         Style::Accent,
         None,
-        n > 0,
+        foot.move_enabled,
     );
     // The WinUI button's text block, which the VM rig reads for the count.
-    ui.reg(id("MoveText"), move_r, Role::Text, &move_label, false);
+    ui.reg(id("MoveText"), move_r, Role::Text, &foot.move_text, false);
 }
 
 /// The groups and their items, scrolled as one list.
 fn items(ui: &mut Ui, m: &Model, v: &mut View, r: Rect) {
     let pal = ui.pal;
-    let l = &m.leftovers;
+    let l = &m.flow.leftovers;
     ui.card(r);
     let view = r.inset(6.0);
-    let gid = |g: usize| Id("Group", g as u32 + 1);
-
-    // The heights first: a group that is opening is as tall as its body shows.
-    let heights: Vec<f32> = l
-        .groups
-        .iter()
-        .enumerate()
-        .map(|(g, group)| {
-            let full = group.items.len() as f32 * ROW_H;
-            expander::height(ui.cx.anim(), gid(g), group.open, full) + 4.0
-        })
-        .collect();
-    let content: f32 = heights.iter().sum();
+    let rows = l.rows();
+    let height = |row: &LeftoversRow| match row {
+        LeftoversRow::Group { .. } => HEAD_H,
+        LeftoversRow::Item(_) => ROW_H,
+    };
+    let content: f32 = rows.iter().map(height).sum();
     v.left_area = view;
     v.left_content = content;
     let off = v
         .left_scroll
         .offset(ui.cx.anim(), "leftovers-scroll", content, view.h);
-    let total_kb: u32 = l
-        .groups
-        .iter()
-        .flat_map(|g| &g.items)
-        .map(|i| i.size_kb)
-        .sum();
 
     let old = ui.clip(view);
     let row_w = view.w - 10.0;
+    let selected = l.selected().copied();
     let mut y = view.y - off;
-    for (g, group) in l.groups.iter().enumerate() {
-        let full = group.items.len() as f32 * ROW_H;
-        let area = Rect::new(view.x + GUTTER, y, row_w - GUTTER, heights[g] - 4.0);
-        let head = expander::header_rect(area);
-        let hid = gid(g);
-        ui.reg(
-            hid,
-            within(head, view),
-            Role::Expander(group.open),
-            group.title,
-            true,
-        );
-        let look = expander::Look {
-            hovered: ui.hot(hid),
-            pressed: ui.down(hid),
-            focused: ui.ringed(hid),
-            disabled: false,
-        };
-        let body = expander::draw_expander_animated(
-            ui.p,
-            &pal,
-            ui.cx.anim(),
-            hid,
-            area,
-            group.title,
-            group.open,
-            look,
-            full,
-        );
-        // At the header's right: how many and how much, and a bar of its share of the whole.
-        let kb: u32 = group.items.iter().map(|i| i.size_kb).sum();
-        let sum = format!("{} \u{b7} {}", group.items.len(), kb_text(kb));
-        let tw = ui.p.text_right(
-            Face::Ui,
-            12.0,
-            head.right() - 10.0,
-            head.cy(),
-            &sum,
-            pal.muted,
-        );
-        let share = if total_kb > 0 {
-            (kb as f32 / total_kb as f32).sqrt()
-        } else {
-            0.0
-        };
-        let bw = (64.0 * share).max(3.0);
-        let bx = head.right() - 10.0 - tw - 12.0 - 64.0;
-        ui.p.rbox_a(
-            Rect::new(bx + 64.0 - bw, head.cy() - 1.5, bw, 3.0),
-            1.5,
-            pal.accent,
-            0.7,
-        );
-        // The group's own box, in the gutter: ticked, not ticked, or some.
-        let tid = Id("GroupTick", g as u32 + 1);
-        let visible = head.cy() > view.y && head.cy() < view.bottom();
-        let label = format!("All of {}", group.title);
-        let can = group.items.iter().any(|i| i.rating != Rating::Protected);
-        if visible {
-            ui.tick(tid, view.x + 8.0, head.cy(), group.tick(), can, &label);
+    for row in &rows {
+        let h = height(row);
+        let rr = Rect::new(view.x, y, row_w, h);
+        y += h;
+        if rr.bottom() < view.y || rr.y > view.bottom() {
+            continue;
         }
-
-        if body.h > 0.5 {
-            let inner = ui.clip(within(body, view));
-            for (i, item) in group.items.iter().enumerate() {
-                let row = Rect::new(view.x, body.y + i as f32 * ROW_H, row_w, ROW_H);
-                // The keyboard went to a row that is cut off: bring it into view.
-                let cut = row.y < view.y || row.bottom() > view.bottom();
-                if cut && group.open && ui.ringed(Id("Item", item_no(g, i))) {
-                    let top = row.y - view.y + off;
-                    let to = if row.y < view.y {
-                        top
-                    } else {
-                        top + ROW_H - view.h
-                    };
-                    if v.left_scroll.scroll_to(to, content, view.h) {
-                        ui.cx.request_redraw_all();
-                    }
+        match *row {
+            LeftoversRow::Group { group, hidden } => {
+                let Some(head) = l.group_header(group, hidden) else {
+                    continue;
+                };
+                let hid = Id("Group", group as u32 + 1);
+                let hit = within(Rect::new(rr.x + GUTTER, rr.y, rr.w - GUTTER, rr.h), view);
+                ui.reg(
+                    hid,
+                    hit,
+                    Role::Expander(head.expanded),
+                    &l.row_name(*row),
+                    true,
+                );
+                if ui.hot(hid) {
+                    draw_row_fill(ui.p, &pal, hit, true, ui.down(hid), false);
                 }
-                if row.y < body.bottom() {
-                    item_row(ui, m, within(body, view), row, (g, i), item, group.title);
+                if ui.ringed(hid) {
+                    mdshared_ui::focus::draw_ring(ui.p, &pal, hit.inset(2.0), 4.0);
+                }
+                let chevron = if head.expanded {
+                    glyph::DOWN
+                } else {
+                    glyph::RIGHT
+                };
+                ui.p.icon(chevron, 12.0, rr.x + GUTTER + 12.0, rr.cy(), pal.muted);
+                let name = format!("{}  \u{b7}  {}", head.name, head.count_text);
+                ui.p.text(
+                    Face::Semibold,
+                    13.0,
+                    rr.x + GUTTER + 26.0,
+                    rr.cy(),
+                    &name,
+                    pal.text,
+                    rr.w * 0.6,
+                );
+                ui.p.text_right(
+                    Face::Ui,
+                    12.0,
+                    rr.right() - 10.0,
+                    rr.cy(),
+                    &head.size_text,
+                    pal.muted,
+                );
+                if head.tick_visible && rr.cy() > view.y && rr.cy() < view.bottom() {
+                    ui.tick(
+                        Id("GroupTick", group as u32 + 1),
+                        rr.x + 8.0,
+                        rr.cy(),
+                        head.checked,
+                        head.tick_enabled,
+                        &format!("All of {}", head.name),
+                    );
                 }
             }
-            ui.p.restore(inner);
+            LeftoversRow::Item(index) => {
+                let Some(item) = l.item_row(index) else {
+                    continue;
+                };
+                let n = index as u32 + 1;
+                let rid = Id("Item", n);
+                let is_sel = selected == Some(item.candidate_id);
+                let hit = within(rr, view);
+                ui.reg(rid, hit, Role::Item(is_sel), &l.row_name(*row), true);
+                let fill = Rect::new(rr.x, rr.y + 1.0, rr.w, rr.h - 2.0);
+                draw_row_fill(ui.p, &pal, fill, ui.hot(rid), ui.down(rid), is_sel);
+                if ui.ringed(rid) {
+                    mdshared_ui::focus::draw_ring(ui.p, &pal, fill.inset(2.0), 4.0);
+                }
+                let cy = rr.cy();
+                if item.check_visible && hit.h >= ROW_H * 0.5 {
+                    ui.tick(
+                        Id("ItemTick", n),
+                        rr.x + 8.0,
+                        cy,
+                        Some(item.checked),
+                        true,
+                        &format!("Move {}", item.title),
+                    );
+                }
+                let ix = rr.x + GUTTER + 16.0;
+                let icon = if item.protected { LOCK } else { glyph::FOLDER };
+                ui.p.icon(icon, 15.0, ix, cy, pal.muted);
+                ui.p.text_right(
+                    Face::Ui,
+                    12.0,
+                    rr.right() - 10.0,
+                    cy,
+                    &item.size_text,
+                    pal.muted,
+                );
+                let chip = if item.protected {
+                    "Protected"
+                } else {
+                    item.look.word()
+                };
+                let cw = ui.chip_w(chip);
+                let chip_x = rr.right() - 10.0 - 64.0 - cw;
+                ui.chip(chip_x, cy, chip, look_tone(item.look));
+                let tx = ix + 16.0;
+                let tw = chip_x - 12.0 - tx;
+                let title = ui.p.elide(Face::Mono, 12.5, &item.title, tw);
+                let ink = if item.protected { pal.muted } else { pal.text };
+                ui.p.text(Face::Mono, 12.5, tx, cy - 8.0, &title, ink, tw);
+                let why = if item.refused {
+                    item.refusal_text.clone()
+                } else if item.user_data {
+                    format!("{} \u{b7} User data", item.why)
+                } else {
+                    item.why.clone()
+                };
+                let why = ui.p.elide(Face::Ui, 12.0, &why, tw);
+                ui.p.text(Face::Ui, 12.0, tx, cy + 10.0, &why, pal.muted, tw);
+            }
         }
-        y += heights[g];
     }
     ui.p.restore(old);
 
@@ -780,70 +955,13 @@ fn items(ui: &mut Ui, m: &Model, v: &mut View, r: Rect) {
     }
 }
 
-fn item_row(
-    ui: &mut Ui,
-    m: &Model,
-    shown: Rect,
-    row: Rect,
-    at: (usize, usize),
-    item: &Leftover,
-    group: &str,
-) {
-    let pal = ui.pal;
-    let n = item_no(at.0, at.1);
-    let rid = Id("Item", n);
-    let selected = m.leftovers.selected == Some(at);
-    let label = format!("{}, {}, {}", item.path, item.what, item.rating.title());
-    let hit = within(row, shown);
-    ui.reg(rid, hit, Role::Item(selected), &label, true);
-    let fill = Rect::new(row.x, row.y + 1.0, row.w, row.h - 2.0);
-    draw_row_fill(ui.p, &pal, fill, ui.hot(rid), ui.down(rid), selected);
-    if ui.ringed(rid) {
-        mdshared_ui::focus::draw_ring(ui.p, &pal, fill.inset(2.0), 4.0);
-    }
-
-    let cy = row.cy();
-    let protected = item.rating == Rating::Protected;
-    if hit.h >= ROW_H * 0.5 {
-        let tid = Id("ItemTick", n);
-        let what = format!("Move {}", item.path);
-        ui.tick(tid, row.x + 8.0, cy, Some(item.ticked), !protected, &what);
-    }
-    let ix = row.x + GUTTER + 16.0;
-    let icon = if protected { LOCK } else { group_icon(group) };
-    ui.p.icon(icon, 15.0, ix, cy, pal.muted);
-
-    // From the right: the size, then the rating.
-    let size = kb_text(item.size_kb);
-    ui.p.text_right(Face::Ui, 12.0, row.right() - 10.0, cy, &size, pal.muted);
-    let chip = item.rating.title();
-    let cw = ui.chip_w(chip);
-    let chip_x = row.right() - 10.0 - 64.0 - cw;
-    ui.chip(chip_x, cy, chip, rating_tone(item.rating));
-    let tx = ix + 16.0;
-    let tw = chip_x - 12.0 - tx;
-    let path = ui.p.elide(Face::Mono, 12.5, &item.path, tw);
-    let ink = if protected { pal.muted } else { pal.text };
-    ui.p.text(Face::Mono, 12.5, tx, cy - 8.0, &path, ink, tw);
-    let why = if protected {
-        format!("{} \u{b7} never moved", item.what)
-    } else if item.rating == Rating::Likely {
-        format!("{} \u{b7} you decide", item.what)
-    } else {
-        item.what.to_string()
-    };
-    let why = ui.p.elide(Face::Ui, 12.0, &why, tw);
-    ui.p.text(Face::Ui, 12.0, tx, cy + 10.0, &why, pal.muted, tw);
-}
-
 /// Why Purge thinks the selected item is a leftover, and what moving it means.
-fn evidence(ui: &mut Ui, m: &Model, r: Rect) {
+fn evidence(ui: &mut Ui, l: &LeftoversModel, r: Rect) {
     let pal = ui.pal;
-    let l = &m.leftovers;
     ui.card(r);
     let x = r.x + 18.0;
     let w = r.w - 36.0;
-    let Some((at, item)) = l.selected.and_then(|at| l.item(at).map(|i| (at, i))) else {
+    let Some(d) = l.detail() else {
         let t = "Select an item to see why Purge thinks it is a leftover.";
         let h =
             ui.p.paragraph(Face::Ui, 13.0, x, r.y + 20.0, w, t, pal.muted);
@@ -858,44 +976,45 @@ fn evidence(ui: &mut Ui, m: &Model, r: Rect) {
     };
     let old = ui.clip(r.inset(1.0));
     let mut y = r.y + 18.0;
-    let h =
-        ui.p.paragraph(Face::Semibold, 15.0, x, y, w, item.what, pal.text);
-    ui.reg(
-        id("DTitle"),
-        Rect::new(x, y, w, h),
-        Role::Text,
-        item.what,
-        false,
-    );
-    y += h + 8.0;
+    if let Some(title) = &d.title {
+        let h =
+            ui.p.paragraph(Face::Semibold, 15.0, x, y, w, title, pal.text);
+        ui.reg(
+            id("DTitle"),
+            Rect::new(x, y, w, h),
+            Role::Text,
+            title,
+            false,
+        );
+        y += h + 8.0;
+    }
     let top = y;
-    y = super::programs::mono(ui, 12.0, x, y, w, &item.path);
+    y = super::programs::mono(ui, 12.0, x, y, w, &d.path);
     ui.reg(
         id("DPath"),
         Rect::new(x, top, w, y - top),
         Role::Text,
-        &item.path,
+        &d.path,
         false,
     );
     y += 18.0;
 
-    // The chips: the rating, what kind of data, and whether it is ticked now.
-    let (name, tone) = match item.rating {
-        Rating::Safe => ("DSafe", Tone::Good),
-        Rating::Likely => ("DLikely", Tone::Caution),
-        Rating::Protected => ("DProtected", Tone::Outline),
+    let band = if d.protected {
+        "Protected"
+    } else {
+        d.look.word()
     };
     let mut cx = x;
-    let cw = ui.chip(cx, y, item.rating.title(), tone);
+    let cw = ui.chip(cx, y, band, look_tone(d.look));
     ui.reg(
-        id(name),
+        id("DBand"),
         Rect::new(cx, y - 10.0, cw, 20.0),
         Role::Text,
-        item.rating.title(),
+        band,
         false,
     );
     cx += cw + 6.0;
-    if user_data(item) {
+    if d.user_data {
         let cw = ui.chip(cx, y, "User data", Tone::Bad);
         ui.reg(
             id("DUserData"),
@@ -904,64 +1023,56 @@ fn evidence(ui: &mut Ui, m: &Model, r: Rect) {
             "User data",
             false,
         );
-        cx += cw + 6.0;
     }
-    let state = if item.ticked { "Ticked" } else { "Not ticked" };
-    ui.chip(cx, y, state, Tone::Neutral);
     y += 22.0;
-    let pre = match item.rating {
-        Rating::Safe => "Ticked by default: Purge is certain it is the program's.",
-        Rating::Likely => "Never ticked by default: tick it yourself if you want it gone.",
-        Rating::Protected => "Cannot be ticked: Purge never moves this.",
-    };
-    let h = ui.p.paragraph(Face::Ui, 12.5, x, y, w, pre, pal.muted);
+    let h =
+        ui.p.paragraph(Face::Ui, 12.5, x, y, w, d.preselect, pal.muted);
     ui.reg(
         id("DPreselect"),
         Rect::new(x, y, w, h),
         Role::Text,
-        pre,
+        d.preselect,
         false,
     );
     y += h + 14.0;
+    if let Some(refused) = &d.refused {
+        let h = ui.p.paragraph(Face::Ui, 12.5, x, y, w, refused, pal.text);
+        ui.reg(
+            id("DRefused"),
+            Rect::new(x, y, w, h),
+            Role::Text,
+            refused,
+            false,
+        );
+        y += h + 10.0;
+    }
     ui.divider(x, y, w);
     y += 18.0;
-
     ui.p.text(Face::Semibold, 13.0, x, y, "Evidence", pal.text, w);
     y += 14.0;
     let top = y;
-    for part in item.evidence.split_inclusive(". ") {
-        let part = part.trim();
-        if part.is_empty() {
-            continue;
-        }
-        ui.p.icon(glyph::CHECK, 12.0, x + 6.0, y + 9.0, pal.muted);
+    let mut all = Vec::new();
+    for line in &d.evidence {
+        ui.p.icon(line.glyph.glyph(), 12.0, x + 6.0, y + 9.0, pal.muted);
         y +=
-            ui.p.paragraph(Face::Ui, 12.5, x + 20.0, y, w - 20.0, part, pal.text) + 4.0;
+            ui.p.paragraph(Face::Ui, 12.5, x + 20.0, y, w - 20.0, &line.text, pal.text) + 4.0;
+        all.push(line.text.as_str());
     }
     ui.reg(
         id("DEvidence"),
-        Rect::new(x, top, w, y - top),
+        Rect::new(x, top, w, (y - top).max(1.0)),
         Role::Text,
-        &item.evidence,
+        &all.join(" "),
         false,
     );
     y += 10.0;
     ui.divider(x, y, w);
     y += 14.0;
-
-    let contents = format!("{} \u{b7} {}", item.what, kb_text(item.size_kb));
-    y = ui.fact(id("DContents"), x, y, 82.0, w, "Contents", &contents);
-    y = ui.fact(
-        id("DIfRemoved"),
-        x,
-        y,
-        82.0,
-        w,
-        "If removed",
-        item.if_removed,
-    );
-    y = ui.fact(id("DFoundBy"), x, y, 82.0, w, "Found by", item.found_by);
-    let kind = l.groups.get(at.0).map_or("", |g| g.title);
-    ui.fact(id("DOwner"), x, y, 82.0, w, "Kind", kind);
+    y = ui.fact(id("DContents"), x, y, 82.0, w, "Contents", &d.contents);
+    y = ui.fact(id("DIfRemoved"), x, y, 82.0, w, "If removed", &d.if_removed);
+    y = ui.fact(id("DFoundBy"), x, y, 82.0, w, "Found by", &d.found_by);
+    if let Some(owner) = &d.owner {
+        ui.fact(id("DOwner"), x, y, 82.0, w, "Shared", owner);
+    }
     ui.p.restore(old);
 }

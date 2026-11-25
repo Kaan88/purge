@@ -1,5 +1,6 @@
-//! The History and Quarantine pages on the link: each page reads its list when shown, the sample
-//! answers the reads and refuses every change without starting a broker, an idle page gives its
+//! The History and Quarantine pages on the link: each page reads its list when shown, the
+//! first-elevation explanation comes before the broker (its "Not now" declines), the sample answers
+//! the reads and refuses every change without starting a real broker, an idle page gives its
 //! broker back, and a page's broker calls go to its session (a fake broker over OS pipes; no
 //! broker is ever launched here).
 
@@ -9,6 +10,8 @@ use std::time::{Duration, Instant};
 
 use purge_ui_model::history::HistoryCall;
 use purge_ui_model::history::text as htext;
+
+use purge_client::BrokerClient;
 
 use super::*;
 use crate::link::Source;
@@ -76,6 +79,14 @@ fn the_sample_reads_but_refuses_every_change_and_starts_no_broker() {
     let r = h.page.show_items();
     h.take(r);
     link.pump(&mut model);
+    // The first-elevation explanation first (UI-FLOW's dialog), then the sample's session.
+    assert_eq!(model.flow.elevation.showing(), Some(Owner::History));
+    assert!(
+        model.history.page.items().is_none(),
+        "not before the explanation"
+    );
+    model.flow.elevation.answer(true);
+    link.pump(&mut model);
     let items = model.history.page.items().expect("read from the sample");
     assert_eq!(items.len(), 4);
     let op = items[0].op;
@@ -105,7 +116,26 @@ fn the_sample_reads_but_refuses_every_change_and_starts_no_broker() {
     assert!(error.contains(NOT_LIVE), "{error}");
     assert_eq!(model.quarantine.page.batches().len(), 6, "nothing deleted");
 
-    assert!(link.broker.launching.is_none() && link.broker.session.is_none());
+    assert!(link.broker.launching.is_none(), "no real broker");
+}
+
+#[test]
+fn not_now_in_the_explanation_declines_the_launch() {
+    let (mut link, mut model) = started();
+    model.page = Page::History;
+    until(&mut link, &mut model, |m| {
+        !m.history.page.sessions().is_empty()
+    });
+    let r = model.history.page.show_items();
+    model.history.take(r);
+    link.pump(&mut model);
+    assert_eq!(model.flow.elevation.showing(), Some(Owner::History));
+    model.flow.elevation.answer(false);
+    link.pump(&mut model);
+    assert!(model.history.page.items().is_none());
+    assert!(!model.history.page.broker_is_live());
+    assert!(!model.history.page.busy(), "the page is free again");
+    assert_eq!(link.broker.holder(), None);
 }
 
 #[test]
@@ -118,10 +148,14 @@ fn leaving_a_page_while_idle_gives_its_broker_back() {
     let r = model.history.page.show_items();
     model.history.take(r);
     link.pump(&mut model);
+    model.flow.elevation.answer(true);
+    link.pump(&mut model);
     assert!(model.history.page.broker_is_live(), "the sample's broker");
+    assert_eq!(link.broker.holder(), Some(Owner::History));
     model.page = Page::Settings;
     link.pump(&mut model);
     assert!(!model.history.page.broker_is_live(), "given back");
+    assert_eq!(link.broker.holder(), None);
 }
 
 fn fixture(name: &str) -> String {
@@ -193,11 +227,11 @@ fn the_history_pages_broker_calls_go_to_its_session_and_their_answers_come_back(
     // As if the page's launch had ended with this session; no broker is ever started here.
     link.live = true;
     let (client, asked) = fake_broker(link.sink.clone());
-    link.broker.session = Some((Owner::History, client));
+    link.broker.adopt(Owner::History, client);
     let h = &mut model.history;
     let r = h.page.show_items();
     assert_eq!(r, vec![HistoryCall::Launch { read_only: true }]);
-    let r = h.page.on_launch(BrokerLaunch::started());
+    // The page's session is there already: no explanation, no launch.
     h.take(r);
     until(&mut link, &mut model, |m| m.history.page.items().is_some());
     let items = model.history.page.items().unwrap_or_default();
