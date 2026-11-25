@@ -1,10 +1,10 @@
-﻿//! The window: title row, rail, the content card with the page in it, and what lies over the
+//! The window: title row, rail, the content card with the page in it, and what lies over the
 //! page (the confirmation, a drop-down's menu, the command palette, a toast).
 
 use mdshared_ui::anim::{Edge, PageEffect, fluent};
 use mdshared_ui::chrome::{WIN_BTN_W, WinButton, draw_win_button};
 use mdshared_ui::dropdown::{DROPDOWN_H, draw_dropdown_menu_animated};
-use mdshared_ui::gfx::{Along, Face, Rect, mix};
+use mdshared_ui::gfx::{Along, Face, Rect, Wrap, mix};
 use mdshared_ui::glyph;
 use mdshared_ui::infobar::{InfoBar, Look, Severity, draw_infobar_with};
 use mdshared_ui::overlay::{
@@ -12,6 +12,7 @@ use mdshared_ui::overlay::{
     draw_backdrop_presence, draw_dialog_card, draw_keycaps,
 };
 use mdshared_ui::pane::draw_row_fill;
+use mdshared_ui::scroll::{draw_scrollbar_animated, scrollbar};
 use mdshared_ui::toggle::TOGGLE_W;
 
 use crate::look::{Choice, Design, Effect, Transition};
@@ -19,7 +20,7 @@ use purge_ui_model::leftovers::LeftoversPhase;
 use purge_ui_model::pipeline::page::ConfirmButton;
 
 use crate::model::{Model, Page};
-use crate::ui::{BOX, BUTTON_H, GEAR, Id, Role, SHIELD, Style, Ui, id};
+use crate::ui::{BOX, BUTTON_H, GEAR, Id, Role, SHIELD, Style, Ui, id, within};
 use crate::view::{DD_ALL, DD_RESTORE, View};
 
 mod history;
@@ -163,8 +164,15 @@ pub fn draw(ui: &mut Ui, m: &Model, v: &mut View) {
 
     if m.flow.confirm.is_some() {
         confirm(ui, m, v);
-    } else if let Some(owner) = m.flow.elevation.showing() {
-        elevation(ui, crate::flow::Elevation::read_only(owner));
+    } else {
+        v.confirm_at = None;
+        v.confirm_scroll = mdshared_ui::scroll::SmoothScroll::new();
+        v.confirm_area = Rect::default();
+        if m.flow.elevation.showing().is_some() {
+            elevation(ui, m.flow.elevation.showing_read_only());
+        } else if let Some(t) = &m.flow.takeover {
+            takeover(ui, t);
+        }
     }
     v.dialog_opened = m.flow.dialog_open();
 
@@ -189,6 +197,16 @@ pub fn draw(ui: &mut Ui, m: &Model, v: &mut View) {
         let t = ui.cx.anim().toggle("toast", true, fluent::ENTER);
         Bubble::toast(ui.p, &toast.text, content).draw_presence(ui.p, &pal, t);
     }
+}
+
+/// Under `--sample`, the flow pages' fixed bar: nothing on this PC changes, whatever the pretend
+/// uninstall shows. Returns the y under it (`y` when there is none).
+pub(crate) fn sample_bar(ui: &mut Ui, m: &Model, x: f32, y: f32, w: f32) -> f32 {
+    if !m.sample() {
+        return y;
+    }
+    let bar = InfoBar::new(Severity::Info, "", crate::model::SAMPLE_BAR).closable(false);
+    ui.infobar(id("SampleBar"), x, y, w, &bar, None) + 8.0
 }
 
 /// The place of a page's item in the rail.
@@ -534,22 +552,63 @@ fn close_dialog(ui: &mut Ui, o: Opened) {
     }
 }
 
-/// The height the confirmation needs for what it shows.
+/// How long the confirmation's Uninstall stays disabled after the dialog appears, so a click
+/// meant for what was under it never lands on it.
+pub const ARM_DELAY: std::time::Duration = std::time::Duration::from_millis(400);
+
+/// The gap under each wrapped step of the confirmation.
+const STEP_GAP: f32 = 4.0;
+/// The command box's padding above and below its wrapped text.
+const COMMAND_PAD: f32 = 8.0;
+
+/// The heights of the confirmation's wrapped parts, `cw` wide: each step, the command, the
+/// quiet line.
+struct ConfirmSizes {
+    steps: Vec<f32>,
+    command: f32,
+    quiet_line: f32,
+}
+
+fn confirm_sizes(ui: &mut Ui, c: &crate::flow::Confirm, cw: f32) -> ConfirmSizes {
+    let d = &c.dialog;
+    ConfirmSizes {
+        steps: d
+            .steps
+            .iter()
+            .map(|s| ui.p.paragraph_height(Face::Ui, 13.0, cw - 8.0, s).max(17.0))
+            .collect(),
+        command: ui
+            .p
+            .paragraph_height_wrapped(Face::Mono, 12.0, cw - 20.0, c.command(), Wrap::Anywhere)
+            .max(16.0),
+        quiet_line: ui.p.paragraph_height(Face::Ui, 12.0, cw, &d.quiet_line),
+    }
+}
+
+/// The height the confirmation needs for all it shows, the command and the steps in full.
 fn confirm_height(ui: &mut Ui, c: &crate::flow::Confirm, cw: f32) -> f32 {
     let d = &c.dialog;
-    let mut h = DIALOG_PAD + 40.0 + 24.0 + d.steps.len() as f32 * 21.0 + 10.0 + 20.0 + 40.0 + 24.0;
+    let z = confirm_sizes(ui, c, cw);
+    let mut h = DIALOG_PAD + 40.0 + 24.0;
+    h += z.steps.iter().map(|s| s + STEP_GAP).sum::<f32>();
+    h += 10.0 + 20.0 + z.command + 2.0 * COMMAND_PAD + 8.0 + 24.0;
     if let Some(running) = &d.still_running {
         let bar = InfoBar::new(Severity::Warning, "", running).closable(false);
         h += bar.height(ui.p, cw) + 16.0;
     }
-    h += 28.0 + ui.p.paragraph_height(Face::Ui, 12.0, cw, &d.quiet_line) + 14.0;
+    h += 28.0 + z.quiet_line + 14.0;
     h += 22.0 + DROPDOWN_H + 14.0 + 34.0;
     h + DIALOG_FOOTER
 }
 
 /// The confirmation before an uninstall (the model's [`ConfirmDialog`]): what will happen, the
 /// exact command for the quiet switch's position, the restore point and the three buttons.
-/// Nothing reaches the pipeline except through its "Uninstall".
+/// Nothing reaches the pipeline except through its "Uninstall", which waits [`ARM_DELAY`] after
+/// the dialog appears.
+///
+/// The steps and the command are wrapped and shown in full (the WinUI dialog wrapped its
+/// command and scrolled); when it all is taller than the window, the part above the buttons
+/// scrolls, by the wheel and to the control the keyboard is on.
 ///
 /// [`ConfirmDialog`]: purge_ui_model::pipeline::page::ConfirmDialog
 fn confirm(ui: &mut Ui, m: &Model, v: &mut View) {
@@ -557,11 +616,31 @@ fn confirm(ui: &mut Ui, m: &Model, v: &mut View) {
     let d = &c.dialog;
     let pal = ui.pal;
     let cw = 540.0;
-    let ch = confirm_height(ui, c, cw).min(ui.size.1 - 24.0);
+    let full = confirm_height(ui, c, cw);
+    let z = confirm_sizes(ui, c, cw);
+    let ch = full.min(ui.size.1 - 24.0);
+    let now = ui.cx.now();
+    let opened = *v.confirm_at.get_or_insert(now);
+    let armed = now.saturating_duration_since(opened) >= ARM_DELAY;
+    if !armed {
+        ui.cx.anim().wake_at(opened + ARM_DELAY);
+    }
     let o = open_dialog(ui, "confirm", cw, ch);
     let r = o.card;
     let x = r.x + DIALOG_PAD;
-    let mut y = r.y + DIALOG_PAD;
+
+    // The part above the buttons, scrolled when it does not fit.
+    let body = Rect::new(r.x, r.y, r.w, (o.footer.y - r.y).max(0.0));
+    let content = full - DIALOG_FOOTER;
+    v.confirm_area = body;
+    v.confirm_content = content;
+    let off = v
+        .confirm_scroll
+        .offset(ui.cx.anim(), "confirm-scroll", content, body.h);
+    let clip = ui.clip(body);
+    let first = ui.ctls.len();
+    let mut y = r.y + DIALOG_PAD - off;
+
     let drawn = ui.p.elide(Face::Semibold, 20.0, &d.title, cw);
     ui.text(
         id("DialogTitle"),
@@ -585,41 +664,38 @@ fn confirm(ui: &mut Ui, m: &Model, v: &mut View) {
         cw,
     );
     y += 24.0;
-    for (k, step) in d.steps.iter().enumerate() {
-        // Each line is read by its text: step 2 says the route (the rig reads it).
-        let s = ui.p.elide(Face::Ui, 13.0, step, cw - 8.0);
-        ui.text(
+    for (k, (step, sh)) in d.steps.iter().zip(&z.steps).enumerate() {
+        // Each step is read by its text: step 2 says the route (the rig reads it).
+        ui.p.paragraph(Face::Ui, 13.0, x + 8.0, y + 1.0, cw - 8.0, step, pal.text);
+        ui.reg(
             Id("ConfirmStep", k as u32 + 1),
-            Face::Ui,
-            13.0,
-            x + 8.0,
-            y + 9.0,
-            &s,
-            pal.text,
-            cw,
+            Rect::new(x + 8.0, y, cw - 8.0, *sh),
+            Role::Text,
+            step,
+            false,
         );
-        ui.say_whole(step);
-        y += 21.0;
+        y += sh + STEP_GAP;
     }
     y += 10.0;
     ui.p.text(Face::Ui, 12.0, x, y + 7.0, "Command", pal.muted, cw);
     y += 20.0;
-    let box_r = Rect::new(x, y, cw, 32.0);
-    ui.p.frame(box_r, 5.0, pal.page, pal.line);
+    // The command in full, broken anywhere (a path has no spaces to break at): what runs is
+    // never cut short. Its name is the whole command.
     let command = c.command();
-    let shown = ui.p.elide(Face::Mono, 12.0, command, cw - 20.0);
-    ui.text(
-        id("CommandText"),
+    let box_r = Rect::new(x, y, cw, z.command + 2.0 * COMMAND_PAD);
+    ui.p.frame(box_r, 5.0, pal.page, pal.line);
+    ui.p.paragraph_wrapped(
         Face::Mono,
         12.0,
         x + 10.0,
-        box_r.cy(),
-        &shown,
-        pal.text,
+        y + COMMAND_PAD,
         cw - 20.0,
+        command,
+        pal.text,
+        Wrap::Anywhere,
     );
-    ui.say_whole(command);
-    y += 40.0;
+    ui.reg(id("CommandText"), box_r, Role::Text, command, false);
+    y += box_r.h + 8.0;
     let signer = ui.p.elide(Face::Ui, 12.0, &d.signer, cw);
     ui.text(
         id("SignerText"),
@@ -691,16 +767,46 @@ fn confirm(ui: &mut Ui, m: &Model, v: &mut View) {
         "Restore point for the cleanup step",
     );
     y += DROPDOWN_H + 14.0;
-    if o.footer.y - y - 4.0 >= 30.0 {
-        ui.para(
-            Face::Ui,
-            12.0,
-            x,
-            y,
-            cw,
-            "Nothing is moved or removed by Purge until you confirm the list on the next page.",
-            pal.muted,
-        );
+    ui.para(
+        Face::Ui,
+        12.0,
+        x,
+        y,
+        cw,
+        "Nothing is moved or removed by Purge until you confirm the list on the next page.",
+        pal.muted,
+    );
+    ui.p.restore(clip);
+
+    // The keyboard went to a control that is cut off: bring it into view. Then the body's
+    // controls take the pointer only where they show, never over the backdrop.
+    let ringed = ui.ctls[first..]
+        .iter()
+        .find(|c| c.focusable && ui.ringed(c.id))
+        .map(|c| c.rect);
+    if let Some(rr) = ringed
+        && (rr.y < body.y || rr.bottom() > body.bottom())
+    {
+        let top = rr.y - body.y + off;
+        let to = if rr.y < body.y {
+            top - 8.0
+        } else {
+            top + rr.h + 8.0 - body.h
+        };
+        if v.confirm_scroll.scroll_to(to, content, body.h) {
+            ui.cx.request_redraw_all();
+        }
+    }
+    for c in &mut ui.ctls[first..] {
+        c.rect = within(c.rect, body);
+    }
+    if let Some((track, thumb)) = scrollbar(
+        Rect::new(body.right() - 6.0, body.y + 4.0, 3.0, body.h - 8.0),
+        content,
+        body.h,
+        off,
+    ) {
+        draw_scrollbar_animated(ui.p, &pal, ui.cx.anim(), "confirm-bar", track, thumb, false);
     }
 
     // Ids of their own, not the WinUI template parts: the rig presses these by id and name, so
@@ -726,7 +832,7 @@ fn confirm(ui: &mut Ui, m: &Model, v: &mut View) {
         "Uninstall",
         Style::Accent,
         None,
-        true,
+        armed,
     ));
     let by = o.footer.y + (DIALOG_FOOTER - BUTTON_H) / 2.0;
     ui.buttons_right(o.footer.right() - DIALOG_PAD, by, &list);
@@ -809,6 +915,74 @@ fn elevation(ui: &mut Ui, read_only: bool) {
             None,
             true,
         ),
+    ];
+    let by = o.footer.y + (DIALOG_FOOTER - BUTTON_H) / 2.0;
+    ui.buttons_right(o.footer.right() - DIALOG_PAD, by, &list);
+    close_dialog(ui, o);
+}
+
+/// The takeover question's title: "End the leftovers review of Firefox?".
+pub fn takeover_title(t: &crate::flow::Takeover) -> String {
+    format!("End {}?", t.what)
+}
+
+/// The question before a launch ends work another page still holds in the one broker session
+/// ([`crate::flow::Takeover`]). "Not now" is where the keyboard starts.
+fn takeover(ui: &mut Ui, t: &crate::flow::Takeover) {
+    let pal = ui.pal;
+    let cw = 440.0;
+    let title = takeover_title(t);
+    let first = format!(
+        "Purge's administrator part works for one page at a time. The {} page needs it now, but the {} page still holds {}.",
+        t.asking.page_name(),
+        t.holder.page_name(),
+        t.what
+    );
+    let second = "If you end it, that work has to be started again, and Windows may ask for permission again. Ending it moves or removes nothing.";
+    let h1 = ui.p.paragraph_height(Face::Ui, 14.0, cw, &first);
+    let h2 = ui.p.paragraph_height(Face::Ui, 14.0, cw, second);
+    let th =
+        ui.p.paragraph_height(Face::Semibold, 20.0, cw, &title)
+            .max(24.0);
+    let ch = DIALOG_PAD + th + 20.0 + h1 + 14.0 + h2 + DIALOG_PAD + DIALOG_FOOTER;
+    let o = open_dialog(ui, "takeover", cw, ch);
+    let x = o.card.x + DIALOG_PAD;
+    let mut y = o.card.y + DIALOG_PAD;
+    ui.p.paragraph(Face::Semibold, 20.0, x, y, cw, &title, pal.text);
+    ui.reg(
+        id("DialogTitle"),
+        Rect::new(x, y, cw, th),
+        Role::Text,
+        &title,
+        false,
+    );
+    y += th + 20.0;
+    let a = ui.p.paragraph(Face::Ui, 14.0, x, y, cw, &first, pal.text);
+    ui.reg(
+        id("DialogText"),
+        Rect::new(x, y, cw, a),
+        Role::Text,
+        &first,
+        false,
+    );
+    y += a + 14.0;
+    let b = ui.p.paragraph(Face::Ui, 14.0, x, y, cw, second, pal.text);
+    ui.reg(
+        id("DialogDetailText"),
+        Rect::new(x, y, cw, b),
+        Role::Text,
+        second,
+        false,
+    );
+    let list = [
+        (
+            id("TakeoverNotNowButton"),
+            "Not now",
+            Style::Standard,
+            None,
+            true,
+        ),
+        (id("TakeoverEndButton"), "End it", Style::Accent, None, true),
     ];
     let by = o.footer.y + (DIALOG_FOOTER - BUTTON_H) / 2.0;
     ui.buttons_right(o.footer.right() - DIALOG_PAD, by, &list);

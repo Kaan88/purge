@@ -13,7 +13,7 @@ use purge_ui_model::vault::{VaultBarAction, VaultBatch, VaultChip, VaultItem, WA
 
 use super::model_bars;
 use crate::model::Model;
-use crate::ui::{BOX, BUTTON_H, Id, Role, Style, Tone, Ui, bad_ink, id, within};
+use crate::ui::{BOX, BUTTON_H, Id, Key, Role, Style, Tone, Ui, bad_ink, id, within};
 use crate::view::View;
 
 const ROW_H: f32 = 62.0;
@@ -422,6 +422,7 @@ fn batch_row(ui: &mut Ui, m: &Model, hit: Rect, row: Rect, i: usize, on: bool) {
     };
     let bid = Id("Batch", i as u32 + 1);
     ui.reg(bid, hit, Role::Item(on), &view.accessible_name, true);
+    ui.key(bid, Key::Session(b.id.clone()));
     let fill = Rect::new(row.x, row.y + 1.0, row.w, row.h - 2.0);
     draw_row_fill(ui.p, &pal, fill, ui.hot(bid), ui.down(bid), on);
     let cy = row.cy();
@@ -745,8 +746,9 @@ fn item_row(ui: &mut Ui, m: &Model, r: Rect, k: usize, item: &VaultItem, view: R
     let bw = ui.button_w(label, None);
     let cy = r.y + r.h / 2.0;
     if r.bottom() > view.y && r.y < view.bottom() {
+        let did = Id("ItemDelete", k as u32 + 1);
         ui.button(
-            Id("ItemDelete", k as u32 + 1),
+            did,
             Rect::new(r.right() - bw, cy - BUTTON_H / 2.0, bw, BUTTON_H),
             label,
             Style::Standard,
@@ -754,6 +756,7 @@ fn item_row(ui: &mut Ui, m: &Model, r: Rect, k: usize, item: &VaultItem, view: R
             page.items_can_act(),
         );
         ui.say_whole(&item.delete_label());
+        ui.key(did, Key::Expiry(item.expiry_id));
     }
     let tw = r.w - bw - 12.0;
     let path = ui.p.elide(Face::Mono, 12.0, &item.path, tw);

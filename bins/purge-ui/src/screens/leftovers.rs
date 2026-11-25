@@ -12,7 +12,7 @@ use purge_ui_model::info_bar::Severity as ModelSeverity;
 use purge_ui_model::leftovers::{LeftoversModel, LeftoversPhase, LeftoversRow, Look};
 
 use crate::model::Model;
-use crate::ui::{BUTTON_H, Id, LOCK, Role, Style, Tone, Ui, id, ok_ink, within};
+use crate::ui::{BUTTON_H, Id, Key, LOCK, Role, Style, Tone, Ui, id, ok_ink, within};
 use crate::view::View;
 
 const ROW_H: f32 = 46.0;
@@ -168,7 +168,8 @@ pub fn body(ui: &mut Ui, m: &Model, v: &mut View, area: Rect) {
     let lk = ui.look;
     let left = area.x + lk.margin;
     let w = area.w - 2.0 * lk.margin;
-    let y = bars(ui, m, left, area.y, w);
+    let y = super::sample_bar(ui, m, left, area.y, w);
+    let y = bars(ui, m, left, y, w);
     let area = Rect::new(area.x, y, area.w, area.bottom() - y);
     let l = &m.flow.leftovers;
     match l.phase() {
@@ -883,6 +884,7 @@ fn items(ui: &mut Ui, m: &Model, v: &mut View, r: Rect) {
                 let is_sel = selected == Some(item.candidate_id);
                 let hit = within(rr, view);
                 ui.reg(rid, hit, Role::Item(is_sel), &l.row_name(*row), true);
+                ui.key(rid, Key::Candidate(item.candidate_id));
                 let fill = Rect::new(rr.x, rr.y + 1.0, rr.w, rr.h - 2.0);
                 draw_row_fill(ui.p, &pal, fill, ui.hot(rid), ui.down(rid), is_sel);
                 if ui.ringed(rid) {
@@ -898,6 +900,7 @@ fn items(ui: &mut Ui, m: &Model, v: &mut View, r: Rect) {
                         true,
                         &format!("Move {}", item.title),
                     );
+                    ui.key(Id("ItemTick", n), Key::Candidate(item.candidate_id));
                 }
                 let ix = rr.x + GUTTER + 16.0;
                 let icon = if item.protected { LOCK } else { glyph::FOLDER };

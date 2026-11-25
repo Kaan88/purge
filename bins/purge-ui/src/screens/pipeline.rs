@@ -4,7 +4,7 @@
 //! as one flow: the steps in a strip across the page, the step that runs in a card of its own, and
 //! the review of the leftovers on the same page once the scan is in.
 
-use mdshared_ui::gfx::{Face, Rect};
+use mdshared_ui::gfx::{Face, Rect, Wrap};
 use mdshared_ui::glyph;
 use mdshared_ui::infobar::{InfoBar, Severity};
 use mdshared_ui::slider::draw_spinner;
@@ -184,6 +184,7 @@ pub fn draw(ui: &mut Ui, m: &Model, v: &mut View, content: Rect) {
 
     let fy = footer(ui, content, pv.footer);
     let mut y = content.y + 76.0 + (lk.margin - 28.0);
+    y = super::sample_bar(ui, m, left, y, w);
     y = bars(ui, &m.flow_bars(), left, y, w);
     if pv.empty {
         nothing_card(ui, left, y, w, pv.footer);
@@ -291,7 +292,9 @@ pub fn draw(ui: &mut Ui, m: &Model, v: &mut View, content: Rect) {
 
     // The program and its steps at the left, the choices at the right.
     let side_w = 330.0_f32.min(w * 0.36);
-    let head_h = if lk.hero { 60.0 } else { 112.0 };
+    // The command is shown in full: a long one grows the head of the card.
+    let extra = command_extra(ui, &pv, w - side_w - 16.0 - 36.0);
+    let head_h = if lk.hero { 60.0 } else { 112.0 } + extra;
     let main = Rect::new(
         left,
         y,
@@ -380,23 +383,58 @@ fn heading(ui: &mut Ui, m: &Model, pv: &UninstallPageView, left: f32, edge: f32,
     );
 }
 
-/// The exact command and its signer.
+/// The height of one line of the command's text.
+fn command_line_h(ui: &mut Ui, w: f32) -> f32 {
+    ui.p.paragraph_height(Face::Mono, 12.0, w, "C")
+}
+
+/// How much taller than one line the command is, wrapped `w` wide: what its card grows by.
+fn command_extra(ui: &mut Ui, pv: &UninstallPageView, w: f32) -> f32 {
+    let Some(command) = &pv.command else {
+        return 0.0;
+    };
+    let one = command_line_h(ui, w);
+    let all =
+        ui.p.paragraph_height_wrapped(Face::Mono, 12.0, w, command, Wrap::Anywhere);
+    (all - one).max(0.0)
+}
+
+/// The exact command, in full (wrapped anywhere: a path has no spaces to break at), and its
+/// signer under it. `y` is the middle of the command's first line; the card leaves
+/// [`command_extra`] for the lines after it.
 fn command_lines(ui: &mut Ui, pv: &UninstallPageView, x: f32, y: f32, w: f32) {
     let pal = ui.pal;
     // Before the record step there is no command yet: the route line above says why.
     let Some(command) = &pv.command else {
         return;
     };
-    let c = ui.p.elide(Face::Mono, 12.0, command, w);
-    ui.text(id("CommandText"), Face::Mono, 12.0, x, y, &c, pal.text, w);
-    ui.say_whole(command);
+    let one = command_line_h(ui, w);
+    let top = y - one / 2.0;
+    let h = ui.p.paragraph_wrapped(
+        Face::Mono,
+        12.0,
+        x,
+        top,
+        w,
+        command,
+        pal.text,
+        Wrap::Anywhere,
+    );
+    ui.reg(
+        id("CommandText"),
+        Rect::new(x, top, w, h.max(one)),
+        Role::Text,
+        command,
+        false,
+    );
+    let extra = (h - one).max(0.0);
     let s = ui.p.elide(Face::Ui, 12.0, &pv.signer, w);
     ui.text(
         id("SignerText"),
         Face::Ui,
         12.0,
         x,
-        y + 18.0,
+        y + 18.0 + extra,
         &s,
         pal.muted,
         w,
@@ -873,7 +911,8 @@ fn flow(ui: &mut Ui, m: &Model, v: &mut View, content: Rect) {
         return;
     }
     let fy = footer(ui, content, pv.footer);
-    let mut y = bars(ui, &m.flow_bars(), left, area.y, w);
+    let y = super::sample_bar(ui, m, left, area.y, w);
+    let mut y = bars(ui, &m.flow_bars(), left, y, w);
     if st == 0 {
         nothing_card(ui, left, y, w, pv.footer);
         return;
@@ -922,15 +961,16 @@ fn step_card(ui: &mut Ui, pv: &UninstallPageView, r: Rect) {
         w - 58.0,
     );
     ui.say_whole(&pv.route_detail);
+    let extra = command_extra(ui, pv, w);
     command_lines(ui, pv, x, r.y + 88.0, w);
-    ui.divider(x, r.y + 122.0, w);
+    ui.divider(x, r.y + 122.0 + extra, w);
 
     let i = current(pv);
     let Some(step) = pv.steps.get(i) else {
         ui.p.restore(old);
         return;
     };
-    let mut y = r.y + 146.0;
+    let mut y = r.y + 146.0 + extra;
     let caption = format!("STEP {} OF {}", i + 1, pv.steps.len());
     ui.text(
         id("StepCaption"),

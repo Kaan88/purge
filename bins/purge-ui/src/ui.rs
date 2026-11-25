@@ -77,9 +77,26 @@ pub enum Role {
     Item(bool),
 }
 
+/// What a row's control stands for, kept with the control when it is drawn (UI-REVIEW1 S7): a
+/// click is resolved by this, never by the row's place in a list that may have changed since the
+/// frame the user saw.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Key {
+    /// A leftovers item.
+    Candidate(purge_rpc::methods::CandidateRef),
+    /// A cleanup (History) or a batch of it (Quarantine).
+    Session(purge_model::exec::session::SessionId),
+    /// An item of the cleanup History shows.
+    Op(purge_model::exec::op::OpId),
+    /// A quarantined item.
+    Expiry(purge_rpc::methods::ExpiryId),
+}
+
 #[derive(Clone, Debug)]
 pub struct Ctl {
     pub id: Id,
+    /// What the control stands for, when it is a row's ([`Ui::key`]).
+    pub key: Option<Key>,
     pub rect: Rect,
     pub role: Role,
     pub label: String,
@@ -251,6 +268,7 @@ impl Ui<'_, '_, '_> {
         }
         self.ctls.push(Ctl {
             id,
+            key: None,
             rect,
             role,
             label: label.to_string(),
@@ -264,6 +282,7 @@ impl Ui<'_, '_, '_> {
     pub fn reg_disabled(&mut self, id: Id, rect: Rect, role: Role, label: &str) {
         self.ctls.push(Ctl {
             id,
+            key: None,
             rect,
             role,
             label: label.to_string(),
@@ -271,6 +290,13 @@ impl Ui<'_, '_, '_> {
             disabled: true,
             modal: self.modal,
         });
+    }
+
+    /// Gives the control `id` declared last what it stands for: its clicks act on `key`.
+    pub fn key(&mut self, id: Id, key: Key) {
+        if let Some(c) = self.ctls.iter_mut().rev().find(|c| c.id == id) {
+            c.key = Some(key);
+        }
     }
 
     pub fn hot(&self, id: Id) -> bool {

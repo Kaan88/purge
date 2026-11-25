@@ -8,7 +8,8 @@
 //! other pages can have it.
 //!
 //! Launches go through [`Link::launch_for`] (link/flow.rs): the first-elevation explanation
-//! first (History's words say it only reads), then the Windows prompt; its answer comes back in
+//! first (History's reads say they only read; its restore and rollback do not), then the Windows
+//! prompt; its answer comes back in
 //! [`Link::pages_launched`].
 //!
 //! **With sample data** no real broker is started (the flow's sample session stands in), the read
@@ -29,7 +30,7 @@ use purge_ui_model::pipeline::{LaunchResult, LaunchState};
 use purge_ui_model::vault::VaultCall;
 
 use super::{Link, Owner, call_error, failure, no_session};
-use crate::model::{Model, Page};
+use crate::model::{Mode, Model, Page};
 
 /// What a History or Quarantine call in flight is for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,8 +108,9 @@ impl Link {
                     model.history.take(r);
                 }
             }
-            // The explanation words History's launch as a read itself (`Elevation::read_only`).
-            HistoryCall::Launch { read_only: _ } => self.launch_for(model, owner),
+            // The explanation says "only reads" for History's reads, never before a restore or
+            // a rollback (the WinUI `LaunchIsReadOnly`).
+            HistoryCall::Launch { read_only } => self.launch_for(model, owner, read_only),
             HistoryCall::DropBroker => self.drop_broker(owner),
             HistoryCall::AllowForeground => self.allow_foreground(owner),
             HistoryCall::Get(p) => {
@@ -141,7 +143,7 @@ impl Link {
                     model.quarantine.sync();
                 }
             }
-            VaultCall::Launch => self.launch_for(model, owner),
+            VaultCall::Launch => self.launch_for(model, owner, false),
             VaultCall::DropBroker => self.drop_broker(owner),
             VaultCall::AllowForeground => self.allow_foreground(owner),
             VaultCall::Undo(p) => {
@@ -177,10 +179,21 @@ impl Link {
     }
 
     fn pages_broker_call(&mut self, model: &mut Model, call: PipeCall, what: Call) {
-        if !self.live {
-            let answer = sample_answer(&call);
-            self.pages_answer(model, what, answer);
-            return;
+        match &self.mode {
+            // `--sample`: the sample's reads, every change refused.
+            Mode::Sample => {
+                let answer = sample_answer(&call);
+                self.pages_answer(model, what, answer);
+                return;
+            }
+            // Not started yet, or the engine failed: nothing is sent, and the page says why.
+            Mode::Starting | Mode::Fallback(_) => {
+                let reason = self.mode.refusal().unwrap_or_default().to_owned();
+                let answer = Err(ClientError::NotAvailable(reason));
+                self.pages_answer(model, what, answer);
+                return;
+            }
+            Mode::Live => {}
         }
         let owner = match what {
             Call::VaultUndo | Call::VaultExpiring | Call::VaultPurge => Owner::Vault,

@@ -10,7 +10,7 @@ use purge_ui_model::history::{HistoryChip, HistoryEntry, HistoryRow, HistorySess
 
 use super::model_bars;
 use crate::model::Model;
-use crate::ui::{BUTTON_H, Id, Role, Style, Tone, Ui, bad_ink, id, within};
+use crate::ui::{BUTTON_H, Id, Key, Role, Style, Tone, Ui, bad_ink, id, within};
 use crate::view::View;
 
 const ROW_H: f32 = 58.0;
@@ -118,7 +118,8 @@ pub fn draw(ui: &mut Ui, m: &Model, v: &mut View, content: Rect) {
         } else {
             &[]
         };
-        let close = Some(Id("BarClose", k as u32 + 1));
+        // Its own ids: "BarClose" is the Uninstall page's (UI-REVIEW1 S3).
+        let close = Some(Id("HBarClose", k as u32 + 1));
         y = model_bars::bar(ui, host, left, y, w, bar, close, actions) + 8.0;
     }
 
@@ -267,6 +268,13 @@ fn strip(ui: &mut Ui, m: &Model, strip: Rect) {
         };
         if visible(&r) {
             ui.reg(sid, within(r, strip), Role::Item(on), &name, true);
+            // A day marker stands for the cleanup after it, as its click selects.
+            if let Some(s) = page
+                .timeline_target(&timeline, k)
+                .and_then(|i| page.sessions().get(i))
+            {
+                ui.key(sid, Key::Session(s.id.clone()));
+            }
             if matches!(row, HistoryRow::Session(_)) {
                 draw_row_fill(ui.p, &pal, r, ui.hot(sid), ui.down(sid), on);
             }
@@ -456,6 +464,7 @@ fn op_row(ui: &mut Ui, m: &Model, hit: Rect, row: Rect, i: usize, s: &HistorySes
     let oid = Id("Op", i as u32 + 1);
     let name = page.row_name(&HistoryRow::Session(i));
     ui.reg(oid, hit, Role::Item(on), &name, true);
+    ui.key(oid, Key::Session(s.id.clone()));
     let fill = Rect::new(row.x, row.y + 1.0, row.w, row.h - 2.0);
     draw_row_fill(ui.p, &pal, fill, ui.hot(oid), ui.down(oid), on);
     let cy = row.cy();
@@ -703,6 +712,7 @@ fn item_row(ui: &mut Ui, r: Rect, k: usize, item: &HistoryEntry, view: Rect) {
             item.selectable,
             &item.display_name,
         );
+        ui.key(tid, Key::Op(item.op));
     }
     let tx = r.x + 40.0;
     let tw = r.w - 52.0;

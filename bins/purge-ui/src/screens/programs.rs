@@ -49,7 +49,7 @@ pub fn draw(ui: &mut Ui, m: &Model, v: &mut View, content: Rect) {
     let sub = pr.view.summary.clone();
     // With sample data the mockup's confirmation and pipeline stand in for the Uninstall page;
     // with the engine the model says when Uninstall can act.
-    let can_uninstall = if m.sample {
+    let can_uninstall = if m.sample() {
         !pr.page.ticked().is_empty()
     } else {
         pr.view.commands.uninstall_enabled
@@ -686,7 +686,7 @@ fn program_details(ui: &mut Ui, m: &Model, v: &mut View, r: Rect) {
     } else {
         "Uninstall".to_string()
     };
-    let can_uninstall = m.sample || pr.view.commands.details_uninstall_enabled;
+    let can_uninstall = m.sample() || pr.view.commands.details_uninstall_enabled;
     if lk.soft {
         // D1: the verdict first, as the chip the list shows for this program.
         let (text, tone) = verdict_chip(g);

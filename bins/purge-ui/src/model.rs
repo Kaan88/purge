@@ -644,11 +644,6 @@ impl History {
         self.clock
     }
 
-    /// The session at this index of the model's list, and its id.
-    pub fn session_id(&self, at: usize) -> Option<SessionId> {
-        self.page.sessions().get(at).map(|s| s.id.clone())
-    }
-
     /// The position of the selected session in the model's list.
     pub fn selected_at(&self) -> Option<usize> {
         let id = &self.page.selected()?.id;
@@ -775,11 +770,49 @@ pub struct Model {
     pub history: History,
     pub quarantine: Quarantine,
     pub settings: Settings,
-    /// The window shows sample data (`--sample`, or the engine could not be used): the pages not
-    /// wired yet show the mockup's sample pages, which change nothing. False with the real
-    /// engine, where those pages say they are not available yet.
-    pub sample: bool,
+    /// Where the window's data comes from (`link` sets it once the startup has answered).
+    pub mode: Mode,
 }
+
+/// Where the window's data comes from. Only an explicit `--sample` plays the pretend flow; a
+/// window whose engine failed shows the sample list but changes nothing, and one whose startup
+/// has not answered yet starts nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Mode {
+    /// The startup has not answered yet: launches and broker calls are refused.
+    Starting,
+    /// `--sample` (and the scripted walk): the sample engine and the made-up broker, with a
+    /// pretend uninstall that changes nothing.
+    Sample,
+    /// The engine could not be used: the sample list shows with the notice, which every change
+    /// is refused with.
+    Fallback(String),
+    /// The real engine.
+    Live,
+}
+
+impl Mode {
+    /// The sentence a refused change says, or `None` when changes may go on.
+    pub fn refusal(&self) -> Option<&str> {
+        match self {
+            Mode::Starting => Some(STILL_STARTING),
+            Mode::Fallback(notice) => Some(notice),
+            Mode::Sample | Mode::Live => None,
+        }
+    }
+}
+
+/// What a change asked for before the startup has answered says.
+pub const STILL_STARTING: &str = "Purge is still starting its engine. Try again in a moment.";
+
+/// What Uninstall with nothing picked says.
+pub const SELECT_FIRST: &str = "Select a program first.";
+
+/// What Uninstall says while the Uninstall page runs a step (it takes no new programs then).
+pub const STILL_RUNNING: &str = "An uninstall is still running. Try again when it has finished.";
+
+/// The fixed bar of the flow pages under `--sample`.
+pub const SAMPLE_BAR: &str = "Sample data, nothing on this PC changes";
 
 impl Model {
     pub fn new(prefs: Prefs, programs: Programs, sample: bool) -> Model {
@@ -798,23 +831,45 @@ impl Model {
                     policy: None,
                 },
             },
-            sample,
+            mode: if sample { Mode::Sample } else { Mode::Starting },
         }
+    }
+
+    /// The pretend flow of `--sample` runs (never after an engine failure).
+    pub fn sample(&self) -> bool {
+        self.mode == Mode::Sample
     }
 
     // ---- the uninstall flow (UI-FLOW) ---------------------------------------------------------
 
     /// Uninstall (the toolbar, the details pane, Delete or Enter on the list): the programs go to
-    /// the Uninstall page. False when nothing is picked and nothing was said.
-    pub fn ask_uninstall(&mut self) -> bool {
-        if self.sample {
-            // The Programs model's Uninstall needs an engine that can change the PC; the sample
-            // broker (`sample_broker`) plays the administrator part, so the targets are taken here.
-            let targets = self.programs.page.uninstall_targets();
-            return self.open_uninstall(targets);
+    /// the Uninstall page. `Err` with the sentence to say when nothing was started and nothing
+    /// was said: nothing picked, the startup not answered yet, or the engine failed.
+    pub fn ask_uninstall(&mut self) -> Result<(), String> {
+        match &self.mode {
+            Mode::Sample => {
+                // The Programs model's Uninstall needs an engine that can change the PC; the
+                // sample broker (`sample_broker`) plays the administrator part, so the targets
+                // are taken here.
+                let targets = self.programs.page.uninstall_targets();
+                if targets.is_empty() {
+                    Err(SELECT_FIRST.into())
+                } else if self.open_uninstall(targets) {
+                    Ok(())
+                } else if self.flow.page.is_busy() {
+                    Err(STILL_RUNNING.into())
+                } else {
+                    Err(SELECT_FIRST.into())
+                }
+            }
+            Mode::Starting | Mode::Fallback(_) => {
+                Err(self.mode.refusal().unwrap_or_default().to_owned())
+            }
+            Mode::Live => {
+                self.programs.command(ProgramCommand::Uninstall);
+                Ok(())
+            }
         }
-        self.programs.command(ProgramCommand::Uninstall);
-        true
     }
 
     /// The Uninstall page's entry: `targets` from the Programs page (`ProgramsRequest::Uninstall`).
@@ -834,6 +889,10 @@ impl Model {
         }
         let env = self.flow_env();
         let r = self.flow.page.begin(targets, env);
+        // A step that runs keeps the targets out: the page stays where it is then.
+        if r.is_empty() {
+            return false;
+        }
         self.flow.take(r);
         self.page = Page::Pipeline;
         true

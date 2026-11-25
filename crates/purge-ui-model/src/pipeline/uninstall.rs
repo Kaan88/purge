@@ -633,7 +633,11 @@ impl UninstallController {
                 UninstallNotice::new(
                     NoticeKind::Error,
                     strings::BROKER_ENDED_TITLE,
-                    format!("{}{}", strings::BROKER_ENDED_IDLE, strings::BROKER_ENDED_TAIL),
+                    format!(
+                        "{}{}",
+                        strings::BROKER_ENDED_IDLE,
+                        strings::BROKER_ENDED_TAIL
+                    ),
                 )
                 .start_over(),
             );

@@ -238,6 +238,12 @@ pub struct View {
     pub palette: Option<CommandPalette>,
     /// When the dialog over the page opened, to let it rise into place.
     pub dialog_opened: bool,
+    /// The confirmation: when it was first drawn (its Uninstall waits `screens::ARM_DELAY`
+    /// from then), and its body's scroll, area and height, while it is open.
+    pub confirm_at: Option<Instant>,
+    pub confirm_scroll: SmoothScroll,
+    pub confirm_area: Rect,
+    pub confirm_content: f32,
     /// The launch marker: ms from the start of `main` to the first frame drawn.
     pub first_frame_ms: Option<f64>,
 }
@@ -277,6 +283,10 @@ impl View {
             toast: None,
             palette: None,
             dialog_opened: false,
+            confirm_at: None,
+            confirm_scroll: SmoothScroll::new(),
+            confirm_area: Rect::default(),
+            confirm_content: 0.0,
             first_frame_ms: None,
         }
     }

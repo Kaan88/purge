@@ -1186,7 +1186,12 @@ fn broker_death_mid_execute_never_claims_a_result() {
 #[test]
 fn a_move_never_sent_says_nothing_was_moved() {
     let mut broker = Broker::with_rows(vec![safe(1, true)]);
-    broker.execute = Box::new(|| Err(CallError::link("The administrator part is not running.", true)));
+    broker.execute = Box::new(|| {
+        Err(CallError::link(
+            "The administrator part is not running.",
+            true,
+        ))
+    });
     let mut model = scanned_default(&mut broker);
 
     moved(&mut broker, &mut model);

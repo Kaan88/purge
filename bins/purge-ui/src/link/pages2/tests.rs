@@ -15,8 +15,8 @@ use purge_client::BrokerClient;
 
 use super::*;
 use crate::link::Source;
-use crate::model::Programs;
 use crate::model::tests::{clock, sample_programs};
+use crate::model::{Mode, Programs};
 use crate::prefs::Prefs;
 
 /// A link on the sample engine, started, and a model on it.
@@ -26,11 +26,11 @@ fn started() -> (Link, Model) {
     model.programs = Programs::new(clock(), |_| false);
     link.start(&Source::Sample { bench_rows: 0 });
     let t0 = Instant::now();
-    while !link.started && t0.elapsed().as_secs() < 10 {
+    while link.mode == Mode::Starting && t0.elapsed().as_secs() < 10 {
         link.pump(&mut model);
         std::thread::sleep(Duration::from_millis(5));
     }
-    assert!(link.started);
+    assert_eq!(link.mode, Mode::Sample);
     (link, model)
 }
 
@@ -225,7 +225,7 @@ fn the_history_pages_broker_calls_go_to_its_session_and_their_answers_come_back(
         !m.history.page.sessions().is_empty()
     });
     // As if the page's launch had ended with this session; no broker is ever started here.
-    link.live = true;
+    link.mode = Mode::Live;
     let (client, asked) = fake_broker(link.sink.clone());
     link.broker.adopt(Owner::History, client);
     let h = &mut model.history;

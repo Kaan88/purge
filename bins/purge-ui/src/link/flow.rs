@@ -4,10 +4,16 @@
 //!
 //! - **Launches.** Every page that needs the broker asks [`Link::launch_for`]. Before the first
 //!   Windows prompt of the run the explanation shows ([`crate::flow::Elevation`]); its "Not now"
-//!   answers the page as a declined launch, so its bar does not claim a cancelled prompt. A session
-//!   another page holds is ended first when that page is idle (the WinUI app replaced an idle
-//!   link too); while that page uses it, the launch is refused with a sentence. With sample data
-//!   the session is the [`SampleBroker`], with no prompt at all.
+//!   answers the page as a declined launch, so its bar does not claim a cancelled prompt. Nothing
+//!   launches before the startup has answered, nor after the engine failed (`Mode::refusal`).
+//!   With `--sample` the session is the [`SampleBroker`], with no prompt at all.
+//! - **One session, several pages (UI-REVIEW1 S1).** The WinUI app gave each page its own broker;
+//!   the hub holds one. A session another page holds is ended first only when that page has no
+//!   work in it ([`Use`]). While that page runs a step the launch is refused with a sentence
+//!   naming the page. While it holds work without running anything (a leftovers review, an
+//!   uninstall that is prepared or failed with its forced cleanup still possible) the user is
+//!   asked first ([`crate::flow::Takeover`]): "End it" ends that work and the launch goes on,
+//!   "Not now" leaves it and the asking page says the administrator part is in use.
 //! - **Hand-overs.** The pipeline's session goes to the Leftovers page with its scan
 //!   (`PageRequest::ShowLeftovers { with_broker }`), as the removed-program check's does
 //!   (`ProgramsRequest::OpenLeftovers`).
@@ -24,15 +30,15 @@ use purge_rpc::methods::{
 };
 use purge_ui_model::CallError;
 use purge_ui_model::broker_link::BrokerLaunch;
-use purge_ui_model::leftovers::{LeftoversCall, LeftoversRequest};
+use purge_ui_model::leftovers::{LeftoversCall, LeftoversPhase, LeftoversRequest};
 use purge_ui_model::pipeline::{
     LaunchResult, LaunchState, PageRequest, PipelineRequest, StoredScanOutcome,
 };
 use purge_ui_model::programs::page::BrokerUsers;
 
-use super::{Link, Owner, Pending, failure, no_session};
-use crate::flow::Confirm;
-use crate::model::{Model, Page};
+use super::{Link, Owner, Pending, failure, in_use, no_session};
+use crate::flow::{Confirm, Takeover};
+use crate::model::{Mode, Model, Page};
 use crate::sample_broker::{Pace, SampleBroker, SampleProgram};
 
 /// What a flow call in flight is for.
@@ -53,6 +59,17 @@ pub enum Call {
     Execute,
     Undo,
     RetryHeld,
+}
+
+/// What the session's holder does with it, when another page asks for the broker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Use {
+    /// Nothing: the session may be ended for the other page.
+    Idle,
+    /// A step runs (a call in flight, a change applied): the other page's launch is refused.
+    Busy,
+    /// Work waits in it, as this sentence names it: the user is asked before it ends.
+    Work(String),
 }
 
 /// What the flow last told the other pages, so each change is told once.
@@ -76,6 +93,10 @@ impl Link {
             && from != model.page
         {
             model.flow_left(from);
+        }
+        if let Some((t, end_it)) = model.flow.takeover_answer.take() {
+            busy = true;
+            self.takeover_answered(model, t, end_it);
         }
         for (owner, go) in std::mem::take(&mut model.flow.elevation.answers) {
             busy = true;
@@ -124,41 +145,90 @@ impl Link {
     // ---- launches ----------------------------------------------------------------------------
 
     /// `owner` needs the broker: the explanation first (once a run), then the launch.
-    pub(super) fn launch_for(&mut self, model: &mut Model, owner: Owner) {
+    /// `read_only`: the launch only reads (History's reads), and the explanation says so.
+    pub(super) fn launch_for(&mut self, model: &mut Model, owner: Owner, read_only: bool) {
+        if let Some(refusal) = self.mode.refusal() {
+            // Not started yet, or the engine failed: nothing is launched, not even the sample's.
+            let message = refusal.to_owned();
+            return self.refuse_launch(model, owner, message);
+        }
         if self.broker.session(owner).is_some() {
             return self.on_launched(model, owner, Ok(LaunchResult::started()));
         }
-        if model.flow.elevation.ask(owner) {
+        if model.flow.elevation.ask(owner, read_only) {
             self.launch_now(model, owner);
         }
     }
 
-    /// Whether `owner`'s session may be ended for another page: it runs nothing.
-    fn idle(model: &Model, owner: Owner) -> bool {
+    fn refuse_launch(&mut self, model: &mut Model, owner: Owner, message: String) {
+        self.on_launched(
+            model,
+            owner,
+            Ok(LaunchResult::of(LaunchState::CannotStart, message)),
+        );
+    }
+
+    /// What `owner` does with its session, for another page that asks for the broker.
+    fn use_of(model: &Model, owner: Owner) -> Use {
+        let name = |n: &str| {
+            if n.is_empty() {
+                "the program".to_owned()
+            } else {
+                n.to_owned()
+            }
+        };
         match owner {
-            Owner::Removed => !model.programs.page.check_running(),
-            Owner::Pipeline => !model.flow.page.is_busy(),
-            Owner::Leftovers => !model.flow.leftovers.is_changing(),
+            Owner::Removed if model.programs.page.check_running() => Use::Busy,
+            Owner::Pipeline if model.flow.page.is_busy() => Use::Busy,
+            Owner::Pipeline if model.flow.page.holds_broker_work() => {
+                let target = model.flow.page.controller().target();
+                let program = name(target.map_or("", |t| t.program_name.as_str()));
+                Use::Work(format!("the uninstall of {program}"))
+            }
+            Owner::Leftovers => {
+                let l = &model.flow.leftovers;
+                match l.phase() {
+                    LeftoversPhase::Scanning | LeftoversPhase::Waiting => Use::Busy,
+                    LeftoversPhase::Review => Use::Work(format!(
+                        "the leftovers review of {}",
+                        name(l.program_name())
+                    )),
+                    _ => Use::Idle,
+                }
+            }
             // UI-PAGES2: a restore, recovery or purge in flight keeps the session.
-            Owner::History => !model.history.page.busy(),
-            Owner::Vault => !model.quarantine.page.busy(),
+            Owner::History if model.history.page.busy() => Use::Busy,
+            Owner::Vault if model.quarantine.page.busy() => Use::Busy,
+            _ => Use::Idle,
         }
     }
 
     fn launch_now(&mut self, model: &mut Model, owner: Owner) {
         if let Some(other) = self.broker.holder().filter(|o| *o != owner) {
-            if !Self::idle(model, other) {
-                let message = format!("The administrator part is in use ({other:?}).");
-                return self.on_launched(
-                    model,
-                    owner,
-                    Ok(LaunchResult::of(LaunchState::CannotStart, message)),
-                );
+            match Self::use_of(model, other) {
+                Use::Busy => {
+                    let message = format!("{} Try again when it has finished.", in_use(other));
+                    return self.refuse_launch(model, owner, message);
+                }
+                Use::Work(what) => {
+                    if model.flow.takeover.is_some() {
+                        // One question at a time: the second page is told plainly.
+                        return self.refuse_launch(model, owner, in_use(other));
+                    }
+                    model.flow.takeover = Some(Takeover {
+                        asking: owner,
+                        holder: other,
+                        what,
+                    });
+                    return;
+                }
+                Use::Idle => {
+                    self.broker.close(other);
+                    self.flow_broker_closed(model, other);
+                }
             }
-            self.broker.close(other);
-            self.flow_broker_closed(model, other);
         }
-        if !self.live {
+        if self.mode == Mode::Sample {
             // Sample data: the made-up administrator part, no Windows prompt.
             let programs: HashMap<ProgramId, SampleProgram> = model
                 .programs
@@ -231,10 +301,31 @@ impl Link {
         }
     }
 
-    /// `owner`'s broker link ended.
+    /// The takeover question was answered: "End it" ends the holder's work and the launch goes
+    /// on (asked again: the holder may have started a step meanwhile); "Not now" refuses it.
+    fn takeover_answered(&mut self, model: &mut Model, t: Takeover, end_it: bool) {
+        if !end_it {
+            let message = format!(
+                "{} Nothing was ended: {} is still there.",
+                in_use(t.holder),
+                t.what
+            );
+            return self.refuse_launch(model, t.asking, message);
+        }
+        if self.broker.holder() == Some(t.holder) && Self::use_of(model, t.holder) != Use::Busy {
+            self.broker.close(t.holder);
+            self.flow_broker_closed(model, t.holder);
+        }
+        self.launch_now(model, t.asking);
+    }
+
+    /// `owner`'s broker link ended (or was ended for another page): its page holds no session
+    /// from then on.
     pub(super) fn flow_broker_closed(&mut self, model: &mut Model, owner: Owner) {
-        if owner == Owner::Leftovers {
-            model.flow.leftovers.set_broker_live(false);
+        match owner {
+            Owner::Leftovers => model.flow.leftovers.set_broker_live(false),
+            Owner::Pipeline => model.flow.page.on_broker_ended(),
+            _ => {}
         }
         // UI-PAGES2.
         self.pages_broker_closed(model, owner);
@@ -276,11 +367,9 @@ impl Link {
         let with = request.broker.is_some();
         match model.flow.leftovers.try_show(request) {
             Ok(shown) => {
+                // `with` means `from` holds the session (the requests check it), so the page
+                // holds none of its own: the hub keeps one session.
                 if with {
-                    if self.broker.holder() == Some(Owner::Leftovers) {
-                        // The page's older link is replaced by the scan's.
-                        self.broker.close(Owner::Leftovers);
-                    }
                     self.broker.hand_over(from, Owner::Leftovers);
                 }
                 model.flow.closed_bars.clear();
@@ -321,7 +410,7 @@ impl Link {
         let env = model.flow_env();
         let page = &mut model.flow.page;
         let r = match request {
-            PipelineRequest::Launch => return self.launch_for(model, Owner::Pipeline),
+            PipelineRequest::Launch => return self.launch_for(model, Owner::Pipeline, false),
             PipelineRequest::Prepare { program_id } => {
                 let Some(program_ids) = NonEmpty::new(vec![program_id]) else {
                     return;
@@ -359,6 +448,13 @@ impl Link {
                 page.on_run(Err(no_session()), env)
             }
             PipelineRequest::RunUser { program_id, quiet } => {
+                // The broker observes the run afterwards (design 3.2): without its session the
+                // run never starts.
+                if self.broker.session(Owner::Pipeline).is_none() {
+                    let r = page.on_run_user_without_broker(env);
+                    model.flow.take(r);
+                    return;
+                }
                 let call = StdioCall::UninstallRunUser(RunUserParams { program_id, quiet });
                 if self
                     .engine_call(call, Pending::Flow(Call::RunUser))
@@ -400,7 +496,7 @@ impl Link {
             PipelineRequest::AdminPromptCancelled { .. } => return,
             PipelineRequest::RunEnded { target, removed } => {
                 let pr = &mut model.programs;
-                if self.live {
+                if self.mode == Mode::Live {
                     let r = pr.page.on_uninstall_run_ended(&target.program_id, removed);
                     pr.take(r);
                 } else if removed && let Some(at) = pr.index_of(&target.program_id) {
@@ -439,7 +535,7 @@ impl Link {
             }
             LeftoversCall::Relaunch => {
                 l.set_broker_live(false);
-                return self.launch_for(model, Owner::Leftovers);
+                return self.launch_for(model, Owner::Leftovers, false);
             }
             LeftoversCall::OpenHistory => {
                 model.page = Page::History;
@@ -646,7 +742,7 @@ mod tests {
     #[test]
     fn the_sample_walks_from_the_explanation_to_put_back_all() {
         let (mut link, mut model) = started("firefox");
-        assert!(model.ask_uninstall());
+        assert!(model.ask_uninstall().is_ok());
         until(&mut link, &mut model, "the explanation", |m| {
             m.flow.elevation.showing() == Some(Owner::Pipeline)
         });
@@ -702,10 +798,154 @@ mod tests {
         );
     }
 
+    /// `name` uninstalled on the sample up to the leftovers review, which holds the session.
+    fn at_review(name: &str) -> (Link, Model) {
+        let (mut link, mut model) = started(name);
+        assert!(model.ask_uninstall().is_ok());
+        until(&mut link, &mut model, "the explanation", |m| {
+            m.flow.elevation.showing().is_some()
+        });
+        model.flow_elevation(true);
+        until(&mut link, &mut model, "the confirmation", |m| {
+            m.flow.confirm.is_some()
+        });
+        model.flow_confirm(ConfirmButton::Uninstall);
+        until(&mut link, &mut model, "the review", |m| {
+            m.flow.leftovers.phase() == LeftoversPhase::Review
+        });
+        assert_eq!(link.broker.holder(), Some(Owner::Leftovers));
+        (link, model)
+    }
+
+    /// History, loaded, asks for its broker to show the selected cleanup's items.
+    fn history_asks(link: &mut Link, model: &mut Model) {
+        model.page = Page::History;
+        until(link, model, "History's list", |m| {
+            !m.history.page.sessions().is_empty()
+        });
+        let r = model.history.page.show_items();
+        model.history.take(r);
+        link.pump(model);
+    }
+
+    #[test]
+    fn a_launch_asks_before_it_ends_a_leftovers_review_and_not_now_keeps_it() {
+        let (mut link, mut model) = at_review("firefox");
+        history_asks(&mut link, &mut model);
+        let t = model.flow.takeover.clone().expect("the question");
+        assert_eq!((t.asking, t.holder), (Owner::History, Owner::Leftovers));
+        assert!(t.what.contains("leftovers review"), "{}", t.what);
+        assert!(model.flow.dialog_open());
+
+        model.flow_takeover(false);
+        link.pump(&mut model);
+        assert_eq!(link.broker.holder(), Some(Owner::Leftovers), "kept");
+        assert_eq!(model.flow.leftovers.phase(), LeftoversPhase::Review);
+        let error = model.history.page.action_error().unwrap_or_default();
+        assert!(
+            error.contains("in use by the Leftovers page") && !error.contains("Leftovers)"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn end_it_ends_the_review_and_the_launch_goes_on() {
+        let (mut link, mut model) = at_review("firefox");
+        history_asks(&mut link, &mut model);
+        assert!(model.flow.takeover.is_some());
+        model.flow_takeover(true);
+        until(&mut link, &mut model, "History's items", |m| {
+            m.history.page.items().is_some()
+        });
+        assert_eq!(link.broker.holder(), Some(Owner::History));
+        assert!(!model.flow.leftovers.broker_is_live());
+    }
+
+    #[test]
+    fn an_idle_uninstall_with_a_prepared_record_is_asked_for_too() {
+        let (mut link, mut model) = started("firefox");
+        assert!(model.ask_uninstall().is_ok());
+        until(&mut link, &mut model, "the explanation", |m| {
+            m.flow.elevation.showing().is_some()
+        });
+        model.flow_elevation(true);
+        until(&mut link, &mut model, "the confirmation", |m| {
+            m.flow.confirm.is_some()
+        });
+        model.flow_confirm(ConfirmButton::NotNow);
+        link.pump(&mut model);
+        assert!(model.flow.page.holds_broker_work());
+        history_asks(&mut link, &mut model);
+        let t = model.flow.takeover.clone().expect("the question");
+        assert_eq!(t.holder, Owner::Pipeline);
+        assert!(t.what.contains("uninstall of"), "{}", t.what);
+
+        model.flow_takeover(true);
+        until(&mut link, &mut model, "History's items", |m| {
+            m.history.page.items().is_some()
+        });
+        assert!(
+            !model.flow.page.holds_broker_work(),
+            "the Uninstall page knows its session ended"
+        );
+        assert!(
+            model
+                .flow_bars()
+                .iter()
+                .any(|b| b.title == purge_ui_model::pipeline::strings::BROKER_ENDED_TITLE),
+            "and says so"
+        );
+    }
+
+    #[test]
+    fn nothing_launches_before_the_startup_has_answered() {
+        let mut link = Link::new(|| {});
+        let mut model = Model::new(Prefs::default(), sample_programs(), false);
+        assert_eq!(link.mode, Mode::Starting);
+        assert_eq!(
+            model.ask_uninstall(),
+            Err(crate::model::STILL_STARTING.to_owned())
+        );
+        let r = model.flow.leftovers.rescan();
+        model.flow.ltake(r);
+        link.launch_for(&mut model, Owner::Leftovers, false);
+        link.pump(&mut model);
+        assert!(link.broker.holder().is_none(), "no sample broker either");
+        assert!(model.flow.elevation.showing().is_none());
+    }
+
+    #[test]
+    fn after_an_engine_failure_nothing_pretends_to_uninstall() {
+        let mut link = Link::new(|| {});
+        let mut model = Model::new(Prefs::default(), sample_programs(), false);
+        model.programs = crate::model::Programs::new(crate::model::tests::clock(), |_| false);
+        link.start(&Source::Engine(std::path::PathBuf::from(
+            r"Z:
+o\such\purge-engine.exe",
+        )));
+        until(&mut link, &mut model, "the fallback", |m| {
+            m.mode != Mode::Starting
+        });
+        let Mode::Fallback(notice) = model.mode.clone() else {
+            panic!("the fallback, not {:?}", model.mode)
+        };
+        model.programs.set_query("firefox");
+        model.programs.click(0, Mods::default());
+        assert_eq!(model.ask_uninstall(), Err(notice.clone()));
+        assert_eq!(
+            model.page,
+            Page::Programs,
+            "the Uninstall page is not opened"
+        );
+        link.launch_for(&mut model, Owner::Pipeline, false);
+        link.pump(&mut model);
+        assert!(link.broker.holder().is_none(), "no made-up broker");
+    }
+
     #[test]
     fn not_now_on_the_explanation_starts_nothing_and_says_so() {
         let (mut link, mut model) = started("7-zip");
-        assert!(model.ask_uninstall());
+        assert!(model.ask_uninstall().is_ok());
         until(&mut link, &mut model, "the explanation", |m| {
             m.flow.elevation.showing().is_some()
         });

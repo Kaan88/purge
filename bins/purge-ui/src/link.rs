@@ -40,7 +40,7 @@ mod pages2;
 
 use crate::icons::{self, Atlas};
 use crate::markers;
-use crate::model::Model;
+use crate::model::{Mode, Model};
 
 /// How the window starts.
 #[derive(Debug, Clone)]
@@ -97,6 +97,15 @@ fn launch_result(f: LaunchFailure) -> Result<LaunchResult, CallError> {
 
 // ---- the broker session --------------------------------------------------------------------
 
+/// "The administrator part is in use by the Uninstall pipeline page.": the holder by its
+/// page's name.
+pub fn in_use(holder: Owner) -> String {
+    format!(
+        "The administrator part is in use by the {} page.",
+        holder.page_name()
+    )
+}
+
 /// Who holds the one broker session. The broker serves one client at a time, so the pages take
 /// turns.
 // Every page takes the broker through `launch_for` (link/flow.rs).
@@ -115,6 +124,21 @@ pub enum Owner {
     Vault,
 }
 
+impl Owner {
+    /// The name of the page, as the rail shows it.
+    pub fn page_name(self) -> &'static str {
+        use crate::model::Page;
+        match self {
+            Owner::Removed => Page::Programs,
+            Owner::Pipeline => Page::Pipeline,
+            Owner::Leftovers => Page::Leftovers,
+            Owner::History => Page::History,
+            Owner::Vault => Page::Quarantine,
+        }
+        .title()
+    }
+}
+
 /// The one broker session, and the launch of it while one runs. The session is a
 /// [`BrokerClient`], or with sample data the [`crate::sample_broker::SampleBroker`].
 #[derive(Default)]
@@ -129,7 +153,7 @@ impl BrokerHub {
     /// another page holds the broker or there is no broker beside the app.
     pub fn launch(&mut self, owner: Owner, sink: Sink) -> Result<CallId, String> {
         if let Some((other, _)) = self.session.as_ref().filter(|(o, _)| *o != owner) {
-            return Err(format!("The administrator part is in use ({other:?})."));
+            return Err(in_use(*other));
         }
         if self.launching.is_some() {
             return Err("The administrator part is starting.".into());
@@ -272,10 +296,11 @@ pub struct Link {
     rx: Receiver<ClientEvent>,
     sink: Sink,
     engine: Option<Arc<dyn Engine>>,
-    /// The real engine answers (not the sample one).
-    pub live: bool,
-    /// The startup has answered.
-    pub started: bool,
+    /// Where the data comes from: `Starting` until the startup has answered. Only `Sample` (an
+    /// explicit `--sample`) plays the made-up broker; `Fallback` refuses every change.
+    pub mode: Mode,
+    /// `--sample` was asked for (the startup's answer then is `Sample`, not `Fallback`).
+    sample_asked: bool,
     pending: HashMap<CallId, Pending>,
     icons: IconLoad,
     atlas: Atlas,
@@ -306,8 +331,8 @@ impl Link {
             rx,
             sink,
             engine: None,
-            live: false,
-            started: false,
+            mode: Mode::Starting,
+            sample_asked: false,
             pending: HashMap::new(),
             icons: IconLoad::default(),
             atlas: Atlas::open(None),
@@ -320,7 +345,8 @@ impl Link {
 
     /// Starts the engine (or the sample) on a background thread; its answer arrives through
     /// [`Link::pump`].
-    pub fn start(&self, source: &Source) {
+    pub fn start(&mut self, source: &Source) {
+        self.sample_asked = matches!(source, Source::Sample { .. });
         let startup = match source {
             Source::Engine(path) => Startup::engine(path.clone()),
             Source::Sample { bench_rows } => Startup::sample().bench_rows(*bench_rows),
@@ -448,25 +474,26 @@ impl Link {
     }
 
     fn on_startup(&mut self, model: &mut Model, s: StartupResult) {
-        self.started = true;
-        self.live = s.error.is_none() && s.engine.is_live();
-        let can_change_pc = self.live && s.engine.can_change_pc();
+        let live = s.error.is_none() && s.engine.is_live();
+        self.mode = match &s.error {
+            _ if live => Mode::Live,
+            None if self.sample_asked => Mode::Sample,
+            Some(notice) => Mode::Fallback(notice.clone()),
+            None => Mode::Fallback(purge_client::startup::FALLBACK_NOTICE.trim_end().to_owned()),
+        };
+        let can_change_pc = live && s.engine.can_change_pc();
         self.engine = Some(s.engine.clone());
         self.pending.insert(s.changes, Pending::Changes);
         // A live engine's icons are kept between runs; the sample's are not.
-        self.atlas = Atlas::open(if self.live {
-            icons::default_file()
-        } else {
-            None
-        });
-        model.sample = !self.live;
-        if self.live {
+        self.atlas = Atlas::open(if live { icons::default_file() } else { None });
+        model.mode = self.mode.clone();
+        if live {
             model.settings.facts.engine = Some(s.hello.hello.version.clone());
             model.settings.facts.policy = Some(s.hello.hello.policy_version.clone());
         }
         let pr = &mut model.programs;
         let r = pr.page.set_engine(EngineState {
-            live: self.live,
+            live,
             can_change_pc,
         });
         pr.take(r);
@@ -662,7 +689,7 @@ impl Link {
         };
         match check {
             // Through the first-elevation explanation, as every launch (`link/flow.rs`).
-            RemovedRequest::Launch => self.launch_for(model, Owner::Removed),
+            RemovedRequest::Launch => self.launch_for(model, Owner::Removed, false),
             RemovedRequest::Stored { program_ids } => {
                 let sent = NonEmpty::new(program_ids).is_some_and(|program_ids| {
                     broker_call(
@@ -783,11 +810,12 @@ mod tests {
         model.programs = crate::model::Programs::new(crate::model::tests::clock(), |_| false);
         link.start(&Source::Sample { bench_rows: 0 });
         let t0 = std::time::Instant::now();
-        while !link.started && t0.elapsed().as_secs() < 10 {
+        while link.mode == Mode::Starting && t0.elapsed().as_secs() < 10 {
             link.pump(&mut model);
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        assert!(link.started && !link.live && model.sample);
+        assert_eq!(link.mode, Mode::Sample);
+        assert!(model.sample());
         assert!(!model.programs.rows.is_empty());
         assert!(
             model.programs.view.notice.is_none(),
@@ -817,11 +845,15 @@ mod tests {
             r"Z:\no\such\purge-engine.exe",
         )));
         let t0 = std::time::Instant::now();
-        while !link.started && t0.elapsed().as_secs() < 30 {
+        while link.mode == Mode::Starting && t0.elapsed().as_secs() < 30 {
             link.pump(&mut model);
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        assert!(link.started && !link.live && model.sample);
+        assert!(matches!(link.mode, Mode::Fallback(_)), "{:?}", link.mode);
+        assert!(
+            !model.sample(),
+            "a failed engine never plays the pretend flow"
+        );
         let notice = model
             .programs
             .view

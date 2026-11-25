@@ -8,7 +8,7 @@
 
 use std::collections::VecDeque;
 
-use purge_rpc::methods::{CandidateRef, ItemKind, RestorePoint};
+use purge_rpc::methods::{ItemKind, RestorePoint};
 use purge_ui_model::leftovers::{
     ItemLabel, LeftoversAction, LeftoversCall, LeftoversModel, LeftoversOptions,
 };
@@ -50,47 +50,65 @@ impl Confirm {
 pub struct Elevation {
     /// Shown and answered with Continue in this run (as the WinUI app kept it).
     pub explained: bool,
-    /// The pages waiting for it, the shown one first.
-    pub asking: VecDeque<Owner>,
+    /// The pages waiting for it, the shown one first, each with whether its launch only reads
+    /// (the WinUI `LaunchIsReadOnly`: History's reads, never its restore or rollback).
+    pub asking: VecDeque<(Owner, bool)>,
     /// The answers `link` has still to act on: Continue (true) or "Not now".
     pub answers: Vec<(Owner, bool)>,
 }
 
 impl Elevation {
-    /// `owner` asks for the broker: true when it may launch now (explained already).
-    pub fn ask(&mut self, owner: Owner) -> bool {
+    /// `owner` asks for the broker, for a launch that only reads (`read_only`) or not: true when
+    /// it may launch now (explained already). A page that asks again while it waits keeps the
+    /// words of a change once any of its asks was one.
+    pub fn ask(&mut self, owner: Owner, read_only: bool) -> bool {
         if self.explained {
             return true;
         }
-        if !self.asking.contains(&owner) {
-            self.asking.push_back(owner);
+        match self.asking.iter_mut().find(|(o, _)| *o == owner) {
+            Some((_, ro)) => *ro &= read_only,
+            None => self.asking.push_back((owner, read_only)),
         }
         false
     }
 
     /// The page the dialog is open for.
     pub fn showing(&self) -> Option<Owner> {
-        self.asking.front().copied()
+        self.asking.front().map(|(o, _)| *o)
+    }
+
+    /// Whether the launch the dialog is open for only reads: its second paragraph says so.
+    pub fn showing_read_only(&self) -> bool {
+        self.asking.front().is_some_and(|(_, ro)| *ro)
     }
 
     /// The dialog's answer. After a Continue, the pages still waiting go on too: the explanation
     /// has been read.
     pub fn answer(&mut self, go: bool) {
-        let Some(owner) = self.asking.pop_front() else {
+        let Some((owner, _)) = self.asking.pop_front() else {
             return;
         };
         self.answers.push((owner, go));
         if go {
             self.explained = true;
             self.answers
-                .extend(self.asking.drain(..).map(|o| (o, true)));
+                .extend(self.asking.drain(..).map(|(o, _)| (o, true)));
         }
     }
+}
 
-    /// The History page's own uses only read Purge's records (the WinUI `readOnly` text).
-    pub fn read_only(owner: Owner) -> bool {
-        owner == Owner::History
-    }
+/// The question before one page's launch ends the broker session another page still holds work
+/// in (S1). The hub holds one session where the WinUI app gave each page its own broker, so
+/// the user decides: "End it" closes the holder's session and the launch goes on; "Not now"
+/// leaves it and the asking page says the administrator part is in use.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Takeover {
+    /// The page that asked for the broker.
+    pub asking: Owner,
+    /// The page whose session would end.
+    pub holder: Owner,
+    /// What the holder would lose, in a sentence.
+    pub what: String,
 }
 
 /// The two pages of the flow and what lies over them.
@@ -108,6 +126,10 @@ pub struct Flow {
     /// The Leftovers bars the user closed, by title and message.
     pub closed_bars: Vec<(String, String)>,
     pub elevation: Elevation,
+    /// The question before a launch ends another page's work, while it is open.
+    pub takeover: Option<Takeover>,
+    /// Its answer, which `link` has still to act on: "End it" (true) or "Not now".
+    pub takeover_answer: Option<(Takeover, bool)>,
 }
 
 /// `RegistryLabel` as the Leftovers model's describer (registry rows in words).
@@ -129,6 +151,8 @@ impl Flow {
             lout: Vec::new(),
             closed_bars: Vec::new(),
             elevation: Elevation::default(),
+            takeover: None,
+            takeover_answer: None,
         }
     }
 
@@ -148,15 +172,10 @@ impl Flow {
         self.lout.extend(calls);
     }
 
-    /// Something is open over the page: the confirmation or the explanation.
+    /// Something is open over the page: the confirmation, the explanation or the takeover
+    /// question.
     pub fn dialog_open(&self) -> bool {
-        self.confirm.is_some() || self.elevation.showing().is_some()
-    }
-
-    /// The item of the list row `n` (1-based, as the controls' ids count).
-    pub fn item_id(&self, n: usize) -> Option<CandidateRef> {
-        let i = n.checked_sub(1)?;
-        self.leftovers.items().get(i).map(|i| i.candidate_id)
+        self.confirm.is_some() || self.elevation.showing().is_some() || self.takeover.is_some()
     }
 }
 
@@ -289,6 +308,13 @@ impl Model {
         self.flow.elevation.answer(go);
     }
 
+    /// The takeover question's "End it" (true) or "Not now".
+    pub fn flow_takeover(&mut self, end_it: bool) {
+        if let Some(t) = self.flow.takeover.take() {
+            self.flow.takeover_answer = Some((t, end_it));
+        }
+    }
+
     /// A bar action of the Leftovers page.
     pub fn flow_leftovers_action(&mut self, action: LeftoversAction) {
         match action {
@@ -367,9 +393,9 @@ mod tests {
     #[test]
     fn the_explanation_is_asked_once_and_its_continue_lets_the_waiting_pages_go() {
         let mut e = Elevation::default();
-        assert!(!e.ask(Owner::Pipeline));
-        assert!(!e.ask(Owner::Removed));
-        assert!(!e.ask(Owner::Pipeline), "asked once");
+        assert!(!e.ask(Owner::Pipeline, false));
+        assert!(!e.ask(Owner::Removed, false));
+        assert!(!e.ask(Owner::Pipeline, false), "asked once");
         assert_eq!(e.showing(), Some(Owner::Pipeline));
         e.answer(true);
         assert_eq!(
@@ -377,18 +403,33 @@ mod tests {
             vec![(Owner::Pipeline, true), (Owner::Removed, true)]
         );
         assert!(e.showing().is_none());
-        assert!(e.ask(Owner::Leftovers), "explained: no dialog again");
+        assert!(e.ask(Owner::Leftovers, false), "explained: no dialog again");
     }
 
     #[test]
     fn not_now_answers_only_the_page_it_was_shown_for() {
         let mut e = Elevation::default();
-        e.ask(Owner::Removed);
-        e.ask(Owner::Pipeline);
+        e.ask(Owner::Removed, false);
+        e.ask(Owner::Pipeline, false);
         e.answer(false);
         assert_eq!(e.answers, vec![(Owner::Removed, false)]);
         assert_eq!(e.showing(), Some(Owner::Pipeline), "the next one is asked");
         assert!(!e.explained);
+    }
+
+    #[test]
+    fn the_explanation_says_only_reads_for_a_read_and_never_for_a_change() {
+        let mut e = Elevation::default();
+        e.ask(Owner::History, true);
+        assert!(e.showing_read_only(), "History's read");
+        e.ask(Owner::History, false);
+        assert!(
+            !e.showing_read_only(),
+            "a restore asked meanwhile: the words of a change"
+        );
+        let mut e = Elevation::default();
+        e.ask(Owner::History, false);
+        assert!(!e.showing_read_only(), "History's restore or rollback");
     }
 
     #[test]

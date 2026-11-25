@@ -288,7 +288,9 @@ impl ConfirmDialog {
             _ if !c.interactive_command.is_empty() => &c.interactive_command,
             // `command` is the selected one, which is the quiet one when the quiet switch was on
             // at the record step: only a program without a quiet command may show it here.
-            _ if !c.command.is_empty() && c.quiet_command.as_deref() != Some(c.command.as_str()) => {
+            _ if !c.command.is_empty()
+                && c.quiet_command.as_deref() != Some(c.command.as_str()) =>
+            {
                 &c.command
             }
             _ => strings::confirm::COMMAND_NOT_KNOWN,

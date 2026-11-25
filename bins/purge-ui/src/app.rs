@@ -38,7 +38,7 @@ use crate::model::{Model, Page, Programs, SortKey, Tab};
 use crate::prefs::{Prefs, Store};
 use crate::screens::{self, NAV, nav_id};
 use crate::script::Script;
-use crate::ui::{Ctl, Id, Look, Role, SCOPE, Ui, id};
+use crate::ui::{Ctl, Id, Key, Look, Role, SCOPE, Ui, id};
 use crate::view::{
     DD_ALL, DD_BACKDROP, DD_DESIGN, DD_PRESET, DD_RESTORE, DD_SORT, DD_THEME, DD_TRANSITION, Toast,
     View,
@@ -335,6 +335,12 @@ impl PurgeApp {
         self.ctls.iter().rev().find(|c| c.id == id)
     }
 
+    /// What the control `id` stood for when the last frame drew it (a row's candidate,
+    /// session, op or expiry id).
+    pub fn key_of(&self, id: Id) -> Option<Key> {
+        self.ctl(id).and_then(|c| c.key.clone())
+    }
+
     /// The control under a point: the last declared wins, and while something is open over the
     /// page only its own controls answer.
     fn hit(&self, x: f32, y: f32) -> Option<&Ctl> {
@@ -357,6 +363,8 @@ impl PurgeApp {
                 self.focus.push_scope_on(SCOPE, id("ConfirmNotNowButton"));
             } else if self.model.flow.elevation.showing().is_some() {
                 self.focus.push_scope_on(SCOPE, id("DialogPrimaryButton"));
+            } else if self.model.flow.takeover.is_some() {
+                self.focus.push_scope_on(SCOPE, id("TakeoverNotNowButton"));
             } else {
                 self.focus.push_scope(SCOPE);
             }
@@ -388,8 +396,8 @@ impl PurgeApp {
     }
 
     fn ask_uninstall(&mut self, cx: &mut Cx<'_, ()>) {
-        if !self.model.ask_uninstall() {
-            self.toast(cx, "Select a program first.");
+        if let Err(said) = self.model.ask_uninstall() {
+            self.toast(cx, &said);
         }
     }
 
@@ -445,6 +453,10 @@ impl PurgeApp {
             "Commands.Expander" => self.view.commands_open = !self.view.commands_open,
 
             // The confirmation and the first-elevation explanation (UI-FLOW).
+            // The Uninstall waits a moment after the dialog appears (`screens::ARM_DELAY`), for
+            // the keyboard and the reader too: a click or key meant for what was there lands
+            // nowhere.
+            "ConfirmUninstallButton" if self.ctl(id).is_none_or(|c| c.disabled) => {}
             "ConfirmUninstallButton" | "ConfirmCheckAgainButton" | "ConfirmNotNowButton" => {
                 self.close_dropdowns();
                 if let Some(button) = screens::confirm_button(id.0) {
@@ -454,6 +466,8 @@ impl PurgeApp {
             "QuietSwitch" => self.model.flow_quiet(),
             "DialogPrimaryButton" => self.model.flow_elevation(true),
             "DialogCloseButton" => self.model.flow_elevation(false),
+            "TakeoverEndButton" => self.model.flow_takeover(true),
+            "TakeoverNotNowButton" => self.model.flow_takeover(false),
 
             // The Uninstall page.
             "NextButton" => self.model.flow_next(),
@@ -472,19 +486,21 @@ impl PurgeApp {
             "LBarClose" if n > 0 => self.model.flow_close_lbar(n - 1),
             "Group" if n > 0 => self.model.flow.leftovers.toggle_expanded(n - 1),
             "GroupTick" if n > 0 => self.model.flow.leftovers.toggle_group(n - 1),
+            // The rows act on what they showed (`Ctl::key`), never on a place in the list.
             "Item" => {
-                if let Some(c) = self.model.flow.item_id(n) {
+                if let Some(Key::Candidate(c)) = self.key_of(id) {
                     let r = self.model.flow.leftovers.select(c);
                     self.model.flow.ltake(r);
                 }
             }
             "ItemTick" => {
-                if let Some(c) = self.model.flow.item_id(n) {
+                if let Some(Key::Candidate(c)) = self.key_of(id) {
                     let l = &mut self.model.flow.leftovers;
-                    let on = l.items().get(n - 1).is_some_and(|i| i.checked);
-                    l.set_checked(&c, !on);
-                    let r = l.select(c);
-                    self.model.flow.ltake(r);
+                    if let Some(on) = l.item(&c).map(|i| i.checked) {
+                        l.set_checked(&c, !on);
+                        let r = l.select(c);
+                        self.model.flow.ltake(r);
+                    }
                 }
             }
             "ExpandButton" => self.model.flow.leftovers.expand_all(),
@@ -893,6 +909,15 @@ impl PurgeApp {
             return;
         }
         if self.overlay() {
+            // The confirmation's body scrolls when it is taller than the window.
+            let v = &mut self.view;
+            if self.model.flow.confirm.is_some()
+                && v.confirm_area.contains(x, y)
+                && v.confirm_scroll
+                    .scroll_by(-dy, v.confirm_content, v.confirm_area.h)
+            {
+                cx.request_redraw_all();
+            }
             return;
         }
         let v = &mut self.view;
@@ -957,6 +982,8 @@ impl PurgeApp {
                         .flow_confirm(purge_ui_model::pipeline::page::ConfirmButton::NotNow);
                 } else if self.model.flow.elevation.showing().is_some() {
                     self.model.flow_elevation(false);
+                } else if self.model.flow.takeover.is_some() {
+                    self.model.flow_takeover(false);
                 } else if self.focus.is_focused(SEARCH) {
                     if self.view.search.is_empty() {
                         self.focus.focus(LIST);
@@ -1436,15 +1463,17 @@ impl PurgeApp {
         }
         if !inside.is_empty() {
             let what = if let Some(c) = &self.model.flow.confirm {
-                c.dialog.title.as_str()
+                c.dialog.title.clone()
             } else if self.model.flow.elevation.showing().is_some() {
-                screens::ELEVATION_TITLE
+                screens::ELEVATION_TITLE.to_string()
+            } else if let Some(t) = &self.model.flow.takeover {
+                screens::takeover_title(t)
             } else {
-                "Commands"
+                "Commands".to_string()
             };
             let did = a11y::id("ContentDialog");
             let r = dialog_rect.unwrap_or_default();
-            tree.add(did, a11y::dialog(what, "ContentDialog", r, true, inside));
+            tree.add(did, a11y::dialog(&what, "ContentDialog", r, true, inside));
             top.push(did);
         }
         let root = tree.root();
@@ -1539,26 +1568,19 @@ fn screens_tab_index(name: &str) -> usize {
 
 impl PurgeApp {
     /// A click on a control of the History or Quarantine page; false when `name` is not one.
-    fn pages_activate(&mut self, cx: &mut Cx<'_, ()>, name: &str, n: usize) -> bool {
+    fn pages_activate(&mut self, cx: &mut Cx<'_, ()>, name: &'static str, n: usize) -> bool {
         let at = n.saturating_sub(1);
+        // The rows act on what they showed when drawn (`Ctl::key`), not on a place in a list
+        // that an answer may have changed since.
+        let key = self.key_of(Id(name, n as u32));
         let h = &mut self.model.history;
         let q = &mut self.model.quarantine;
         match name {
             // History.
-            "StripItem" => {
-                let timeline = h.page.timeline(&h.clock);
-                if let Some(id) = h
-                    .page
-                    .timeline_target(&timeline, at)
-                    .and_then(|i| h.session_id(i))
+            "StripItem" | "Op" => {
+                if let Some(Key::Session(id)) = key
+                    && h.page.sessions().iter().any(|s| s.id == id)
                 {
-                    h.page.select(&id);
-                    h.dismissed.clear();
-                    self.view.page_scroll = scroll::SmoothScroll::new();
-                }
-            }
-            "Op" => {
-                if let Some(id) = h.session_id(at) {
                     h.page.select(&id);
                     h.dismissed.clear();
                     self.view.page_scroll = scroll::SmoothScroll::new();
@@ -1570,11 +1592,14 @@ impl PurgeApp {
                 h.take(r);
             }
             "DItemTick" => {
-                let item = h
-                    .page
-                    .items()
-                    .and_then(|i| i.get(at))
-                    .map(|e| (e.op, e.checked));
+                let item = match key {
+                    Some(Key::Op(op)) => h
+                        .page
+                        .items()
+                        .and_then(|i| i.iter().find(|e| e.op == op))
+                        .map(|e| (e.op, e.checked)),
+                    _ => None,
+                };
                 if let Some((op, checked)) = item {
                     h.page.set_checked(op, !checked);
                 }
@@ -1598,7 +1623,7 @@ impl PurgeApp {
                 let r = h.page.load();
                 h.take(r);
             }
-            "BarClose" => {
+            "HBarClose" => {
                 if let Some(bar) = h.page.bars().get(at) {
                     h.dismissed.push(format!("{} {}", bar.title, bar.message));
                 }
@@ -1606,7 +1631,12 @@ impl PurgeApp {
 
             // Quarantine.
             "Batch" => {
-                let id = q.page.batches().get(at).map(|b| b.id.clone());
+                let id = match key {
+                    Some(Key::Session(id)) if q.page.batches().iter().any(|b| b.id == id) => {
+                        Some(id)
+                    }
+                    _ => None,
+                };
                 if id.is_some() && id != q.selected {
                     q.selected = id;
                     q.flyout = None;
@@ -1651,7 +1681,8 @@ impl PurgeApp {
             "FlyoutCancel" => q.flyout = None,
             "ItemsClose" => q.page.close_items(),
             "ItemDelete" => {
-                if let Some(id) = q.page.items().get(at).map(|i| i.expiry_id) {
+                // `delete_item_now` checks the id is still one of the items shown.
+                if let Some(Key::Expiry(id)) = key {
                     let r = q.page.delete_item_now(id);
                     q.take(r);
                 }
@@ -1675,7 +1706,7 @@ impl App for PurgeApp {
         markers::mark("window_ctor");
         // The engine starts with the window: its events wake the loop with an empty message.
         let proxy = cx.proxy();
-        let link = Link::new(move || {
+        let mut link = Link::new(move || {
             proxy.send(());
         });
         link.start(&self.source);
