@@ -100,9 +100,10 @@ pub enum Transition {
     Fade,
     /// The new page rises a little and fades in (D1's, and WinUI's navigation view).
     Slide,
-    /// The same from the side: from the right going down the rail, from the left going up.
+    /// The same from the side: always from the left (`Transition::effect`).
     SlideSide,
-    /// The new page pushes the old one out, up or down by their order in the rail (D2's).
+    /// The new page comes down from the top and pushes the old one out (D2's), whatever the
+    /// pages' order.
     Flow,
     /// The new page pushes the old one up, whatever their order.
     SlideUp,
@@ -164,8 +165,11 @@ pub enum Effect {
 impl Transition {
     /// The effect for a move from the page at rail place `from` to the one at `to`; `None` for
     /// no motion.
-    pub fn effect(self, from: usize, to: usize) -> Option<Effect> {
-        let down = to > from;
+    ///
+    /// The places do not change the direction (the user's choice): every navigation moves the
+    /// same way, the new page coming in from the left (Flow: from the top), as a move up the
+    /// rail did when the direction followed the rail's order.
+    pub fn effect(self, _from: usize, _to: usize) -> Option<Effect> {
         Some(match self {
             Transition::None => return None,
             Transition::Fade => Effect::Toolkit(PageEffect::Crossfade),
@@ -174,12 +178,10 @@ impl Transition {
                 distance: 28.0,
             }),
             Transition::SlideSide => Effect::Toolkit(PageEffect::SlideFade {
-                from: if down { Edge::Right } else { Edge::Left },
+                from: Edge::Left,
                 distance: 40.0,
             }),
-            Transition::Flow => Effect::Toolkit(PageEffect::Push {
-                from: if down { Edge::Bottom } else { Edge::Top },
-            }),
+            Transition::Flow => Effect::Toolkit(PageEffect::Push { from: Edge::Top }),
             Transition::SlideUp => Effect::Toolkit(PageEffect::Push { from: Edge::Bottom }),
             Transition::Scale => Effect::Scale,
             Transition::Depth => Effect::Depth,
@@ -392,15 +394,20 @@ mod tests {
     }
 
     #[test]
-    fn flow_pushes_by_rail_order() {
-        let down = Transition::Flow.effect(0, 2);
-        let up = Transition::Flow.effect(2, 0);
+    fn every_move_goes_the_same_way_whatever_the_rail_order() {
+        for t in Transition::ALL {
+            assert_eq!(t.effect(0, 2), t.effect(2, 0), "{t:?}");
+            assert_eq!(t.effect(0, 5), t.effect(4, 1), "{t:?}");
+        }
         assert_eq!(
-            down,
-            Some(Effect::Toolkit(PageEffect::Push { from: Edge::Bottom }))
+            Transition::SlideSide.effect(3, 0),
+            Some(Effect::Toolkit(PageEffect::SlideFade {
+                from: Edge::Left,
+                distance: 40.0
+            }))
         );
         assert_eq!(
-            up,
+            Transition::Flow.effect(0, 3),
             Some(Effect::Toolkit(PageEffect::Push { from: Edge::Top }))
         );
     }

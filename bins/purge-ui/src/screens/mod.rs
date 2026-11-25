@@ -92,9 +92,10 @@ pub fn draw(ui: &mut Ui, m: &Model, v: &mut View) {
     let content = content_rect(ui);
     v.dds.sync(m);
 
-    // The flow (D2's pipeline page): the next stage of the uninstall pushes the old one out to
-    // the left (and back from the left when the flow starts over), unless the user chose no
-    // motion. Not while the page itself changes.
+    // The flow (D2's pipeline page): the next stage of the uninstall comes in from the left and
+    // pushes the old one out (the way every page comes in, `look::Transition::effect`), also
+    // when the flow starts over, unless the user chose no motion. Not while the page itself
+    // changes.
     let moves = m.prefs.transition != Transition::None;
     let stage = pipeline::flow_stage(m, &lk);
     let flow_body = pipeline::flow_body(&lk, content);
@@ -102,8 +103,7 @@ pub fn draw(ui: &mut Ui, m: &Model, v: &mut View) {
         (Some(old), Some(new))
             if old != new && moves && v.shown == Some((m.page, m.prefs.design)) =>
         {
-            let from = if new > old { Edge::Right } else { Edge::Left };
-            let push = Effect::Toolkit(PageEffect::Push { from });
+            let push = Effect::Toolkit(PageEffect::Push { from: Edge::Left });
             v.flow_tx.begin(ui.cx.anim(), ui.p, flow_body, push);
         }
         (_, None) if v.flow_tx.running() => v.flow_tx.cancel(ui.cx.anim()),
