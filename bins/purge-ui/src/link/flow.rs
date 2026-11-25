@@ -323,7 +323,7 @@ impl Link {
     /// from then on.
     pub(super) fn flow_broker_closed(&mut self, model: &mut Model, owner: Owner) {
         match owner {
-            Owner::Leftovers => model.flow.leftovers.set_broker_live(false),
+            Owner::Leftovers => model.flow.leftovers.on_link_ended(),
             Owner::Pipeline => model.flow.page.on_broker_ended(),
             _ => {}
         }
@@ -861,7 +861,16 @@ mod tests {
             m.history.page.items().is_some()
         });
         assert_eq!(link.broker.holder(), Some(Owner::History));
-        assert!(!model.flow.leftovers.broker_is_live());
+        let l = &model.flow.leftovers;
+        assert!(!l.broker_is_live());
+        // Review SF2: the review is over, and nothing offers it as if it were live.
+        assert_eq!(l.phase(), LeftoversPhase::Empty);
+        assert!(!l.can_move());
+        assert_eq!(l.waiting_for_review(), 0);
+        assert_eq!(model.badge(Page::Leftovers), None);
+        let (title, text) = l.empty_panel().expect("the ended panel");
+        assert_eq!(title, "The administrator part ended");
+        assert!(text.contains(l.program_name()) && text.contains("Nothing was moved"), "{text}");
     }
 
     #[test]

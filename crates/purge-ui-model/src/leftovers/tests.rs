@@ -1673,3 +1673,28 @@ fn a_retry_over_an_ended_link_starts_a_new_broker_first() {
     assert_eq!(model.phase(), LeftoversPhase::Result);
     assert_eq!(model.info(), Some(text::RETRY_NOT_PERMITTED));
 }
+
+/// Review SF2: a link that ends during a review empties the page to a panel that names the program;
+/// a result keeps showing (undo and retry start a new broker).
+#[test]
+fn a_link_that_ends_during_a_review_ends_the_review() {
+    let mut broker = Broker::with_rows(vec![safe(1, true)]);
+    let mut model = scanned_default(&mut broker);
+    assert_eq!(model.phase(), LeftoversPhase::Review);
+    assert!(model.can_move());
+    model.on_link_ended();
+    assert_eq!(model.phase(), LeftoversPhase::Empty);
+    assert!(!model.can_move());
+    assert_eq!(model.waiting_for_review(), 0);
+    assert!(model.move_items(RestorePoint::HighRisk).is_empty());
+    let (title, text) = model.empty_panel().expect("the panel");
+    assert_eq!(title, text::LINK_GONE_TITLE);
+    assert!(text.contains(model.program_name()), "{text}");
+    assert!(text.contains("Nothing was moved"), "{text}");
+
+    let mut broker = Broker::new();
+    let mut model = moved_with_launcher(&mut broker);
+    model.on_link_ended();
+    assert_eq!(model.phase(), LeftoversPhase::Result);
+    assert!(!model.broker_is_live());
+}

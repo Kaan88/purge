@@ -168,6 +168,8 @@ pub struct LeftoversOptions {
 enum EmptyReason {
     NoScan,
     LinkGone,
+    /// The link ended (ended for another page, or the broker died) during a review or a scan.
+    Ended,
 }
 
 /// The change the page waits for.
@@ -228,6 +230,8 @@ pub struct LeftoversModel {
     result: Option<ExecResult>,
     undo: Option<UndoResult>,
     program_name: String,
+    /// The empty panel's text after [`EmptyReason::Ended`]: it names the program.
+    ended_text: String,
     is_sample: bool,
     code: Option<ConfirmCode>,
     prompt_up: bool,
@@ -279,6 +283,7 @@ impl LeftoversModel {
             result: None,
             undo: None,
             program_name: String::new(),
+            ended_text: String::new(),
             is_sample: false,
             code: None,
             prompt_up: false,
@@ -598,6 +603,33 @@ impl LeftoversModel {
     /// is up.
     pub fn set_broker_live(&mut self, live: bool) {
         self.broker_live = live;
+    }
+
+    /// The page's link ended without a change on its way: "End it" for another page, or the broker
+    /// died. A review or scan cannot go on over it (Move and Scan again would only be refused), so
+    /// the page empties to a panel that names the program and says how to scan it again. Nothing
+    /// was moved. A result keeps showing: undo and retry start a new broker.
+    pub fn on_link_ended(&mut self) {
+        self.broker_live = false;
+        if !matches!(
+            self.phase,
+            LeftoversPhase::Review | LeftoversPhase::Scanning
+        ) {
+            return;
+        }
+        let stored = matches!(self.target, Some(ScanTarget::Stored(_)));
+        self.pending = None;
+        self.phase = LeftoversPhase::Empty;
+        self.empty_reason = EmptyReason::Ended;
+        self.ended_text = text::review_ended(&self.program_name, stored);
+        self.error = None;
+        self.info = None;
+        self.items.clear();
+        self.groups.clear();
+        self.selected = None;
+        self.explaining = false;
+        self.rescan_offered = false;
+        self.list_version += 1;
     }
 
     /// Whether the result page offers the undo button.
@@ -1715,6 +1747,9 @@ impl LeftoversModel {
             )),
             LeftoversPhase::Empty if self.empty_reason == EmptyReason::LinkGone => {
                 Some((text::LINK_GONE_TITLE, text::LINK_GONE_TEXT))
+            }
+            LeftoversPhase::Empty if self.empty_reason == EmptyReason::Ended => {
+                Some((text::LINK_GONE_TITLE, &self.ended_text))
             }
             LeftoversPhase::Empty => Some((text::NO_SCAN_TITLE, text::NO_SCAN_TEXT)),
             _ => None,

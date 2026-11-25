@@ -311,6 +311,22 @@ pub const NO_SCAN_TEXT: &str = "Start an uninstall on the Programs page; Purge s
      without Purge can be checked from Programs, under \"Removed outside Purge\".";
 pub const LINK_GONE_TITLE: &str = "The administrator part ended";
 pub const LINK_GONE_TEXT: &str = "The scan cannot be shown because its broker link is gone. Start the uninstall again from the Uninstall pipeline page.";
+/// The empty panel after the link ended during a review or a scan (review SF2): what WinUI's page
+/// offered when its broker went away, with the program named.
+pub fn review_ended(name: &str, stored: bool) -> String {
+    let name = if name.is_empty() { "the program" } else { name };
+    let again = if stored {
+        format!("Check {name} again from Programs, under \"Removed outside Purge\".")
+    } else {
+        "Start the uninstall again from the Uninstall pipeline page, or check the program from \
+         Programs, under \"Removed outside Purge\"."
+            .to_owned()
+    };
+    format!(
+        "The leftovers review of {name} cannot go on because its broker link is gone. \
+         Nothing was moved. {again}"
+    )
+}
 pub const INTERRUPTED_TITLE: &str = "A change was interrupted";
 pub const INTERRUPTED_FALLBACK: &str = "The administrator part ended.";
 
