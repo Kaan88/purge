@@ -150,8 +150,10 @@ pub struct BrokerHub {
 impl BrokerHub {
     /// Starts the elevated broker for `owner` (the Windows prompt shows); the answer comes as a
     /// [`ClientEvent::BrokerLaunched`] with the returned call. `Err` with the sentence to show when
-    /// another page holds the broker or there is no broker beside the app.
+    /// another page holds a live broker or there is no broker beside the app. Another page's
+    /// session that is no longer live is dropped, never a reason to refuse.
     pub fn launch(&mut self, owner: Owner, sink: Sink) -> Result<CallId, String> {
+        self.drop_dead();
         if let Some((other, _)) = self.session.as_ref().filter(|(o, _)| *o != owner) {
             return Err(in_use(*other));
         }
@@ -194,6 +196,18 @@ impl BrokerHub {
             self.session = Some((owner, client));
         }
         Some(owner)
+    }
+
+    /// Drops a session whose link has ended (its `BrokerClosed` may not have come yet): whose it
+    /// was, so that page can be told.
+    pub fn drop_dead(&mut self) -> Option<Owner> {
+        if self.session.as_ref().is_some_and(|(_, c)| !c.is_live())
+            && let Some((owner, c)) = self.session.take()
+        {
+            c.close();
+            return Some(owner);
+        }
+        None
     }
 
     /// Gives `owner` a session made without a launch (the sample broker). A session another

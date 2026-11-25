@@ -204,6 +204,10 @@ impl Link {
     }
 
     fn launch_now(&mut self, model: &mut Model, owner: Owner) {
+        // Another page's session whose link ended is dropped, and that page told.
+        if let Some(dead) = self.broker.drop_dead().filter(|o| *o != owner) {
+            self.flow_broker_closed(model, dead);
+        }
         if let Some(other) = self.broker.holder().filter(|o| *o != owner) {
             match Self::use_of(model, other) {
                 Use::Busy => {
@@ -305,11 +309,21 @@ impl Link {
     /// on (asked again: the holder may have started a step meanwhile); "Not now" refuses it.
     fn takeover_answered(&mut self, model: &mut Model, t: Takeover, end_it: bool) {
         if !end_it {
-            let message = format!(
-                "{} Nothing was ended: {} is still there.",
-                in_use(t.holder),
-                t.what
-            );
+            // The holder may have ended meanwhile (its broker died): then nothing is "still
+            // there", and nothing stands in the way of asking again.
+            let message = if self.broker.holder() == Some(t.holder) {
+                format!(
+                    "{} Nothing was ended: {} is still there.",
+                    in_use(t.holder),
+                    t.what
+                )
+            } else {
+                format!(
+                    "Nothing was started. The administrator part {} used has ended \
+                     meanwhile, so you can try again now.",
+                    t.what
+                )
+            };
             return self.refuse_launch(model, t.asking, message);
         }
         if self.broker.holder() == Some(t.holder) && Self::use_of(model, t.holder) != Use::Busy {
@@ -371,6 +385,9 @@ impl Link {
                 // holds none of its own: the hub keeps one session.
                 if with {
                     self.broker.hand_over(from, Owner::Leftovers);
+                } else {
+                    // The page is offline now: a session it still held idles for nothing.
+                    self.broker.close(Owner::Leftovers);
                 }
                 model.flow.closed_bars.clear();
                 model.flow.ltake(shown.calls);
@@ -378,7 +395,11 @@ impl Link {
                     model.page = leftovers_page(model);
                 }
             }
-            Err(_) => self.broker.close(from),
+            // Refused while a change runs: `from`'s session ends, and its page is told.
+            Err(_) => {
+                self.broker.close(from);
+                self.flow_broker_closed(model, from);
+            }
         }
     }
 
