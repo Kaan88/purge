@@ -8,13 +8,50 @@
 //! The names are the WinUI app's where the step exists here: `main`, `window_ctor` (the host
 //! starts the app), `first_tick` (the first frame is drawn), `presented` (after the next DWM
 //! composition once the first frame was presented and the window shown), `rows_set`,
-//! `names_visible` (the program names are in the first presented frame: `presented`'s time) and
-//! `bench_timeout`.
+//! `names_visible` (the program names are in the first presented frame: `presented`'s time),
+//! `icons_visible` (a live engine only: the first presented frame whose rows on screen all have
+//! their icons settled: drawn from the atlas or `icon.batch`, or answered without one, which keeps
+//! that row's tile), `engine_fallback` (the engine could not be used: the list is the sample
+//! data) and `bench_timeout` (the `--bench-until` marker did not come within
+//! [`BENCH_TIMEOUT`] of the first frame). `list_patched` is this app's own: the real engine's list
+//! has the `programs.patch`es that follow its reply (`purge_client::startup::PATCH_WAIT`).
 //!
 //! Deliberately not here: TraceLogging, and the WinUI-only markers (`module_init`,
 //! `on_launched`, the XAML steps).
 
 use std::sync::{Mutex, OnceLock};
+use std::time::Duration;
+
+/// The marker after which the bench writes its line (and, with `--bench-exit`, closes):
+/// `--bench-until`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BenchUntil {
+    /// `presented`.
+    Presented,
+    /// `names_visible`, the default.
+    Names,
+    /// `icons_visible`.
+    Icons,
+}
+
+impl BenchUntil {
+    pub fn parse(s: &str) -> Option<BenchUntil> {
+        match s {
+            "presented" => Some(BenchUntil::Presented),
+            "names_visible" => Some(BenchUntil::Names),
+            "icons_visible" => Some(BenchUntil::Icons),
+            _ => None,
+        }
+    }
+}
+
+/// A later `--bench-until` marker gets at most this long after the first frame (the WinUI
+/// app's); then `bench_timeout` is marked and the line written as it is.
+pub const BENCH_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// With `--bench-exit` and a live engine, the window waits at most this long after the end
+/// marker for the icon load to end, so its atlas is saved for the next launch (the WinUI app's).
+pub const ICONS_SAVE_WAIT: Duration = Duration::from_secs(10);
 
 struct State {
     out: Option<String>,
@@ -167,6 +204,14 @@ mod tests {
     fn the_line_is_the_winui_apps() {
         let line = format(&[("main", 12.34), ("presented", 300.0)]);
         assert_eq!(line, "main=12.3 presented=300.0");
+    }
+
+    #[test]
+    fn the_bench_ends_the_xtask_asks_for_are_known() {
+        assert_eq!(BenchUntil::parse("presented"), Some(BenchUntil::Presented));
+        assert_eq!(BenchUntil::parse("names_visible"), Some(BenchUntil::Names));
+        assert_eq!(BenchUntil::parse("icons_visible"), Some(BenchUntil::Icons));
+        assert_eq!(BenchUntil::parse("s3_open"), None);
     }
 
     #[test]

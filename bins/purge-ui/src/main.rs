@@ -37,6 +37,7 @@ mod winplace;
 
 use app::{Options, PurgeApp};
 use look::{Choice, Design, Preset, ThemeChoice, Transition};
+use markers::BenchUntil;
 use mdshared_app::backdrop::Backdrop;
 use model::Page;
 use prefs::Store;
@@ -55,8 +56,9 @@ const HELP: &str = "Purge: uninstalls programs and what they leave behind.
   --sample             show the sample data without starting the engine
   --bench-stub         the launch bench's sample engine: 300 rows, no engine started
   --bench-exit         close once the launch markers are written (PURGE_BENCH_OUT)
-  --bench-until <m>    the marker the bench waits for: presented or names_visible (the
-                       default: the program names are in a presented frame)
+  --bench-until <m>    the marker the bench waits for: presented, names_visible (the
+                       default: the program names are in a presented frame) or icons_visible
+                       (the rows on screen show their icons; a live engine only)
   --seconds <n>        close by itself after n seconds
   --shot <file>        with --seconds: write a PNG of the last frame before closing
   --script             walk through the screens by made-up events on the sample data,
@@ -99,7 +101,7 @@ fn main() {
     let mut shots: Option<PathBuf> = None;
     let mut shot_at_end: Option<PathBuf> = None;
     let mut bench_exit = false;
-    let mut bench_until_presented = false;
+    let mut bench_until = BenchUntil::Names;
     let mut source: Option<link::Source> = None;
     let mut timeout: Option<u64> = None;
     let mut args = std::env::args().skip(1);
@@ -132,12 +134,11 @@ fn main() {
             // The WinUI bench's stub: hello and 300 rows, answered at once.
             "--bench-stub" => source = Some(link::Source::Sample { bench_rows: 300 }),
             "--bench-exit" => bench_exit = true,
-            "--bench-until" => match args.next().as_deref() {
-                Some("presented") => bench_until_presented = true,
-                Some("names_visible") => bench_until_presented = false,
-                other => {
+            "--bench-until" => match args.next().as_deref().and_then(BenchUntil::parse) {
+                Some(u) => bench_until = u,
+                None => {
                     eprintln!(
-                        "Purge: --bench-until takes presented or names_visible, not {other:?}"
+                        "Purge: --bench-until takes presented, names_visible or icons_visible"
                     );
                     std::process::exit(2);
                 }
@@ -216,7 +217,7 @@ fn main() {
         remember_place,
         page,
         bench_exit,
-        bench_until_presented,
+        bench_until,
         // The walk checks what it knows: the sample data.
         source: if script {
             link::Source::Sample { bench_rows: 0 }

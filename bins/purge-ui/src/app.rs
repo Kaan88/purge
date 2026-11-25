@@ -30,7 +30,7 @@ use purge_ui_model::programs::{Filter, ProgramCommand};
 
 use crate::link::{Link, Source};
 use crate::look::{Choice, Design, Preset, ThemeChoice, Transition};
-use crate::markers;
+use crate::markers::{self, BenchUntil};
 use purge_ui_model::leftovers::LeftoversPhase;
 
 use crate::model::DeleteFlyout;
@@ -73,8 +73,8 @@ pub struct Options {
     /// `--shot`: the PNG of the last frame of a `--seconds` run.
     pub shot_at_end: Option<PathBuf>,
     pub bench_exit: bool,
-    /// `--bench-until presented`: the bench ends at `presented`, not at `names_visible`.
-    pub bench_until_presented: bool,
+    /// `--bench-until`: the marker the bench ends at.
+    pub bench_until: BenchUntil,
     /// Where the program list comes from.
     pub source: Source,
     /// When `main` began, for the launch time.
@@ -153,7 +153,7 @@ pub struct PurgeApp {
     remember_place: bool,
     place: Option<Placer>,
     bench_exit: bool,
-    bench_until_presented: bool,
+    bench_until: BenchUntil,
     /// The first frame was drawn and `presented` is still to be marked.
     presented_due: bool,
     /// A frame with the first real rows was drawn after the first frame, and `names_visible` is
@@ -161,6 +161,15 @@ pub struct PurgeApp {
     names_due: bool,
     /// The first real rows were drawn (`rows_set`, `first_row`).
     rows_drawn: bool,
+    /// A frame whose rows on screen all had their icons settled was drawn (`icons_visible`).
+    icons_drawn: bool,
+    /// ... and `icons_visible` is still to be marked once it is presented.
+    icons_due: bool,
+    /// When the bench gives up waiting for its end marker (`bench_timeout`).
+    bench_deadline: Option<Instant>,
+    /// The end marker was written with `--bench-exit` while the icon load still ran: the window
+    /// closes when it ends, or at this time.
+    close_after_icons: Option<Instant>,
     /// The marker line was written.
     markers_written: bool,
     /// The engine link, from the host's start on.
@@ -222,10 +231,14 @@ impl PurgeApp {
             remember_place: o.remember_place,
             place: None,
             bench_exit: o.bench_exit,
-            bench_until_presented: o.bench_until_presented,
+            bench_until: o.bench_until,
             presented_due: false,
             names_due: false,
             rows_drawn: false,
+            icons_drawn: false,
+            icons_due: false,
+            bench_deadline: None,
+            close_after_icons: None,
             markers_written: false,
             link: None,
             source: o.source,
@@ -1394,7 +1407,9 @@ impl PurgeApp {
 
     fn timers(&mut self, cx: &mut Cx<'_, ()>) {
         let wakes = [
-            (self.presented_due || self.names_due).then(|| cx.now()),
+            (self.presented_due || self.names_due || self.icons_due).then(|| cx.now()),
+            self.bench_deadline,
+            self.close_after_icons,
             self.until,
             self.view.toast.as_ref().map(|t| t.until),
             self.script.as_ref().and_then(|s| s.due()),
@@ -1423,24 +1438,50 @@ impl PurgeApp {
             cx.exit();
             return;
         }
+        // The WinUI app's approximation of "presented": the next DWM composition after the frame
+        // was drawn. One composition serves every marker due now.
+        let mut flushed = false;
+        let mut flush = || {
+            if !std::mem::replace(&mut flushed, true) {
+                markers::dwm_flush();
+            }
+        };
         if std::mem::take(&mut self.presented_due) {
-            // The WinUI app's approximation: the next DWM composition after the first frame.
-            markers::dwm_flush();
+            flush();
             let at = markers::mark("presented");
             let names = self.rows_drawn && !self.names_due;
             if names {
                 markers::record("names_visible", at);
             }
-            if self.end_marker(cx, names) {
+            if self.end_marker(cx, BenchUntil::Presented)
+                || (names && self.end_marker(cx, BenchUntil::Names))
+            {
                 return;
             }
-        } else if self.names_due && (markers::enabled() || self.bench_exit) {
-            self.names_due = false;
-            markers::dwm_flush();
+        } else if std::mem::take(&mut self.names_due) {
+            flush();
             markers::mark("names_visible");
-            if self.end_marker(cx, true) {
+            if self.end_marker(cx, BenchUntil::Names) {
                 return;
             }
+        }
+        // After `names_visible`: a frame with icons has its rows.
+        if !self.presented_due && !self.names_due && std::mem::take(&mut self.icons_due) {
+            flush();
+            markers::mark("icons_visible");
+            if self.end_marker(cx, BenchUntil::Icons) {
+                return;
+            }
+        }
+        if self.bench_deadline.is_some_and(|d| d <= now) {
+            self.bench_deadline = None;
+            markers::mark("bench_timeout");
+            if self.end_marker(cx, self.bench_until) {
+                return;
+            }
+        }
+        if self.bench_close(cx, now) {
+            return;
         }
         if self.view.toast.as_ref().is_some_and(|t| t.until <= now) {
             self.view.toast = None;
@@ -1480,20 +1521,66 @@ impl PurgeApp {
         }
     }
 
-    /// At the bench's end marker (`presented` with `--bench-until presented`, else
-    /// `names_visible`) the marker line is written, once, and `--bench-exit` closes the window.
-    /// True when it closes. `names`: the names are on screen now. Not read back from the markers,
+    /// At the bench's end marker (`--bench-until`; `reached` is the one that came now) the
+    /// marker line is written, once, and `--bench-exit` closes the window: at once, or with a
+    /// live engine once its icon load ended (at most [`markers::ICONS_SAVE_WAIT`]), so its atlas
+    /// is saved for the next launch. True when it closes now. Not read back from the markers,
     /// which are kept only with `PURGE_BENCH_OUT` (without it `--bench-exit` never closed).
-    fn end_marker(&mut self, cx: &mut Cx<'_, ()>, names: bool) -> bool {
-        if self.markers_written || (!names && !self.bench_until_presented) {
+    fn end_marker(&mut self, cx: &mut Cx<'_, ()>, reached: BenchUntil) -> bool {
+        if self.markers_written || reached != self.bench_until {
             return false;
         }
         self.markers_written = true;
+        self.bench_deadline = None;
         markers::flush();
-        if self.bench_exit {
-            cx.exit();
+        if !self.bench_exit {
+            return false;
         }
-        self.bench_exit
+        self.close_after_icons = Some(Instant::now() + markers::ICONS_SAVE_WAIT);
+        self.bench_close(cx, Instant::now())
+    }
+
+    /// The bench's `icons_visible`: the data is the live engine's and every row the list shows
+    /// at its scroll has its icon settled: drawn from the atlas or `icon.batch`, or answered
+    /// without one (its tile is its look). The sample sends no icons, so it never counts.
+    fn icons_on_screen(&self) -> bool {
+        let Some(link) = self.link.as_ref().filter(|l| l.live()) else {
+            return false;
+        };
+        let pr = &self.model.programs;
+        let l = &self.view.list;
+        if !(l.row_h > 0.0 && l.offset.is_finite()) {
+            return false;
+        }
+        let first = (l.offset / l.row_h).floor().max(0.0) as usize;
+        let end = ((l.offset + l.area.h) / l.row_h).ceil().max(0.0) as usize;
+        let end = end.min(pr.rows.len());
+        first < end
+            && pr.rows[first..end].iter().all(|&i| {
+                let p = &pr.all[i];
+                p.icon.is_some() || link.icon_settled(&p.id)
+            })
+    }
+
+    /// `--bench-exit` after the end marker: closes once no live icon load runs, or at its time.
+    /// True when it closed.
+    fn bench_close(&mut self, cx: &mut Cx<'_, ()>, now: Instant) -> bool {
+        let Some(at) = self.close_after_icons else {
+            return false;
+        };
+        let loading = self
+            .link
+            .as_ref()
+            .is_some_and(|l| l.live() && l.icons_loading());
+        if loading && now < at {
+            return false;
+        }
+        self.close_after_icons = None;
+        if let Some(link) = &mut self.link {
+            link.save_icons();
+        }
+        cx.exit();
+        true
     }
 
     // ---- accessibility -----------------------------------------------------------------------
@@ -1511,6 +1598,10 @@ impl PurgeApp {
         }
         let pr = &self.model.programs;
         pr.rows.hash(&mut h);
+        // A row's name changes with what the engine learns of it (a late patch, its kind).
+        for &i in &pr.rows {
+            pr.all[i].accessible.hash(&mut h);
+        }
         for r in pr.sel.ranges() {
             (r.start, r.end).hash(&mut h);
         }
@@ -1939,6 +2030,10 @@ impl App for PurgeApp {
 
     fn message(&mut self, cx: &mut Cx<'_, ()>, _: ()) {
         self.pump(cx);
+        // The bench's window waits for the icon load to end before it closes.
+        if self.bench_close(cx, Instant::now()) {
+            return;
+        }
         // A dialog the link's answer opened or closed takes the keyboard now, not at the next
         // input event.
         self.sync_scope();
@@ -2121,13 +2216,28 @@ impl App for PurgeApp {
         // drawn; `rows_set` and `first_row` when a frame first draws the list's rows (the first
         // frame itself when the list came first); `presented` on the next wake, once the host has
         // presented the first frame; `names_visible` once a frame with the rows is presented.
+        // `icons_visible` (a live engine only) once a frame drew the rows on screen with their icons
+        // settled. All of this before the first frame's deferred work below changes the model.
+        let bench = markers::enabled() || self.bench_exit;
         let rows_now = !self.rows_drawn
             && self.model.programs.loaded
             && self.model.page == Page::Programs
             && !self.model.programs.rows.is_empty();
+        let icons_now = bench
+            && !self.icons_drawn
+            && (self.rows_drawn || rows_now)
+            && self.model.page == Page::Programs
+            && self.icons_on_screen();
+        if icons_now {
+            self.icons_drawn = true;
+            self.icons_due = true;
+        }
         if self.frames == 1 {
             markers::mark("first_tick");
-            self.presented_due = markers::enabled() || self.bench_exit;
+            self.presented_due = bench;
+            if self.bench_exit && self.bench_until != BenchUntil::Presented {
+                self.bench_deadline = Some(Instant::now() + markers::BENCH_TIMEOUT);
+            }
             // The model's deferred work (sizes, icons, the removed group) waits for this frame.
             let r = self.model.programs.page.on_first_frame();
             self.model.programs.take(r);
@@ -2138,8 +2248,8 @@ impl App for PurgeApp {
             let at = markers::mark("rows_set");
             markers::record("first_row", at);
             // Rows in the first frame are visible when it is presented; later ones need a
-            // presentation of their own.
-            self.names_due = self.frames > 1;
+            // presentation of their own. Off the bench nothing waits for it.
+            self.names_due = bench && self.frames > 1;
         }
         if self.frames == 1 {
             self.view.first_frame_ms = Some(self.launched.elapsed().as_secs_f64() * 1000.0);
