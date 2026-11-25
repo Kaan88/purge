@@ -1893,7 +1893,16 @@ impl App for PurgeApp {
         let blocked = match event {
             Event::PointerMove { .. } | Event::Wake(_) | Event::Modifiers(_) => false,
             Event::Press { x, y, .. } | Event::Release { x, y, .. } if self.blocked(cx, x, y) => {
-                if self.pressed.take().is_some() {
+                // Nothing pressed before goes on past a passed-over press or release: the
+                // button, the list's drag (its scroll bar) and a drop-down's press all end here
+                // (review N8), as when the window loses the focus.
+                let mut ended = self.view.list.drag.take().is_some();
+                for dd in DD_ALL {
+                    if let Some(d) = self.view.dds.get(dd) {
+                        ended |= d.cancel();
+                    }
+                }
+                if self.pressed.take().is_some() || ended {
                     self.view.page_dirty = true;
                     cx.request_redraw_all();
                 }
