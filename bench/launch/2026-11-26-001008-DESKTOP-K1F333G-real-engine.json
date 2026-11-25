@@ -1,0 +1,116 @@
+{
+  "apps": {
+    "purge": {
+      "markers": {
+        "engine_ready": {
+          "max": 84.7,
+          "min": 74.3,
+          "p50": 78.6,
+          "p90": 81.6
+        },
+        "first_row": {
+          "max": 274.9,
+          "min": 256.5,
+          "p50": 267.3,
+          "p90": 272.8
+        },
+        "first_tick": {
+          "max": 63.6,
+          "min": 53.7,
+          "p50": 57.0,
+          "p90": 61.4
+        },
+        "icons_visible": {
+          "max": 285.9,
+          "min": 259.9,
+          "p50": 272.1,
+          "p90": 280.5
+        },
+        "list_reply": {
+          "max": 219.8,
+          "min": 201.2,
+          "p50": 207.8,
+          "p90": 215.8
+        },
+        "main": {
+          "max": 15.5,
+          "min": 11.4,
+          "p50": 12.4,
+          "p90": 13.8
+        },
+        "names_visible": {
+          "max": 285.9,
+          "min": 259.9,
+          "p50": 272.1,
+          "p90": 280.5
+        },
+        "presented": {
+          "max": 104.1,
+          "min": 86.2,
+          "p50": 91.2,
+          "p90": 96.3
+        },
+        "rows_set": {
+          "max": 274.9,
+          "min": 256.5,
+          "p50": 267.3,
+          "p90": 272.8
+        },
+        "window_ctor": {
+          "max": 47.7,
+          "min": 40.1,
+          "p50": 42.1,
+          "p90": 44.8
+        }
+      },
+      "runs": 20
+    }
+  },
+  "date": "2026-11-26",
+  "dropped_first": 1,
+  "flavour": {
+    "deploy": "unpackaged, self-contained, Native AOT, x64, custom Main",
+    "engine": "real purge-engine --stdio (E:\\purge-target\\launchfix\\release\\purge-engine.exe), this host's ARP data",
+    "stub_engine": null,
+    "winappsdk": "2.6.5"
+  },
+  "gates": [
+    {
+      "gate": "names visible (presented frame with rows), real engine and ARP data",
+      "limit_p50": 400.0,
+      "limit_p90": 460.0,
+      "p50": 272.1,
+      "p90": 280.5,
+      "pass": true
+    },
+    {
+      "cold_cache": "reported, no gate: launch 1 with an empty atlas (also the dropped warm-up run)",
+      "cold_cache_first_launch_ms": 629.9,
+      "gate": "icons visible, warm icon cache (first screenful settled)",
+      "limit_p50": 1000.0,
+      "limit_p90": null,
+      "p50": 272.1,
+      "p90": 280.5,
+      "pass": true
+    }
+  ],
+  "host": {
+    "hardware": "Intel(R) Core(TM) i7-6700HQ CPU @ 2.60GHz; NVIDIA GeForce GTX 1060",
+    "host": "DESKTOP-K1F333G",
+    "note": "a shared dev host: other work on the machine invalidates a run (docs/M3_BENCH.md)",
+    "os": "Microsoft Windows 11 Pro 26100",
+    "power": "battery status=2 charge=%; plan=Balanced"
+  },
+  "n": 21,
+  "note": "kept apart from the stub runs: the program count and the engine's speed are this host's",
+  "pass": true,
+  "percentile_rule": "nearest rank",
+  "purge_args": [
+    "--bench-exit",
+    "--bench-until",
+    "icons_visible"
+  ],
+  "regressions_over_10_percent": [],
+  "schema": "purge.bench-launch-real/0",
+  "xaml_changes": []
+}
