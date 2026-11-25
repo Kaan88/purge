@@ -59,6 +59,8 @@ const MARKERS: &[&str] = &[
     "main",
     "engine_ready",
     "list_reply",
+    // Rust UI: the first list once its patches are folded in (report only).
+    "list_patched",
     "on_launched",
     "window_ctor",
     "w_backdrop",
