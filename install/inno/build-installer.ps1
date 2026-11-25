@@ -1,19 +1,22 @@
-# Builds Purge's Inno Setup installer: the three release artifacts, then target\installer\
+# Builds Purge's Inno Setup installer: the three release exes, then target\installer\
 # Purge-Setup-<version>.exe (install\README.md, "Inno installer"). Windows PowerShell 5.1, 64-bit. No
 # elevation: nothing is installed here, the setup is only compiled.
 #
 #   powershell.exe -NoProfile -ExecutionPolicy Bypass -File install\inno\build-installer.ps1
-#   ... -SkipBuild                  pack the artifacts that already exist (no cargo, no dotnet)
+#   ... -SkipBuild                  pack the exes that already exist (no cargo)
 #   ... -InnoCompiler <ISCC.exe>    when Inno Setup is somewhere unusual
 #
 # The version comes from the workspace Cargo.toml ([workspace.package] version), the one version of
 # Purge: check-version.ps1 reads it, checks Cargo.lock, and checks that purge-engine.exe,
 # purge-broker.exe and Purge.exe carry it before ISCC runs and the setup after; purge.iss refuses a
 # payload of another version too. Honours CARGO_TARGET_DIR (target\release otherwise).
+#
+# Purge.exe is the Rust UI (bins\purge-ui, bin name Purge): <cargo target>\release\Purge.exe, one file.
+# The WinUI app (ui\Purge.App, dotnet publish) is no longer built or shipped.
 
 [CmdletBinding()]
 param(
-    # Pack target\release and target\ui-publish as they are; run neither cargo nor dotnet.
+    # Pack <cargo target>\release as it is; run no cargo.
     [switch]$SkipBuild,
     # ISCC.exe (Inno Setup 6). Default: %LOCALAPPDATA%\Programs, then Program Files (x86), then PATH.
     [string]$InnoCompiler = ''
@@ -26,11 +29,11 @@ function Write-Step([string]$Message) { Write-Host "build-installer: $Message" }
 
 $repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $target = Join-Path $repo 'target'
-$uiPublish = Join-Path $target 'ui-publish'
 $outDir = Join-Path $target 'installer'
 $cargoTarget = if ($env:CARGO_TARGET_DIR) { [IO.Path]::GetFullPath($env:CARGO_TARGET_DIR) } else { $target }
 $engineExe = Join-Path $cargoTarget 'release\purge-engine.exe'
 $brokerExe = Join-Path $cargoTarget 'release\purge-broker.exe'
+$uiExe = Join-Path $cargoTarget 'release\Purge.exe'
 $checkVersion = Join-Path $PSScriptRoot 'check-version.ps1'
 $kbDir = Join-Path $repo 'kb'
 $installPs1 = Join-Path $repo 'install\install.ps1'
@@ -42,6 +45,9 @@ if (-not (Test-Path -LiteralPath $iss -PathType Leaf)) { throw "the Inno script 
 $version = & $checkVersion
 if ($LASTEXITCODE -ne 0 -or -not $version) { throw 'check-version.ps1 failed: Cargo.toml and Cargo.lock disagree, or the version is not X.Y.Z[-pre]' }
 $version = [string]$version
+# The four-number FILEVERSION (0.2.0-alpha.1 -> 0.2.0.1), for purge.iss's checks and VersionInfoVersion.
+$fileVersion = [string](& $checkVersion -FileVersion)
+if ($LASTEXITCODE -ne 0 -or -not $fileVersion) { throw 'check-version.ps1 -FileVersion failed' }
 
 function Resolve-Iscc([string]$Given) {
     if ($Given) {
@@ -60,8 +66,8 @@ function Resolve-Iscc([string]$Given) {
     throw 'ISCC.exe (Inno Setup 6) was not found. Install it: winget install --id JRSoftware.InnoSetup -e, or pass -InnoCompiler <path>'
 }
 
-# The release build of install\README.md: two separate cargo builds (never one, never --workspace),
-# the dependency check, then the Native AOT publish of the UI. No RUSTFLAGS (it would replace the
+# The release build of install\README.md: three separate cargo builds (never one, never --workspace:
+# a joint build would unify features), then the dependency check. No RUSTFLAGS (it would replace the
 # crt-static flags of .cargo\config.toml).
 if (-not $SkipBuild) {
     if ($env:RUSTFLAGS) { throw 'RUSTFLAGS is set; it replaces .cargo\config.toml (crt-static) and must be unset for a release build' }
@@ -71,7 +77,7 @@ if (-not $SkipBuild) {
     # cargo builds the workspace of the current folder: run it in this script's repository, never the caller's.
     Push-Location -LiteralPath $repo
     try {
-        foreach ($cargoArgs in @(@('build', '--release', '--locked', '-p', 'purge-engine'), @('build', '--release', '--locked', '-p', 'purge-broker'), @('xtask', 'check-deps'))) {
+        foreach ($cargoArgs in @(@('build', '--release', '--locked', '-p', 'purge-engine'), @('build', '--release', '--locked', '-p', 'purge-broker'), @('build', '--release', '--locked', '-p', 'purge-ui'), @('xtask', 'check-deps'))) {
             $line = 'cargo ' + ($cargoArgs -join ' ')
             Write-Step $line
             & $cargo.Source @cargoArgs
@@ -80,29 +86,23 @@ if (-not $SkipBuild) {
     } finally {
         Pop-Location
     }
-    $dotnet = Get-Command dotnet -ErrorAction SilentlyContinue
-    $dotnetPath = if ($dotnet) { $dotnet.Source } else { Join-Path $env:ProgramFiles 'dotnet\dotnet.exe' }
-    if (-not (Test-Path -LiteralPath $dotnetPath -PathType Leaf)) { throw 'the .NET SDK was not found (PATH, or C:\Program Files\dotnet\dotnet.exe)' }
-    Write-Step "dotnet publish ui\Purge.App -c Release -r win-x64 -o $uiPublish"
-    & $dotnetPath publish (Join-Path $repo 'ui\Purge.App') -c Release -r win-x64 -o $uiPublish
-    if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed with exit code $LASTEXITCODE" }
 } else {
-    Write-Step 'build skipped (-SkipBuild): target\release and target\ui-publish must already exist'
+    Write-Step "build skipped (-SkipBuild): $cargoTarget\release must already hold the three exes"
 }
 
-foreach ($file in @($engineExe, $brokerExe, (Join-Path $uiPublish 'Purge.exe'), $installPs1)) {
+foreach ($file in @($engineExe, $brokerExe, $uiExe, $installPs1)) {
     if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "missing artifact: $file (run without -SkipBuild)" }
 }
 if (-not (Test-Path -LiteralPath $kbDir -PathType Container)) { throw "the kb folder is missing: $kbDir" }
 
-# Every shipped exe carries the version (its VERSIONINFO: bins\versioninfo.rs, ui\Directory.Build.props).
-& $checkVersion -Exe $engineExe, $brokerExe, (Join-Path $uiPublish 'Purge.exe') | Out-Null
+# Every shipped exe carries the version (its VERSIONINFO: bins\versioninfo.rs).
+& $checkVersion -Exe $engineExe, $brokerExe, $uiExe | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "an exe does not carry version $version (check-version.ps1 above)" }
 
 $iscc = Resolve-Iscc $InnoCompiler
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
-Write-Step "ISCC ($iscc), version $version"
-& $iscc "/DAppVersion=$version" "/DRepoRoot=$repo" "/DEngineExe=$engineExe" "/DBrokerExe=$brokerExe" "/DUiPublishDir=$uiPublish" "/DKbDir=$kbDir" "/DInstallPs1=$installPs1" "/DOutDir=$outDir" $iss
+Write-Step "ISCC ($iscc), version $version (FILEVERSION $fileVersion)"
+& $iscc "/DAppVersion=$version" "/DAppFileVersion=$fileVersion" "/DRepoRoot=$repo" "/DEngineExe=$engineExe" "/DBrokerExe=$brokerExe" "/DUiExe=$uiExe" "/DKbDir=$kbDir" "/DInstallPs1=$installPs1" "/DOutDir=$outDir" $iss
 if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
 
 $setup = Join-Path $outDir "Purge-Setup-$version.exe"

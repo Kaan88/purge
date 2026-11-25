@@ -5,7 +5,7 @@
 ; the one version of Purge is [workspace.package] version in the root Cargo.toml, and the script passes
 ; it as /DAppVersion. The preprocessor then refuses to compile a setup whose purge-engine.exe,
 ; purge-broker.exe or Purge.exe carries another version (their version resources come from the same
-; Cargo.toml: bins\versioninfo.rs, ui\Directory.Build.props).
+; Cargo.toml through bins\versioninfo.rs; Purge.exe is the Rust UI, bins\purge-ui).
 ;
 ; Hub (Kaan88/mdhub, docs/COMPLIANCE.md sections 1 and 4) installs and updates Purge by running this
 ; setup elevated with /VERYSILENT /SUPPRESSMSGBOXES /NORESTART and reading its exit code (0 = done). So:
@@ -34,8 +34,9 @@
 #ifndef BrokerExe
   #define BrokerExe RepoRoot + "\target\release\purge-broker.exe"
 #endif
-#ifndef UiPublishDir
-  #define UiPublishDir RepoRoot + "\target\ui-publish"
+; Purge.exe: the release build of bins\purge-ui (cargo build --release -p purge-ui), one file.
+#ifndef UiExe
+  #define UiExe RepoRoot + "\target\release\Purge.exe"
 #endif
 #ifndef KbDir
   #define KbDir RepoRoot + "\kb"
@@ -47,15 +48,28 @@
   #define OutDir RepoRoot + "\target\installer"
 #endif
 
-; X.Y.Z of X.Y.Z[-pre]: the numeric version Windows' version resources hold.
+; X.Y.Z of X.Y.Z[-pre].
 #if Pos("-", AppVersion) > 0
   #define AppVersionNumeric Copy(AppVersion, 1, Pos("-", AppVersion) - 1)
 #else
   #define AppVersionNumeric AppVersion
 #endif
 
+; The four-number FILEVERSION of AppVersion (check-version.ps1 -FileVersion: X.Y.Z -> X.Y.Z.0,
+; X.Y.Z-alpha.N -> X.Y.Z.N, -beta.N -> 1000+N, -rc.N -> 2000+N; bins\versioninfo.rs has the same rule).
+; build-installer.ps1 passes it; without it only a final X.Y.Z compiles (X.Y.Z.0).
+#ifndef AppFileVersion
+  #if Pos("-", AppVersion) > 0
+    #error Pass /DAppFileVersion=<check-version.ps1 -FileVersion> for a pre-release version (install\inno\build-installer.ps1 does)
+  #endif
+  #define AppFileVersion AppVersionNumeric + ".0"
+#endif
+#if Copy(AppFileVersion, 1, Len(AppVersionNumeric) + 1) != AppVersionNumeric + "."
+  #error AppFileVersion does not start with the X.Y.Z of AppVersion
+#endif
+
 ; Every shipped exe must carry AppVersion: ProductVersion (the string) = AppVersion, and the fixed
-; FILEVERSION = AppVersionNumeric.0, which is what Hub reads from Purge.exe (COMPLIANCE.md section 5).
+; FILEVERSION = AppFileVersion, which is what Hub reads from Purge.exe (COMPLIANCE.md section 5).
 #sub CheckExeVersion
   #define Path PayloadExe
   #if !FileExists(Path)
@@ -66,15 +80,15 @@
   #if GotProduct != AppVersion
     #pragma error "Version mismatch: " + Path + " says ProductVersion '" + GotProduct + "', the setup is " + AppVersion
   #endif
-  #if GotFixed != AppVersionNumeric + ".0"
-    #pragma error "Version mismatch: " + Path + " has FILEVERSION " + GotFixed + ", the setup is " + AppVersionNumeric + ".0"
+  #if GotFixed != AppFileVersion
+    #pragma error "Version mismatch: " + Path + " has FILEVERSION " + GotFixed + ", the setup is " + AppFileVersion
   #endif
 #endsub
 #define PayloadExe EngineExe
 #expr CheckExeVersion
 #define PayloadExe BrokerExe
 #expr CheckExeVersion
-#define PayloadExe UiPublishDir + "\Purge.exe"
+#define PayloadExe UiExe
 #expr CheckExeVersion
 
 [Setup]
@@ -98,18 +112,19 @@ DisableProgramGroupPage=yes
 PrivilegesRequired=admin
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
-; Purge.App targets Windows 10 2004 (10.0.19041) and the Windows App SDK.
+; Windows 10 2004 (10.0.19041), the floor of the earlier WinUI app, kept for the Rust UI.
 MinVersion=10.0.19041
 OutputDir={#OutDir}
 OutputBaseFilename=Purge-Setup-{#AppVersion}
-SetupIconFile={#RepoRoot}\ui\Purge.App\Assets\Purge.ico
+SetupIconFile={#RepoRoot}\install\inno\Purge.ico
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
 UninstallDisplayName={#AppName}
 UninstallDisplayIcon={app}\Purge.exe
 ; A running Purge.exe holds the files the setup replaces. PrepareToInstall (below) first stops Purge's
-; own executables in {app} (Purge.exe, purge-broker.exe, purge-engine.exe, RestartAgent.exe), window or
+; own executables in {app} (Purge.exe, purge-broker.exe, purge-engine.exe, and RestartAgent.exe of an
+; earlier WinUI install), window or
 ; not, and refuses any install folder but {autopf}\Purge; Restart Manager stays as the fallback for
 ; anything else that holds a file (a silent setup lets it close those without asking).
 CloseApplications=yes
@@ -117,11 +132,15 @@ RestartApplications=no
 ; Always write %TEMP%\Setup Log <date> #<n>.txt (Hub's arguments have no /LOG): a silent run reports a
 ; failed post-install step only there and through its exit code.
 SetupLogging=yes
-VersionInfoVersion={#AppVersionNumeric}
+VersionInfoVersion={#AppFileVersion}
 VersionInfoCompany=Purge
 VersionInfoDescription={#AppName} Setup
 VersionInfoProductName={#AppName}
-VersionInfoProductVersion={#AppVersion}
+; The binary versions are four numbers (AppFileVersion); the strings carry AppVersion, so the setup's
+; ProductVersion string is AppVersion also for a pre-release (check-version.ps1 -Setup reads it).
+VersionInfoTextVersion={#AppVersion}
+VersionInfoProductVersion={#AppFileVersion}
+VersionInfoProductTextVersion={#AppVersion}
 VersionInfoCopyright=Purge
 
 [Languages]
@@ -135,8 +154,9 @@ Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription
 Source: "{#EngineExe}"; DestDir: "{app}"; Flags: ignoreversion
 ; purge-broker.exe: the only binary that links the executor; Purge.exe starts it elevated.
 Source: "{#BrokerExe}"; DestDir: "{app}"; Flags: ignoreversion
-; The Native AOT publish of ui\Purge.App: Purge.exe, its Windows App SDK DLLs and Assets\.
-Source: "{#UiPublishDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Purge.exe: the Rust UI (bins\purge-ui), a single file with no DLLs or resource folders. The broker
+; serves only <install dir>\Purge.exe (start.rs), so the name never changes.
+Source: "{#UiExe}"; DestDir: "{app}"; DestName: "Purge.exe"; Flags: ignoreversion
 ; The knowledge base below <install dir>\kb, which is where the broker and the engine read it.
 Source: "{#KbDir}\*"; DestDir: "{app}\kb"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; The deploy script, for the post-install step below and for -Check / -Uninstall by hand.
@@ -151,6 +171,19 @@ Name: "{commondesktop}\Purge"; Filename: "{app}\Purge.exe"; WorkingDir: "{app}";
 [Run]
 ; Not offered after a failed post-install step: the tree did not pass its own check.
 Filename: "{app}\Purge.exe"; Description: "Launch {#AppName}"; Flags: nowait postinstall skipifsilent runasoriginaluser; Check: PostInstallSucceeded
+
+[InstallDelete]
+; An update over 0.1.x (the WinUI app) first removes that app's Windows App SDK payload: its DLLs,
+; .winmd/.pri files, PDBs, RestartAgent.exe and its folders (Assets, Microsoft.UI.Xaml; the language
+; folders go in RemoveWinUiLanguageDirs below). {app} is always {autopf}\Purge (PrepareToInstall), and
+; nothing Purge ships today has these names.
+Type: files; Name: "{app}\*.dll"
+Type: files; Name: "{app}\*.winmd"
+Type: files; Name: "{app}\*.pri"
+Type: files; Name: "{app}\*.pdb"
+Type: files; Name: "{app}\RestartAgent.exe"
+Type: filesandordirs; Name: "{app}\Assets"
+Type: filesandordirs; Name: "{app}\Microsoft.UI.Xaml"
 
 [UninstallDelete]
 ; Inno removes the files it installed; this also removes anything Purge left in its own directory and
@@ -254,10 +287,43 @@ begin
   end;
 end;
 
+{ The language folders of the earlier WinUI app's publish (en-us, de-DE, sr-Cyrl-RS, ...): every
+  folder directly in AppDir whose name has a '-' and no '.'. Purge's own folders are kb and setup. }
+procedure RemoveWinUiLanguageDirs(const AppDir: String);
+var
+  F: TFindRec;
+  Dirs: TArrayOfString;
+  I: Integer;
+begin
+  SetArrayLength(Dirs, 0);
+  if FindFirst(AppDir + '\*', F) then
+  try
+    repeat
+      if ((F.Attributes and FILE_ATTRIBUTE_DIRECTORY) <> 0) and (Pos('-', F.Name) > 0) and
+        (Pos('.', F.Name) = 0) then
+      begin
+        SetArrayLength(Dirs, GetArrayLength(Dirs) + 1);
+        Dirs[GetArrayLength(Dirs) - 1] := F.Name;
+      end;
+    until not FindNext(F);
+  finally
+    FindClose(F);
+  end;
+  for I := 0 to GetArrayLength(Dirs) - 1 do
+  begin
+    Log('Removing the WinUI language folder ' + AppDir + '\' + Dirs[I]);
+    if not DelTree(AppDir + '\' + Dirs[I], True, True, True) then
+      Log('Could not remove ' + AppDir + '\' + Dirs[I]);
+  end;
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   Code: Integer;
 begin
+  { ssInstall runs after PrepareToInstall stopped Purge and before Inno copies the files. }
+  if CurStep = ssInstall then
+    RemoveWinUiLanguageDirs(RemoveBackslashUnlessRoot(ExpandConstant('{app}')));
   if CurStep = ssPostInstall then
   begin
     ScriptLog := ExpandConstant('{tmp}\purge-setup-install.log');
@@ -285,8 +351,9 @@ begin
 end;
 
 { The executables of Purge in its install folder: the UI, the broker and the engine, and
-  RestartAgent.exe, which the Windows App SDK publish puts next to Purge.exe (it runs only for
-  AppInstance.Restart, which Purge does not call). The setup stops nothing else, so a /DIR that
+  RestartAgent.exe, which the earlier WinUI app's Windows App SDK publish put next to Purge.exe (an
+  update over such an install may still find it; it runs only for AppInstance.Restart, which Purge
+  never called). The setup stops nothing else, so a /DIR that
   points at a folder of other programs could not make it end those (PrepareToInstall refuses such a
   folder anyway). }
 function IsAppImage(const Name: String): Boolean;

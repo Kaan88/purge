@@ -375,6 +375,15 @@ Check 'install.ps1 compiles as a script block' ($null -ne $sb)
     Remove-TreeNoFollow $dest
     Check 'uninstall: the payload tree is gone' (-not (Test-Path $dest))
 
+    # The Rust UI: -Ui passes Purge.exe itself, copied as <dest>\Purge.exe alone.
+    $dest1 = Join-Path $Work 'payload-install-exe'
+    Check 'payload (one-file UI): create the test install root' ([PurgeInstall.Native]::CreateDirWithSddl($dest1, $sddl) -eq 0)
+    $r6 = Copy-Payload $dest1 (Join-Path $src 'purge-engine.exe') (Join-Path $src 'purge-broker.exe') (Join-Path $src 'ui\Purge.exe') (Join-Path $src 'kb') $sddl $admins
+    Check 'payload (one-file UI): Purge.exe is copied, nothing else of the UI folder' ((Test-Path (Join-Path $dest1 'Purge.exe')) -and -not (Test-Path (Join-Path $dest1 'Purge.Client.dll')) -and -not (Test-Path (Join-Path $dest1 'Assets')) -and @($r6.files | Where-Object { $_.action -eq 'copied' }).Count -eq 5)
+    $r7 = Copy-Payload $dest1 (Join-Path $src 'purge-engine.exe') (Join-Path $src 'purge-broker.exe') (Join-Path $src 'ui\Purge.exe') (Join-Path $src 'kb') $sddl $admins
+    Check 'payload (one-file UI): re-run is a no-op' (-not $r7.changed)
+    Remove-TreeNoFollow $dest1
+
     $good = Join-Path $Work 'clean.exe'
     $badEngine = Join-Path $Work 'executor.exe'
     [IO.File]::WriteAllText($good, 'nothing to see here')
@@ -393,7 +402,7 @@ Check 'install.ps1 compiles as a script block' ($null -ne $sb)
     $code = $LASTEXITCODE
     $text = ($out | Out-String)
     $j = if (Test-Path -LiteralPath $rep) { [IO.File]::ReadAllText($rep) | ConvertFrom-Json } else { $null }
-    Check 'what-if: install exits 0 and names every step' ($code -eq 0 -and $text -match 'cargo build --release -p purge-engine' -and $text -match 'cargo build --release -p purge-broker' -and $text -match 'dotnet publish' -and $text -match 'copy purge-engine\.exe, purge-broker\.exe' -and $text -match 'event-log source' -and $text -match 'Start-menu shortcut') "exit $code; $text"
+    Check 'what-if: install exits 0 and names every step' ($code -eq 0 -and $text -match 'cargo build --release -p purge-engine' -and $text -match 'cargo build --release -p purge-broker' -and $text -match 'cargo build --release -p purge-ui' -and $text -notmatch 'dotnet' -and $text -match 'copy purge-engine\.exe, purge-broker\.exe' -and $text -match 'event-log source' -and $text -match 'Start-menu shortcut') "exit $code; $text"
     Check 'what-if: the report says what_if and changed false' ($j -and $j.what_if -and $j.ok -and -not $j.changed -and $j.mode -eq 'install')
     $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $InstallPs1 -Check -WhatIf 2>&1
     $code = $LASTEXITCODE

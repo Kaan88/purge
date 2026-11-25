@@ -11,10 +11,11 @@
 #
 # What it does (contract and the SDDL constants: install\README.md, the single documented source):
 #   1. Builds the release artifacts: cargo build --release -p purge-engine, then
-#      cargo build --release -p purge-broker (two separate builds, install\README.md), then a Native AOT
-#      publish of ui\Purge.App. -SkipBuild deploys artifacts that already exist.
+#      cargo build --release -p purge-broker, then cargo build --release -p purge-ui (separate builds,
+#      install\README.md; purge-ui is the Rust UI, Purge.exe). -SkipBuild deploys artifacts that
+#      already exist.
 #   2. %ProgramFiles%\Purge: created with a protected admin-only-write DACL; purge-engine.exe,
-#      purge-broker.exe, the UI publish folder (Purge.exe and its WinUI files) and the kb\ tree are
+#      purge-broker.exe, Purge.exe (or a folder holding it, -UiPublishDir) and the kb\ tree are
 #      copied in (files whose SHA-256 already matches are left alone). Every deployed object is checked
 #      against the broker's rule (owner, no non-administrator write) and re-protected when it fails.
 #   3. %ProgramData%\Purge with sessions, Quarantine, fp, kb and sessions\index.json (created as "{}"):
@@ -44,11 +45,13 @@ param(
     [string]$Engine = '',
     # purge-broker.exe to deploy. Default: the repo's target\release\purge-broker.exe.
     [string]$Broker = '',
-    # The UI publish folder (it holds Purge.exe). Default: <repo>\target\ui-publish.
+    # Purge.exe (the Rust UI, bins\purge-ui) to deploy. Default: the repo's target\release\Purge.exe.
+    [string]$Ui = '',
+    # Instead of -Ui: a folder holding Purge.exe, copied as a whole (the VM rig's client folders).
     [string]$UiPublishDir = '',
     # kb directory to deploy beside the broker. Default: <engine dir>\kb when it exists, else the repo's kb\.
     [string]$Kb = '',
-    # Use the artifacts as they are; run neither cargo nor dotnet.
+    # Use the artifacts as they are; run no cargo.
     [switch]$SkipBuild,
     # Inno Setup mode: the setup has already copied the payload into the program-files directory.
     # Create (or verify) only the data root and the event-log source; no build, no payload copy, no
@@ -785,16 +788,20 @@ function Protect-Tree([string]$Dir, [string]$Sddl, [string[]]$AdminSids = $scrip
     $reprotected
 }
 
-# Engine, broker, the UI publish folder and kb into the verified Program Files tree. New files and
+# Engine, broker, the UI (Purge.exe, or a folder holding it) and kb into the verified Program Files tree. New files and
 # subdirectories inherit the root's protected DACL; every deployed object is then checked with the
 # broker's rule and re-protected (owner + protected DACL) when it does not pass (a replaced binary, a
 # file copied from a tree with other permissions). Files in the destination but not in the sources are
 # reported as stale, never deleted.
-function Copy-Payload([string]$Dir, [string]$EnginePath, [string]$BrokerPath, [string]$UiDir, [string]$KbDir, [string]$Sddl, [string[]]$AdminSids = $script:AdminSids) {
+# $UiPath is Purge.exe itself (copied as <Dir>\Purge.exe) or a folder holding it (copied as a tree).
+function Copy-Payload([string]$Dir, [string]$EnginePath, [string]$BrokerPath, [string]$UiPath, [string]$KbDir, [string]$Sddl, [string[]]$AdminSids = $script:AdminSids) {
     $out = New-Object System.Collections.Generic.List[object]
     $out.Add((Copy-PayloadFile $EnginePath (Join-Path $Dir 'purge-engine.exe')))
     if ($BrokerPath) { $out.Add((Copy-PayloadFile $BrokerPath (Join-Path $Dir 'purge-broker.exe'))) }
-    if ($UiDir) { foreach ($r in (Copy-FileTree $UiDir $Dir 'the UI publish folder')) { $out.Add($r) } }
+    if ($UiPath) {
+        if (Test-Path -LiteralPath $UiPath -PathType Leaf) { $out.Add((Copy-PayloadFile $UiPath (Join-Path $Dir 'Purge.exe'))) }
+        else { foreach ($r in (Copy-FileTree $UiPath $Dir 'the UI folder')) { $out.Add($r) } }
+    }
     if ($KbDir) { foreach ($r in (Copy-FileTree $KbDir (Join-Path $Dir 'kb') 'kb')) { $out.Add($r) } }
 
     # Stale files: present in the install directory, part of no source.
@@ -954,45 +961,25 @@ function Remove-EventLogSource {
     $true
 }
 
-# The .NET SDK: PATH first, then the folder docs/M3_DESIGN.md names.
-function Resolve-Dotnet {
-    $cmd = Get-Command dotnet -ErrorAction SilentlyContinue
-    if ($cmd) { return $cmd.Source }
-    foreach ($base in @($env:ProgramFiles, ${env:ProgramFiles(x86)})) {
-        if (-not $base) { continue }
-        $p = Join-Path $base 'dotnet\dotnet.exe'
-        if (Test-Path -LiteralPath $p -PathType Leaf) { return $p }
-    }
-    $null
-}
-
-# The release build of install\README.md: two separate cargo builds (never one, never --workspace),
-# the dependency check, then the Native AOT publish of the UI. No RUSTFLAGS (it would replace the
-# crt-static flags of .cargo\config.toml).
-function Invoke-ReleaseBuild([string]$Repo, [string]$UiOut) {
-    $project = Join-Path $Repo 'ui\Purge.App'
-    $publishLine = 'dotnet publish {0} -c Release -r win-x64 -o {1}' -f $project, $UiOut
+# The release build of install\README.md: three separate cargo builds (never one, never --workspace:
+# a joint build would unify features), then the dependency check. No RUSTFLAGS (it would replace the
+# crt-static flags of .cargo\config.toml). The defaults of -Engine, -Broker and -Ui are
+# <repo>\target\release; with CARGO_TARGET_DIR set, pass the three paths.
+function Invoke-ReleaseBuild([string]$Repo) {
+    $steps = @(@('build', '--release', '-p', 'purge-engine'), @('build', '--release', '-p', 'purge-broker'), @('build', '--release', '-p', 'purge-ui'), @('xtask', 'check-deps'))
     if ($script:DryRun) {
-        Write-InstallLog 'what-if: cargo build --release -p purge-engine'
-        Write-InstallLog 'what-if: cargo build --release -p purge-broker'
-        Write-InstallLog 'what-if: cargo xtask check-deps'
-        Write-InstallLog "what-if: $publishLine"
+        foreach ($cargoArgs in $steps) { Write-InstallLog ('what-if: cargo ' + ($cargoArgs -join ' ')) }
         return
     }
     if ($env:RUSTFLAGS) { throw 'RUSTFLAGS is set; it replaces .cargo\config.toml (crt-static) and must be unset for a release build' }
     $cargo = Get-Command cargo -ErrorAction SilentlyContinue
     if (-not $cargo) { throw 'cargo was not found on PATH' }
-    foreach ($cargoArgs in @(@('build', '--release', '-p', 'purge-engine'), @('build', '--release', '-p', 'purge-broker'), @('xtask', 'check-deps'))) {
+    foreach ($cargoArgs in $steps) {
         $line = 'cargo ' + ($cargoArgs -join ' ')
         Write-InstallLog "build: $line"
         & $cargo.Source @cargoArgs
         if ($LASTEXITCODE -ne 0) { throw "$line failed with exit code $LASTEXITCODE" }
     }
-    $dotnet = Resolve-Dotnet
-    if (-not $dotnet) { throw 'the .NET SDK was not found (PATH, or C:\Program Files\dotnet\dotnet.exe)' }
-    Write-InstallLog "build: $publishLine"
-    & $dotnet publish $project -c Release -r win-x64 -o $UiOut
-    if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed with exit code $LASTEXITCODE" }
 }
 
 # The strings a purge-engine built with the executor carries (M3-INSTALL: the installed engine imports
@@ -1144,27 +1131,28 @@ function Invoke-PurgeInstall {
         } else {
             $enginePath = if ($Engine) { $Engine } else { Join-Path $repo 'target\release\purge-engine.exe' }
             $brokerPath = if ($EngineOnly) { '' } elseif ($Broker) { $Broker } else { Join-Path $repo 'target\release\purge-broker.exe' }
-            $uiDir = if ($EngineOnly) { '' } elseif ($UiPublishDir) { $UiPublishDir } else { Join-Path $repo 'target\ui-publish' }
+            if ($Ui -and $UiPublishDir) { throw 'pass -Ui (Purge.exe) or -UiPublishDir (a folder holding it), not both' }
+            $uiDir = if ($EngineOnly) { '' } elseif ($UiPublishDir) { $UiPublishDir } elseif ($Ui) { $Ui } else { Join-Path $repo 'target\release\Purge.exe' }
             $kbDir = $Kb
             if (-not $kbDir) {
                 $nextTo = Join-Path (Split-Path -Parent $enginePath) 'kb'
                 $kbDir = if (Test-Path -LiteralPath $nextTo -PathType Container) { $nextTo } else { Join-Path $repo 'kb' }
             }
             $report.engine = $enginePath; $report.kb = $kbDir
-            if (-not $EngineOnly) { $report.broker = $brokerPath; $report.ui_publish_dir = $uiDir }
+            if (-not $EngineOnly) { $report.broker = $brokerPath; $report.ui = $uiDir }
             if ($EngineOnly) { Write-InstallLog "engine $enginePath; kb $kbDir" }
             else { Write-InstallLog "engine $enginePath; broker $brokerPath; UI $uiDir; kb $kbDir" }
 
             Assert-SystemVolume $pf $windowsDir
             if ($EngineOnly) { Write-InstallLog 'build: skipped (engine-only mode); purge-engine.exe must already exist' }
-            elseif (-not $SkipBuild) { Invoke-ReleaseBuild $repo $uiDir }
+            elseif (-not $SkipBuild) { Invoke-ReleaseBuild $repo }
             else { Write-InstallLog 'build: skipped (-SkipBuild); the artifacts must already exist' }
 
             if ($script:DryRun) {
                 Write-InstallLog "what-if: check that purge-engine.exe carries no executor marker"
                 Write-InstallLog "what-if: install the program-files tree $pf with the ProgramFiles descriptor"
                 if ($EngineOnly) { Write-InstallLog "what-if: copy purge-engine.exe and kb\ into $pf" }
-                else { Write-InstallLog "what-if: copy purge-engine.exe, purge-broker.exe, the UI publish folder and kb\ into $pf" }
+                else { Write-InstallLog "what-if: copy purge-engine.exe, purge-broker.exe, Purge.exe ($uiDir) and kb\ into $pf" }
                 Write-InstallLog "what-if: protect every deployed file and folder (owner Administrators, admin-only write)"
                 Write-InstallLog "what-if: install the data-root tree $dr (sessions, Quarantine, fp, kb, sessions\index.json)"
                 if (-not $EngineOnly) {
@@ -1180,8 +1168,10 @@ function Invoke-PurgeInstall {
                     if (-not (Test-Path -LiteralPath $brokerPath -PathType Leaf)) { throw "broker not found: $brokerPath (cargo build --release -p purge-broker, or pass -Broker)" }
                     if ((Split-Path -Leaf $brokerPath) -ne 'purge-broker.exe') { throw "the broker file must be named purge-broker.exe: $brokerPath" }
                     $uiFacts = Get-ObjectFacts $uiDir
-                    if (-not $uiFacts.Exists -or -not $uiFacts.IsDirectory -or $uiFacts.IsReparsePoint) { throw "UI publish folder not found or not a plain directory: $uiDir (dotnet publish ui\Purge.App -c Release -r win-x64 -o $uiDir)" }
-                    if (-not (Test-Path -LiteralPath (Join-Path $uiDir 'Purge.exe') -PathType Leaf)) { throw "Purge.exe is not in the UI publish folder: $uiDir" }
+                    if (-not $uiFacts.Exists -or $uiFacts.IsReparsePoint) { throw "UI not found or a reparse point: $uiDir (cargo build --release -p purge-ui, or pass -Ui)" }
+                    if ($uiFacts.IsDirectory) {
+                        if (-not (Test-Path -LiteralPath (Join-Path $uiDir 'Purge.exe') -PathType Leaf)) { throw "Purge.exe is not in the UI folder: $uiDir" }
+                    } elseif ((Split-Path -Leaf $uiDir) -ne 'Purge.exe') { throw "the UI file must be named Purge.exe: $uiDir" }
                 }
                 if (-not (Test-Path -LiteralPath $kbDir -PathType Container)) { throw "kb folder not found: $kbDir" }
 

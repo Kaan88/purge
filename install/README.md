@@ -1,8 +1,8 @@
 # install
 
 `install.ps1` is the v1 deploy script (ENGINE_PLAN.md §3.2, §7.4, §7.9; package M3-INSTALL). It builds
-the release artifacts, copies `purge-engine.exe`, `purge-broker.exe`, the published UI (`Purge.exe` and
-its WinUI files) and `kb\` to `%ProgramFiles%\Purge`, creates `C:\ProgramData\Purge` with protected
+the release artifacts, copies `purge-engine.exe`, `purge-broker.exe`, the UI (`Purge.exe`, the Rust UI of
+`bins/purge-ui`, one file) and `kb\` to `%ProgramFiles%\Purge`, creates `C:\ProgramData\Purge` with protected
 DACLs, registers the `Purge` event-log source and creates one all-users Start-menu shortcut. A real
 installer is an M7 item.
 
@@ -14,7 +14,7 @@ This file is the **single documented source of the SDDL constants**. `purge-exec
 Windows PowerShell 5.1, 64-bit, elevated (except `-WhatIf`):
 
 ```
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File install\install.ps1 [-Engine <exe>] [-Broker <exe>] [-UiPublishDir <dir>] [-Kb <dir>] [-SkipBuild] [-ReportPath <json>]
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File install\install.ps1 [-Engine <exe>] [-Broker <exe>] [-Ui <exe> | -UiPublishDir <dir>] [-Kb <dir>] [-SkipBuild] [-ReportPath <json>]
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File install\install.ps1 -WhatIf     [-ReportPath <json>]
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File install\install.ps1 -Check      [-ReportPath <json>]
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File install\install.ps1 -Uninstall  [-ReportPath <json>]
@@ -25,9 +25,10 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File install\install.ps1 -Eng
 |---|---|---|
 | `-Engine` | `<repo>\target\release\purge-engine.exe` | Engine to deploy; the file must be named `purge-engine.exe` and carry no executor marker. |
 | `-Broker` | `<repo>\target\release\purge-broker.exe` | Broker to deploy; the file must be named `purge-broker.exe`. |
-| `-UiPublishDir` | `<repo>\target\ui-publish` | The AOT publish folder; it must contain `Purge.exe`. |
+| `-Ui` | `<repo>\target\release\Purge.exe` | The UI to deploy (`cargo build --release -p purge-ui`); the file must be named `Purge.exe` and is copied alone. |
+| `-UiPublishDir` | | Instead of `-Ui`: a folder holding `Purge.exe`, copied as a whole (the VM rig's client folders). |
 | `-Kb` | `<engine dir>\kb` if it exists, else `<repo>\kb` | Knowledge files copied to `%ProgramFiles%\Purge\kb` (the broker and the engine read `<exe dir>\kb`). |
-| `-SkipBuild` | | Deploy the artifacts as they are; run neither `cargo` nor `dotnet`. |
+| `-SkipBuild` | | Deploy the artifacts as they are; run no `cargo`. |
 | `-DataRootOnly` | | Inno Setup mode (install only): the setup copied the payload already. Create the data root and the event-log source; no build, no payload copy, no shortcut. |
 | `-ProtectOnly` | | Inno Setup mode (install only): set the payload's root, and every object in it that fails the broker's per-object rule, to the `ProgramFiles` descriptor (owner Administrators, protected DACL). |
 | `-EngineOnly` | | Legacy M1b/M2 rig mode: deploy `purge-engine.exe` and `kb\` plus the data root only; no broker, UI, event-log source or shortcut, and no build. `-Check` and `-Uninstall` honour it. |
@@ -48,16 +49,16 @@ entry; the `Purge` Application event-log source is the one registry key M3-HARDE
 
 ## Release build
 
-A release is two separate Rust builds, the dependency check, then the UI publish:
+A release is three separate Rust builds, then the dependency check:
 
 ```
 cargo build --release -p purge-engine
 cargo build --release -p purge-broker
+cargo build --release -p purge-ui
 cargo xtask check-deps
-dotnet publish ui\Purge.App -c Release -r win-x64 -o target\ui-publish
 ```
 
-- Two commands, never one. `cargo build -p purge-engine -p purge-broker`, `--workspace` and
+- Separate commands, never one. `cargo build -p purge-engine -p purge-broker`, `--workspace` and
   `--all-features` unify features across everything they build, so `purge-engine.exe` would get
   purge-win's `write` (the broker's) and any feature another member switches on. Built on its own, the
   engine links no executor and has no `write` (check-deps rule 4c).
@@ -71,9 +72,10 @@ dotnet publish ui\Purge.App -c Release -r win-x64 -o target\ui-publish
   the `purge-engine.exe` of the first build stays as it was.
 - `cargo xtask check-deps` checks the trees these two commands build (rule 4 in
   `tools/xtask/src/check_deps.rs`). Do not ship a build that fails it.
-- The UI publish is Native AOT and self-contained (`ui/Purge.App/Purge.App.csproj`); it needs the .NET 10
-  SDK and the Visual Studio C++ desktop workload. The script looks for `dotnet` on `PATH`, then in
-  `C:\Program Files\dotnet`.
+- `purge-ui` (bin `Purge`) is the window, `Purge.exe`, on the shared Rust toolkit (`mdshared-ui`). It is one
+  statically linked file with no DLLs, `.pri` or `Assets\` beside it; it links neither the executor nor
+  purge-win's `write` (rule 4c covers every package with a binary). The WinUI app in `ui\` (a .NET Native AOT
+  publish) is no longer built or shipped.
 
 Before deploying, the script reads `purge-engine.exe` and refuses a binary that carries a `purge-exec`
 panic-location marker (`purge-exec\src` or `purge-exec/src`): such an engine was built with `rig-exec`.
@@ -82,8 +84,8 @@ panic-location marker (`purge-exec\src` or `purge-exec/src`): such an engine was
 ## Layout
 
 ```
-%ProgramFiles%\Purge\            ProgramFiles   purge-engine.exe, purge-broker.exe, Purge.exe and its
-                                                WinUI files, kb\ (every object admin-only writable)
+%ProgramFiles%\Purge\            ProgramFiles   purge-engine.exe, purge-broker.exe, Purge.exe,
+                                                kb\ (every object admin-only writable)
 %ProgramData%\Purge\             DataRoot
     sessions\                    Sessions       one directory per session (created by purge-exec)
         index.json               Index          created as the 2-byte document {} (UTF-8, no BOM)
@@ -115,7 +117,7 @@ true; the left column names the code rule.
 | own directory: plain drive path, no reparse point on any component, final path equal, on the system volume, admin-only writable (`trusted_install_dir`) | `Assert-SystemVolume` refuses an install directory off the Windows volume; `Install-Tree` creates `%ProgramFiles%\Purge` with the `ProgramFiles` descriptor in the creating call and rejects/recreates any tree with a reparse point at its top two levels |
 | the running executable (`purge-broker.exe`) admin-only writable | `Copy-Payload` copies it into the protected root, so it inherits the `ProgramFiles` descriptor, and the protection pass applies that descriptor itself to any object that fails the broker's rule |
 | `<install dir>\kb` passes the directory rule | `Copy-FileTree` creates `kb\` below the protected root; the protection pass judges it by the same rule; `Install-Tree` refuses a reparse-point `kb` |
-| `<install dir>\Purge.exe` (the client image) admin-only writable | the UI publish folder is copied into the protected root by `Copy-FileTree`; the protection pass covers `Purge.exe` itself |
+| `<install dir>\Purge.exe` (the client image) admin-only writable | `Copy-Payload` copies it into the protected root (or a `-UiPublishDir` folder with `Copy-FileTree`); the protection pass covers `Purge.exe` itself |
 | every file directly in `<install dir>\kb\baselines` admin-only writable | the protection pass visits every file of the deployed tree, `kb\baselines\*.tsv.gz` included |
 | data root `%ProgramData%\Purge` passes the directory rule and `StorageRoots::check` (data root, `sessions`, `Quarantine`, `fp`) | `Install-Tree` creates the data layout (root, `sessions`, `Quarantine`, `fp`, `kb`, `sessions\index.json`) with its own protected descriptors |
 | KB and baselines are `<install dir>\kb`, `PURGE_KB_DIR` is not read | the layout above; the engine and broker use `<exe dir>\kb` |
@@ -223,8 +225,8 @@ event-log source. It never touches the data root.
 
 ## Deployed files, shortcut and event-log source
 
-`Copy-Payload` copies `purge-engine.exe`, `purge-broker.exe`, the whole UI publish folder (relative paths
-kept, `Assets\` included) and `kb\` into the verified root. A file whose SHA-256 already matches is left
+`Copy-Payload` copies `purge-engine.exe`, `purge-broker.exe`, `Purge.exe` (or, with `-UiPublishDir`, that
+whole folder, relative paths kept) and `kb\` into the verified root. A file whose SHA-256 already matches is left
 alone; an existing file is overwritten; a file in the destination that matches no source is reported as
 `stale (left in place)` and never deleted.
 
@@ -261,20 +263,23 @@ winget install --id JRSoftware.InnoSetup -e
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File install\inno\build-installer.ps1 [-SkipBuild] [-InnoCompiler <ISCC.exe>]
 ```
 
-The script builds what "Release build" above describes (`cargo` twice, `cargo xtask check-deps`, the
-Native AOT publish), then compiles the setup into `target\installer\Purge-Setup-<version>.exe`, the
+The script builds what "Release build" above describes (`cargo` three times, `cargo xtask check-deps`),
+then compiles the setup into `target\installer\Purge-Setup-<version>.exe`, the
 version taken from `[workspace.package] version` in the root `Cargo.toml`. `-SkipBuild` packs the
 artifacts that already exist. Build-time only: no elevation and no change to the machine.
 
 **Install.** The setup is x64, `PrivilegesRequired=admin`, `DefaultDirName={autopf}\Purge` and
 `DisableDirPage=yes`: the broker refuses a directory a non-administrator can write, so the user cannot
-pick another one. `[Files]` copies `purge-engine.exe`, `purge-broker.exe`, the whole UI publish folder
-(`Purge.exe` and its Windows App SDK files) and `kb\` into `{app}` (`= %ProgramFiles%\Purge`), plus
+pick another one. `[Files]` copies `purge-engine.exe`, `purge-broker.exe`, `Purge.exe` (one file,
+`<cargo target>\release\Purge.exe`, `/DUiExe`) and `kb\` into `{app}` (`= %ProgramFiles%\Purge`), plus
 `install.ps1` into `{app}\setup\`. `[Icons]` creates the same all-users Start-menu shortcut the script
 does (`{commonprograms}\Purge`, i.e. `%ProgramData%\Microsoft\Windows\Start Menu\Programs\Purge.lnk`)
 and an optional desktop shortcut (unchecked task). `AppId` is a fixed GUID, so a second setup upgrades
 the same "Installed apps" entry; name, version and publisher ("Purge") come from `AppName`,
-`AppVersion` and `AppPublisher`.
+`AppVersion` and `AppPublisher`. An update over a 0.1.x install (the WinUI app) first removes that app's
+Windows App SDK payload from `{app}` (`[InstallDelete]`: `*.dll`, `*.winmd`, `*.pri`, `*.pdb`,
+`RestartAgent.exe`, `Assets\`, `Microsoft.UI.Xaml\`; and at `ssInstall` every language folder, a folder
+whose name has a `-` and no `.`), so only Purge's own files are left.
 
 | Check (`bins/purge-broker/src/start.rs`) | What the setup does for it |
 |---|---|
@@ -283,7 +288,7 @@ the same "Installed apps" entry; name, version and publisher ("Purge") come from
 | own directory: plain drive path, no reparse point, system volume, admin-only writable (`trusted_install_dir`) | `DefaultDirName={autopf}\Purge` + `DisableDirPage=yes` fixes `%ProgramFiles%\Purge`; Inno creates plain directories; `-ProtectOnly` applies the `ProgramFiles` constant |
 | `purge-broker.exe` admin-only writable | Inno's copy inherits Program Files (Users: read and execute), which the rule accepts; `-ProtectOnly` repairs it when the copied file's own descriptor fails |
 | `<install dir>\kb` passes the directory rule | `kb\` is copied below the protected root; `-ProtectOnly` visits the directory too |
-| `<install dir>\Purge.exe` admin-only writable | the UI publish tree goes into `{app}`; `-ProtectOnly` visits `Purge.exe` |
+| `<install dir>\Purge.exe` admin-only writable | `Purge.exe` goes into `{app}`; `-ProtectOnly` visits it |
 | every file in `<install dir>\kb\baselines` admin-only writable | `kb\baselines\*` is copied by the same rule; `-ProtectOnly` walks every file of the tree |
 | data root `%ProgramData%\Purge` passes the directory rule and `StorageRoots::check` | `install.ps1 -DataRootOnly` creates `Purge`, `sessions`, `Quarantine`, `fp`, `kb` and `sessions\index.json` with the `DataRoot`, `Sessions`, `Store` and `Index` descriptors |
 | KB and baselines are `<install dir>\kb`, `PURGE_KB_DIR` is not read | `DestDir: "{app}\kb"`; nothing sets `PURGE_KB_DIR` |
@@ -332,7 +337,7 @@ stops Purge itself:
   the re-protection of the tree and `[UninstallDelete]` all act on `{app}`.
 - It stops only the app's own executables in that folder: a process whose path is exactly
   `{app}\Purge.exe`, `purge-broker.exe`, `purge-engine.exe` or `RestartAgent.exe` (the Windows App SDK
-  helper the UI publish ships), found through WMI; Purge.exe first; `taskkill /F /PID`, no `/T`, so a
+  helper the earlier WinUI app shipped, still stopped for an update over such an install), found through WMI; Purge.exe first; `taskkill /F /PID`, no `/T`, so a
   program's uninstaller the broker started is left alone. It waits up to 10 s until they are gone and
   their files can be opened for writing.
 - Without WMI it opens the four files instead: for each of the three Purge images whose installed file
@@ -346,13 +351,27 @@ stops Purge itself:
 `DisplayVersion` Inno writes is `AppVersion`.
 
 **Version.** The one version is `[workspace.package] version` in the root `Cargo.toml`.
-`build-installer.ps1` passes it as `/DAppVersion` (`purge.iss` has no default), the engine's and the
-broker's `VERSIONINFO` come from it (`bins/versioninfo.rs`, included by both `build.rs`), and
-`ui/Directory.Build.props` reads it from `Cargo.toml` for `Purge.exe` (`Version`, `FileVersion`,
-`InformationalVersion`). `install/inno/check-version.ps1` checks `Cargo.lock`, the three exes
-(`ProductVersion` = the version, fixed `FILEVERSION` = `X.Y.Z.0`) and the setup; the preprocessor of
-`purge.iss` refuses the same mismatches. `.github/workflows/release.yml` builds, checks and publishes
-a release for the tag `v<version>`, with the `hub.txt` Hub reads.
+`build-installer.ps1` passes it as `/DAppVersion` (`purge.iss` has no default) and its four-number
+form as `/DAppFileVersion`; the `VERSIONINFO` of all three exes comes from it (`bins/versioninfo.rs`,
+included by the `build.rs` of purge-engine, purge-broker and purge-ui). `install/inno/check-version.ps1`
+checks `Cargo.lock`, the three exes (`ProductVersion` = the version, fixed `FILEVERSION` = the
+four-number form) and the setup; the preprocessor of `purge.iss` refuses the same mismatches.
+
+| Version (`Cargo.toml`) | Fixed `FILEVERSION` | Release |
+|---|---|---|
+| `X.Y.Z` | `X.Y.Z.0` | full release, latest (Hub offers it) |
+| `X.Y.Z-alpha.N` (N 1..999, no leading zero) | `X.Y.Z.N` | GitHub pre-release, never latest (Hub skips it) |
+| `X.Y.Z-beta.N` | `X.Y.Z.(1000+N)` | GitHub pre-release |
+| `X.Y.Z-rc.N` | `X.Y.Z.(2000+N)` | GitHub pre-release |
+| any other `X.Y.Z-suffix` | `X.Y.Z.0` | built and checked, never published |
+
+`check-version.ps1 -FileVersion` prints the four-number form. Within one `X.Y.Z` the fourth number orders
+alpha < beta < rc; the final `X.Y.Z.0` sorts below its own pre-releases, so a PC on a pre-release of
+`X.Y.Z` that Hub reads would not see `X.Y.Z` itself as an update (Hub never offers pre-releases, so this
+matters only for someone who installed one by hand: install the final by hand once, or release the next
+`X.Y.Z+1`). `.github/workflows/release.yml` builds, checks and publishes
+a release for the tag `v<version>`, with the `hub.txt` Hub reads (a pre-release gets one too; Hub only
+reads `releases/latest`).
 
 The setup must be tested on the target machine, elevated: it writes Program Files, ProgramData and
 HKLM, which is exactly what cannot be verified by compiling it. Its first VM run checks, each with
@@ -392,7 +411,7 @@ a temp folder: create-with-descriptor round trip, `CREATE_NEW` refusal, reparse 
 rename of a junction (target untouched) and the non-following tree removal.
 
 The M3 rows add, in a temp folder and with a descriptor owned by the test user: a fresh payload copy of
-engine, broker, a UI publish tree and `kb` (including a subdirectory), a re-run that reports every file
+engine, broker, a UI folder and `kb` (including a subdirectory), then a one-file UI (`Purge.exe` alone), a re-run that reports every file
 `unchanged` and `changed: false`, one changed source file reported `updated`, a stale file reported and
 left in place, the per-object protection rule (a file given an `Everyone` write ACE is named by `-Check`
 and re-protected by the next run), the shortcut create/verify/remove round trip, `Test-PayloadLayout`
@@ -417,5 +436,7 @@ VM gate G0 (`-Mode m2-install`, run by the rig, elevated in the guest):
 
 ### Release stage
 `install/release-stage.txt` holds one lower-case word, the stage the release workflow puts in the release title
-("Purge 0.1.2 (alpha)"): `alpha` now, `beta` when the beta starts, and an empty file for final releases. The
-version itself stays `X.Y.Z` (Hub's `releases/latest` skips pre-releases, so a `-beta` version would never reach it).
+("Purge 0.1.2 (alpha)"): `alpha` now, `beta` when the beta starts, and an empty file for final releases. It
+names full releases only: their version stays `X.Y.Z`, because Hub's `releases/latest` skips pre-releases. A
+GitHub pre-release (`X.Y.Z-alpha.N`, see "Version") carries its stage in the version and is titled
+"Purge X.Y.Z-alpha.N (pre-release)".
