@@ -43,6 +43,8 @@ pub const CONFIRM_DELETE_DETAIL: &str =
     "The items are in quarantine. Nothing has been deleted yet.";
 pub const MOVE_DECLINED: &str = "Nothing was moved: the prompt was cancelled.";
 pub const MOVE_NOT_STARTED: &str = "The move was not started.";
+pub const MOVE_NEVER_SENT: &str =
+    "Nothing was moved: the administrator part had already ended, so the move never started.";
 pub const MOVE_INTERRUPTED: &str = "The administrator part ended during the move. Purge cannot tell which items were moved. \
      Check History & undo before trying again; nothing is claimed here.";
 pub const PLAN_REFUSED: &str = "The plan was refused.";

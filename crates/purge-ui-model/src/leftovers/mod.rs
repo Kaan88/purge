@@ -1196,6 +1196,12 @@ impl LeftoversModel {
                 self.phase = LeftoversPhase::Review;
                 self.info = Some(text::MOVE_DECLINED.into());
             }
+            // Never sent (the session had ended, or the broker was closing): nothing was moved,
+            // so the review stays as it was. Never "cannot tell".
+            _ if never_reached_a_broker(e) => {
+                self.phase = LeftoversPhase::Review;
+                self.error = Some(text::MOVE_NEVER_SENT.into());
+            }
             CallError::Link { .. } => {
                 self.phase = LeftoversPhase::Interrupted;
                 self.error = Some(text::MOVE_INTERRUPTED.into());
