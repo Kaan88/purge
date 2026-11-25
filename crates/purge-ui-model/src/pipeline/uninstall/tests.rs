@@ -739,6 +739,94 @@ fn a_broker_handed_over_is_not_closed_with_the_page() {
 }
 
 #[test]
+fn the_declined_bars_try_again_goes_once_the_run_restarts() {
+    let mut broker = Broker::new(prepared_for(Route::Broker, Some(QUIET)));
+    broker.first_run_error = Some(fixture_error("error.consent_declined"));
+    let mut rig = Rig::new(broker, Medium::new());
+    let mut c = UninstallController::new();
+    run_through(&mut rig, &mut c);
+    assert!(single(&c).can_retry);
+
+    let requests = c.retry();
+    assert!(c.is_busy());
+    assert!(
+        c.notices().iter().all(|n| !n.can_retry),
+        "the run under way answered the Try again: {:?}",
+        c.notices()
+    );
+    rig.pump(&mut c, requests);
+}
+
+#[test]
+fn an_ended_session_of_an_idle_run_says_so_and_is_not_closed_again() {
+    let mut rig = Rig::new(
+        Broker::new(prepared_for(Route::Broker, Some(QUIET))),
+        Medium::new(),
+    );
+    let mut c = UninstallController::new();
+    begin(&mut rig, &mut c);
+    rig.next_confirmation();
+    answer(&mut rig, &mut c, false, RestorePoint::HighRisk);
+    assert!(c.has_broker());
+
+    c.on_broker_ended();
+    assert!(!c.has_broker());
+    let ended = c
+        .notices()
+        .iter()
+        .find(|n| n.title == strings::BROKER_ENDED_TITLE)
+        .expect("the ended bar");
+    assert!(ended.can_start_over);
+    assert!(c.close().is_empty(), "nothing left to close");
+}
+
+#[test]
+fn a_medium_run_never_starts_without_the_broker_that_observes_it() {
+    let local = r#""C:\Users\u\AppData\Local\App\unins000.exe""#;
+    let mut rig = Rig::new(
+        Broker::new(prepared_for(Route::Medium, Some(QUIET))),
+        Medium::with(route_of(Route::Medium, local, None)),
+    );
+    let mut c = UninstallController::new();
+    begin(&mut rig, &mut c);
+    rig.next_confirmation();
+    // The session ended while the confirmation was open (another page took it).
+    c.on_broker_ended();
+    answer(&mut rig, &mut c, true, RestorePoint::HighRisk);
+
+    assert_eq!(rig.medium.run_calls, 0, "nothing ran");
+    assert!(!c.is_busy());
+    assert_eq!(c.state_of(UninstallStep::Run), StepState::Failed);
+    assert!(
+        c.notices()
+            .iter()
+            .any(|n| n.title == strings::BROKER_ENDED_TITLE && n.can_start_over)
+    );
+}
+
+#[test]
+fn run_user_refused_by_the_window_fails_as_the_broker_ending() {
+    let local = r#""C:\Users\u\AppData\Local\App\unins000.exe""#;
+    let mut rig = Rig::new(
+        Broker::new(prepared_for(Route::Medium, Some(QUIET))),
+        Medium::with(route_of(Route::Medium, local, None)),
+    );
+    let mut c = UninstallController::new();
+    begin(&mut rig, &mut c);
+    rig.next_confirmation();
+    // Answered without the rig: the RunUser request is the window's to refuse.
+    let requests = c.answer(UninstallAnswer::new(true, false, RestorePoint::HighRisk));
+    assert!(matches!(requests[..], [PipelineRequest::RunUser { .. }]));
+    assert!(c.on_run_user_without_broker().is_empty());
+    assert!(!c.is_busy());
+    assert!(
+        c.notices()
+            .iter()
+            .any(|n| n.title == strings::BROKER_ENDED_TITLE)
+    );
+}
+
+#[test]
 fn progress_lines_go_to_the_step_that_waits() {
     let mut c = UninstallController::new();
     c.begin(target());

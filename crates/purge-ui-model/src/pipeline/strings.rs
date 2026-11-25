@@ -123,6 +123,10 @@ pub const RESTART_MESSAGE: &str = "The uninstaller asked Windows to finish after
 pub const STOPPED_TITLE: &str = "Uninstall stopped.";
 /// Bar: cancelled.
 pub const STOPPED_MESSAGE: &str = "Nothing more will run until you retry.";
+/// The bar's message when an idle run's broker session was ended (another page took it).
+pub const BROKER_ENDED_IDLE: &str = "It was closed while this uninstall waited.";
+/// The link error of a step that needs the broker after its session ended.
+pub const BROKER_NOT_RUNNING: &str = "The administrator part is not running.";
 /// After the broker link's sentence.
 pub const BROKER_ENDED_TAIL: &str = " Purge can start it again and record the program again.";
 /// Bar title: the engine's link ended.
@@ -384,6 +388,10 @@ pub mod confirm {
     pub const PURGE_WILL: &str = "Purge will:";
     /// The command's label.
     pub const COMMAND: &str = "Command";
+    /// The command shown with the quiet switch off when the program's own (interactive) command
+    /// is not known.
+    pub const COMMAND_NOT_KNOWN: &str =
+        "The program's own uninstall command is not known; only its quiet command is.";
     /// The quiet switch's accessible name.
     pub const QUIET_SWITCH_NAME: &str = "Use quiet mode when available";
     /// The quiet row with a quiet uninstaller.

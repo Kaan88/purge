@@ -619,6 +619,41 @@ impl UninstallController {
         std::mem::take(&mut self.has_broker)
     }
 
+    /// The window ended this controller's broker session (another page took the administrator
+    /// part, or its link ended): it holds no broker from now on, so the next step that needs one
+    /// starts it again or says the link has ended. While a call is in flight its own answer says
+    /// so; an idle run that still had work (a prepared record, a failed run whose forced cleanup
+    /// was still possible) gets a bar that offers "Start over".
+    pub fn on_broker_ended(&mut self) {
+        let had = std::mem::take(&mut self.has_broker);
+        if had && !self.busy && self.target.is_some() && self.completed.is_none() {
+            self.retry = RetryStage::None;
+            self.notices.retain(|n| !n.can_retry && !n.can_force);
+            self.add_notice(
+                UninstallNotice::new(
+                    NoticeKind::Error,
+                    strings::BROKER_ENDED_TITLE,
+                    format!("{}{}", strings::BROKER_ENDED_IDLE, strings::BROKER_ENDED_TAIL),
+                )
+                .start_over(),
+            );
+        }
+    }
+
+    /// The window could not send `uninstall.run_user` because the administrator part is no longer
+    /// running: the medium route needs the broker's observation afterwards, so nothing is run.
+    pub fn on_run_user_without_broker(&mut self) -> Vec<PipelineRequest> {
+        if self.waiting != Some(Waiting::RunUser) {
+            return vec![];
+        }
+        self.waiting = None;
+        self.has_broker = false;
+        self.fail(
+            CallError::link(strings::BROKER_NOT_RUNNING, true),
+            Side::Broker,
+        )
+    }
+
     /// The page goes away: ends the broker unless it was handed over.
     pub fn close(&mut self) -> Vec<PipelineRequest> {
         if self.detached {
@@ -1093,6 +1128,14 @@ impl UninstallController {
                     strings::RUNNING.into()
                 }),
             );
+            if !self.has_broker {
+                // The broker observes the run afterwards (design 3.2): without it nothing runs.
+                self.fail(
+                    CallError::link(strings::BROKER_NOT_RUNNING, true),
+                    Side::Broker,
+                );
+                return;
+            }
             self.waiting = Some(Waiting::RunUser);
             out.push(PipelineRequest::RunUser {
                 program_id,
@@ -1326,8 +1369,11 @@ impl UninstallController {
         self.notices.push(notice);
     }
 
+    /// A stage runs again: the error bars go, and so does any bar that offered a retry (the
+    /// declined prompt's "Try again"), which the run now under way has answered.
     fn clear_errors(&mut self) {
-        self.notices.retain(|n| n.kind != NoticeKind::Error);
+        self.notices
+            .retain(|n| n.kind != NoticeKind::Error && !n.can_retry);
     }
 
     fn drop_broker(&mut self) -> Vec<PipelineRequest> {

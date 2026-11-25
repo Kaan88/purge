@@ -278,13 +278,20 @@ impl ConfirmDialog {
     }
 
     /// The command line for the quiet switch's position: the quiet command when on, the
-    /// interactive one when off (the WinUI dialog showed the quiet one in both positions).
+    /// interactive one when off (the WinUI dialog showed the quiet one in both positions). It
+    /// never shows the quiet command with the switch off: when the interactive command is not
+    /// known, it says so ([`strings::confirm::COMMAND_NOT_KNOWN`]).
     pub fn command_for(&self, quiet_on: bool) -> &str {
         let c = &self.confirmation;
         match &c.quiet_command {
             Some(q) if quiet_on && c.quiet_available && !q.is_empty() => q,
             _ if !c.interactive_command.is_empty() => &c.interactive_command,
-            _ => &c.command,
+            // `command` is the selected one, which is the quiet one when the quiet switch was on
+            // at the record step: only a program without a quiet command may show it here.
+            _ if !c.command.is_empty() && c.quiet_command.as_deref() != Some(c.command.as_str()) => {
+                &c.command
+            }
+            _ => strings::confirm::COMMAND_NOT_KNOWN,
         }
     }
 
@@ -533,6 +540,24 @@ impl UninstallPage {
     pub fn on_launch(&mut self, launch: LaunchResult, env: PageEnv) -> Vec<PageRequest> {
         let requests = self.controller.on_launch(launch);
         self.after(requests, env)
+    }
+
+    /// The window ended this page's broker session: see [`UninstallController::on_broker_ended`].
+    pub fn on_broker_ended(&mut self) {
+        self.controller.on_broker_ended();
+    }
+
+    /// See [`UninstallController::on_run_user_without_broker`].
+    pub fn on_run_user_without_broker(&mut self, env: PageEnv) -> Vec<PageRequest> {
+        let requests = self.controller.on_run_user_without_broker();
+        self.after(requests, env)
+    }
+
+    /// The run still needs its broker session although no step runs: a prepared record waits
+    /// for the confirmation's answer, a failed run can still be cleaned up by force, or a scan
+    /// waits for the Leftovers page. Ending the session for another page loses that work.
+    pub fn holds_broker_work(&self) -> bool {
+        self.controller.has_broker()
     }
 
     /// See [`UninstallController::on_progress`].

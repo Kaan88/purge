@@ -376,6 +376,21 @@ fn the_confirm_dialog_says_what_will_run() {
 }
 
 #[test]
+fn the_switched_off_dialog_never_shows_the_quiet_command() {
+    let mut rig = rig();
+    let mut p = UninstallPage::new();
+    let requests = p.begin(vec![target()], IDLE);
+    rig.pump_page(&mut p, requests, IDLE);
+    let mut confirmation = rig.next_confirmation();
+    // The record knew only the quiet command: the selected one is that.
+    confirmation.interactive_command = String::new();
+    confirmation.command = QUIET.into();
+    let d = ConfirmDialog::new(confirmation);
+    assert_eq!(d.command_for(true), QUIET);
+    assert_eq!(d.command_for(false), strings::confirm::COMMAND_NOT_KNOWN);
+}
+
+#[test]
 fn the_running_card_names_each_process_once() {
     assert_eq!(
         strings::running_text(&["Code.exe".into()], 1),
