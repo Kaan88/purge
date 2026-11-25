@@ -8,6 +8,7 @@ use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use mdshared_app::backdrop::Backdrop;
 use mdshared_ui::a11y::{self, accesskit};
 use mdshared_ui::cursor::Cursor;
 use mdshared_ui::dropdown::Outcome as DdOutcome;
@@ -39,7 +40,8 @@ use crate::screens::{self, NAV, nav_id};
 use crate::script::Script;
 use crate::ui::{Ctl, Id, Look, Role, SCOPE, Ui, id};
 use crate::view::{
-    DD_ALL, DD_DESIGN, DD_PRESET, DD_RESTORE, DD_SORT, DD_THEME, DD_TRANSITION, Toast, View,
+    DD_ALL, DD_BACKDROP, DD_DESIGN, DD_PRESET, DD_RESTORE, DD_SORT, DD_THEME, DD_TRANSITION, Toast,
+    View,
 };
 
 const LIST: Id = Id("ProgramList", 0);
@@ -232,7 +234,7 @@ impl PurgeApp {
             None
         };
         cx.set_dark(dark);
-        let backdrop = tokens::allowed_backdrop(screens::backdrop_of(self.model.prefs.design), hc);
+        let backdrop = tokens::allowed_backdrop(self.model.prefs.backdrop, hc);
         cx.set_backdrop(backdrop, &self.pal);
         cx.request_redraw_all();
     }
@@ -243,8 +245,8 @@ impl PurgeApp {
             return;
         }
         let old = self.model.prefs;
-        let looks =
-            (prefs.design, prefs.preset, prefs.theme) != (old.design, old.preset, old.theme);
+        let looks = (prefs.design, prefs.preset, prefs.theme, prefs.backdrop)
+            != (old.design, old.preset, old.theme, old.backdrop);
         // Only what changed is written over the saved settings: what the command line chose
         // for this run stays this run's.
         let s = &mut self.saved;
@@ -259,6 +261,9 @@ impl PurgeApp {
         }
         if prefs.transition != old.transition {
             s.transition = prefs.transition;
+        }
+        if prefs.backdrop != old.backdrop {
+            s.backdrop = prefs.backdrop;
         }
         self.model.prefs = prefs;
         self.store.save(&self.saved);
@@ -279,6 +284,14 @@ impl PurgeApp {
     pub fn set_preset(&mut self, cx: &mut Cx<'_, ()>, preset: Preset) {
         let p = Prefs {
             preset,
+            ..self.model.prefs
+        };
+        self.set_prefs(cx, p);
+    }
+
+    pub fn set_backdrop(&mut self, cx: &mut Cx<'_, ()>, backdrop: Backdrop) {
+        let p = Prefs {
+            backdrop,
             ..self.model.prefs
         };
         self.set_prefs(cx, p);
@@ -539,6 +552,7 @@ impl PurgeApp {
             DD_DESIGN => self.set_design(cx, Design::at(i)),
             DD_TRANSITION => self.set_transition(cx, Transition::at(i)),
             DD_PRESET => self.set_preset(cx, Preset::at(i)),
+            DD_BACKDROP => self.set_backdrop(cx, Backdrop::at(i)),
             DD_RESTORE => self.model.flow_restore_point(i.min(2)),
             _ => {}
         }
@@ -1779,6 +1793,22 @@ impl App for PurgeApp {
                 Ok(()) => println!("shot: {}", path.display()),
                 Err(e) => println!("shot failed: {}: {e}", path.display()),
             }
+            if cx.frosted() {
+                let over = path.with_extension("over-desktop.png");
+                let mut shot = p.bmp.clone();
+                over_desktop(
+                    &mut shot.pixels,
+                    shot.width as usize,
+                    &self.pal,
+                    self.model.prefs.backdrop,
+                );
+                match shot.write_png(&over) {
+                    Ok(()) => println!("shot over a made-up desktop: {}", over.display()),
+                    Err(e) => println!("shot failed: {}: {e}", over.display()),
+                }
+            } else if self.model.prefs.backdrop != Backdrop::Off && self.script.is_none() {
+                println!("shot: the chrome was not frosted (no keyboard, or no backdrop here)");
+            }
         }
         self.frames += 1;
         // The launch markers at the moments they name: `first_tick` when the first frame is
@@ -1821,5 +1851,44 @@ impl App for PurgeApp {
     fn accessibility(&mut self, cx: &mut Cx<'_, ()>, tree: &mut a11y::Tree) -> accesskit::NodeId {
         let title = cx.title().to_string();
         self.build_tree(tree, &title, cx.scale())
+    }
+}
+
+/// `--shot`: what the compositor would show of a frosted frame laid over a desktop, for a look
+/// at the chrome over a backdrop without one. The marked chrome is keyed out as the host does
+/// when it presents (`frost::key_out`), then laid over a made-up "desktop": a smooth diagonal of
+/// strong colours, about what Acrylic's blur makes of a busy screen behind the window (Mica's
+/// tinted wallpaper is much flatter, so this is the harder case for it). `pixels` are BGRA.
+fn over_desktop(pixels: &mut [u8], width: usize, pal: &Palette, backdrop: Backdrop) {
+    use mdshared_ui::frost;
+    if width == 0 {
+        return;
+    }
+    let key = frost::Key::new(frost::key_colour(pal), frost::veil(backdrop));
+    let mut px: Vec<u32> = pixels
+        .chunks_exact(4)
+        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect();
+    let rows = px.len() / width;
+    frost::key_out(&key, &mut px, width, (0, 0, width, rows));
+    let span = (width + rows).max(1) as f32;
+    for (i, (out, v)) in pixels.chunks_exact_mut(4).zip(px).enumerate() {
+        let a = v >> 24;
+        if a == 255 {
+            continue;
+        }
+        let (x, y) = (i % width, i / width);
+        let t = (x + y) as f32 / span;
+        // Orange to teal, with a soft band across.
+        let band = 0.5 + 0.5 * ((x as f32 / 90.0).sin() * (y as f32 / 70.0).cos());
+        let d = [
+            (230.0 * (1.0 - t) + 40.0 * t) * (0.8 + 0.2 * band),
+            (120.0 * (1.0 - t) + 170.0 * t) * (0.8 + 0.2 * band),
+            (40.0 * (1.0 - t) + 200.0 * t) * (0.8 + 0.2 * band),
+        ];
+        let keep = (255 - a) as f32 / 255.0;
+        let c = [(v >> 16) & 0xff, (v >> 8) & 0xff, v & 0xff];
+        let ch = |k: usize| (c[k] as f32 + keep * d[k]).round().min(255.0) as u8;
+        out.copy_from_slice(&[ch(2), ch(1), ch(0), 255]);
     }
 }

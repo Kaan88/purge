@@ -112,8 +112,6 @@ pub struct Look {
     /// The rail's pill moves; rows fade their hover. (Page transitions are a setting of their
     /// own: `look::Transition`.)
     pub motion: bool,
-    /// The rail is frosted over Acrylic instead of Mica.
-    pub acrylic: bool,
     /// D1: a page's secondary line stands under its title, not beside it.
     pub stacked: bool,
     /// D1: a card is a quiet panel a shade off the page, with no outline.
@@ -140,7 +138,6 @@ impl Look {
                 radius: 12.0,
                 row_h: 46.0,
                 motion: true,
-                acrylic: true,
                 stacked: true,
                 soft: true,
                 hero: false,
@@ -156,7 +153,6 @@ impl Look {
                 radius: 14.0,
                 row_h: 44.0,
                 motion: true,
-                acrylic: false,
                 stacked: false,
                 soft: false,
                 hero: true,

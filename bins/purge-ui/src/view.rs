@@ -13,6 +13,8 @@ use mdshared_ui::scroll::SmoothScroll;
 use mdshared_ui::table::{Align, Column, Table};
 use mdshared_ui::textfield::TextField;
 
+use mdshared_app::backdrop::Backdrop;
+
 use crate::look::{Choice, Design, Preset, ThemeChoice, Transition};
 use crate::model::{Model, Page, SortKey};
 use crate::transition::PageSwitch;
@@ -102,6 +104,7 @@ pub struct Dropdowns {
     pub design: Dropdown<usize>,
     pub transition: Dropdown<usize>,
     pub preset: Dropdown<usize>,
+    pub backdrop: Dropdown<usize>,
     pub restore: Dropdown<usize>,
 }
 
@@ -110,13 +113,15 @@ pub const DD_THEME: Id = Id("ThemeChoice", 0);
 pub const DD_DESIGN: Id = Id("LookChoice", 0);
 pub const DD_TRANSITION: Id = Id("TransitionChoice", 0);
 pub const DD_PRESET: Id = Id("ColourChoice", 0);
+pub const DD_BACKDROP: Id = Id("BackdropChoice", 0);
 pub const DD_RESTORE: Id = Id("RestorePointBox", 0);
-pub const DD_ALL: [Id; 6] = [
+pub const DD_ALL: [Id; 7] = [
     DD_SORT,
     DD_THEME,
     DD_DESIGN,
     DD_TRANSITION,
     DD_PRESET,
+    DD_BACKDROP,
     DD_RESTORE,
 ];
 
@@ -139,6 +144,7 @@ impl Dropdowns {
             design: of(titles::<Design>()),
             transition: of(titles::<Transition>()),
             preset: of(titles::<Preset>()),
+            backdrop: of(titles::<Backdrop>()),
             restore: of(RESTORE_MODES.iter().map(|s| s.to_string()).collect()),
         }
     }
@@ -150,6 +156,7 @@ impl Dropdowns {
             DD_DESIGN => Some(&mut self.design),
             DD_TRANSITION => Some(&mut self.transition),
             DD_PRESET => Some(&mut self.preset),
+            DD_BACKDROP => Some(&mut self.backdrop),
             DD_RESTORE => Some(&mut self.restore),
             _ => None,
         }
@@ -163,6 +170,7 @@ impl Dropdowns {
             (DD_DESIGN, &self.design),
             (DD_TRANSITION, &self.transition),
             (DD_PRESET, &self.preset),
+            (DD_BACKDROP, &self.backdrop),
             (DD_RESTORE, &self.restore),
         ]
         .into_iter()
@@ -182,6 +190,7 @@ impl Dropdowns {
         set(&mut self.design, m.prefs.design.index());
         set(&mut self.transition, m.prefs.transition.index());
         set(&mut self.preset, m.prefs.preset.index());
+        set(&mut self.backdrop, Choice::index(m.prefs.backdrop));
         set(&mut self.restore, m.flow_restore_index());
     }
 }

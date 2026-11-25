@@ -12,11 +12,13 @@
 
 use std::path::PathBuf;
 
+use mdshared_app::backdrop::Backdrop;
 use mdshared_app::settings;
 
 use crate::look::{Choice, Design, Preset, ThemeChoice, Transition};
 
-/// The file's format. Raise it when a key changes meaning, not when one is added.
+/// The file's format. Raise it when a key changes meaning, not when one is added (`backdrop`
+/// came later than version 1 and needed none: a file without it has the default).
 pub const VERSION: u32 = 1;
 const SECTION: &str = "purge-ui";
 
@@ -27,15 +29,18 @@ pub struct Prefs {
     pub transition: Transition,
     pub preset: Preset,
     pub theme: ThemeChoice,
+    /// What shows behind the title row and the rail, in either design.
+    pub backdrop: Backdrop,
 }
 
 impl Default for Prefs {
     fn default() -> Prefs {
         Prefs {
-            design: Design::Standard,
+            design: Design::Bold,
             transition: Transition::Slide,
-            preset: Preset::Windows,
+            preset: Preset::Violet,
             theme: ThemeChoice::System,
+            backdrop: Backdrop::Acrylic,
         }
     }
 }
@@ -51,6 +56,7 @@ impl Prefs {
                 "transition" => p.transition = Transition::parse(&v).unwrap_or(p.transition),
                 "colour" => p.preset = Preset::parse(&v).unwrap_or(p.preset),
                 "theme" => p.theme = ThemeChoice::parse(&v).unwrap_or(p.theme),
+                "backdrop" => p.backdrop = Backdrop::parse(&v).unwrap_or(p.backdrop),
                 _ => {}
             }
         }
@@ -64,6 +70,7 @@ impl Prefs {
         w.line("design", self.design.name());
         w.line("transition", self.transition.name());
         w.line("colour", self.preset.name());
+        w.line("backdrop", self.backdrop.key());
         w.line("theme", self.theme.name());
         w.finish()
     }
@@ -150,9 +157,26 @@ mod tests {
             transition: Transition::Depth,
             preset: Preset::Amber,
             theme: ThemeChoice::Dark,
+            backdrop: Backdrop::Mica,
         };
         assert_eq!(Prefs::parse(&p.text()), p);
         assert!(p.text().starts_with("[purge-ui]\nversion=1\n"));
+    }
+
+    #[test]
+    fn the_defaults_are_bold_violet_and_acrylic() {
+        let p = Prefs::default();
+        assert_eq!(
+            (p.design, p.preset, p.backdrop),
+            (Design::Bold, Preset::Violet, Backdrop::Acrylic)
+        );
+        // A version-1 file from before the backdrop key keeps what it says, and gets the
+        // default backdrop.
+        let old = Prefs::parse("[purge-ui]\nversion=1\ndesign=standard\ncolour=blue\n");
+        assert_eq!(
+            (old.design, old.preset, old.backdrop),
+            (Design::Standard, Preset::Blue, Backdrop::Acrylic)
+        );
     }
 
     #[test]
@@ -166,6 +190,15 @@ mod tests {
             }
         );
         assert_eq!(Prefs::parse(""), Prefs::default());
+        assert_eq!(
+            Prefs::parse("[purge-ui]\nversion=1\nbackdrop=MICA\n").backdrop,
+            Backdrop::Mica
+        );
+        assert_eq!(
+            Prefs::parse("[purge-ui]\nversion=1\nbackdrop=glass\n").backdrop,
+            Backdrop::Acrylic,
+            "unknown is the default"
+        );
         assert_eq!(Prefs::parse("garbage \u{0} lines"), Prefs::default());
     }
 
