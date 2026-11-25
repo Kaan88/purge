@@ -17,6 +17,16 @@ use crate::ui::{Id, Role, id};
 
 const LIST: Id = Id("ProgramList", 0);
 
+/// B1's long command: the interactive one, and with " /SILENT" the quiet one.
+const LONG_COMMAND: &str = r#""C:\Program Files (x86)\Some Vendor\Some Application\unins000.exe""#;
+
+/// The confirmation's command as the last frame declared it: its whole text, and its height.
+fn shown_command(app: &PurgeApp) -> (String, f32) {
+    app.ctl(id("CommandText"))
+        .map(|c| (c.label.clone(), c.rect.h))
+        .unwrap_or_default()
+}
+
 fn nothing(_: &mut PurgeApp, _: &mut Cx<'_, ()>) {}
 
 fn ok(_: &PurgeApp) -> Result<String, String> {
@@ -579,6 +589,124 @@ pub fn steps() -> Vec<Step> {
             },
             settle: 400,
         },
+        // B1: a long command is drawn whole, wrapped, and follows the switch.
+        Step {
+            name: "long-command-wraps",
+            act: |app, _| {
+                if let Some(c) = &mut app.model.flow.confirm {
+                    let mut k = c.dialog.confirmation.clone();
+                    let quiet = format!("{LONG_COMMAND} /SILENT");
+                    k.interactive_command = LONG_COMMAND.into();
+                    k.command = quiet.clone();
+                    k.quiet_command = Some(quiet);
+                    k.quiet_available = true;
+                    k.quiet = true;
+                    *c = crate::flow::Confirm::new(k);
+                }
+            },
+            check: |app| {
+                let c = app.model.flow.confirm.as_ref().ok_or("closed")?;
+                want(c.quiet_on, "quiet is on")?;
+                let (said, h) = shown_command(app);
+                let quiet = format!("{LONG_COMMAND} /SILENT");
+                want(said == quiet, format!("the command says {said:?}"))?;
+                // One line of 12 px mono with the box's padding is about 32 px.
+                want(h > 40.0, format!("the command is one line ({h} px)"))?;
+                Ok(format!("{h:.0} px: {said}"))
+            },
+            settle: 500,
+        },
+        Step {
+            name: "long-command-quiet-off",
+            act: |app, cx| {
+                app.click(cx, id("QuietSwitch"));
+            },
+            check: |app| {
+                let c = app.model.flow.confirm.as_ref().ok_or("closed")?;
+                want(!c.quiet_on, "quiet is off")?;
+                let (said, h) = shown_command(app);
+                want(
+                    said == LONG_COMMAND,
+                    format!("the interactive command is shown, not {said:?}"),
+                )?;
+                Ok(format!("{h:.0} px: {said}"))
+            },
+            settle: 500,
+        },
+        // B1: a command taller than the window scrolls the dialog; the buttons stay.
+        Step {
+            name: "huge-command-scrolls",
+            act: |app, _| {
+                if let Some(c) = &mut app.model.flow.confirm {
+                    let mut k = c.dialog.confirmation.clone();
+                    let huge = vec![LONG_COMMAND; 40].join(" ");
+                    k.command = huge.clone();
+                    k.quiet_command = Some(huge);
+                    k.quiet_available = true;
+                    k.quiet = true;
+                    *c = crate::flow::Confirm::new(k);
+                }
+            },
+            check: |app| {
+                let v = &app.view;
+                want(
+                    v.confirm_content > v.confirm_area.h + 100.0,
+                    format!(
+                        "the body is {} px in {} px",
+                        v.confirm_content, v.confirm_area.h
+                    ),
+                )?;
+                let (said, _) = shown_command(app);
+                want(said.len() > 2000, "the whole command is its name")?;
+                let b = app
+                    .ctl(id("ConfirmUninstallButton"))
+                    .ok_or("no Uninstall")?
+                    .rect;
+                want(
+                    b.bottom() <= app.view.confirm_area.bottom() + 80.0 && b.h > 0.0,
+                    "the buttons stay in the window",
+                )?;
+                Ok(format!(
+                    "{:.0} px of body in {:.0} px",
+                    v.confirm_content, v.confirm_area.h
+                ))
+            },
+            settle: 500,
+        },
+        Step {
+            name: "confirm-wheel-scrolls",
+            act: |app, cx| {
+                let a = app.view.confirm_area;
+                app.event(
+                    cx,
+                    Event::PointerMove {
+                        x: a.cx(),
+                        y: a.cy(),
+                    },
+                );
+                for _ in 0..40 {
+                    app.event(
+                        cx,
+                        Event::Wheel {
+                            dx: 0.0,
+                            dy: -120.0,
+                            precise: false,
+                        },
+                    );
+                }
+            },
+            check: |app| {
+                let t = app.view.confirm_scroll.target();
+                want(t > 0.0, "the wheel scrolled the dialog")?;
+                let q = app.ctl(id("QuietSwitch")).ok_or("no quiet switch")?.rect;
+                want(
+                    q.h > 0.0,
+                    "at the end the quiet switch is in view and takes the pointer",
+                )?;
+                Ok(format!("scrolled {t:.0} px"))
+            },
+            settle: 700,
+        },
         Step {
             name: "check-again-rereads",
             act: |app, cx| {
@@ -836,6 +964,97 @@ pub fn steps() -> Vec<Step> {
             },
             settle: 600,
         },
+        // S1: another page's launch asks before it ends the review the session holds, and
+        // "Not now" leaves it, the asking page saying why.
+        page_step("takeover-to-history", |app, cx| {
+            app.click(cx, id("NavHistory"));
+        }),
+        Step {
+            name: "takeover-asks",
+            act: |app, cx| {
+                app.click(cx, id("ShowItems"));
+            },
+            check: |app| {
+                let t = app
+                    .model
+                    .flow
+                    .takeover
+                    .as_ref()
+                    .ok_or("no question was asked")?;
+                has(app, "TakeoverEndButton")?;
+                has(app, "TakeoverNotNowButton")?;
+                let title = app
+                    .ctl(id("DialogTitle"))
+                    .map(|c| c.label.clone())
+                    .unwrap_or_default();
+                want(
+                    title.starts_with("End the leftovers review of"),
+                    format!("the question is {title:?}"),
+                )?;
+                want(
+                    app.focus.focused() == Some(id("TakeoverNotNowButton")),
+                    "the keyboard starts on Not now",
+                )?;
+                Ok(format!("{title} ({:?} for {:?})", t.holder, t.asking))
+            },
+            settle: 900,
+        },
+        Step {
+            name: "takeover-not-now",
+            act: |app, cx| {
+                app.click(cx, id("TakeoverNotNowButton"));
+            },
+            check: |app| {
+                want(app.model.flow.takeover.is_none(), "the question closed")?;
+                want(
+                    app.model.flow.leftovers.phase() == LeftoversPhase::Review,
+                    "the review is kept",
+                )?;
+                let holder = app.link.as_ref().and_then(|l| l.broker.holder());
+                want(
+                    holder == Some(crate::link::Owner::Leftovers),
+                    format!("the session is the review's, is {holder:?}'s"),
+                )?;
+                let bar = app
+                    .ctl(id("InfoBarHost"))
+                    .map(|c| c.label.clone())
+                    .unwrap_or_default();
+                want(
+                    bar.contains("in use by the Leftovers page"),
+                    format!("History's bar says {bar:?}"),
+                )?;
+                Ok(bar)
+            },
+            settle: 700,
+        },
+        // S3: History's bar closes on History, not on the Uninstall page.
+        Step {
+            name: "history-bar-closes",
+            act: |app, cx| {
+                app.note = app.model.flow_bars().len().to_string();
+                app.click(cx, Id("HBarClose", 1));
+            },
+            check: |app| {
+                let bar = app
+                    .ctl(id("InfoBarHost"))
+                    .map(|c| c.label.clone())
+                    .unwrap_or_default();
+                want(
+                    !bar.contains("in use by the Leftovers page"),
+                    format!("the bar is still there: {bar:?}"),
+                )?;
+                want(
+                    app.model.flow_bars().len().to_string() == app.note
+                        && app.model.flow.hidden.is_empty(),
+                    "the Uninstall page's bars are untouched",
+                )?;
+                Ok("closed on History".to_string())
+            },
+            settle: 500,
+        },
+        page_step("takeover-back-to-leftovers", |app, cx| {
+            app.press_key(cx, KeyName::Char('3'), CTRL);
+        }),
         Step {
             name: "leftovers-move-waits",
             act: |app, cx| {
