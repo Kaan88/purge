@@ -867,5 +867,34 @@ mod tests {
             "{}",
             notice.message
         );
+
+        // Review SF5: History and Quarantine never list the sample engine's made-up cleanups;
+        // they say why their lists are empty.
+        let notice = purge_client::startup::FALLBACK_NOTICE.trim_end();
+        model.page = crate::model::Page::History;
+        let t0 = std::time::Instant::now();
+        while model
+            .history
+            .page
+            .state_panel()
+            .is_some_and(|(_, d, _)| d.is_empty())
+            && t0.elapsed().as_secs() < 10
+        {
+            link.pump(&mut model);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(model.history.page.sessions().is_empty());
+        let (_, detail, _) = model.history.page.state_panel().expect("History's panel");
+        assert!(detail.contains(notice), "{detail}");
+
+        model.page = crate::model::Page::Quarantine;
+        let t0 = std::time::Instant::now();
+        while model.quarantine.page.error().is_none() && t0.elapsed().as_secs() < 10 {
+            link.pump(&mut model);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(model.quarantine.page.batches().is_empty());
+        let error = model.quarantine.page.error().unwrap_or_default();
+        assert!(error.contains(notice), "{error}");
     }
 }
