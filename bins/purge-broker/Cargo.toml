@@ -23,6 +23,12 @@ purge-index.workspace = true
 purge-rpc.workspace = true
 purge-win = { workspace = true, features = ["write"] }
 serde_json.workspace = true
+# The consent dialog drawn with Purge's own toolkit (src/consent/toolkit; `--consent toolkit`). The
+# toolkit and the two crates of it the dialog has to name; `xtask check-deps` rule 6 lists every
+# crate this brings into the elevated binary and why.
+mdshared-ui.workspace = true
+mdshared-text.workspace = true
+winit.workspace = true
 
 [dev-dependencies]
 purge-plan.workspace = true

@@ -53,6 +53,17 @@
 //!    that creates, changes, saves or merges an offline hive, never mounts a hive (`RegLoadKey`,
 //!    `RegLoadAppKey`), and never spawns `netsh` or PowerShell (see `identifier_violations`).
 //!
+//! 6. **The broker's outside crates** (BROKER-CONSENT-UI). The elevated binary links only what is
+//!    listed. In purge-broker's tree for the shipped target, under any feature and with
+//!    dev-dependencies, every crate that is not a Purge crate is in [`BROKER_OUTSIDE`] (what it linked
+//!    before) or in [`BROKER_TOOLKIT`] (what drawing its consent dialog with Purge's own toolkit
+//!    brings: the toolkit, the window loop, accessibility, text, and what the toolkit's crates link
+//!    without the dialog using it). Every `mdshared-*` crate comes from the toolkit's repository at a
+//!    pinned revision, and `mdshared-ui` is built with `host` and `a11y` only, in the broker's own
+//!    tree and in a workspace build. Before this rule nothing limited what the broker links from
+//!    outside; a crate a toolkit update starts to bring is now a violation until it is listed (see
+//!    `broker_outside_violations`).
+//!
 //! `xtask ci` also builds purge-mcp on its own (`cargo clippy -p purge-mcp`), so code that only compiles
 //! with features another member turns on fails CI.
 
@@ -176,6 +187,168 @@ const EXEC_RIG_FEATURES: [&str; 2] = ["fault-inject", "test-support"];
 const WRITE_ASKERS: [&str; 2] = [EXEC, BROKER];
 /// The packages that may ask for `purge-win/write` as a dev-dependency (rule 4f).
 const WRITE_DEV_ASKERS: [&str; 3] = [EXEC, BROKER, ENGINE];
+
+/// The target a release is built for (`.cargo/config.toml`): rule 6 reads the broker's tree for it,
+/// since a crate another system would link is not in the binary.
+const SHIPPED_TARGET: &str = "x86_64-pc-windows-msvc";
+/// The crates from outside the workspace the broker linked before its consent dialog could be drawn
+/// with the toolkit (rule 6): serialisation, hashing, compression, the Windows bindings.
+pub const BROKER_OUTSIDE: &[&str] = &[
+    "adler2",
+    "anyhow",
+    "block-buffer",
+    "cfg-if",
+    "cpufeatures",
+    "crc32fast",
+    "crypto-common",
+    "digest",
+    "dyn-clone",
+    "flate2",
+    "generic-array",
+    "itoa",
+    "memchr",
+    "miniz_oxide",
+    "proc-macro2",
+    "quick-xml",
+    "quote",
+    "ref-cast",
+    "ref-cast-impl",
+    "schemars",
+    "schemars_derive",
+    "serde",
+    "serde_core",
+    "serde_derive",
+    "serde_derive_internals",
+    "serde_json",
+    "sha2",
+    "simd-adler32",
+    "syn",
+    "thiserror",
+    "thiserror-impl",
+    "tinyvec",
+    "typenum",
+    "unicode-ident",
+    "unicode-normalization",
+    "version_check",
+    "windows",
+    "windows-collections",
+    "windows-core",
+    "windows-future",
+    "windows-implement",
+    "windows-interface",
+    "windows-link",
+    "windows-numerics",
+    "windows-result",
+    "windows-strings",
+    "windows-sys",
+    "windows-threading",
+    "zmij",
+];
+/// The crates the toolkit dialog brings into the broker (rule 6; package BROKER-CONSENT-UI, the user's
+/// decision of 2026-11-25: the elevated consent dialog is drawn with Purge's own toolkit so that it
+/// looks like the application). Each group says why it is there. Nothing else from outside may be
+/// added to the elevated binary without a line here.
+pub const BROKER_TOOLKIT: &[&str] = &[
+    // The toolkit itself, at the revision the workspace pins.
+    "mdshared-ui",
+    "mdshared-text",
+    "mdshared-app",
+    // The window, its loop and its present: winit (named by the broker too, for the window's handle
+    // and size), softbuffer, and what they bring.
+    "winit",
+    "softbuffer",
+    "raw-window-handle",
+    "dpi",
+    "cursor-icon",
+    "smol_str",
+    "cfg_aliases",
+    "tracing",
+    "tracing-core",
+    "pin-project-lite",
+    "bitflags",
+    "windows-targets",
+    "windows_x86_64_msvc",
+    // Accessibility: the tree and its UI Automation provider.
+    "accesskit",
+    "accesskit_consumer",
+    "accesskit_windows",
+    "accesskit_winit",
+    "hashbrown",
+    "foldhash",
+    "static_assertions",
+    "uuid",
+    // Text: layout (parley), shaping (harfrust), font lookup (fontique, which maps font files into
+    // memory), font parsing and scaling (read-fonts, skrifa, swash, zeno), and the Unicode tables.
+    "parley",
+    "parley_data",
+    "parley_emoji",
+    "parley_engine",
+    "parlance",
+    "harfrust",
+    "fontique",
+    "memmap2",
+    "linebender_resource_handle",
+    "read-fonts",
+    "font-types",
+    "skrifa",
+    "swash",
+    "yazi",
+    "zeno",
+    "bytemuck",
+    "bytemuck_derive",
+    "once_cell",
+    "smallvec",
+    "unicode-segmentation",
+    "utf8_iter",
+    "utf_types",
+    "icu_collections",
+    "icu_locale_core",
+    "icu_locale_fallback",
+    "icu_locale_fallback_data",
+    "icu_normalizer",
+    "icu_normalizer_data",
+    "icu_properties",
+    "icu_properties_data",
+    "icu_provider",
+    "icu_segmenter",
+    "icu_segmenter_data",
+    "displaydoc",
+    "litemap",
+    "potential_utf",
+    "stable_deref_trait",
+    "synstructure",
+    "tinystr",
+    "writeable",
+    "yoke",
+    "yoke-derive",
+    "zerofrom",
+    "zerofrom-derive",
+    "zerotrie",
+    "zerovec",
+    "zerovec-derive",
+    // Linked because the toolkit's crates depend on them, and not used by the dialog: image decoding
+    // (mdshared-text: png, JPEG), the file watcher of mdshared-app (notify), the file dialogs of
+    // mdshared-ui (rfd).
+    "png",
+    "fdeflate",
+    "zune-core",
+    "zune-jpeg",
+    "notify",
+    "notify-types",
+    "walkdir",
+    "same-file",
+    "winapi-util",
+    "libc",
+    "log",
+    "rfd",
+];
+/// The toolkit crate, and the only features the broker (and any build that unifies with it) may
+/// build it with: the window host and accessibility. Not `recycle`, `media-session` or `notify`.
+const TOOLKIT: &str = "mdshared-ui";
+/// See [`TOOLKIT`].
+const TOOLKIT_FEATURES: [&str; 2] = ["a11y", "host"];
+/// Where every `mdshared-*` crate must come from: the toolkit's repository at a pinned revision.
+const TOOLKIT_SOURCE: &str = "(https://github.com/Kaan88/markdown-shared-rs?rev=";
 
 /// The package names of a listing, root first.
 fn names(listing: &str) -> Vec<&str> {
@@ -324,6 +497,51 @@ fn exec_violations(l: &ExecListings<'_>) -> Vec<String> {
         out.push(format!(
             "{ENGINE} builds {EXEC} with test-support under some feature (only its tests may)"
         ));
+    }
+    out
+}
+
+/// Violations of rule 6. `tree` is `cargo tree -p purge-broker --all-features -f "{p} {f}"` for the
+/// shipped target with dev edges; `workspace` the same for `--workspace`, which holds the features a
+/// unified build gives the toolkit.
+fn broker_outside_violations(tree: &str, workspace: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    if !expect_root(tree, BROKER, "-p purge-broker (shipped target)", &mut out) {
+        return out;
+    }
+    let mut seen = BTreeSet::new();
+    for raw in tree.lines() {
+        let Some(line) = parse_line(raw) else {
+            continue;
+        };
+        if is_purge(line.name) || !seen.insert(line.name) {
+            continue;
+        }
+        if !BROKER_OUTSIDE.contains(&line.name) && !BROKER_TOOLKIT.contains(&line.name) {
+            out.push(format!(
+                "{} is in {BROKER}'s dependency tree and in neither list of rule 6: the elevated \
+                 binary links only what is listed, with the reason written down",
+                line.name
+            ));
+        }
+        if line.name.starts_with("mdshared-") && !raw.contains(TOOLKIT_SOURCE) {
+            out.push(format!(
+                "{} in {BROKER}'s tree does not come from the toolkit's repository at a pinned \
+                 revision",
+                line.name
+            ));
+        }
+    }
+    for (what, listing) in [(BROKER, tree), ("a workspace build", workspace)] {
+        let Some(features) = features_of(listing, TOOLKIT) else {
+            continue;
+        };
+        for extra in features.iter().filter(|f| !TOOLKIT_FEATURES.contains(*f)) {
+            out.push(format!(
+                "{what} builds {TOOLKIT} with feature {extra}; the broker links it with {} only",
+                TOOLKIT_FEATURES.join(" and ")
+            ));
+        }
     }
     out
 }
@@ -1376,10 +1594,15 @@ fn privilege_violations(sources: &[Source]) -> (Vec<String>, Option<String>) {
 
 /// `cargo tree <args> -e <edges> --target all --prefix none` in `root`.
 fn cargo_tree(root: &Path, args: &[&str], edges: &str) -> Result<String> {
+    cargo_tree_for(root, args, edges, "all")
+}
+
+/// [`cargo_tree`] for one target.
+fn cargo_tree_for(root: &Path, args: &[&str], edges: &str, target: &str) -> Result<String> {
     let output = crate::cargo()
         .arg("tree")
         .args(args)
-        .args(["-e", edges, "--target", "all", "--prefix", "none"])
+        .args(["-e", edges, "--target", target, "--prefix", "none"])
         .current_dir(root)
         .output()
         .context("running cargo tree")?;
@@ -1420,7 +1643,7 @@ const NORMAL: &str = "normal,build";
 /// Normal, build and dev edges.
 const WITH_DEV: &str = "normal,build,dev";
 
-/// Rules 1 to 5 on the workspace at `root`.
+/// Rules 1 to 6 on the workspace at `root`.
 fn check(root: &Path) -> Result<Report> {
     let tree = |args: &[&str], edges: &str| cargo_tree(root, args, edges);
 
@@ -1512,6 +1735,18 @@ fn check(root: &Path) -> Result<Report> {
 
     found.extend(win_source_violations(root)?);
 
+    let shipped = |args: &[&str]| cargo_tree_for(root, args, WITH_DEV, SHIPPED_TARGET);
+    let broker_shipped = shipped(&["-p", BROKER, "--all-features", "-f", "{p} {f}"])?;
+    found.extend(broker_outside_violations(
+        &broker_shipped,
+        &shipped(&["--workspace", "--all-features", "-f", "{p} {f}"])?,
+    ));
+    let broker_outside = names(&broker_shipped)
+        .into_iter()
+        .filter(|n| !is_purge(n))
+        .collect::<BTreeSet<_>>()
+        .len();
+
     let ok = vec![
         format!(
             "{MCP} tree under any feature, dev-dependencies included, has {} packages, Purge crates \
@@ -1536,6 +1771,14 @@ fn check(root: &Path) -> Result<Report> {
             "purge-win names none of {}, no `INetFwRules` removal, no {}",
             FORBIDDEN_WIN_IDENTS.join(", "),
             FORBIDDEN_WIN_WORDS.join(" or ")
+        ),
+        format!(
+            "{BROKER} links {broker_outside} crates from outside the workspace for \
+             {SHIPPED_TARGET}, each listed: {} it had before and {} the toolkit consent dialog \
+             brings; {TOOLKIT} with {} only",
+            BROKER_OUTSIDE.len(),
+            BROKER_TOOLKIT.len(),
+            TOOLKIT_FEATURES.join(" and ")
         ),
     ];
     Ok(Report { found, ok })
@@ -1937,6 +2180,86 @@ mod tests {
             .len(),
             6,
             "every unrecognised listing is named"
+        );
+    }
+
+    /// Rule 6: the broker links from outside only what the two lists name, the toolkit from its
+    /// pinned repository and with the window host and accessibility only.
+    #[test]
+    fn rule_6_the_broker_links_only_the_listed_outside_crates() {
+        let line = |name: &str, source: &str, features: &str| {
+            format!("{name} v0.1.0 {source}{features}\n")
+        };
+        let toolkit_source = "(https://github.com/Kaan88/markdown-shared-rs?rev=294d330#294d330a) ";
+        let mut clean = line(BROKER, "(C:\\x\\purge-broker) ", "");
+        clean += &line("purge-win", "(C:\\x\\purge-win) ", "read,write");
+        for name in BROKER_OUTSIDE.iter().chain(BROKER_TOOLKIT) {
+            let (source, features) = match *name {
+                "mdshared-ui" => (toolkit_source, "a11y,host"),
+                n if n.starts_with("mdshared-") => (toolkit_source, ""),
+                _ => ("", ""),
+            };
+            clean += &line(name, source, features);
+        }
+        assert_eq!(
+            broker_outside_violations(&clean, &clean),
+            Vec::<String>::new()
+        );
+        // The lists do not overlap, and name nothing twice.
+        let all: Vec<&str> = BROKER_OUTSIDE
+            .iter()
+            .chain(BROKER_TOOLKIT)
+            .copied()
+            .collect();
+        let unique: BTreeSet<&str> = all.iter().copied().collect();
+        assert_eq!(all.len(), unique.len());
+
+        // A crate nobody listed, once however often the tree repeats it.
+        let more = format!(
+            "{clean}{}{}",
+            line("reqwest", "", ""),
+            line("reqwest", "", "(*)")
+        );
+        assert_eq!(
+            broker_outside_violations(&more, &clean),
+            [
+                "reqwest is in purge-broker's dependency tree and in neither list of rule 6: the \
+                 elevated binary links only what is listed, with the reason written down"
+            ]
+        );
+        // The toolkit from somewhere else: a path, a registry, another repository.
+        let moved = clean.replace(
+            &line("mdshared-text", toolkit_source, ""),
+            &line("mdshared-text", "(C:\\src\\mdshared-text) ", ""),
+        );
+        assert_eq!(
+            broker_outside_violations(&moved, &clean),
+            [
+                "mdshared-text in purge-broker's tree does not come from the toolkit's repository \
+                 at a pinned revision"
+            ]
+        );
+        // A feature beyond the window host and accessibility, in the broker's tree or switched on
+        // by another member of a workspace build.
+        let recycle = clean.replace("a11y,host", "a11y,host,recycle");
+        assert_eq!(
+            broker_outside_violations(&recycle, &clean),
+            [
+                "purge-broker builds mdshared-ui with feature recycle; the broker links it with \
+                 a11y and host only"
+            ]
+        );
+        assert_eq!(
+            broker_outside_violations(&clean, &recycle),
+            [
+                "a workspace build builds mdshared-ui with feature recycle; the broker links it \
+                 with a11y and host only"
+            ]
+        );
+        // A listing of something else is not read as clean.
+        assert_eq!(
+            broker_outside_violations(&line(ENGINE, "", ""), &clean).len(),
+            1
         );
     }
 
