@@ -134,7 +134,9 @@ pub fn draw(ui: &mut Ui, m: &Model, v: &mut View) {
     // costs the chrome and the blend, not the page.
     let dirty = std::mem::take(&mut v.page_dirty);
     let running = v.page_tx.step(ui.cx.anim(), ui.p, content);
-    if running && dirty {
+    // A stage push of the Uninstall page moves every frame: the page under a switch is drawn
+    // again while it runs, or the push would stand still in the held frame (review N9).
+    if running && (dirty || v.flow_tx.running()) {
         v.page_tx.drop_held();
     }
     v.page_drawn = !(running && v.page_tx.holds());
