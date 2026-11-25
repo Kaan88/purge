@@ -412,7 +412,46 @@ fn command_field(ui: &mut Ui, after: f32, before: f32) {
         pal.muted,
         r.w - 34.0 - 84.0,
     );
-    draw_keycaps(ui.p, &pal, Rect::new(r.x, r.y, r.w + 6.0, r.h), "Ctrl+K");
+    field_keycaps(ui, r, &["Ctrl", "K"]);
+}
+
+/// The command field's shortcut as small keycaps inside its pill. The toolkit's keycaps are
+/// 22 px tall with 12 px text, made for menus and tooltips: in a 28 px pill they crowd its round
+/// end and their letters sit low (text centred on the line box, not on the capitals). Here they
+/// are 18 px, clear of the end by the pill's radius, with the letters centred on their capitals.
+fn field_keycaps(ui: &mut Ui, field: Rect, keys: &[&str]) {
+    let pal = ui.pal;
+    let (h, size) = (18.0, 11.0);
+    let px = ui.p.px();
+    let mut x = field.right() - 9.0;
+    let y = (field.cy() - h / 2.0).round();
+    for key in keys.iter().rev() {
+        let tw = ui.p.measure(Face::Ui, size, key);
+        let w = (tw + 12.0).max(20.0).round();
+        x -= w;
+        let cap = Rect::new(x, y, w, h);
+        ui.p.frame(
+            cap,
+            4.0,
+            mix(pal.field, pal.text, 0.08),
+            mix(pal.popup_line, pal.text, 0.10),
+        );
+        ui.p.fill(
+            Rect::new(cap.x + 3.0, cap.bottom() - 1.0 - px, cap.w - 6.0, px),
+            mix(pal.popup_line, pal.text, 0.14),
+        );
+        // Capitals and digits only: their middle is about a pixel above the line box's.
+        ui.p.text(
+            Face::Ui,
+            size,
+            (cap.x + (w - tw) / 2.0).round(),
+            cap.cy() - 1.0,
+            key,
+            pal.muted,
+            tw + 2.0,
+        );
+        x -= 4.0;
+    }
 }
 
 fn chrome(ui: &mut Ui, m: &Model) {
