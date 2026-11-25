@@ -11,6 +11,7 @@ use purge_win::taskdialog::{Button, Icon as DialogIcon, Outcome, Page};
 
 use crate::serve::{Ctx, Handler};
 
+use super::sheet::sheet;
 use super::text::{MARK, TITLE};
 use super::view::{ConsentView, Icon};
 
@@ -94,6 +95,9 @@ pub fn pages(view: &ConsentView) -> Vec<Page> {
 
 /// Shows the dialog for `view` and waits. [`Outcome::Approved`] only for the primary button with the
 /// box ticked; the client is sent `consent.shown` with the view's code when the window is up.
+///
+/// The consent the broker was wired with shows either the pages (the TaskDialog) or the sheet (the
+/// toolkit window, `super::toolkit`); both are made here from the one view.
 pub fn ask<H: Handler>(ctx: &Ctx<'_, H>, view: &ConsentView) -> Outcome {
-    ctx.consent(&pages(view), PRIMARY, view.code)
+    ctx.consent_sheet(&sheet(view), &pages(view), PRIMARY, view.code)
 }

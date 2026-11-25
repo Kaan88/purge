@@ -19,6 +19,7 @@ use purge_win::taskdialog::{Outcome, Page};
 use serde_json::{Value, json};
 
 use crate::baseline::BuildHandle;
+use crate::consent::sheet::Sheet;
 use crate::lifetime::{Clock, Closer, Exit, Parent};
 use crate::link::{Link, LinkError, Refusal};
 use crate::serve::{Consent, Ctx, Handler, Host, Limits, Wiring, run};
@@ -358,6 +359,11 @@ struct ConsentState {
     closed_by_broker: bool,
     pages: Vec<Page>,
     primary: i32,
+    /// The sheet the dialog that was asked last came with, when it came with one
+    /// ([`Consent::ask_sheet`]): what the toolkit window would draw of it.
+    sheet: Option<Sheet>,
+    /// The sheet of an `ask_sheet` whose `ask` has not recorded it yet.
+    coming: Option<Sheet>,
     /// How many dialogs have been asked in all.
     asked: u64,
 }
@@ -417,6 +423,11 @@ impl ScriptedConsent {
     pub fn primary(&self) -> i32 {
         self.state.lock().unwrap().primary
     }
+
+    /// The sheet of the dialog that was asked last; `None` when it was asked with pages only.
+    pub fn sheet(&self) -> Option<Sheet> {
+        self.state.lock().unwrap().sheet.clone()
+    }
 }
 
 impl Consent for Arc<ScriptedConsent> {
@@ -433,6 +444,7 @@ impl Consent for Arc<ScriptedConsent> {
             g.answer = None;
             g.pages = pages.to_vec();
             g.primary = primary;
+            g.sheet = g.coming.take();
             g.asked += 1;
             self.cv.notify_all();
         }
@@ -456,6 +468,18 @@ impl Consent for Arc<ScriptedConsent> {
         drop(g);
         closer.disarm();
         Ok(outcome)
+    }
+
+    fn ask_sheet(
+        &self,
+        sheet: &Sheet,
+        pages: &[Page],
+        primary: i32,
+        closer: &Closer,
+        shown: &(dyn Fn() + Sync),
+    ) -> io::Result<Outcome> {
+        self.state.lock().unwrap().coming = Some(sheet.clone());
+        self.ask(pages, primary, closer, shown)
     }
 }
 

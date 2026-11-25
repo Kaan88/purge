@@ -60,6 +60,7 @@ use purge_win::taskdialog::{Outcome, Page};
 use serde_json::Value;
 
 use crate::baseline::{BuildHandle, in_progress};
+use crate::consent::sheet::Sheet;
 use crate::lifetime::{
     BUILD_GRACE, CLOSE_WAIT, Clock, Closer, Exit, ExitReason, HELLO_LINE_CAP, HELLO_WAIT,
     IDLE_LIMIT, MAX_FAILED_CLIENTS, Parent, READ_GRACE, idle_expired,
@@ -93,6 +94,21 @@ pub trait Consent: Send + Sync + 'static {
         closer: &Closer,
         shown: &(dyn Fn() + Sync),
     ) -> io::Result<Outcome>;
+
+    /// [`Consent::ask`] for a caller that also has the dialog as a [`Sheet`]: the same dialog in
+    /// the form the toolkit window draws (`consent::toolkit`). Both say the same; an implementation
+    /// shows one of them, and every rule of `ask` holds whichever it shows. By default the pages.
+    fn ask_sheet(
+        &self,
+        sheet: &Sheet,
+        pages: &[Page],
+        primary: i32,
+        closer: &Closer,
+        shown: &(dyn Fn() + Sync),
+    ) -> io::Result<Outcome> {
+        let _ = sheet;
+        self.ask(pages, primary, closer, shown)
+    }
 }
 
 /// Runs the requests the serving loop does not answer itself: everything but `engine.hello` and
@@ -421,6 +437,27 @@ impl<H: Handler> Ctx<'_, H> {
     /// dialog as Cancel. The request's first dialog is timed: `consent_shown` when it is up,
     /// `consent_answered` when it ended.
     pub fn consent(&self, pages: &[Page], primary: i32, code: ConfirmCode) -> Outcome {
+        self.consent_with(None, pages, primary, code)
+    }
+
+    /// [`Ctx::consent`] for a dialog that is also there as a [`Sheet`] ([`Consent::ask_sheet`]).
+    pub fn consent_sheet(
+        &self,
+        sheet: &Sheet,
+        pages: &[Page],
+        primary: i32,
+        code: ConfirmCode,
+    ) -> Outcome {
+        self.consent_with(Some(sheet), pages, primary, code)
+    }
+
+    fn consent_with(
+        &self,
+        sheet: Option<&Sheet>,
+        pages: &[Page],
+        primary: i32,
+        code: ConfirmCode,
+    ) -> Outcome {
         if self.shared.closer.fired() || self.lost() {
             return Outcome::Declined;
         }
@@ -433,11 +470,13 @@ impl<H: Handler> Ctx<'_, H> {
                 code,
             }));
         };
-        let answer = self
-            .shared
-            .consent
-            .ask(pages, primary, &self.shared.closer, &shown)
-            .unwrap_or(Outcome::Declined);
+        let consent = &self.shared.consent;
+        let closer = &self.shared.closer;
+        let answer = match sheet {
+            Some(sheet) => consent.ask_sheet(sheet, pages, primary, closer, &shown),
+            None => consent.ask(pages, primary, closer, &shown),
+        }
+        .unwrap_or(Outcome::Declined);
         if was_shown.load(Ordering::SeqCst) {
             self.mark(TimingName::ConsentAnswered);
         }

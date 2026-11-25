@@ -774,6 +774,18 @@ fn run_asks_a_dialog_drawn_from_the_frozen_command_before_it_starts_anything() {
     let last = pages.last().unwrap();
     assert_eq!(last.buttons.len(), 1);
     assert_eq!(last.default_button, None, "Cancel is the default");
+    // The same dialog as a sheet, for a consent that draws with the toolkit: the pages' words.
+    let sheet = b
+        .consent
+        .sheet()
+        .expect("the handler asks with the sheet too");
+    assert_eq!(sheet.instruction, last.instruction);
+    assert_eq!(sheet.approve, last.buttons[0].label);
+    assert_eq!(Some(&sheet.footer), last.footer.as_ref());
+    assert_eq!(sheet.verification, last.verification);
+    for block in sheet.blocks.iter().filter(|b| !b.is_heading()) {
+        assert!(text.contains(block.text()), "{:?}", block.text());
+    }
 
     let shown = c.reply();
     assert_eq!(shown["method"], "consent.shown", "{shown}");
