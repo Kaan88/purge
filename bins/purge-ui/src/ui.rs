@@ -2,8 +2,6 @@
 //! declares (one list serves the pointer's hits, the Tab order and the accessibility tree), and
 //! the small pieces the toolkit has no widget for (see GAPS.md).
 
-use std::time::Instant;
-
 use mdshared_ui::check::{TICK, Tick, draw_tick_animated};
 use mdshared_ui::chrome;
 use mdshared_ui::dropdown::{self, Dropdown, draw_dropdown_animated};
@@ -238,7 +236,6 @@ pub struct Ui<'a, 'p, 'c> {
     pub pressed: Option<Id>,
     /// The controls being declared belong to what is open over the page.
     pub modal: bool,
-    pub now: Instant,
     /// The window, logical px.
     pub size: (f32, f32),
 }
@@ -544,14 +541,31 @@ impl Ui<'_, '_, '_> {
 
     /// A switch whose middle is at `cy`, with its left edge at `x`.
     pub fn switch(&mut self, id: Id, x: f32, cy: f32, on: bool, label: &str) {
+        self.switch_enabled(id, x, cy, on, true, label);
+    }
+
+    /// [`Ui::switch`] that may be disabled (it still says its position).
+    pub fn switch_enabled(
+        &mut self,
+        id: Id,
+        x: f32,
+        cy: f32,
+        on: bool,
+        enabled: bool,
+        label: &str,
+    ) {
         let pal = self.pal;
         let r = Rect::new(x, cy - TOGGLE_H / 2.0, TOGGLE_W, TOGGLE_H);
-        self.reg(id, grow(r, 4.0), Role::Switch(on), label, true);
+        if enabled {
+            self.reg(id, grow(r, 4.0), Role::Switch(on), label, true);
+        } else {
+            self.reg_disabled(id, grow(r, 4.0), Role::Switch(on), label);
+        }
         let look = toggle::Look {
             hovered: self.hot(id),
             pressed: self.down(id),
             focused: self.ringed(id),
-            disabled: false,
+            disabled: !enabled,
         };
         draw_toggle_animated(self.p, &pal, self.cx.anim(), id, r, &Toggle::new(on), look);
     }
@@ -605,6 +619,22 @@ impl Ui<'_, '_, '_> {
         bar: &InfoBar,
         close: Option<Id>,
     ) -> f32 {
+        self.infobar_with(host, x, y, w, bar, close, &[])
+    }
+
+    /// [`Ui::infobar`] with action buttons: `actions[k]` names the bar's action `k` (its
+    /// [`infobar::Action::id`] is `k`).
+    #[allow(clippy::too_many_arguments)] // a place, the bar and its controls' names
+    pub fn infobar_with(
+        &mut self,
+        host: Id,
+        x: f32,
+        y: f32,
+        w: f32,
+        bar: &InfoBar,
+        close: Option<Id>,
+        actions: &[Id],
+    ) -> f32 {
         let pal = self.pal;
         let h = bar.height(self.p, w);
         let r = Rect::new(x, y, w, h);
@@ -615,11 +645,37 @@ impl Ui<'_, '_, '_> {
             high_contrast: self.hc,
             ..infobar::Look::default()
         };
+        for (k, (aid, ar)) in parts.actions.iter().enumerate() {
+            let Some(&cid) = actions.get(*aid as usize) else {
+                continue;
+            };
+            let text = bar
+                .actions()
+                .get(k)
+                .map_or("", |a| a.label.as_str())
+                .to_owned();
+            self.reg(cid, *ar, Role::Button, &text, true);
+            if self.hot(cid) {
+                look.hover = Some(Hit::Action(*aid));
+            }
+            if self.down(cid) {
+                look.pressed = Some(Hit::Action(*aid));
+            }
+            if self.ringed(cid) {
+                look.focused = Some(Hit::Action(*aid));
+            }
+        }
         if let (Some(cid), Some(cr)) = (close, parts.close) {
             self.reg(cid, cr, Role::Button, "Close", true);
-            look.hover = self.hot(cid).then_some(Hit::Close);
-            look.pressed = self.down(cid).then_some(Hit::Close);
-            look.focused = self.ringed(cid).then_some(Hit::Close);
+            if self.hot(cid) {
+                look.hover = Some(Hit::Close);
+            }
+            if self.down(cid) {
+                look.pressed = Some(Hit::Close);
+            }
+            if self.ringed(cid) {
+                look.focused = Some(Hit::Close);
+            }
         }
         draw_infobar_with(self.p, &pal, r, bar, look);
         y + h
