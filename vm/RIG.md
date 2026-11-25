@@ -1868,7 +1868,7 @@ $env:VMPWFILE = 'C:\path\to\pw.txt'
 $rel = '<checkout>\target'                     # release builds (never the rig-exec engine)
 .\vm\rig-m3.ps1 -Mode m3-broker  -Engine $rel\release\purge-engine.exe -Broker $rel\release\purge-broker.exe
 .\vm\rig-m3.ps1 -Mode m3-consent -Engine $rel\release\purge-engine.exe -Broker $rel\release\purge-broker.exe
-.\vm\rig-m3.ps1 -Mode m3-uac     -Engine $rel\release\purge-engine.exe -Broker $rel\release\purge-broker.exe -UiPublish $rel\ui-publish
+.\vm\rig-m3.ps1 -Mode m3-uac     -Engine $rel\release\purge-engine.exe -Broker $rel\release\purge-broker.exe -UiPublish $rel\release\Purge.exe
 powershell -NoProfile -File vm\truth\m3-sec-score.ps1 -Mode broker  -Evidence E:\purge-build\gate-evidence\m3-broker
 powershell -NoProfile -File vm\truth\m3-sec-score.ps1 -Mode consent -Evidence E:\purge-build\gate-evidence\m3-consent
 powershell -NoProfile -File vm\truth\m3-sec-score.ps1 -Mode uac     -Evidence E:\purge-build\gate-evidence\m3-uac
@@ -1876,7 +1876,7 @@ powershell -NoProfile -File vm\truth\m3-sec-score.ps1 --self-test
 ```
 
 - **Layout** (phase `install`): the host zips the release `purge-engine.exe`, `purge-broker.exe`, the repo's `kb\`
-  and, with `-UiPublish`, the UI publish folder; the guest runs `install\install.ps1 -SkipBuild` twice:
+  and, with `-UiPublish`, the UI (`Purge.exe`, the Rust UI; a folder holding it also works); the guest runs `install\install.ps1 -SkipBuild` twice:
   `C:\Program Files\Purge` with the **rig client as `Purge.exe`** (`m3sec.exe client`: the broker's client check of
   design 3.3 step 4 accepts `<own directory>\Purge.exe`, which an administrator installed, so the rig can speak the
   pipe protocol without UI automation), and `C:\Program Files\PurgeUI` with the real UI (only m3-uac's cancelled-bar
@@ -2102,7 +2102,7 @@ section 14), expectations `vm\truth\m3-recover-expect.json`, scorer `vm\truth\m3
 $env:VMPWFILE = 'C:\path\to\pw.txt'
 $rel = '<checkout>\target'                     # release builds (never the rig-exec engine, never a fault-inject broker)
 .\vm\rig-m3-recover.ps1 -Mode m3-owner   -Engine $rel\release\purge-engine.exe -Broker $rel\release\purge-broker.exe   # ~25 min
-.\vm\rig-m3-recover.ps1 -Mode m3-recover -Engine $rel\release\purge-engine.exe -Broker $rel\release\purge-broker.exe -UiPublish $rel\ui-publish   # ~6 min a round
+.\vm\rig-m3-recover.ps1 -Mode m3-recover -Engine $rel\release\purge-engine.exe -Broker $rel\release\purge-broker.exe -UiPublish $rel\release\Purge.exe   # ~6 min a round
 .\vm\rig-m3-recover.ps1 -Mode m3-extras  -Engine $rel\release\purge-engine.exe -Broker $rel\release\purge-broker.exe   # ~45 min
 powershell -NoProfile -File vm\truth\m3-recover-score.ps1 -Mode owner   -Evidence E:\purge-build\gate-evidence\m3-owner\<run>
 powershell -NoProfile -File vm\truth\m3-recover-score.ps1 -Mode recover -Evidence E:\purge-build\gate-evidence\m3-recover\<run>
@@ -2236,7 +2236,7 @@ UIAutomationClient), the MSI fixtures `vm\guest\m3-e2e-msi.ps1`; expectations `v
 ```powershell
 $env:VMPWFILE = 'C:\path\to\pw.txt'
 $t = '<checkout>\target'                        # release builds (never the rig-exec engine) + the UI publish folder
-.\vm\rig-m3.ps1 -Mode m3-e2e -Engine $t\release\purge-engine.exe -Broker $t\release\purge-broker.exe -UiPublish $t\ui-publish
+.\vm\rig-m3.ps1 -Mode m3-e2e -Engine $t\release\purge-engine.exe -Broker $t\release\purge-broker.exe -UiPublish $t\release\Purge.exe
 #   -Apps npp,msi1603 (a subset), -UndoApps npp (default: the expectations' undo_apps), -RunName <name>, -UacOn (m3-uac-on)
 powershell -NoProfile -File vm\truth\m3-e2e-score.ps1 -Evidence E:\purge-build\gate-evidence\m3-e2e\<run> -Collect
 powershell -NoProfile -File vm\truth\m3-e2e-score.ps1 --self-test
@@ -2442,7 +2442,7 @@ that never saw the UI, the consent dialog or the broker. As M1b did for its exec
 the e2e gets an ambient set from null runs of its own flow:
 
     $env:VMPWFILE = '<guest password file>'
-    .\vm\rig-m3.ps1 -Mode m3-e2e-null -Count 2 -Engine <release engine> -Broker <release broker> -UiPublish <ui publish>
+    .\vm\rig-m3.ps1 -Mode m3-e2e-null -Count 2 -Engine <release engine> -Broker <release broker> -UiPublish <Purge.exe>
     #   2 runs en<k>-m3-e2e-<app>, k = 1..2, of each default app (vscode, vscode-user, git, firefox-tb, execapp: 10
     #   runs; the set needs 6 in all), each from a fresh restore of rig-base; then host rigtool
     #   `ambient --m2 --added --null vm\runs\en1-m3-e2e-vscode ...` -> vm\truth\m3-e2e-ambient.json

@@ -6,7 +6,7 @@
 
     $env:VMPWFILE = 'C:\path\to\pw.txt'; $t = '<checkout>\target'
     .\vm\rig-m3-recover.ps1 -Mode m3-owner   -Engine $t\release\purge-engine.exe -Broker $t\release\purge-broker.exe
-    .\vm\rig-m3-recover.ps1 -Mode m3-recover -Engine ... -Broker ... -UiPublish $t\ui-publish [-Steps 1,5,9] [-After resume]
+    .\vm\rig-m3-recover.ps1 -Mode m3-recover -Engine ... -Broker ... -UiPublish $t\Purge.exe [-Steps 1,5,9] [-After resume]
     .\vm\rig-m3-recover.ps1 -Mode m3-extras  -Engine ... -Broker ... [-NppInstaller <cached npp.exe>]
     powershell -NoProfile -File vm\truth\m3-recover-score.ps1 -Mode owner|recover|extras -Evidence <run dir>
 
@@ -299,11 +299,11 @@ function Invoke-RecRound([int]$K, [string]$After, [bool]$Ui) {
 }
 
 function Invoke-RecRecover {
-    $ui = (-not $RC.no_ui) -and (Test-Path -LiteralPath (Join-Path $(if ($M3.ui) { $M3.ui } else { Join-Path $script:RepoRoot 'target\ui-publish' }) 'Purge.exe') -PathType Leaf)
-    if (-not $ui -and -not $RC.no_ui) { Write-RigLog '  !! no UI publish folder: recovery goes through the rig client and the scorer fails the UI rows (pass -UiPublish, or -NoUi to say so)' }
+    $ui = (-not $RC.no_ui) -and (Test-Path -LiteralPath (Get-M3UiExe) -PathType Leaf)
+    if (-not $ui -and -not $RC.no_ui) { Write-RigLog '  !! no UI (Purge.exe): recovery goes through the rig client and the scorer fails the UI rows (pass -UiPublish, or -NoUi to say so)' }
     $files = @($(if ($M3.engine) { $M3.engine } else { Join-Path $script:RepoRoot 'target\release\purge-engine.exe' }), $(if ($M3.broker) { $M3.broker } else { Join-Path $script:RepoRoot 'target\release\purge-broker.exe' })) +
              @($RecGuestScripts | ForEach-Object { Join-Path $script:RigDir "guest\$_" })
-    if ($ui) { $files += (Join-Path $(if ($M3.ui) { $M3.ui } else { Join-Path $script:RepoRoot 'target\ui-publish' }) 'Purge.exe') }
+    if ($ui) { $files += (Get-M3UiExe) }
     $hash = Get-RecPayloadHash $files
     Initialize-RecBase $hash
     # Calibration: one run, not cut; its journal is the list of steps.

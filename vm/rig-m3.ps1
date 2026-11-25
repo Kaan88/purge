@@ -31,12 +31,12 @@
   M3 security modes (vm\RIG.md section 14; M3_DESIGN.md 4, 11.2, 11.3, gate G3, G4, G5, G10; M3_FINISH_PLAN.md B4-B6).
   Guest side vm\guest\m3-sec.ps1 + the tool vm\guest\m3sec.cs (built in the guest); scorer vm\truth\m3-sec-score.ps1.
   Each pushes a payload of release artifacts (never built here): -Engine and -Broker (default target\release\*.exe of
-  this checkout; the rig-exec engine is refused by install.ps1) and -UiPublish (default target\ui-publish; m3-uac's
-  cancelled-bar row needs it), installs them with install\install.ps1 and runs one boot of the snapshot:
+  this checkout; the rig-exec engine is refused by install.ps1) and -UiPublish (Purge.exe, or a folder holding it;
+  default target\release\Purge.exe, the Rust UI of bins\purge-ui; m3-uac's cancelled-bar row needs it), installs them with install\install.ps1 and runs one boot of the snapshot:
 
     .\vm\rig-m3.ps1 -Mode m3-broker  -Engine <dir>\purge-engine.exe -Broker <dir>\purge-broker.exe            # rig-base
     .\vm\rig-m3.ps1 -Mode m3-consent -Engine ... -Broker ...                                                    # rig-base
-    .\vm\rig-m3.ps1 -Mode m3-uac     -Engine ... -Broker ... -UiPublish <dir>\ui-publish                       # m3-uac-on
+    .\vm\rig-m3.ps1 -Mode m3-uac     -Engine ... -Broker ... -UiPublish <dir>\Purge.exe                        # m3-uac-on
     powershell -File vm\truth\m3-sec-score.ps1 -Mode broker|consent|uac -Evidence <dir>
 
   -Cases limits m3-broker to some case ids of vm\truth\m3-sec-expect.json; -Base overrides the snapshot; -StdUserKeys
@@ -49,7 +49,7 @@
   fixtures); expectations vm\truth\m3-e2e-expect.json; scorer vm\truth\m3-e2e-score.ps1. One boot of rig-base per app
   (UAC silent in design 11.2; a prompt that comes up is answered by scancode), the real UI installed as C:\Program Files\Purge\Purge.exe, every step driven through the UI:
 
-    .\vm\rig-m3.ps1 -Mode m3-e2e -Engine ... -Broker ... -UiPublish <dir>\ui-publish [-Apps npp,msi1603] [-UndoApps npp]
+    .\vm\rig-m3.ps1 -Mode m3-e2e -Engine ... -Broker ... -UiPublish <dir>\Purge.exe [-Apps npp,msi1603] [-UndoApps npp]
                     [-RunName <name>] [-UacOn]
     powershell -File vm\truth\m3-e2e-score.ps1 -Evidence E:\purge-build\gate-evidence\m3-e2e\<run> -Collect
 
@@ -309,12 +309,21 @@ function Move-M3EvidenceAside([string]$Dir) {
     $to
 }
 
+# The UI under test: -UiPublish as Purge.exe itself or a folder holding it, else target\release\Purge.exe (the Rust
+# UI, cargo build --release -p purge-ui: one file, no DLLs). Returns the path of Purge.exe, which may not exist.
+function Get-M3UiExe {
+    $ui = $(if ($M3.ui) { $M3.ui } else { Join-Path $script:RepoRoot 'target\release\Purge.exe' })
+    if (Test-Path -LiteralPath $ui -PathType Container) { return (Join-Path $ui 'Purge.exe') }
+    $ui
+}
+
 # The release artifacts the guest installs (install.ps1 -SkipBuild): purge-engine.exe, purge-broker.exe, kb\ and, when
-# given, ui\ (the UI publish folder). Returns the zip path in the host temp directory.
+# there is one, ui\Purge.exe (Get-M3UiExe; the guest passes ui\ as -UiPublishDir). Returns the zip path in the host
+# temp directory.
 function New-M3SecPayload {
     $engine = $(if ($M3.engine) { $M3.engine } else { Join-Path $script:RepoRoot 'target\release\purge-engine.exe' })
     $broker = $(if ($M3.broker) { $M3.broker } else { Join-Path $script:RepoRoot 'target\release\purge-broker.exe' })
-    $ui = $(if ($M3.ui) { $M3.ui } else { Join-Path $script:RepoRoot 'target\ui-publish' })
+    $ui = Get-M3UiExe
     foreach ($f in @(@($engine, 'purge-engine.exe'), @($broker, 'purge-broker.exe'))) {
         if (-not (Test-Path -LiteralPath $f[0] -PathType Leaf)) { throw "missing $($f[0]) (cargo build --release -p $([IO.Path]::GetFileNameWithoutExtension($f[1])), or pass -Engine / -Broker)" }
         if ((Split-Path -Leaf $f[0]) -ne $f[1]) { throw "the file must be named $($f[1]): $($f[0])" }
@@ -323,9 +332,12 @@ function New-M3SecPayload {
     New-Item -ItemType Directory -Force $stage | Out-Null
     Copy-Item -LiteralPath $engine, $broker -Destination $stage
     Copy-Item -LiteralPath (Join-Path $script:RepoRoot 'kb') -Destination (Join-Path $stage 'kb') -Recurse
-    $hasUi = Test-Path -LiteralPath (Join-Path $ui 'Purge.exe') -PathType Leaf
-    if ($hasUi) { Copy-Item -LiteralPath $ui -Destination (Join-Path $stage 'ui') -Recurse }
-    else { Write-RigLog "  no UI publish folder at ${ui}: m3-uac's cancelled-bar row will have no evidence (the scorer fails it)" }
+    $hasUi = Test-Path -LiteralPath $ui -PathType Leaf
+    if ($hasUi) {
+        New-Item -ItemType Directory -Force (Join-Path $stage 'ui') | Out-Null
+        Copy-Item -LiteralPath $ui -Destination (Join-Path $stage 'ui\Purge.exe')
+    }
+    else { Write-RigLog "  no UI at ${ui}: m3-uac's cancelled-bar row will have no evidence (the scorer fails it)" }
     $zip = "$stage.zip"
     Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip -Force
     Remove-Item -LiteralPath $stage -Recurse -Force
@@ -936,8 +948,8 @@ function Invoke-M3E2eMsiSmoke($Apps, [string]$Base) {
 
 function Invoke-M3E2e {
     Assert-M3E2eGateRunName $M3.run
-    $ui = $(if ($M3.ui) { $M3.ui } else { Join-Path $script:RepoRoot 'target\ui-publish' })
-    if (-not (Test-Path -LiteralPath (Join-Path $ui 'Purge.exe') -PathType Leaf)) { throw "m3-e2e needs the UI publish folder (-UiPublish; no Purge.exe in $ui)" }
+    $ui = Get-M3UiExe
+    if (-not (Test-Path -LiteralPath $ui -PathType Leaf)) { throw "m3-e2e needs the UI (-UiPublish; no $ui)" }
     $base = $(if ($M3.base) { $M3.base } elseif ($M3.uac_on) { 'm3-uac-on' } else { 'rig-base' })
     if ($base -eq 'm3-uac-on' -and -not (Test-M3Snapshot)) { throw "snapshot $M3Snap missing (rig-m3.ps1 -Mode snapshot)" }
     # The gate's ambient set (RIG.md section 17.1): built from this flow's null runs; no fallback to the M2 set.
@@ -1024,12 +1036,12 @@ function Assert-M3E2eNullWait($Sec) {
 }
 
 # The binaries under test: purge-engine.exe, purge-broker.exe (-Engine / -Broker, else target\release) and the UI's
-# Purge.exe (-UiPublish, else target\ui-publish), with their SHA-256. Throws when one is missing.
+# Purge.exe (Get-M3UiExe), with their SHA-256. Throws when one is missing.
 function Get-M3E2eBinaryHashes {
     $p = [ordered]@{
         engine = $(if ($M3.engine) { $M3.engine } else { Join-Path $script:RepoRoot 'target\release\purge-engine.exe' })
         broker = $(if ($M3.broker) { $M3.broker } else { Join-Path $script:RepoRoot 'target\release\purge-broker.exe' })
-        ui     = Join-Path $(if ($M3.ui) { $M3.ui } else { Join-Path $script:RepoRoot 'target\ui-publish' }) 'Purge.exe'
+        ui     = Get-M3UiExe
     }
     $h = [ordered]@{}
     foreach ($k in $p.Keys) {
@@ -1333,8 +1345,8 @@ function Invoke-M3E2eNullCampaign {
     if ($M3.undo_apps.Count) { throw 'a null run is never undone (-UndoApps)' }
     $null = Get-M3E2eHostRigTool
     $out = Resolve-M3E2eAmbient                                       # the output file must be known before the rounds
-    $ui = $(if ($M3.ui) { $M3.ui } else { Join-Path $script:RepoRoot 'target\ui-publish' })
-    if (-not (Test-Path -LiteralPath (Join-Path $ui 'Purge.exe') -PathType Leaf)) { throw "m3-e2e-null needs the UI publish folder (-UiPublish; no Purge.exe in $ui)" }
+    $ui = Get-M3UiExe
+    if (-not (Test-Path -LiteralPath $ui -PathType Leaf)) { throw "m3-e2e-null needs the UI (-UiPublish; no $ui)" }
     $base = $(if ($M3.base) { $M3.base } elseif ($M3.uac_on) { 'm3-uac-on' } else { 'rig-base' })
     if ($base -eq 'm3-uac-on' -and -not (Test-M3Snapshot)) { throw "snapshot $M3Snap missing (rig-m3.ps1 -Mode snapshot)" }
     $apps = @(Get-M3E2eNullApps -Only $M3.apps)
