@@ -126,38 +126,42 @@ pub fn draw(ui: &mut Ui, m: &Model, v: &mut View) {
         }
     }
     v.shown = Some((m.page, m.prefs.design));
-
     chrome(ui, m);
 
-    let card = Rect::new(content.x, content.y, content.w + 12.0, content.h + 12.0);
-    ui.p.frame(card, lk.radius.min(10.0), pal.page, pal.line);
-    if lk.hero && !ui.hc {
-        // D3: the accent falls away behind the page's title.
-        let band = Rect::new(content.x + 1.0, content.y + 1.0, content.w + 10.0, 78.0);
-        let from = mix(pal.page, pal.accent, if pal.dark { 0.20 } else { 0.13 });
-        ui.p.gradient(
-            band,
-            lk.radius.min(10.0) - 1.0,
-            from,
-            pal.page,
-            Along::Y,
-            1.0,
-        );
+    // While a page comes in, the page as the switch's first frame drew it is laid over the old
+    // one, and it is drawn again only when what it shows changed (`View::page_dirty`); the
+    // controls it declared then stand for it in the frames between. So a frame of a switch
+    // costs the chrome and the blend, not the page.
+    let dirty = std::mem::take(&mut v.page_dirty);
+    let running = v.page_tx.step(ui.cx.anim(), ui.p, content);
+    if running && dirty {
+        v.page_tx.drop_held();
     }
-    let old = ui.clip(content);
-    match m.page {
-        Page::Programs => programs::draw(ui, m, v, content),
-        Page::Pipeline => pipeline::draw(ui, m, v, content),
-        Page::Leftovers => leftovers::draw(ui, m, v, content),
-        Page::History => history::draw(ui, m, v, content),
-        Page::Quarantine => quarantine::draw(ui, m, v, content),
-        Page::Settings => settings::draw(ui, m, v, content),
+    v.page_drawn = !(running && v.page_tx.holds());
+    if v.page_drawn {
+        let first = ui.ctls.len();
+        page(ui, m, v, content, stage.is_some(), flow_body);
+        if running {
+            v.page_tx.hold(ui.p);
+            v.page_ctls = ui.ctls[first..].to_vec();
+        }
+    } else {
+        for c in &v.page_ctls {
+            if c.focusable {
+                if c.modal {
+                    ui.focus.add_in(crate::ui::SCOPE, c.id);
+                } else {
+                    ui.focus.add(c.id);
+                }
+            }
+            ui.ctls.push(c.clone());
+        }
     }
-    ui.p.restore(old);
-    if stage.is_some() {
-        v.flow_tx.apply(ui.cx.anim(), ui.p, flow_body);
+    if running {
+        v.page_tx.lay(ui.p);
+    } else {
+        v.page_ctls.clear();
     }
-    v.page_tx.apply(ui.cx.anim(), ui.p, content);
     if lk.rail_icons {
         rail_tip(ui, m);
     }
@@ -197,6 +201,57 @@ pub fn draw(ui: &mut Ui, m: &Model, v: &mut View) {
         let t = ui.cx.anim().toggle("toast", true, fluent::ENTER);
         Bubble::toast(ui.p, &toast.text, content).draw_presence(ui.p, &pal, t);
     }
+}
+
+/// The content card and the page in it, clipped to `content`, then the pipeline's stage push
+/// over its body (`flow`).
+fn page(ui: &mut Ui, m: &Model, v: &mut View, content: Rect, flow: bool, flow_body: Rect) {
+    let pal = ui.pal;
+    let lk = ui.look;
+    // The scrolled areas are the ones this frame draws: a page left behind keeps none, or the
+    // wheel over Settings would scroll the leftovers list it last drew there.
+    v.left_area = Rect::default();
+    v.page_area = Rect::default();
+    if m.page != Page::Programs {
+        v.list.area = Rect::default();
+    }
+    card(ui, content, lk.radius.min(10.0));
+    if lk.hero && !ui.hc {
+        // D3: the accent falls away behind the page's title.
+        let band = Rect::new(content.x + 1.0, content.y + 1.0, content.w + 10.0, 78.0);
+        let from = mix(pal.page, pal.accent, if pal.dark { 0.20 } else { 0.13 });
+        crate::paint::gradient_down(ui.p, band, lk.radius.min(10.0) - 1.0, from, pal.page, 1.0);
+    }
+    let old = ui.clip(content);
+    match m.page {
+        Page::Programs => programs::draw(ui, m, v, content),
+        Page::Pipeline => pipeline::draw(ui, m, v, content),
+        Page::Leftovers => leftovers::draw(ui, m, v, content),
+        Page::History => history::draw(ui, m, v, content),
+        Page::Quarantine => quarantine::draw(ui, m, v, content),
+        Page::Settings => settings::draw(ui, m, v, content),
+    }
+    ui.p.restore(old);
+    if flow {
+        v.flow_tx.apply(ui.cx.anim(), ui.p, flow_body);
+    }
+}
+
+/// The content card: `content` and 12 px past the window's right and bottom edges, so only its
+/// top-left corner is round and shows. Outside the round the chrome's colour shows: the chrome
+/// fills only the title row and the rail (each pixel is written once), so it is laid here.
+fn card(ui: &mut Ui, content: Rect, radius: f32) {
+    let pal = ui.pal;
+    let card = Rect::new(content.x, content.y, content.w + 12.0, content.h + 12.0);
+    let (x0, y0, _, _) = ui.p.dev_rect(card);
+    let s = ui.p.scale;
+    // The corner's square, in device px: the round and a pixel more.
+    let b = (radius * s).ceil() as i32 + 1;
+    let corner = Rect::new(x0 as f32 / s, y0 as f32 / s, b as f32 / s, b as f32 / s);
+    let old = ui.p.clip(corner);
+    ui.p.fill(card, pal.title);
+    ui.p.restore(old);
+    crate::paint::frame(ui.p, card, radius, pal.page, pal.line);
 }
 
 /// Under `--sample`, the flow pages' fixed bar: nothing on this PC changes, whatever the pretend
@@ -357,7 +412,13 @@ fn chrome(ui: &mut Ui, m: &Model) {
     let (w, h) = ui.size;
     let pal = ui.pal;
     let lk = ui.look;
-    ui.p.fill(Rect::new(0.0, 0.0, w, h), pal.title);
+    // The title row and the rail; the content card covers the rest (`card`), or the page
+    // switch's blend does.
+    ui.p.fill(Rect::new(0.0, 0.0, w, lk.title_h), pal.title);
+    ui.p.fill(
+        Rect::new(0.0, lk.title_h, lk.rail_w, h - lk.title_h),
+        pal.title,
+    );
     if lk.design == Design::Bold && !ui.hc {
         // D3's rail is a quiet gradient of the accent. Over a backdrop (Mica, Acrylic) it is a
         // tint of the glass instead: what differs from the flat colour stays over the desktop

@@ -157,6 +157,11 @@ pub struct PurgeApp {
     source: Source,
     /// The system's accent, read at each change of theme.
     accent: Option<Rgb>,
+    /// With `PURGE_TX_LOG` set: the cost of the frames drawn while no page switch runs.
+    idle_draws: Vec<f64>,
+    /// For the walk: whether `paint`'s boxes and gradients came out as the toolkit's, checked
+    /// on the first frame.
+    pub paint_check: Option<Result<usize, String>>,
 }
 
 impl PurgeApp {
@@ -209,6 +214,8 @@ impl PurgeApp {
             link: None,
             source: o.source,
             accent: None,
+            idle_draws: Vec::new(),
+            paint_check: None,
         }
     }
 
@@ -329,6 +336,23 @@ impl PurgeApp {
 
     fn overlay(&self) -> bool {
         self.model.flow.dialog_open() || self.view.palette.is_some()
+    }
+
+    /// Whether a press, a release, a wheel turn or the pointer at `x, y` is passed over: it is
+    /// on a page still coming in, which is a picture moving into place, not the controls the
+    /// page declared. Not while something open over the page takes the pointer.
+    fn blocked(&self, cx: &Cx<'_, ()>, x: f32, y: f32) -> bool {
+        if !self.view.page_tx.running() || self.overlay() || self.view.dds.open().is_some() {
+            return false;
+        }
+        let lk = Look::of(self.model.prefs.design);
+        let (w, h) = cx.size();
+        x >= lk.rail_w && y >= lk.title_h && x < w && y < h
+    }
+
+    /// Whether the page the switch lays declared `id` (no switch: no page held).
+    fn on_page(&self, id: Option<Id>) -> bool {
+        id.is_some_and(|id| self.view.page_ctls.iter().any(|c| c.id == id))
     }
 
     pub fn ctl(&self, id: Id) -> Option<&Ctl> {
@@ -740,6 +764,16 @@ impl PurgeApp {
         {
             cx.request_redraw_all();
         }
+        if self.blocked(cx, x, y) {
+            // Over a page still coming in: nothing there is hot until it is in place (the
+            // frame that ends the switch looks again). What the rail had hot no longer is.
+            if self.hover.is_some() && !self.on_page(self.hover) {
+                self.hover = None;
+                cx.request_redraw_all();
+            }
+            cx.set_cursor(Cursor::Default);
+            return;
+        }
         let hit = self.hit(x, y).map(|c| (c.id, c.role.clone()));
         let hover = hit.as_ref().map(|h| h.0);
         let over_list = hover == Some(LIST);
@@ -755,6 +789,13 @@ impl PurgeApp {
                 .bar
                 .is_some_and(|(track, _)| x >= track.x - 4.0);
         if hover != self.hover || row != self.view.list.hot || bar != self.view.list.bar_hot {
+            if row != self.view.list.hot
+                || bar != self.view.list.bar_hot
+                || self.on_page(hover)
+                || self.on_page(self.hover)
+            {
+                self.view.page_dirty = true;
+            }
             self.hover = hover;
             self.view.list.hot = if bar { None } else { row };
             self.view.list.bar_hot = bar;
@@ -1193,6 +1234,34 @@ impl PurgeApp {
         }
     }
 
+    /// With `PURGE_TX_LOG` set: a frame's cost goes to the switch that runs, or to the idle
+    /// frames, whose line is printed every 10.
+    fn log_draw(&mut self, ms: f64, switching: bool) {
+        if self.view.page_tx.running() {
+            self.view.page_tx.note_draw(ms, self.view.page_drawn);
+            return;
+        }
+        if self.view.flow_tx.running() {
+            self.view.flow_tx.note_draw(ms, true);
+            return;
+        }
+        if switching {
+            // The switch's last frame: it printed its line.
+            return;
+        }
+        self.idle_draws.push(ms);
+        if self.idle_draws.len() >= 10 {
+            let v = std::mem::take(&mut self.idle_draws);
+            let max = v.iter().copied().fold(0.0, f64::max);
+            let avg = v.iter().sum::<f64>() / v.len() as f64;
+            println!(
+                "idle {:?}: {} frames, draw {avg:.2} avg / {max:.2} max ms",
+                self.model.page,
+                v.len()
+            );
+        }
+    }
+
     // ---- timers ------------------------------------------------------------------------------
 
     /// Asks for the earliest of the times still to come: the host gives one wake-up.
@@ -1252,6 +1321,7 @@ impl PurgeApp {
             .is_some_and(|s| s.due().is_some_and(|d| d <= now))
             && let Some(mut script) = self.script.take()
         {
+            self.view.page_dirty = true;
             let go_on = script.step(self, cx, now);
             if go_on {
                 self.script = Some(script);
@@ -1269,6 +1339,7 @@ impl PurgeApp {
             return;
         };
         if link.pump(&mut self.model) {
+            self.view.page_dirty = true;
             cx.request_redraw_all();
         }
         if let Some(id) = self.model.programs.scroll_to.take()
@@ -1722,9 +1793,31 @@ impl App for PurgeApp {
     }
 
     fn event(&mut self, cx: &mut Cx<'_, ()>, event: Event) {
+        // What may change what the page shows has it drawn again while it comes in
+        // (`View::page_dirty`): the pointer's moves and the timers say so themselves, the
+        // modifiers alone change nothing, and the presses, releases and wheel turns on a page
+        // still coming in are passed over (`blocked`).
+        let blocked = match event {
+            Event::PointerMove { .. } | Event::Wake(_) | Event::Modifiers(_) => false,
+            Event::Press { x, y, .. } | Event::Release { x, y, .. } if self.blocked(cx, x, y) => {
+                if self.pressed.take().is_some() {
+                    self.view.page_dirty = true;
+                    cx.request_redraw_all();
+                }
+                true
+            }
+            Event::Wheel { .. } if self.blocked(cx, self.pointer.0, self.pointer.1) => true,
+            _ => {
+                self.view.page_dirty = true;
+                false
+            }
+        };
         match event {
+            _ if blocked => {}
             Event::PointerMove { x, y } => self.pointer_move(cx, x, y),
             Event::PointerLeave => {
+                // Gone: the end of a page switch has nothing to look under.
+                self.pointer = (-1.0, -1.0);
                 if self.hover.is_some() || self.view.list.hot.is_some() {
                     self.hover = None;
                     self.view.list.hot = None;
@@ -1779,15 +1872,10 @@ impl App for PurgeApp {
     }
 
     fn draw(&mut self, cx: &mut Cx<'_, ()>, p: &mut Painter, _damage: Rect) {
+        let began = Instant::now();
         let size = cx.size();
         self.focus.begin_frame();
-        // The scrolled areas are the ones this frame draws: a page left behind keeps none, or
-        // the wheel over Settings would scroll the leftovers list it last drew there.
-        self.view.left_area = Rect::default();
-        self.view.page_area = Rect::default();
-        if self.model.page != Page::Programs {
-            self.view.list.area = Rect::default();
-        }
+        let switching = self.view.page_tx.running();
         let ctls = {
             let mut ui = Ui {
                 p: &mut *p,
@@ -1808,6 +1896,20 @@ impl App for PurgeApp {
         };
         self.focus.end_frame();
         self.ctls = ctls;
+        if crate::transition::logging() {
+            self.log_draw(began.elapsed().as_secs_f64() * 1000.0, switching);
+        }
+        if self.script.is_some() && self.paint_check.is_none() {
+            self.paint_check = Some(crate::paint::self_check(p));
+        }
+        // The pointer was not followed over the page while it came in (`blocked`): what is
+        // under it now is hot.
+        if switching && !self.view.page_tx.running() {
+            let (x, y) = self.pointer;
+            if x >= 0.0 && y >= 0.0 {
+                self.pointer_move(cx, x, y);
+            }
+        }
 
         // The host reads the tree after the frame, so what this frame declared can be said
         // from here.

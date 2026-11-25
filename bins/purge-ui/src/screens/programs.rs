@@ -4,7 +4,7 @@ use mdshared_ui::check::{TICK, Tick, draw_tick};
 use mdshared_ui::dropdown::DROPDOWN_H;
 use mdshared_ui::expander;
 use mdshared_ui::focus::draw_ring;
-use mdshared_ui::gfx::{self, Along, Face, Rect};
+use mdshared_ui::gfx::{self, Face, Rect};
 use mdshared_ui::glyph;
 use mdshared_ui::link::LINK_H;
 use mdshared_ui::pane::draw_row_fill;
@@ -646,7 +646,7 @@ fn program_details(ui: &mut Ui, m: &Model, v: &mut View, r: Rect) {
         let fill = ui.card_fill();
         let band = Rect::new(r.x + 1.0, r.y + 1.0, r.w - 2.0, 96.0);
         let from = gfx::mix(fill, tile_colour(&g.publisher), 0.26);
-        ui.p.gradient(band, lk.radius - 1.0, from, fill, Along::Y, 1.0);
+        crate::paint::gradient_down(ui.p, band, lk.radius - 1.0, from, fill, 1.0);
     }
     // D1 keeps the one button that acts at the foot of the pane, where it does not move as
     // the selection changes what is above it.

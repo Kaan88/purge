@@ -19,6 +19,15 @@
 //! are mixed as whole words (red with blue in one multiply, green in another); and the rows are
 //! shared out among the cores.
 //!
+//! The page itself is drawn once (UI-REDRAW): on the switch's first frame it is drawn as
+//! always and kept (`hold`), and the frames after lay the two pages kept over each other
+//! without drawing it again (`step`, `holds`, `lay`), until what the page shows changes
+//! (`drop_held`: the next frame draws and keeps it again) or the switch ends (the page is drawn
+//! live from then on). The first frame shows the old page alone in every effect, so it is put
+//! back by a copy rather than a blend, on the frame that also draws the new page. A region that
+//! is drawn every frame anyway (Settings' preview, the pipeline's stage push) uses `apply`,
+//! which keeps it afresh each frame.
+//!
 //! Like the toolkit's, a switch ends at once when the bitmap's size, the scale or the region's
 //! place changed under it, and nothing starts when the animator does not animate (Windows' "Show
 //! animations" off). With `PURGE_TX_LOG` set, each switch prints when it ends the time between
@@ -54,8 +63,11 @@ struct Run {
     of: (u32, u32),
     scale: f32,
     duration: Duration,
-    /// The new page as this frame drew it, kept between frames for its memory.
+    /// The new page as a frame drew it (`held`), laid over the old one until it is out of date.
     new: Vec<u32>,
+    held: bool,
+    /// The progress at this frame, from 0 to 1.
+    t: f32,
 }
 
 impl PageSwitch {
@@ -118,6 +130,8 @@ impl PageSwitch {
                 fluent::NORMAL
             },
             new: Vec::new(),
+            held: false,
+            t: 0.0,
         });
         anim.set(self.id, 0.0_f32);
         if logging() {
@@ -126,37 +140,51 @@ impl PageSwitch {
                 last: None,
                 gaps: Vec::new(),
                 blends: Vec::new(),
+                draws: Vec::new(),
+                redrawn: 0,
             });
         }
     }
 
     /// Blends the old page into `r`, which holds the new page as this frame drew it. Call it
     /// every frame after the region is drawn and before anything over it. Returns whether the
-    /// switch still runs.
+    /// switch still runs. (A region that is drawn every frame: the Settings page's preview, the
+    /// pipeline's stage push.)
     pub fn apply(&mut self, anim: &mut Animator, p: &mut Painter, r: Rect) -> bool {
-        let Some(log) = &mut self.log else {
-            return self.blend(anim, p, r);
-        };
-        let start = Instant::now();
-        if let Some(last) = log.last.replace(start) {
-            log.gaps.push(ms(start - last));
+        if !self.step(anim, p, r) {
+            return false;
         }
-        let running = self.blend(anim, p, r);
+        self.hold(p);
+        self.lay(p);
+        true
+    }
+
+    /// The first half of a frame of a region that is drawn once (the page): before the region
+    /// is drawn, moves the switch on to this frame and says whether it still runs. A switch
+    /// that ended (or was cancelled: the bitmap's size, the scale or the region's place
+    /// changed) leaves the region to be drawn as it is. While it runs, the region is drawn only
+    /// when [`holds`](Self::holds) says no, and then [`hold`](Self::hold) keeps it; then
+    /// [`lay`](Self::lay) lays the two pages over each other.
+    pub fn step(&mut self, anim: &mut Animator, p: &Painter, r: Rect) -> bool {
         if let Some(log) = &mut self.log {
-            log.blends.push(ms(start.elapsed()));
+            let now = Instant::now();
+            if let Some(last) = log.last.replace(now) {
+                log.gaps.push(ms(now - last));
+            }
         }
+        let running = self.advance(anim, p, r);
         if !running && let Some(log) = self.log.take() {
             log.print(self.name);
         }
         running
     }
 
-    fn blend(&mut self, anim: &mut Animator, p: &mut Painter, r: Rect) -> bool {
+    fn advance(&mut self, anim: &mut Animator, p: &Painter, r: Rect) -> bool {
         let Some(run) = &mut self.run else {
             return false;
         };
+        let bmp = &*p.bmp;
         let dev = p.dev_rect(r);
-        let bmp = &mut *p.bmp;
         let region = (
             dev.0.max(0),
             dev.1.max(0),
@@ -172,47 +200,56 @@ impl PageSwitch {
             self.run = None;
             return false;
         }
-        // How far the new page still is from its place, of the way it has to go.
-        let left = 1.0 - fluent::DECELERATE.at(t);
-        let (w, h) = (run.rect.2 - run.rect.0, run.rect.3 - run.rect.1);
-        let place = |scale: f32, shift: (i32, i32)| Place {
-            scale,
-            shift,
-            clamp: false,
+        run.t = t;
+        true
+    }
+
+    /// Whether the new page is kept from an earlier frame: the region need not be drawn.
+    pub fn holds(&self) -> bool {
+        self.run.as_ref().is_some_and(|r| r.held)
+    }
+
+    /// Keeps the new page as the bitmap holds it now, just drawn, for the frames after.
+    pub fn hold(&mut self, p: &Painter) {
+        if let Some(run) = &mut self.run {
+            words(p.bmp.width, &p.bmp.pixels, run.rect, &mut run.new);
+            run.held = true;
+        }
+    }
+
+    /// The new page kept is out of date (what it shows changed): the next frame draws it again.
+    pub fn drop_held(&mut self) {
+        if let Some(run) = &mut self.run {
+            run.held = false;
+        }
+    }
+
+    /// The second half of a frame (after [`step`](Self::step) and [`hold`](Self::hold)): lays
+    /// the old page and the new one kept over each other in the region, as far as this frame
+    /// has them. Everything under the region is covered.
+    pub fn lay(&mut self, p: &mut Painter) {
+        let start = Instant::now();
+        let Some(run) = &self.run else {
+            return;
         };
-        let still = place(1.0, (0, 0));
-        // The old page's place, the new one's, and the new one's opacity.
-        let (old, new, a) = match run.effect {
-            Effect::Toolkit(PageEffect::Crossfade) => (still, still, 1.0 - left),
-            Effect::Toolkit(PageEffect::SlideFade { from, distance }) => {
-                let (ux, uy) = direction(from);
-                let d = distance * run.scale * left;
-                let shift = ((ux * d).round() as i32, (uy * d).round() as i32);
-                // The band the new page has not reached yet repeats its edge.
-                let new = Place {
-                    clamp: true,
-                    ..place(1.0, shift)
-                };
-                (still, new, t * 2.0)
+        if !run.held {
+            return;
+        }
+        let t = run.t;
+        if t <= 0.0 {
+            // The switch's first frame: every effect shows the old page alone, in place (the
+            // new one is wholly transparent, or a whole region away). It is put back as it was,
+            // which costs a copy, not a blend, on the frame that also draws the new page.
+            let bmp = &mut *p.bmp;
+            unwords(bmp.width, &mut bmp.pixels, run.rect, &run.old);
+            if let Some(log) = &mut self.log {
+                log.blends.push(ms(start.elapsed()));
             }
-            Effect::Toolkit(PageEffect::Push { from }) => {
-                let (ux, uy) = direction(from);
-                let shift = (
-                    (ux * w as f32 * left).round() as i32,
-                    (uy * h as f32 * left).round() as i32,
-                );
-                let ahead = (shift.0 - ux as i32 * w, shift.1 - uy as i32 * h);
-                (place(1.0, ahead), place(1.0, shift), 1.0)
-            }
-            // The fade leads the growth, so the page is legible before it is still.
-            Effect::Scale => (still, place(0.94 + 0.06 * (1.0 - left), (0, 0)), t * 1.8),
-            Effect::Depth => (
-                place(0.96 + 0.04 * left, (0, 0)),
-                place(1.0 + 0.03 * left, (0, 0)),
-                1.0 - left,
-            ),
-        };
-        words(bmp.width, &bmp.pixels, run.rect, &mut run.new);
+            return;
+        }
+        let size = (run.rect.2 - run.rect.0, run.rect.3 - run.rect.1);
+        let (old, new, a) = places(run.effect, t, size, run.scale);
+        let bmp = &mut *p.bmp;
         compose(
             bmp.width,
             &mut bmp.pixels,
@@ -221,7 +258,62 @@ impl PageSwitch {
             &Picture::of(&run.new, run.rect, new),
             parts(a),
         );
-        true
+        if let Some(log) = &mut self.log {
+            log.blends.push(ms(start.elapsed()));
+        }
+    }
+
+    /// With `PURGE_TX_LOG` set, the cost of a whole frame's drawing while the switch runs, and
+    /// whether that frame drew the page, for its line.
+    pub fn note_draw(&mut self, ms: f64, drew: bool) {
+        if let Some(log) = &mut self.log {
+            log.draws.push(ms);
+            log.redrawn += usize::from(drew);
+        }
+    }
+}
+
+/// Where the old page and the new one are shown at progress `t` of `effect` in a region `w` by
+/// `h` device px at `scale`, and the new one's opacity.
+fn places(effect: Effect, t: f32, (w, h): (i32, i32), scale: f32) -> (Place, Place, f32) {
+    // How far the new page still is from its place, of the way it has to go.
+    let left = 1.0 - fluent::DECELERATE.at(t);
+    let place = |scale: f32, shift: (i32, i32)| Place {
+        scale,
+        shift,
+        clamp: false,
+    };
+    let still = place(1.0, (0, 0));
+    // The old page's place, the new one's, and the new one's opacity.
+    match effect {
+        Effect::Toolkit(PageEffect::Crossfade) => (still, still, 1.0 - left),
+        Effect::Toolkit(PageEffect::SlideFade { from, distance }) => {
+            let (ux, uy) = direction(from);
+            let d = distance * scale * left;
+            let shift = ((ux * d).round() as i32, (uy * d).round() as i32);
+            // The band the new page has not reached yet repeats its edge.
+            let new = Place {
+                clamp: true,
+                ..place(1.0, shift)
+            };
+            (still, new, t * 2.0)
+        }
+        Effect::Toolkit(PageEffect::Push { from }) => {
+            let (ux, uy) = direction(from);
+            let shift = (
+                (ux * w as f32 * left).round() as i32,
+                (uy * h as f32 * left).round() as i32,
+            );
+            let ahead = (shift.0 - ux as i32 * w, shift.1 - uy as i32 * h);
+            (place(1.0, ahead), place(1.0, shift), 1.0)
+        }
+        // The fade leads the growth, so the page is legible before it is still.
+        Effect::Scale => (still, place(0.94 + 0.06 * (1.0 - left), (0, 0)), t * 1.8),
+        Effect::Depth => (
+            place(0.96 + 0.04 * left, (0, 0)),
+            place(1.0 + 0.03 * left, (0, 0)),
+            1.0 - left,
+        ),
     }
 }
 
@@ -255,6 +347,16 @@ fn words(width: u32, pixels: &[u8], (x0, y0, x1, y1): (i32, i32, i32, i32), out:
                 .chunks_exact(4)
                 .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])),
         );
+    }
+}
+
+/// The words `px` (as `words` took them) back into the device rectangle of a bitmap `width` px
+/// wide.
+fn unwords(width: u32, pixels: &mut [u8], (x0, y0, x1, y1): (i32, i32, i32, i32), px: &[u32]) {
+    let w = (x1 - x0) as usize;
+    for (row, src) in (y0..y1).zip(px.chunks_exact(w)) {
+        let o = (row as usize * width as usize + x0 as usize) * 4;
+        put(&mut pixels[o..o + w * 4], 0..w, src.iter().copied());
     }
 }
 
@@ -464,9 +566,12 @@ struct Log {
     last: Option<Instant>,
     gaps: Vec<f64>,
     blends: Vec<f64>,
+    draws: Vec<f64>,
+    /// The frames that drew the page again rather than lay the kept one.
+    redrawn: usize,
 }
 
-fn logging() -> bool {
+pub fn logging() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("PURGE_TX_LOG").is_some())
 }
@@ -484,12 +589,17 @@ impl Log {
         };
         let (ga, gm) = stat(&self.gaps);
         let (ba, bm) = stat(&self.blends);
+        let (da, dm) = stat(&self.draws);
         let over = self.gaps.iter().filter(|g| **g > 16.0).count();
+        // A frame of a 100 Hz display, with room for the timer's jitter.
+        let late = self.gaps.iter().filter(|g| **g > 12.0).count();
         println!(
-            "tx {name} {:?}: {} frames, frame {ga:.1} avg / {gm:.1} max ms ({over} over 16 ms), \
-             blend {ba:.2} avg / {bm:.2} max ms",
+            "tx {name} {:?}: {} frames, frame {ga:.1} avg / {gm:.1} max ms ({late} over 12, \
+             {over} over 16 ms), blend {ba:.2} avg / {bm:.2} max ms, draw {da:.2} avg / {dm:.2} \
+             max ms ({} drew the page)",
             self.effect,
-            self.blends.len(),
+            self.gaps.len() + 1,
+            self.redrawn,
         );
     }
 }
@@ -611,6 +721,50 @@ mod tests {
         compose(bw, &mut bmp, rect, &o, &n, 128);
         assert_eq!(px(&bmp, 109, 150), 100);
         assert_eq!(px(&bmp, 11, 6), 200);
+    }
+
+    /// Every effect at its first frame shows the old page alone, in place: what `lay` puts back
+    /// without a blend is what the blend would give.
+    #[test]
+    fn the_first_frame_is_the_old_page() {
+        let (bw, bh) = (220u32, 310u32);
+        let rect = (10, 5, 210, 305);
+        // Two pages that differ everywhere, with detail, so a shift or a scale would show.
+        let old: Vec<u32> = (0..200 * 300).map(|i| grey((i * 7 % 251) as u8)).collect();
+        let new: Vec<u32> = (0..200 * 300).map(|i| grey((i * 13 % 241) as u8)).collect();
+        let effects = [
+            Effect::Toolkit(PageEffect::Crossfade),
+            Effect::Toolkit(PageEffect::SlideFade {
+                from: Edge::Bottom,
+                distance: 28.0,
+            }),
+            Effect::Toolkit(PageEffect::SlideFade {
+                from: Edge::Left,
+                distance: 40.0,
+            }),
+            Effect::Toolkit(PageEffect::Push { from: Edge::Top }),
+            Effect::Toolkit(PageEffect::Push { from: Edge::Bottom }),
+            Effect::Scale,
+            Effect::Depth,
+        ];
+        for e in effects {
+            let (o, n, a) = places(e, 0.0, (200, 300), 1.25);
+            let mut blended = vec![9u8; (bw * bh * 4) as usize];
+            compose(
+                bw,
+                &mut blended,
+                rect,
+                &Picture::of(&old, rect, o),
+                &Picture::of(&new, rect, n),
+                parts(a),
+            );
+            let mut copied = vec![9u8; (bw * bh * 4) as usize];
+            unwords(bw, &mut copied, rect, &old);
+            assert!(blended == copied, "{e:?}");
+            let mut back = Vec::new();
+            words(bw, &copied, rect, &mut back);
+            assert!(back == old, "{e:?}: the words round trip");
+        }
     }
 
     #[test]

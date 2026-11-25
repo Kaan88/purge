@@ -764,7 +764,7 @@ impl Ui<'_, '_, '_> {
             // D1: no outline. A contrast theme keeps it: there a shade says nothing.
             self.p.rbox(r, radius, fill);
         } else {
-            self.p.frame(r, radius, fill, pal.line);
+            crate::paint::frame(self.p, r, radius, fill, pal.line);
         }
     }
 
@@ -774,7 +774,7 @@ impl Ui<'_, '_, '_> {
         if self.look.soft && !self.hc {
             self.p.rbox(r, 8.0, pal.page);
         } else {
-            self.p.frame(r, 6.0, pal.page, pal.line);
+            crate::paint::frame(self.p, r, 6.0, pal.page, pal.line);
         }
     }
 
