@@ -137,6 +137,8 @@ struct Broker {
     /// `journal.retry_held` per broker generation, as for `undo.run`.
     retry_calls: [usize; 2],
     retry: [Answer<OutcomeResult>; 2],
+    /// Whether `journal.retry_held` finds held items and so shows its prompt first.
+    retry_prompts: bool,
     foreground: [usize; 2],
     relaunch: Box<dyn FnMut() -> BrokerLaunch>,
     launches: usize,
@@ -163,6 +165,7 @@ impl Broker {
             ],
             retry_calls: [0; 2],
             retry: [Box::new(|| Ok(retried())), Box::new(|| Ok(retried()))],
+            retry_prompts: true,
             foreground: [0; 2],
             relaunch: Box::new(BrokerLaunch::started),
             launches: 0,
@@ -254,6 +257,9 @@ impl Broker {
             LeftoversCall::RetryHeld(_) => {
                 self.retry_calls[self.generation] += 1;
                 let answer = (self.retry[self.generation])();
+                if self.retry_prompts && answer.is_ok() {
+                    shown(model, 3);
+                }
                 model.on_retried(answer)
             }
             LeftoversCall::AllowForeground => {
@@ -1697,4 +1703,162 @@ fn a_link_that_ends_during_a_review_ends_the_review() {
     model.on_link_ended();
     assert_eq!(model.phase(), LeftoversPhase::Result);
     assert!(!model.broker_is_live());
+}
+
+/// Review N2: the link ends while the move waits (so `on_link_ended` leaves the page alone), then
+/// the move comes back never sent: the page ends as `on_link_ended` does instead of going back to a
+/// review over the dead link. A scan that fails over a dead link ends the same way.
+#[test]
+fn a_move_never_sent_over_a_dead_link_ends_the_review() {
+    let mut broker = Broker::with_rows(vec![safe(1, true)]);
+    let mut model = scanned_default(&mut broker);
+    let calls = model.click_move();
+    assert!(matches!(calls.as_slice(), [LeftoversCall::CreatePlan(_)]));
+    model.on_link_ended();
+    assert_eq!(
+        model.phase(),
+        LeftoversPhase::Waiting,
+        "a change is on its way"
+    );
+    assert!(!model.broker_is_live());
+    model.on_plan_created(Err(CallError::link("The administrator part ended.", true)));
+    assert_eq!(model.phase(), LeftoversPhase::Empty);
+    assert!(!model.can_move());
+    assert!(model.error().is_none());
+    let (title, text) = model.empty_panel().expect("the panel");
+    assert_eq!(title, text::LINK_GONE_TITLE);
+    assert!(text.contains("Nothing was moved"), "{text}");
+
+    // Over a live but closing broker the review stays, as before.
+    let mut broker = Broker::with_rows(vec![safe(1, true)]);
+    broker.execute = Box::new(|| Err(CallError::link("not running", true)));
+    let mut model = scanned_default(&mut broker);
+    moved(&mut broker, &mut model);
+    assert_eq!(model.phase(), LeftoversPhase::Review);
+    assert_eq!(model.error(), Some(text::MOVE_NEVER_SENT));
+
+    // A scan sent over a link that had already ended.
+    let mut broker = Broker::with_rows(vec![safe(1, true)]);
+    let mut model = scanned_default(&mut broker);
+    model.set_broker_live(false);
+    let calls = model.rescan();
+    assert!(matches!(calls.as_slice(), [LeftoversCall::Scan(_)]));
+    model.on_scan(Err(CallError::link("The administrator part ended.", true)));
+    assert_eq!(model.phase(), LeftoversPhase::Empty);
+    assert!(model.error().is_none());
+    assert_eq!(
+        model.empty_panel().expect("the panel").0,
+        text::LINK_GONE_TITLE
+    );
+}
+
+/// Review N3: the ended panel keeps nothing of the scan, so a later `baseline.changed` cannot offer
+/// "Scan again" over the dead link, and no refusal or re-scan bar stays.
+#[test]
+fn the_ended_panel_keeps_nothing_of_the_scan() {
+    let mut broker = Broker::with_rows(vec![safe(1, true), safe(2, true)]);
+    broker.create_plan = Box::new(|| {
+        Err(rpc(
+            ErrorData::PlanRefused {
+                refusals: vec![Refusal {
+                    candidate_id: Some(id(2)),
+                    reason: "it cannot be backed up".into(),
+                }],
+            },
+            "bind refused the plan",
+        ))
+    });
+    let mut model = scanned_default(&mut broker);
+    let calls = model.rescan();
+    broker.run(&mut model, calls);
+    moved(&mut broker, &mut model);
+    let scan_id = model.scan().expect("a scan").scan_id;
+    assert!(model.rescan_message().is_some());
+    assert!(!model.refusal_lines().is_empty());
+
+    model.on_link_ended();
+    assert!(model.scan().is_none());
+    assert!(model.rescan_message().is_none());
+    assert!(model.refusal_lines().is_empty());
+    let mut changed: BaselineChanged = serde_json::from_str(include_str!(
+        "../../../purge-rpc/fixtures/notification.baseline.changed.json"
+    ))
+    .expect("the fixture");
+    changed.rescan_offered = vec![scan_id];
+    model.on_baseline_changed(&changed);
+    assert!(!model.rescan_offered());
+    assert!(model.rescan().is_empty());
+    let bars = model.bars(None, None);
+    assert!(
+        bars.iter()
+            .all(|b| b.action != Some(LeftoversAction::ScanAgain))
+    );
+    assert!(bars.iter().all(|b| b.title != text::BAR_SOME_REFUSED));
+    assert!(bars.iter().all(|b| b.title != text::BAR_RESCANNED));
+}
+
+/// Review N4: Move, the retry and "Put back all" act only in the phase that offers them, whatever
+/// the page still holds from before.
+#[test]
+fn move_retry_and_undo_act_only_where_they_are_offered() {
+    // Move from the result: the items are still ticked and the scan is still known.
+    let mut broker = Broker::new();
+    let mut model = moved_with_launcher(&mut broker);
+    assert!(!model.can_move());
+    assert!(model.move_items(RestorePoint::HighRisk).is_empty());
+    assert_eq!(model.phase(), LeftoversPhase::Result);
+
+    // "Put back all" a second time from the "Put back" result.
+    let calls = model.undo_all();
+    broker.run(&mut model, calls);
+    assert_eq!(model.phase(), LeftoversPhase::Undone);
+    assert!(!model.can_undo());
+    assert!(model.undo_all().is_empty());
+    assert!(model.click_undo_all().is_empty());
+    assert_eq!(model.phase(), LeftoversPhase::Undone);
+    assert_eq!(broker.undo_calls, [1, 0]);
+
+    // A result that moved nothing has nothing to put back.
+    let mut broker = Broker::with_rows(vec![safe(1, true)]);
+    broker.execute = Box::new(|| Ok(complete(0, 0)));
+    let mut model = scanned_default(&mut broker);
+    moved(&mut broker, &mut model);
+    assert_eq!(model.phase(), LeftoversPhase::Result);
+    assert!(!model.can_undo());
+    assert!(model.undo_all().is_empty());
+    assert_eq!(model.phase(), LeftoversPhase::Result);
+
+    // The retry from the "Put back" result, and from a result with nothing held.
+    let mut broker = Broker::new();
+    let mut model = held_page(&mut broker, LeftoversOptions::default());
+    let calls = model.undo_all();
+    broker.run(&mut model, calls);
+    assert_eq!(model.phase(), LeftoversPhase::Undone);
+    assert!(!model.can_retry_held());
+    assert!(model.retry_held().is_empty());
+    assert_eq!(model.phase(), LeftoversPhase::Undone);
+    let mut model = moved_with_launcher(&mut Broker::new());
+    assert!(!model.can_retry_held());
+    assert!(model.retry_held().is_empty());
+    assert_eq!(broker.retry_calls, [0, 0]);
+}
+
+/// Review N10: a retry that ran without its prompt found nothing held any more, so it never says
+/// the items were moved.
+#[test]
+fn a_retry_that_finds_nothing_held_says_so() {
+    let mut broker = Broker::new();
+    broker.retry_prompts = false;
+    let mut model = held_page(&mut broker, LeftoversOptions::default());
+    let calls = model.retry_held();
+    broker.run(&mut model, calls);
+    assert_eq!(broker.retry_calls, [1, 0]);
+    assert_eq!(model.phase(), LeftoversPhase::Result);
+    assert_eq!(model.info(), Some(text::RETRY_NOTHING_HELD));
+
+    let mut broker = Broker::new();
+    let mut model = held_page(&mut broker, LeftoversOptions::default());
+    let calls = model.retry_held();
+    broker.run(&mut model, calls);
+    assert_eq!(model.info(), Some(text::RETRY_MOVED));
 }

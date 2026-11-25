@@ -273,6 +273,10 @@ pub fn conflicts_detail(n: usize) -> String {
 
 pub const CONFIRM_RETRY: &str = "Confirm the retry in the Purge security prompt.";
 pub const RETRY_MOVED: &str = "The held items were tried again and moved.";
+/// The retry ran without a prompt: the broker found nothing held any more (another page, or the
+/// next start, had already settled them), so nothing was tried.
+pub const RETRY_NOTHING_HELD: &str =
+    "Nothing was held any more, so nothing was tried again. See History & undo.";
 pub const RETRY_STILL_HELD: &str =
     "The held items were tried again; some are still in use. See History & undo.";
 pub const RETRY_DECLINED: &str = "Nothing was tried: the prompt was cancelled.";

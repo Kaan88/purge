@@ -617,6 +617,12 @@ impl LeftoversModel {
         ) {
             return;
         }
+        self.end_on_dead_link();
+    }
+
+    /// Empties the page to the ended panel: nothing of the scan stays, so nothing (a later
+    /// `baseline.changed`, a re-scan's summary, a refusal) can offer it again over the dead link.
+    fn end_on_dead_link(&mut self) {
         let stored = matches!(self.target, Some(ScanTarget::Stored(_)));
         self.pending = None;
         self.phase = LeftoversPhase::Empty;
@@ -624,8 +630,17 @@ impl LeftoversModel {
         self.ended_text = text::review_ended(&self.program_name, stored);
         self.error = None;
         self.info = None;
+        self.scan = None;
+        self.plan = None;
+        self.code = None;
+        self.prompt_up = false;
+        self.rescan_message = None;
+        self.rescan_ticks = None;
+        self.rescan_ids = None;
         self.items.clear();
         self.groups.clear();
+        self.attention.clear();
+        self.refusal_lines.clear();
         self.selected = None;
         self.explaining = false;
         self.rescan_offered = false;
@@ -988,6 +1003,12 @@ impl LeftoversModel {
     }
 
     fn fail_loading(&mut self, show: bool, e: &CallError) {
+        if !self.broker_live {
+            // The link ended (`on_link_ended` came while nothing could end the scan): the
+            // scan cannot go on over it, so the page says so the way `on_link_ended` does.
+            self.end_on_dead_link();
+            return;
+        }
         self.pending = None;
         self.phase = LeftoversPhase::Empty;
         match e {
@@ -1123,12 +1144,12 @@ impl LeftoversModel {
     /// switches when `consent.shown` says the dialog is up; nothing is said to be moved until the
     /// result arrives.
     pub fn move_items(&mut self, restore_point: RestorePoint) -> Vec<LeftoversCall> {
+        if !self.can_move() {
+            return Vec::new();
+        }
         let Some(scan) = self.scan else {
             return Vec::new();
         };
-        if self.pending.is_some() {
-            return Vec::new();
-        }
         let chosen: Vec<CandidateRef> = self.chosen().map(|i| i.candidate_id).collect();
         let Some(selected) = NonEmpty::new(chosen) else {
             return Vec::new();
@@ -1245,6 +1266,10 @@ impl LeftoversModel {
             }
             // Never sent (the session had ended, or the broker was closing): nothing was moved,
             // so the review stays as it was. Never "cannot tell".
+            // The link is dead too (it ended while the move waited, so `on_link_ended` left the
+            // page alone): a review over it would only be refused again. End it as
+            // `on_link_ended` does; nothing was moved.
+            _ if never_reached_a_broker(e) && !self.broker_live => self.end_on_dead_link(),
             _ if never_reached_a_broker(e) => {
                 self.phase = LeftoversPhase::Review;
                 self.error = Some(text::MOVE_NEVER_SENT.into());
@@ -1392,7 +1417,7 @@ impl LeftoversModel {
     /// on this page. A request that never reached a broker is never reported as "ended while putting
     /// things back".
     pub fn undo_all(&mut self) -> Vec<LeftoversCall> {
-        if self.pending.is_some() || self.result.is_none() {
+        if !self.can_undo() || self.pending.is_some() {
             return Vec::new();
         }
         if self.undo_opens_history() {
@@ -1542,7 +1567,7 @@ impl LeftoversModel {
     /// `journal.retry_held`: tries the items a partial run left locked. Over a link that has ended
     /// (a run ends the broker), a new broker is started first, as for "Put back all".
     pub fn retry_held(&mut self) -> Vec<LeftoversCall> {
-        if self.pending.is_some() || self.result.is_none() {
+        if !self.can_retry_held() || self.pending.is_some() {
             return Vec::new();
         }
         self.error = None;
@@ -1595,7 +1620,12 @@ impl LeftoversModel {
         match answer {
             Ok(retried) => {
                 self.phase = LeftoversPhase::Result;
-                let first = if retried.outcome == Outcome::Complete {
+                // The broker asks before it tries anything; a retry that ran without its prompt
+                // found nothing held any more (design 8.2: a recovery that changes nothing has no
+                // dialog), so it moved nothing.
+                let first = if !self.prompt_up {
+                    text::RETRY_NOTHING_HELD
+                } else if retried.outcome == Outcome::Complete {
                     text::RETRY_MOVED
                 } else {
                     text::RETRY_STILL_HELD
