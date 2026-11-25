@@ -11,8 +11,14 @@
 //! | [`look`] | the colours: Purge's Bold and Violet, light or dark by the system, the contrast theme |
 //! | [`draw`] | measuring, layout and drawing with the toolkit's painter; no window |
 //! | [`access`] | what UI Automation sees: ids, names, roles |
+//! | [`app`] | the window: the toolkit's host loop around one dialog at a time |
+//! | [`service`] | [`ToolkitConsent`], the broker's `Consent`; the threads; the fall back to the TaskDialog |
 
 pub mod access;
+pub mod app;
 pub mod draw;
 pub mod look;
+pub mod service;
 pub mod state;
+
+pub use service::{ToolkitConsent, UiThread};
