@@ -13,7 +13,7 @@ use purge_ui_model::pipeline::page::{Bar, BarClose, UninstallPageView};
 use purge_ui_model::pipeline::{NoticeKind, StepState, UninstallStep};
 
 use crate::model::{Model, Page};
-use crate::ui::{BUTTON_H, Id, Look, Role, Style, Tone, Ui, id, ok_ink};
+use crate::ui::{BUTTON_H, Id, Key, Look, Role, Style, Tone, Ui, id, ok_ink};
 use crate::view::{DD_RESTORE, View};
 
 const STEP_H: f32 = 58.0;
@@ -141,6 +141,10 @@ fn bars(ui: &mut Ui, bars: &[Bar], x: f32, mut y: f32, w: f32) -> f32 {
         }
         let close = (b.close != BarClose::No).then_some(Id("BarClose", k as u32 + 1));
         y = ui.infobar_with(Id("InfoBarHost", k as u32), x, y, w, &bar, close, &ids) + 8.0;
+        // Review SF3: a click acts on the bar it showed, never on its place among the bars.
+        for cid in ids.iter().chain(&close) {
+            ui.key(*cid, Key::bar(&b.title, &b.message));
+        }
     }
     y
 }

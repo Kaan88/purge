@@ -158,6 +158,10 @@ fn bars(ui: &mut Ui, m: &Model, x: f32, mut y: f32, w: f32) -> f32 {
         }
         let close = b.closable.then_some(Id("LBarClose", k as u32 + 1));
         y = ui.infobar_with(Id("InfoBarHost", k as u32), x, y, w, &bar, close, &ids) + 8.0;
+        // Review SF3: a click acts on the bar it showed, never on its place among the bars.
+        for cid in ids.iter().chain(&close) {
+            ui.key(*cid, Key::bar(&b.title, &b.message));
+        }
     }
     y
 }
@@ -834,6 +838,7 @@ fn items(ui: &mut Ui, m: &Model, v: &mut View, r: Rect) {
                     &l.row_name(*row),
                     true,
                 );
+                ui.key(hid, Key::Group(head.name.clone()));
                 if ui.hot(hid) {
                     draw_row_fill(ui.p, &pal, hit, true, ui.down(hid), false);
                 }
@@ -872,6 +877,10 @@ fn items(ui: &mut Ui, m: &Model, v: &mut View, r: Rect) {
                         head.checked,
                         head.tick_enabled,
                         &format!("All of {}", head.name),
+                    );
+                    ui.key(
+                        Id("GroupTick", group as u32 + 1),
+                        Key::Group(head.name.clone()),
                     );
                 }
             }

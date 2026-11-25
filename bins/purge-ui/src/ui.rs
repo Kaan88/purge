@@ -90,6 +90,19 @@ pub enum Key {
     Op(purge_model::exec::op::OpId),
     /// A quarantined item.
     Expiry(purge_rpc::methods::ExpiryId),
+    /// A program (the rows of the removed-programs group).
+    Program(purge_model::ProgramId),
+    /// An info bar, by what it says ([`Key::bar`]).
+    Bar(String),
+    /// A group of the Leftovers list, by its name.
+    Group(String),
+}
+
+impl Key {
+    /// The key of the bar that says `title` and `message`.
+    pub fn bar(title: &str, message: &str) -> Self {
+        Key::Bar(format!("{title}\n{message}"))
+    }
 }
 
 #[derive(Clone, Debug)]

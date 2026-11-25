@@ -277,7 +277,8 @@ pub const RETRY_STILL_HELD: &str =
     "The held items were tried again; some are still in use. See History & undo.";
 pub const RETRY_DECLINED: &str = "Nothing was tried: the prompt was cancelled.";
 /// The waiting title of the retry while a new broker is being started (admin explanation, UAC).
-pub const RETRY_STARTING_TITLE: &str = "Starting the administrator part to try the held items again…";
+pub const RETRY_STARTING_TITLE: &str =
+    "Starting the administrator part to try the held items again…";
 pub const RETRY_ASKS_PERMISSION_FIRST: &str =
     "Nothing has been tried yet. Purge asks for administrator permission first.";
 pub const RETRY_NOT_PERMITTED: &str = "Nothing was tried: administrator permission was not given.";

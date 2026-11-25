@@ -717,6 +717,11 @@ impl LeftoversModel {
         })
     }
 
+    /// The group named `name` (the UI resolves a click on a group by the name it showed).
+    pub fn group_named(&self, name: &str) -> Option<usize> {
+        self.groups.iter().position(|g| g.name == name)
+    }
+
     /// Shows or hides a group's rows.
     pub fn toggle_expanded(&mut self, group: usize) {
         if let Some(g) = self.groups.get_mut(group) {

@@ -870,7 +870,10 @@ mod tests {
         assert_eq!(model.badge(Page::Leftovers), None);
         let (title, text) = l.empty_panel().expect("the ended panel");
         assert_eq!(title, "The administrator part ended");
-        assert!(text.contains(l.program_name()) && text.contains("Nothing was moved"), "{text}");
+        assert!(
+            text.contains(l.program_name()) && text.contains("Nothing was moved"),
+            "{text}"
+        );
     }
 
     #[test]
