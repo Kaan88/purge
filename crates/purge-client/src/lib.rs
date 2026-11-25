@@ -268,9 +268,16 @@ pub enum ClientEvent {
         /// Why, in a sentence for the UI.
         reason: String,
     },
-    /// The broker link ended; every request in flight has had its [`ClientEvent::Reply`]. The next
-    /// click that needs the broker launches a new one.
+    /// The broker link of session `session` ended; every request in flight has had its
+    /// [`ClientEvent::Reply`]. The next click that needs the broker launches a new one.
+    ///
+    /// Only a session that was handed out announces its end, and only after it was handed out: for a
+    /// launch this event always comes after the [`ClientEvent::BrokerLaunched`] that carried the
+    /// session, and a session whose link ended before that is never handed out (the launch fails).
+    /// An event whose `session` is not the UI's current one is of an older session.
     BrokerClosed {
+        /// [`Broker::session`] of the session that ended.
+        session: u64,
         /// Why, in a sentence for the UI.
         reason: String,
     },

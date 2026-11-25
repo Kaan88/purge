@@ -664,7 +664,10 @@ mod tests {
         server_out
             .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{}}\n")
             .unwrap();
-        assert_eq!(small.recv_timeout(LIMIT).unwrap(), Ok(serde_json::json!({})));
+        assert_eq!(
+            small.recv_timeout(LIMIT).unwrap(),
+            Ok(serde_json::json!({}))
+        );
     }
 
     #[test]
@@ -735,7 +738,10 @@ mod tests {
         // The writer is now inside the first write, which does not return.
         std::thread::sleep(Duration::from_millis(100));
         let second = request(&link, None);
-        assert!(started.elapsed() < Duration::from_secs(2), "a request waited");
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "a request waited"
+        );
         assert_eq!(
             first.recv_timeout(Duration::from_millis(100)),
             Err(RecvTimeoutError::Timeout)

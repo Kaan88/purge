@@ -33,7 +33,7 @@ use purge_win::pipe_client::PipeClient;
 use purge_win::process::ProcessHandle;
 use purge_win::token::{ElevationType, current_process_facts};
 
-use super::{BrokerClient, HandshakeError, check_server};
+use super::{BrokerClient, HandshakeError, ServerCheck, check_server};
 use crate::engine::win32_text;
 use crate::{CallId, ClientEvent, Sink};
 
@@ -141,6 +141,9 @@ pub fn classify_shell_failure(error: u32) -> LaunchFailure {
 
 /// Starts `broker` elevated on a background thread. The session (or the failure) arrives as a
 /// [`ClientEvent::BrokerLaunched`]; the session then delivers its own events through `sink`.
+///
+/// The thread is detached: it ends after this one launch, once the Windows prompt is answered and at
+/// most [`CONNECT_TIMEOUT`] and [`HELLO_TIMEOUT`] later ([`Launch::stop`] ends it at its next step).
 pub fn launch(broker: &Path, sink: Sink) -> Launch {
     let launch = Launch {
         call: CallId::next(),
@@ -154,7 +157,7 @@ pub fn launch(broker: &Path, sink: Sink) -> Launch {
         .name("purge-broker-launcher".into())
         .spawn(move || {
             let result = run(&broker, worker_sink.clone(), &stop);
-            worker_sink.send(ClientEvent::BrokerLaunched { call, result });
+            deliver(call, result, &worker_sink);
         });
     if let Err(e) = spawned {
         sink.send(ClientEvent::BrokerLaunched {
@@ -166,6 +169,40 @@ pub fn launch(broker: &Path, sink: Sink) -> Launch {
         });
     }
     launch
+}
+
+/// Sends the answer of launch `call`. A session is handed out with it
+/// ([`BrokerClient::hand_over`]), so its [`ClientEvent::BrokerClosed`] can only come after this
+/// [`ClientEvent::BrokerLaunched`]. A session whose link ended before is not handed out: the launch
+/// fails instead, and the broker is ended.
+pub(crate) fn deliver(call: CallId, result: Result<Arc<BrokerClient>, LaunchFailure>, sink: &Sink) {
+    let session = match result {
+        Ok(session) => session,
+        Err(failure) => {
+            sink.send(ClientEvent::BrokerLaunched {
+                call,
+                result: Err(failure),
+            });
+            return;
+        }
+    };
+    let handed = session.clone();
+    let refused = session.hand_over(|| {
+        sink.send(ClientEvent::BrokerLaunched {
+            call,
+            result: Ok(handed),
+        })
+    });
+    if let Err(e) = refused {
+        let failure = match finish(Err(e), HELLO_TIMEOUT, || session.terminate()) {
+            Ok(_) => unreachable!("finish of an error is an error"),
+            Err(failure) => failure,
+        };
+        sink.send(ClientEvent::BrokerLaunched {
+            call,
+            result: Err(failure),
+        });
+    }
 }
 
 /// The account check of step 1: false only for a standard user (not elevated, and no limited half of
@@ -227,6 +264,8 @@ fn run(broker: &Path, sink: Sink, stop: &AtomicBool) -> Result<Arc<BrokerClient>
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| broker.clone());
+    // `run_as` answers INVALID_DATA only for a start without a process handle; a process whose pid
+    // could not be read was ended there, and its error is GetProcessId's.
     let process = run_as(&broker, &arguments, &directory).map_err(|e| {
         if e == Win32Error::INVALID_DATA {
             LaunchFailure::new(
@@ -237,7 +276,11 @@ fn run(broker: &Path, sink: Sink, stop: &AtomicBool) -> Result<Arc<BrokerClient>
             classify_shell_failure(e.code())
         }
     })?;
-    connect(process, &name, broker, sink, stop)
+    let path = PathBuf::from(format!(r"\\.\pipe\purge-{name}"));
+    let pipe = connect(&process, &path, CONNECT_TIMEOUT, stop, |pipe, pid| {
+        check_server(pipe, pid, &broker, true)
+    })?;
+    handshake(pipe, process, broker, sink, stop)
 }
 
 /// This process's pid and creation time (a FILETIME), which the broker checks to know its parent.
@@ -251,24 +294,50 @@ fn pipe_name() -> Result<String, Win32Error> {
     Ok(format!("{:016x}{:016x}", random_u64()?, random_u64()?))
 }
 
-fn connect(
-    process: LaunchedProcess,
-    name: &str,
-    broker: PathBuf,
-    sink: Sink,
+/// What [`connect`] needs of the started broker; a test drives [`connect`] with its own.
+pub(crate) trait BrokerProcess {
+    /// The pid the server check expects.
+    fn pid(&self) -> u32;
+    /// The exit code once the process has ended; `None` while it runs.
+    fn exit_code(&self) -> Option<u32>;
+    /// Best effort: ends the process while it runs.
+    fn terminate(&self);
+}
+
+impl BrokerProcess for LaunchedProcess {
+    fn pid(&self) -> u32 {
+        LaunchedProcess::pid(self)
+    }
+
+    fn exit_code(&self) -> Option<u32> {
+        LaunchedProcess::exit_code(self)
+    }
+
+    fn terminate(&self) {
+        LaunchedProcess::terminate(self)
+    }
+}
+
+/// Steps 5 and 6: opens `path`, retrying for `timeout` while the pipe is missing or busy, then runs
+/// `check` (the server check, given the pipe and the expected pid) before anything is written. Every
+/// failure ends `process` (best effort), except that of a process that already exited.
+pub(crate) fn connect<P: BrokerProcess>(
+    process: &P,
+    path: &Path,
+    timeout: Duration,
     stop: &AtomicBool,
-) -> Result<Arc<BrokerClient>, LaunchFailure> {
+    check: impl Fn(&PipeClient, u32) -> ServerCheck,
+) -> Result<PipeClient, LaunchFailure> {
     let pid = process.pid();
-    let path = PathBuf::from(format!(r"\\.\pipe\purge-{name}"));
-    let deadline = Instant::now() + CONNECT_TIMEOUT;
+    let deadline = Instant::now() + timeout;
     loop {
         if stop.load(Ordering::SeqCst) {
             process.terminate();
             return Err(stopped());
         }
-        match PipeClient::open(&path) {
+        match PipeClient::open(path) {
             Ok(pipe) => {
-                let check = check_server(&pipe, pid, &broker, true);
+                let check = check(&pipe, pid);
                 if !check.ok() {
                     drop(pipe);
                     process.terminate();
@@ -277,7 +346,7 @@ fn connect(
                         check.reason,
                     ));
                 }
-                return handshake(pipe, process, broker, sink, stop);
+                return Ok(pipe);
             }
             Err(e) => {
                 let error = e.code();
@@ -285,6 +354,7 @@ fn connect(
                     && error != ERROR_FILE_NOT_FOUND
                     && error != ERROR_SEM_TIMEOUT
                 {
+                    process.terminate();
                     return Err(LaunchFailure {
                         win32_error: error,
                         ..LaunchFailure::new(
@@ -313,7 +383,7 @@ fn connect(
                 LaunchStatus::TimedOut,
                 format!(
                     "The administrator part did not start within {} seconds.",
-                    CONNECT_TIMEOUT.as_secs()
+                    timeout.as_secs()
                 ),
             ));
         }

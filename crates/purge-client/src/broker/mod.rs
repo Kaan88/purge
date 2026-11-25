@@ -29,9 +29,9 @@ mod launcher;
 use std::fmt;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use purge_rpc::EngineHello;
@@ -42,7 +42,7 @@ use purge_win::launch::{LaunchedProcess, allow_set_foreground_window};
 use purge_win::pipe_client::{PipeClient, PipeClientError};
 use serde_json::Value;
 
-use crate::link::{Call, Hooks, Link, decode};
+use crate::link::{Call, Hooks, Link, decode, lock};
 use crate::{Answer, CallId, ClientError, ClientEvent, Sink};
 
 pub use check::{ServerCheck, ServerCheckStatus, check_server};
@@ -77,6 +77,12 @@ pub trait Broker: Send + Sync + fmt::Debug {
 
     /// Ends the session: the pipe closes and the broker exits (it also holds the UI as its parent).
     fn close(&self);
+
+    /// The session's id, as [`ClientEvent::BrokerClosed`] names it: unique in the process. The
+    /// default 0 is for an implementation that announces no end.
+    fn session(&self) -> u64 {
+        0
+    }
 }
 
 /// How long one request line may take to write before the link is given up (design T13, as the
@@ -92,9 +98,61 @@ pub struct BrokerClient {
     path: PathBuf,
     /// The handle `ShellExecuteExW` returned, held so the pid is not reused while the session lives.
     /// `None` for a session over streams given by a test.
-    _process: Option<Arc<LaunchedProcess>>,
+    process: Option<Arc<LaunchedProcess>>,
     /// `AllowSetForegroundWindow(pid)`; a test counts the calls instead.
     foreground: Foreground,
+    /// See [`Broker::session`].
+    session: u64,
+    /// Whether the session was handed out, which decides whether its end is announced.
+    announce: Arc<Announce>,
+}
+
+/// The order of a session's two announcements. A session's end is announced
+/// ([`ClientEvent::BrokerClosed`]) only once it was handed out, and never before: the hand-over
+/// (for a launch, the [`ClientEvent::BrokerLaunched`] send) and the end's announcement run under
+/// one lock, and a link that ended before the hand-over makes no session at all.
+#[derive(Default)]
+pub(crate) struct Announce(Mutex<Phase>);
+
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
+enum Phase {
+    /// Made, not handed out yet.
+    #[default]
+    Pending,
+    /// Handed out: its end is announced.
+    HandedOut,
+    /// Ended before it was handed out: it never will be.
+    Ended,
+}
+
+impl Announce {
+    /// The link ended: runs `announce` if the session was handed out; otherwise the session will
+    /// never be.
+    fn closed(&self, announce: impl FnOnce()) {
+        let mut phase = lock(&self.0);
+        match *phase {
+            Phase::HandedOut => announce(),
+            Phase::Pending | Phase::Ended => *phase = Phase::Ended,
+        }
+    }
+
+    /// Hands the session out by running `deliver`, unless its link already ended (false, and
+    /// `deliver` does not run). An end that comes meanwhile is announced after `deliver` returned.
+    fn hand_over(&self, deliver: impl FnOnce()) -> bool {
+        let mut phase = lock(&self.0);
+        if *phase == Phase::Ended {
+            return false;
+        }
+        deliver();
+        *phase = Phase::HandedOut;
+        true
+    }
+}
+
+/// The next [`Broker::session`] id.
+fn next_session() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
 /// What [`Broker::allow_foreground`] does.
@@ -153,7 +211,7 @@ impl BrokerClient {
         hello_timeout: Duration,
         stop: &AtomicBool,
     ) -> Result<Arc<BrokerClient>, HandshakeError> {
-        BrokerClient::handshake(
+        let session = BrokerClient::handshake(
             input,
             output,
             shut_down,
@@ -163,10 +221,14 @@ impl BrokerClient {
             sink,
             hello_timeout,
             stop,
-        )
+        )?;
+        // The caller has the session once this returns, before it can read any event of it.
+        session.hand_over(|| {})?;
+        Ok(session)
     }
 
-    /// A session over the checked pipe `pipe` of process `process`.
+    /// A session over the checked pipe `pipe` of process `process`, not handed out yet: the launcher
+    /// hands it out with its [`ClientEvent::BrokerLaunched`] ([`BrokerClient::hand_over`]).
     pub(crate) fn over_pipe(
         pipe: PipeClient,
         process: Arc<LaunchedProcess>,
@@ -175,20 +237,65 @@ impl BrokerClient {
         hello_timeout: Duration,
         stop: &AtomicBool,
     ) -> Result<Arc<BrokerClient>, HandshakeError> {
-        let pipe = Arc::new(pipe);
         let pid = process.pid();
-        let shut = pipe.clone();
+        BrokerClient::pipe_session(pipe, Some(process), pid, path, sink, hello_timeout, stop)
+    }
+
+    /// The pipe wiring of [`BrokerClient::over_pipe`]. The `shut_down` hook holds the only reference
+    /// to the pipe besides the reader's and the writer's, and lets go of it: once both threads are
+    /// out of their I/O the handle closes, and the broker sees the pipe end (and takes its consent
+    /// dialog down), also while the caller still holds the session.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn pipe_session(
+        pipe: PipeClient,
+        process: Option<Arc<LaunchedProcess>>,
+        pid: u32,
+        path: PathBuf,
+        sink: Sink,
+        hello_timeout: Duration,
+        stop: &AtomicBool,
+    ) -> Result<Arc<BrokerClient>, HandshakeError> {
+        let pipe = Arc::new(pipe);
+        let shut = Mutex::new(Some(pipe.clone()));
         BrokerClient::handshake(
             Box::new(PipeWriter(pipe.clone())),
             Box::new(PipeReader(pipe)),
-            Box::new(move || shut.shut_down()),
-            Some(process),
+            Box::new(move || {
+                if let Some(pipe) = lock(&shut).take() {
+                    pipe.shut_down();
+                }
+            }),
+            process,
             pid,
             path,
             sink,
             hello_timeout,
             stop,
         )
+    }
+
+    /// Hands the session out by running `deliver` (the launcher sends its
+    /// [`ClientEvent::BrokerLaunched`] there). Its [`ClientEvent::BrokerClosed`] can only come after.
+    /// A session whose link already ended is not handed out: the error says why.
+    pub(crate) fn hand_over(&self, deliver: impl FnOnce()) -> Result<(), HandshakeError> {
+        if self.announce.hand_over(deliver) {
+            Ok(())
+        } else {
+            Err(HandshakeError::Refused(ClientError::Link {
+                reason: self
+                    .link
+                    .closed_reason()
+                    .unwrap_or_else(|| "The administrator part ended.".into()),
+                not_sent: false,
+            }))
+        }
+    }
+
+    /// Ends the broker process on a best-effort basis (a session that was never handed out).
+    pub(crate) fn terminate(&self) {
+        if let Some(process) = &self.process {
+            process.terminate();
+        }
     }
 
     /// The one way a session is made: the link, `engine.hello` as its first request, the answer.
@@ -205,7 +312,8 @@ impl BrokerClient {
         stop: &AtomicBool,
     ) -> Result<Arc<BrokerClient>, HandshakeError> {
         // Only a session that was handed out announces its end.
-        let announced = Arc::new(AtomicBool::new(false));
+        let announce = Arc::new(Announce::default());
+        let session = next_session();
         let hooks = Hooks {
             who: "The administrator part",
             out_limit: PIPE_IN_LIMIT,
@@ -216,18 +324,19 @@ impl BrokerClient {
             },
             closed: {
                 let sink = sink.clone();
-                let announced = announced.clone();
+                let announce = announce.clone();
                 Box::new(move |reason| {
-                    if announced.load(Ordering::SeqCst) {
+                    announce.closed(|| {
                         sink.send(ClientEvent::BrokerClosed {
+                            session,
                             reason: reason.to_owned(),
-                        });
-                    }
+                        })
+                    });
                 })
             },
             exit_text: Box::new(String::new),
         };
-        let link = Link::new(input, output, hooks, "purge-broker-reader").map_err(|e| {
+        let link = Link::new(input, output, hooks, "purge-broker").map_err(|e| {
             HandshakeError::Refused(ClientError::Link {
                 reason: e.to_string(),
                 not_sent: true,
@@ -265,7 +374,6 @@ impl BrokerClient {
         };
         match answer {
             Ok(hello) => {
-                announced.store(true, Ordering::SeqCst);
                 if let Some(reason) = link.closed_reason() {
                     // Ended right after the hello: no session.
                     return Err(HandshakeError::Refused(ClientError::Link {
@@ -273,16 +381,19 @@ impl BrokerClient {
                         not_sent: false,
                     }));
                 }
+                // Not handed out yet: a link that ends before the hand-over makes no session.
                 Ok(Arc::new(BrokerClient {
                     link,
                     sink,
                     hello,
                     pid,
                     path,
-                    _process: process,
+                    process,
                     foreground: Arc::new(move || {
                         let _ = allow_set_foreground_window(pid);
                     }),
+                    session,
+                    announce,
                 }))
             }
             Err(e) => {
@@ -384,6 +495,10 @@ impl Broker for BrokerClient {
 
     fn close(&self) {
         self.link.close("The administrator part link was closed.");
+    }
+
+    fn session(&self) -> u64 {
+        self.session
     }
 }
 
