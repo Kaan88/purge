@@ -18,7 +18,7 @@ use mdshared_app::backdrop::Backdrop;
 use crate::look::{Choice, Design, Preset, ThemeChoice, Transition};
 use crate::model::{Model, Page, SortKey};
 use crate::transition::PageSwitch;
-use crate::ui::Id;
+use crate::ui::{Ctl, Id};
 
 /// A list of rows of one height, scrolled: the scroll on its way and the last frame's place.
 pub struct ListView {
@@ -224,6 +224,13 @@ pub struct View {
     /// The page and design the last frame drew, to start a transition when they change.
     pub shown: Option<(Page, Design)>,
     pub page_tx: PageSwitch,
+    /// While a page comes in (`page_tx`), the page is drawn once and laid over the old one
+    /// from then on: what it shows changed since (an event, the engine), so the next frame
+    /// draws it again; whether the last frame drew it; and the controls it declared when it
+    /// was drawn, which stand for it in the frames that lay it.
+    pub page_dirty: bool,
+    pub page_drawn: bool,
+    pub page_ctls: Vec<Ctl>,
     /// D2: the stage of the flow the last frame drew, and the push from one stage to the next.
     pub flow_shown: Option<usize>,
     pub flow_tx: PageSwitch,
@@ -274,6 +281,9 @@ impl View {
             page_content: 0.0,
             shown: None,
             page_tx: PageSwitch::new("page"),
+            page_dirty: false,
+            page_drawn: true,
+            page_ctls: Vec::new(),
             flow_shown: None,
             flow_tx: PageSwitch::new("flow"),
             preview_b: false,

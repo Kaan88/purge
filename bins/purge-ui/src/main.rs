@@ -22,6 +22,7 @@ mod link;
 mod look;
 mod markers;
 mod model;
+mod paint;
 mod prefs;
 mod sample_broker;
 mod screens;

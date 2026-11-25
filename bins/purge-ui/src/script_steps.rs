@@ -1829,6 +1829,108 @@ fn appearance_steps() -> Vec<Step> {
             },
             settle: 60,
         },
+        // UI-REDRAW: a page coming in is drawn once and laid over the old one from then on, and
+        // a click on it is passed over until it is in place.
+        Step {
+            name: "paint-matches-the-toolkit",
+            act: |_, _| {},
+            check: |app| match &app.paint_check {
+                Some(Ok(n)) => Ok(format!("{n} boxes and gradients, pixel for pixel")),
+                Some(Err(e)) => Err(e.clone()),
+                None => Err("not checked".to_string()),
+            },
+            settle: 10,
+        },
+        Step {
+            name: "transition-away-plainly",
+            act: |app, cx| app.press_key(cx, KeyName::Char('3'), CTRL),
+            check: |app| {
+                want(app.model.page == Page::Leftovers, "on Leftovers")?;
+                Ok("Leftovers".to_string())
+            },
+            settle: 60,
+        },
+        Step {
+            name: "transition-lays-the-held-page",
+            act: |app, cx| {
+                app.set_transition(cx, Transition::Depth);
+                app.press_key(cx, KeyName::Char('1'), CTRL);
+            },
+            check: |app| {
+                want(app.view.page_tx.running(), "the page is still settling")?;
+                want(!app.view.page_drawn, "the last frame drew the page again")?;
+                want(
+                    app.ctl(crate::screens::programs_tab_id(Tab::Apps))
+                        .is_some(),
+                    "the held page's controls are declared",
+                )?;
+                Ok("laid, not drawn".to_string())
+            },
+            settle: 60,
+        },
+        Step {
+            name: "transition-passes-over-a-click",
+            act: |app, cx| {
+                let from = app.model.programs.tab;
+                app.note = format!("{from:?}");
+                let to = if from == Tab::Apps {
+                    Tab::Components
+                } else {
+                    Tab::Apps
+                };
+                app.click(cx, crate::screens::programs_tab_id(to));
+            },
+            check: |app| {
+                want(app.view.page_tx.running(), "the page is still settling")?;
+                want(
+                    format!("{:?}", app.model.programs.tab) == app.note,
+                    format!("the click went through: {:?}", app.model.programs.tab),
+                )?;
+                Ok("passed over".to_string())
+            },
+            settle: 20,
+        },
+        Step {
+            name: "transition-in-place-takes-clicks",
+            act: |app, cx| {
+                let to = if app.model.programs.tab == Tab::Apps {
+                    Tab::Components
+                } else {
+                    Tab::Apps
+                };
+                app.click(cx, crate::screens::programs_tab_id(to));
+                app.set_transition(cx, Transition::None);
+            },
+            check: |app| {
+                want(!app.view.page_tx.running(), "still moving")?;
+                want(
+                    format!("{:?}", app.model.programs.tab) != app.note,
+                    "the click was passed over",
+                )?;
+                Ok(format!("{:?}", app.model.programs.tab))
+            },
+            settle: 100,
+        },
+        Step {
+            name: "transition-tab-back",
+            act: |app, cx| {
+                let back = Tab::ALL
+                    .iter()
+                    .copied()
+                    .find(|t| format!("{t:?}") == app.note);
+                if let Some(t) = back {
+                    app.click(cx, crate::screens::programs_tab_id(t));
+                }
+            },
+            check: |app| {
+                want(
+                    format!("{:?}", app.model.programs.tab) == app.note,
+                    "the tab is not back",
+                )?;
+                Ok(app.note.clone())
+            },
+            settle: 100,
+        },
     ]
 }
 
