@@ -2144,10 +2144,12 @@ dependencies = [
 name = "purge-client"
 version = "0.1.9"
 dependencies = [
+ "purge-model",
  "purge-rpc",
  "purge-win",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 2.0.21",
 ]
 

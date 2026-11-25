@@ -1,0 +1,1254 @@
+{
+ "schema": "purge.inventory/0",
+ "entries": [
+  {
+   "program_id": "HKLM|64|7-Zip",
+   "key_path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\7-Zip",
+   "hive_sid": null,
+   "view": "K64",
+   "display_name": "7-Zip 24.08 (x64)",
+   "version": "24.08",
+   "publisher": "Igor Pavlov",
+   "flags": {
+    "system_component": false,
+    "has_display_name": true,
+    "has_uninstall_string": true,
+    "parent_key": null,
+    "release_type": null,
+    "windows_installer": false
+   },
+   "installer_kind": "Nsis",
+   "scope": "Machine",
+   "product_code": null,
+   "upgrade_code": null,
+   "inno_app_id": null,
+   "writable_by": "admin",
+   "install_location": "C:\\Program Files\\7-Zip\\",
+   "uninstall_string": "\"C:\\Program Files\\7-Zip\\Uninstall.exe\"",
+   "quiet_uninstall_string": "\"C:\\Program Files\\7-Zip\\Uninstall.exe\" /S",
+   "display_icon": null,
+   "install_time_evidence": [
+    {
+     "source": "ArpInstallDate",
+     "time": 134380512000000000
+    },
+    {
+     "source": "KeyLastWrite",
+     "time": 134381020200000000
+    }
+   ],
+   "msi": null
+  },
+  {
+   "program_id": "HKLM|64|Git_is1",
+   "key_path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Git_is1",
+   "hive_sid": null,
+   "view": "K64",
+   "display_name": "Git",
+   "version": "2.51.0",
+   "publisher": "The Git Development Community",
+   "flags": {
+    "system_component": false,
+    "has_display_name": true,
+    "has_uninstall_string": true,
+    "parent_key": null,
+    "release_type": null,
+    "windows_installer": false
+   },
+   "installer_kind": "Inno",
+   "scope": "Machine",
+   "product_code": null,
+   "upgrade_code": null,
+   "inno_app_id": "Git",
+   "writable_by": "admin",
+   "install_location": "C:\\Program Files\\Git\\",
+   "uninstall_string": "\"C:\\Program Files\\Git\\unins000.exe\"",
+   "quiet_uninstall_string": "\"C:\\Program Files\\Git\\unins000.exe\" /VERYSILENT",
+   "display_icon": null,
+   "install_time_evidence": [
+    {
+     "source": "ArpInstallDate",
+     "time": 134369280000000000
+    },
+    {
+     "source": "KeyLastWrite",
+     "time": 134369788200000000
+    }
+   ],
+   "msi": null
+  },
+  {
+   "program_id": "HKLM|64|Mozilla Firefox 146.0.1 (x64 en-US)",
+   "key_path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Mozilla Firefox 146.0.1 (x64 en-US)",
+   "hive_sid": null,
+   "view": "K64",
+   "display_name": "Mozilla Firefox (x64 en-US)",
+   "version": "146.0.1",
+   "publisher": "Mozilla",
+   "flags": {
+    "system_component": false,
+    "has_display_name": true,
+    "has_uninstall_string": true,
+    "parent_key": null,
+    "release_type": null,
+    "windows_installer": false
+   },
+   "installer_kind": "Nsis",
+   "scope": "Machine",
+   "product_code": null,
+   "upgrade_code": null,
+   "inno_app_id": null,
+   "writable_by": "admin",
+   "install_location": "C:\\Program Files\\Mozilla Firefox",
+   "uninstall_string": "\"C:\\Program Files\\Mozilla Firefox\\uninstall\\helper.exe\"",
+   "quiet_uninstall_string": "\"C:\\Program Files\\Mozilla Firefox\\uninstall\\helper.exe\" /S",
+   "display_icon": null,
+   "install_time_evidence": [
+    {
+     "source": "ArpInstallDate",
+     "time": 134387424000000000
+    },
+    {
+     "source": "KeyLastWrite",
+     "time": 134387932200000000
+    }
+   ],
+   "msi": null
+  },
+  {
+   "program_id": "HKLM|32|MozillaMaintenanceService",
+   "key_path": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\MozillaMaintenanceService",
+   "hive_sid": null,
+   "view": "K32",
+   "display_name": "Mozilla Maintenance Service",
+   "version": "146.0.1",
+   "publisher": "Mozilla",
+   "flags": {
+    "system_component": false,
+    "has_display_name": true,
+    "has_uninstall_string": true,
+    "parent_key": null,
+    "release_type": null,
+    "windows_installer": false
+   },
+   "installer_kind": "Nsis",
+   "scope": "Machine",
+   "product_code": null,
+   "upgrade_code": null,
+   "inno_app_id": null,
+   "writable_by": "admin",
+   "install_location": "C:\\Program Files (x86)\\Mozilla Maintenance Service",
+   "uninstall_string": "\"C:\\Program Files (x86)\\Mozilla Maintenance Service\\uninstall.exe\"",
+   "quiet_uninstall_string": null,
+   "display_icon": null,
+   "install_time_evidence": [
+    {
+     "source": "ArpInstallDate",
+     "time": 134387424000000000
+    },
+    {
+     "source": "KeyLastWrite",
+     "time": 134387932200000000
+    }
+   ],
+   "msi": null
+  },
+  {
+   "program_id": "HKU:S-1-5-21-1000000001-2000000002-3000000003-1001|64|{2B8A61C4-7A3F-4E5D-9C1B-3F0E2D4A5B6C}",
+   "key_path": "HKU\\S-1-5-21-1000000001-2000000002-3000000003-1001\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{2B8A61C4-7A3F-4E5D-9C1B-3F0E2D4A5B6C}",
+   "hive_sid": "S-1-5-21-1000000001-2000000002-3000000003-1001",
+   "view": "K64",
+   "display_name": "Python 3.12.7 (64-bit)",
+   "version": "3.12.7150.0",
+   "publisher": "Python Software Foundation",
+   "flags": {
+    "system_component": false,
+    "has_display_name": true,
+    "has_uninstall_string": true,
+    "parent_key": null,
+    "release_type": null,
+    "windows_installer": false
+   },
+   "installer_kind": "Burn",
+   "scope": "User",
+   "product_code": null,
+   "upgrade_code": "{F1E2D3C4-B5A6-4789-8A7B-6C5D4E3F2A1B}",
+   "inno_app_id": null,
+   "writable_by": "user",
+   "install_location": null,
+   "uninstall_string": "\"C:\\Users\\Sam\\AppData\\Local\\Package Cache\\{2b8a61c4-7a3f-4e5d-9c1b-3f0e2d4a5b6c}\\python-3.12.7-amd64.exe\" /uninstall",
+   "quiet_uninstall_string": "\"C:\\Users\\Sam\\AppData\\Local\\Package Cache\\{2b8a61c4-7a3f-4e5d-9c1b-3f0e2d4a5b6c}\\python-3.12.7-amd64.exe\" /uninstall /quiet",
+   "display_icon": null,
+   "install_time_evidence": [
+    {
+     "source": "ArpInstallDate",
+     "time": 134387424000000000
+    },
+    {
+     "source": "KeyLastWrite",
+     "time": 134387932200000000
+    }
+   ],
+   "msi": null
+  },
+  {
+   "program_id": "HKLM|32|{0D5C8B2E-1A4F-4B6D-8E3C-7F9A1B2C3D4E}",
+   "key_path": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{0D5C8B2E-1A4F-4B6D-8E3C-7F9A1B2C3D4E}",
+   "hive_sid": null,
+   "view": "K32",
+   "display_name": "Python Launcher",
+   "version": "3.12.7150.0",
+   "publisher": "Python Software Foundation",
+   "flags": {
+    "system_component": false,
+    "has_display_name": true,
+    "has_uninstall_string": true,
+    "parent_key": null,
+    "release_type": null,
+    "windows_installer": true
+   },
+   "installer_kind": "Msi",
+   "scope": "Machine",
+   "product_code": "{0D5C8B2E-1A4F-4B6D-8E3C-7F9A1B2C3D4E}",
+   "upgrade_code": null,
+   "inno_app_id": null,
+   "writable_by": "admin",
+   "install_location": null,
+   "uninstall_string": "MsiExec.exe /X{0D5C8B2E-1A4F-4B6D-8E3C-7F9A1B2C3D4E}",
+   "quiet_uninstall_string": null,
+   "display_icon": null,
+   "install_time_evidence": [
+    {
+     "source": "MsiInstallDate",
+     "time": 134387424000000000
+    },
+    {
+     "source": "KeyLastWrite",
+     "time": 134387932200000000
+    }
+   ],
+   "msi": {
+    "context": "Machine",
+    "local_package": "C:\\Windows\\Installer\\9612caa.msi",
+    "install_date": "20261110"
+   }
+  },
+  {
+   "program_id": "HKLM|64|{771FD6B0-FA20-440A-A002-3B3BAC16DC50}_is1",
+   "key_path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{771FD6B0-FA20-440A-A002-3B3BAC16DC50}_is1",
+   "hive_sid": null,
+   "view": "K64",
+   "display_name": "Microsoft Visual Studio Code",
+   "version": "1.106.0",
+   "publisher": "Microsoft Corporation",
+   "flags": {
+    "system_component": false,
+    "has_display_name": true,
+    "has_uninstall_string": true,
+    "parent_key": null,
+    "release_type": null,
+    "windows_installer": false
+   },
+   "installer_kind": "Inno",
+   "scope": "Machine",
+   "product_code": null,
+   "upgrade_code": null,
+   "inno_app_id": "{771FD6B0-FA20-440A-A002-3B3BAC16DC50}",
+   "writable_by": "admin",
+   "install_location": "C:\\Program Files\\Microsoft VS Code\\",
+   "uninstall_string": "\"C:\\Program Files\\Microsoft VS Code\\unins000.exe\"",
+   "quiet_uninstall_string": null,
+   "display_icon": null,
+   "install_time_evidence": [
+    {
+     "source": "ArpInstallDate",
+     "time": 134383968000000000
+    },
+    {
+     "source": "KeyLastWrite",
+     "time": 134384476200000000
+    }
+   ],
+   "msi": null
+  },
+  {
+   "program_id": "HKLM|64|Notepad++",
+   "key_path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Notepad++",
+   "hive_sid": null,
+   "view": "K64",
+   "display_name": "Notepad++ (64-bit x64)",
+   "version": "8.8.7",
+   "publisher": "Notepad++ Team",
+   "flags": {
+    "system_component": false,
+    "has_display_name": true,
+    "has_uninstall_string": true,
+    "parent_key": null,
+    "release_type": null,
+    "windows_installer": false
+   },
+   "installer_kind": "Nsis",
+   "scope": "Machine",
+   "product_code": null,
+   "upgrade_code": null,
+   "inno_app_id": null,
+   "writable_by": "admin",
+   "install_location": "C:\\Program Files\\Notepad++",
+   "uninstall_string": "\"C:\\Program Files\\Notepad++\\uninstall.exe\"",
+   "quiet_uninstall_string": null,
+   "display_icon": null,
+   "install_time_evidence": [
+    {
+     "source": "ArpInstallDate",
+     "time": 134338176000000000
+    },
+    {
+     "source": "KeyLastWrite",
+     "time": 134338684200000000
+    }
+   ],
+   "msi": null
+  },
+  {
+   "program_id": "HKLM|64|WinMerge_is1",
+   "key_path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\WinMerge_is1",
+   "hive_sid": null,
+   "view": "K64",
+   "display_name": "WinMerge 2.16.50.2 x64",
+   "version": "2.16.50.2",
+   "publisher": "Thingamahoochie Software",
+   "flags": {
+    "system_component": false,
+    "has_display_name": true,
+    "has_uninstall_string": true,
+    "parent_key": null,
+    "release_type": null,
+    "windows_installer": false
+   },
+   "installer_kind": "Inno",
+   "scope": "Machine",
+   "product_code": null,
+   "upgrade_code": null,
+   "inno_app_id": "WinMerge",
+   "writable_by": "admin",
+   "install_location": "C:\\Program Files\\WinMerge\\",
+   "uninstall_string": "\"C:\\Program Files\\WinMerge\\unins000.exe\"",
+   "quiet_uninstall_string": null,
+   "display_icon": null,
+   "install_time_evidence": [
+    {
+     "source": "ArpInstallDate",
+     "time": 134325216000000000
+    },
+    {
+     "source": "KeyLastWrite",
+     "time": 134325724200000000
+    }
+   ],
+   "msi": null
+  },
+  {
+   "program_id": "HKLM|64|{A5C7E9B1-3D2F-4A6B-8C0E-1F2A3B4C5D6E}",
+   "key_path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{A5C7E9B1-3D2F-4A6B-8C0E-1F2A3B4C5D6E}",
+   "hive_sid": null,
+   "view": "K64",
+   "display_name": "Node.js",
+   "version": "22.21.0",
+   "publisher": "Node.js Foundation",
+   "flags": {
+    "system_component": false,
+    "has_display_name": true,
+    "has_uninstall_string": true,
+    "parent_key": null,
+    "release_type": null,
+    "windows_installer": true
+   },
+   "installer_kind": "Msi",
+   "scope": "Machine",
+   "product_code": "{A5C7E9B1-3D2F-4A6B-8C0E-1F2A3B4C5D6E}",
+   "upgrade_code": null,
+   "inno_app_id": null,
+   "writable_by": "admin",
+   "install_location": "C:\\Program Files\\nodejs\\",
+   "uninstall_string": "MsiExec.exe /X{A5C7E9B1-3D2F-4A6B-8C0E-1F2A3B4C5D6E}",
+   "quiet_uninstall_string": null,
+   "display_icon": null,
+   "install_time_evidence": [
+    {
+     "source": "MsiInstallDate",
+     "time": 134353728000000000
+    },
+    {
+     "source": "KeyLastWrite",
+     "time": 134354236200000000
+    }
+   ],
+   "msi": {
+    "context": "Machine",
+    "local_package": "C:\\Windows\\Installer\\71fd72a.msi",
+    "install_date": "20261002"
+   }
+  },
+  {
+   "program_id": "HKLM|64|VLC media player",
+   "key_path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\VLC media player",
+   "hive_sid": null,
+   "view": "K64",
+   "display_name": "VLC media player",
+   "version": "3.0.21",
+   "publisher": "VideoLAN",
+   "flags": {
+    "system_component": false,
+    "has_display_name": true,
+    "has_uninstall_string": true,
+    "parent_key": null,
+    "release_type": null,
+    "windows_installer": false
+   },
+   "installer_kind": "Nsis",
+   "scope": "Machine",
+   "product_code": null,
+   "upgrade_code": null,
+   "inno_app_id": null,
+   "writable_by": "admin",
+   "install_location": "C:\\Program Files\\VideoLAN\\VLC",
+   "uninstall_string": "\"C:\\Program Files\\VideoLAN\\VLC\\uninstall.exe\"",
+   "quiet_uninstall_string": null,
+   "display_icon": null,
+   "install_time_evidence": [
+    {
+     "source": "ArpInstallDate",
+     "time": 134288064000000000
+    },
+    {
+     "source": "KeyLastWrite",
+     "time": 134288572200000000
+    }
+   ],
+   "msi": null
+  },
+  {
+   "program_id": "HKU:S-1-5-21-1000000001-2000000002-3000000003-1001|64|Discord",
+   "key_path": "HKU\\S-1-5-21-1000000001-2000000002-3000000003-1001\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Discord",
+   "hive_sid": "S-1-5-21-1000000001-2000000002-3000000003-1001",
+   "view": "K64",
+   "display_name": "Discord",
+   "version": "1.0.9213",
+   "publisher": "Discord Inc.",
+   "flags": {
+    "system_component": false,
+    "has_display_name": true,
+    "has_uninstall_string": true,
+    "parent_key": null,
+    "release_type": null,
+    "windows_installer": false
+   },
+   "installer_kind": "Unknown",
+   "scope": "User",
+   "product_code": null,
+   "upgrade_code": null,
+   "inno_app_id": null,
+   "writable_by": "user",
+   "install_location": "C:\\Users\\Sam\\AppData\\Local\\Discord",
+   "uninstall_string": "\"C:\\Users\\Sam\\AppData\\Local\\Discord\\Update.exe\" --uninstall",
+   "quiet_uninstall_string": "\"C:\\Users\\Sam\\AppData\\Local\\Discord\\Update.exe\" --uninstall -s",
+   "display_icon": null,
+   "install_time_evidence": [
+    {
+     "source": "ArpInstallDate",
+     "time": 134385696000000000
+    },
+    {
+     "source": "KeyLastWrite",
+     "time": 134386204200000000
+    }
+   ],
+   "msi": null
+  },
+  {
+   "program_id": "HKU:S-1-5-21-1000000001-2000000002-3000000003-1001|64|Spotify",
+   "key_path": "HKU\\S-1-5-21-1000000001-2000000002-3000000003-1001\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Spotify",
+   "hive_sid": "S-1-5-21-1000000001-2000000002-3000000003-1001",
+   "view": "K64",
+   "display_name": "Spotify",
+   "version": "1.2.74.477",
+   "publisher": "Spotify AB",
+   "flags": {
+    "system_component": false,
+    "has_display_name": true,
+    "has_uninstall_string": true,
+    "parent_key": null,
+    "release_type": null,
+    "windows_installer": false
+   },
+   "installer_kind": "Unknown",
+   "scope": "User",
+   "product_code": null,
+   "upgrade_code": null,
+   "inno_app_id": null,
+   "writable_by": "user",
+   "install_location": "C:\\Users\\Sam\\AppData\\Roaming\\Spotify",
+   "uninstall_string": "\"C:\\Users\\Sam\\AppData\\Roaming\\Spotify\\Spotify.exe\" /uninstall",
+   "quiet_uninstall_string": null,
+   "display_icon": null,
+   "install_time_evidence": [
+    {
+     "source": "ArpInstallDate",
+     "time": 134362368000000000
+    },
+    {
+     "source": "KeyLastWrite",
+     "time": 134362876200000000
+    }
+   ],
+   "msi": null
+  },
+  {
+   "program_id": "HKLM|32|Steam",
+   "key_path": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Steam",
+   "hive_sid": null,
+   "view": "K32",
+   "display_name": "Steam",
+   "version": "2.10.91.91",
+   "publisher": "Valve Corporation",
+   "flags": {
+    "system_component": false,
+    "has_display_name": true,
+    "has_uninstall_string": true,
+    "parent_key": null,
+    "release_type": null,
+    "windows_installer": false
+   },
+   "installer_kind": "Nsis",
+   "scope": "Machine",
+   "product_code": null,
+   "upgrade_code": null,
+   "inno_app_id": null,
+   "writable_by": "admin",
+   "install_location": "C:\\Program Files (x86)\\Steam",
+   "uninstall_string": "\"C:\\Program Files (x86)\\Steam\\uninstall.exe\"",
+   "quiet_uninstall_string": null,
+   "display_icon": null,
+   "install_time_evidence": [
+    {
+     "source": "ArpInstallDate",
+     "time": 134250048000000000
+    },
+    {
+     "source": "KeyLastWrite",
+     "time": 134250556200000000
+    }
+   ],
+   "msi": null
+  },
+  {
+   "program_id": "HKLM|32|{6A1B2C3D-4E5F-4071-8293-A4B5C6D7E8F9}",
+   "key_path": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{6A1B2C3D-4E5F-4071-8293-A4B5C6D7E8F9}",
+   "hive_sid": null,
+   "view": "K32",
+   "display_name": "Microsoft Visual C++ 2015-2022 Redistributable (x64) - 14.44.35211",
+   "version": "14.44.35211.0",
+   "publisher": "Microsoft Corporation",
+   "flags": {
+    "system_component": false,
+    "has_display_name": true,
+    "has_uninstall_string": true,
+    "parent_key": null,
+    "release_type": null,
+    "windows_installer": false
+   },
+   "installer_kind": "Burn",
+   "scope": "Machine",
+   "product_code": null,
+   "upgrade_code": null,
+   "inno_app_id": null,
+   "writable_by": "admin",
+   "install_location": null,
+   "uninstall_string": "\"C:\\ProgramData\\Package Cache\\{6a1b2c3d-4e5f-4071-8293-a4b5c6d7e8f9}\\VC_redist.x64.exe\" /uninstall",
+   "quiet_uninstall_string": "\"C:\\ProgramData\\Package Cache\\{6a1b2c3d-4e5f-4071-8293-a4b5c6d7e8f9}\\VC_redist.x64.exe\" /uninstall /quiet",
+   "display_icon": null,
+   "install_time_evidence": [
+    {
+     "source": "ArpInstallDate",
+     "time": 134237952000000000
+    },
+    {
+     "source": "KeyLastWrite",
+     "time": 134238460200000000
+    }
+   ],
+   "msi": null
+  },
+  {
+   "program_id": "HKLM|64|{3E4F5A6B-7C8D-49E0-A1B2-C3D4E5F6A7B8}",
+   "key_path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{3E4F5A6B-7C8D-49E0-A1B2-C3D4E5F6A7B8}",
+   "hive_sid": null,
+   "view": "K64",
+   "display_name": "Microsoft Visual C++ 2022 X64 Minimum Runtime - 14.44.35211",
+   "version": "14.44.35211",
+   "publisher": "Microsoft Corporation",
+   "flags": {
+    "system_component": true,
+    "has_display_name": true,
+    "has_uninstall_string": true,
+    "parent_key": null,
+    "release_type": null,
+    "windows_installer": true
+   },
+   "installer_kind": "Msi",
+   "scope": "Machine",
+   "product_code": "{3E4F5A6B-7C8D-49E0-A1B2-C3D4E5F6A7B8}",
+   "upgrade_code": null,
+   "inno_app_id": null,
+   "writable_by": "admin",
+   "install_location": null,
+   "uninstall_string": "MsiExec.exe /I{3E4F5A6B-7C8D-49E0-A1B2-C3D4E5F6A7B8}",
+   "quiet_uninstall_string": null,
+   "display_icon": null,
+   "install_time_evidence": [
+    {
+     "source": "MsiInstallDate",
+     "time": 134237952000000000
+    },
+    {
+     "source": "KeyLastWrite",
+     "time": 134238460200000000
+    }
+   ],
+   "msi": {
+    "context": "Machine",
+    "local_package": "C:\\Windows\\Installer\\4ef3284.msi",
+    "install_date": "20260521"
+   }
+  },
+  {
+   "program_id": "HKLM|64|{3E4F5A6B-7C8D-49E0-A1B2-C3D4E5F6A7B9}",
+   "key_path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{3E4F5A6B-7C8D-49E0-A1B2-C3D4E5F6A7B9}",
+   "hive_sid": null,
+   "view": "K64",
+   "display_name": "Microsoft Visual C++ 2022 X64 Additional Runtime - 14.44.35211",
+   "version": "14.44.35211",
+   "publisher": "Microsoft Corporation",
+   "flags": {
+    "system_component": true,
+    "has_display_name": true,
+    "has_uninstall_string": true,
+    "parent_key": null,
+    "release_type": null,
+    "windows_installer": true
+   },
+   "installer_kind": "Msi",
+   "scope": "Machine",
+   "product_code": "{3E4F5A6B-7C8D-49E0-A1B2-C3D4E5F6A7B9}",
+   "upgrade_code": null,
+   "inno_app_id": null,
+   "writable_by": "admin",
+   "install_location": null,
+   "uninstall_string": "MsiExec.exe /I{3E4F5A6B-7C8D-49E0-A1B2-C3D4E5F6A7B9}",
+   "quiet_uninstall_string": null,
+   "display_icon": null,
+   "install_time_evidence": [
+    {
+     "source": "MsiInstallDate",
+     "time": 134237952000000000
+    },
+    {
+     "source": "KeyLastWrite",
+     "time": 134238460200000000
+    }
+   ],
+   "msi": {
+    "context": "Machine",
+    "local_package": "C:\\Windows\\Installer\\df40342.msi",
+    "install_date": "20260521"
+   }
+  },
+  {
+   "program_id": "HKLM|32|Microsoft Edge",
+   "key_path": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Microsoft Edge",
+   "hive_sid": null,
+   "view": "K32",
+   "display_name": "Microsoft Edge",
+   "version": "142.0.3595.65",
+   "publisher": "Microsoft Corporation",
+   "flags": {
+    "system_component": false,
+    "has_display_name": true,
+    "has_uninstall_string": true,
+    "parent_key": null,
+    "release_type": null,
+    "windows_installer": false
+   },
+   "installer_kind": "Unknown",
+   "scope": "Machine",
+   "product_code": null,
+   "upgrade_code": null,
+   "inno_app_id": null,
+   "writable_by": "admin",
+   "install_location": "C:\\Program Files (x86)\\Microsoft\\Edge\\Application",
+   "uninstall_string": "\"C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\142.0.3595.65\\Installer\\setup.exe\" --uninstall --msedge --channel=stable --system-level",
+   "quiet_uninstall_string": null,
+   "display_icon": null,
+   "install_time_evidence": [
+    {
+     "source": "ArpInstallDate",
+     "time": 134382240000000000
+    },
+    {
+     "source": "KeyLastWrite",
+     "time": 134382748200000000
+    }
+   ],
+   "msi": null
+  },
+  {
+   "program_id": "HKLM|32|{8F2A3B4C-5D6E-4F70-8192-A3B4C5D6E7F8}",
+   "key_path": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{8F2A3B4C-5D6E-4F70-8192-A3B4C5D6E7F8}",
+   "hive_sid": null,
+   "view": "K32",
+   "display_name": "Microsoft .NET Runtime - 10.0.1 (x64)",
+   "version": "10.0.1.35211",
+   "publisher": "Microsoft Corporation",
+   "flags": {
+    "system_component": false,
+    "has_display_name": true,
+    "has_uninstall_string": true,
+    "parent_key": null,
+    "release_type": null,
+    "windows_installer": false
+   },
+   "installer_kind": "Burn",
+   "scope": "Machine",
+   "product_code": null,
+   "upgrade_code": null,
+   "inno_app_id": null,
+   "writable_by": "admin",
+   "install_location": null,
+   "uninstall_string": "\"C:\\ProgramData\\Package Cache\\{8f2a3b4c-5d6e-4f70-8192-a3b4c5d6e7f8}\\dotnet-runtime-10.0.1-win-x64.exe\" /uninstall",
+   "quiet_uninstall_string": null,
+   "display_icon": null,
+   "install_time_evidence": [
+    {
+     "source": "ArpInstallDate",
+     "time": 134388288000000000
+    },
+    {
+     "source": "KeyLastWrite",
+     "time": 134388796200000000
+    }
+   ],
+   "msi": null
+  },
+  {
+   "program_id": "HKLM|64|Docker Desktop",
+   "key_path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Docker Desktop",
+   "hive_sid": null,
+   "view": "K64",
+   "display_name": "Docker Desktop",
+   "version": "4.50.0",
+   "publisher": "Docker Inc.",
+   "flags": {
+    "system_component": false,
+    "has_display_name": true,
+    "has_uninstall_string": true,
+    "parent_key": null,
+    "release_type": null,
+    "windows_installer": false
+   },
+   "installer_kind": "Unknown",
+   "scope": "Machine",
+   "product_code": null,
+   "upgrade_code": null,
+   "inno_app_id": null,
+   "writable_by": "admin",
+   "install_location": "C:\\Program Files\\Docker\\Docker",
+   "uninstall_string": "\"C:\\Program Files\\Docker\\Docker\\Docker Desktop Installer.exe\" uninstall",
+   "quiet_uninstall_string": null,
+   "display_icon": null,
+   "install_time_evidence": [
+    {
+     "source": "ArpInstallDate",
+     "time": 134327808000000000
+    },
+    {
+     "source": "KeyLastWrite",
+     "time": 134328316200000000
+    }
+   ],
+   "msi": null
+  },
+  {
+   "program_id": "HKU:S-1-5-21-1000000001-2000000002-3000000003-1001|64|Obsidian",
+   "key_path": "HKU\\S-1-5-21-1000000001-2000000002-3000000003-1001\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Obsidian",
+   "hive_sid": "S-1-5-21-1000000001-2000000002-3000000003-1001",
+   "view": "K64",
+   "display_name": "Obsidian",
+   "version": "1.10.3",
+   "publisher": "Obsidian",
+   "flags": {
+    "system_component": false,
+    "has_display_name": true,
+    "has_uninstall_string": true,
+    "parent_key": null,
+    "release_type": null,
+    "windows_installer": false
+   },
+   "installer_kind": "Nsis",
+   "scope": "User",
+   "product_code": null,
+   "upgrade_code": null,
+   "inno_app_id": null,
+   "writable_by": "user",
+   "install_location": "C:\\Users\\Sam\\AppData\\Local\\Programs\\Obsidian",
+   "uninstall_string": "\"C:\\Users\\Sam\\AppData\\Local\\Programs\\Obsidian\\Uninstall Obsidian.exe\" /currentuser",
+   "quiet_uninstall_string": "\"C:\\Users\\Sam\\AppData\\Local\\Programs\\Obsidian\\Uninstall Obsidian.exe\" /currentuser /S",
+   "display_icon": null,
+   "install_time_evidence": [
+    {
+     "source": "ArpInstallDate",
+     "time": 134386560000000000
+    },
+    {
+     "source": "KeyLastWrite",
+     "time": 134387068200000000
+    }
+   ],
+   "msi": null
+  },
+  {
+   "program_id": "HKLM|64|{C1D2E3F4-A5B6-4C7D-8E9F-0A1B2C3D4E5F}",
+   "key_path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{C1D2E3F4-A5B6-4C7D-8E9F-0A1B2C3D4E5F}",
+   "hive_sid": null,
+   "view": "K64",
+   "display_name": "Adobe Acrobat Reader (64-bit)",
+   "version": "25.001.20937",
+   "publisher": "Adobe",
+   "flags": {
+    "system_component": false,
+    "has_display_name": true,
+    "has_uninstall_string": true,
+    "parent_key": null,
+    "release_type": null,
+    "windows_installer": true
+   },
+   "installer_kind": "Msi",
+   "scope": "Machine",
+   "product_code": "{C1D2E3F4-A5B6-4C7D-8E9F-0A1B2C3D4E5F}",
+   "upgrade_code": null,
+   "inno_app_id": null,
+   "writable_by": "admin",
+   "install_location": "C:\\Program Files\\Adobe\\Acrobat DC\\",
+   "uninstall_string": "MsiExec.exe /I{C1D2E3F4-A5B6-4C7D-8E9F-0A1B2C3D4E5F}",
+   "quiet_uninstall_string": null,
+   "display_icon": null,
+   "install_time_evidence": [
+    {
+     "source": "MsiInstallDate",
+     "time": 134203392000000000
+    },
+    {
+     "source": "KeyLastWrite",
+     "time": 134203900200000000
+    }
+   ],
+   "msi": {
+    "context": "Machine",
+    "local_package": "C:\\Windows\\Installer\\83a864a.msi",
+    "install_date": "20260411"
+   }
+  },
+  {
+   "program_id": "HKU:S-1-5-21-1000000001-2000000002-3000000003-1001|64|PowerToys_is1",
+   "key_path": "HKU\\S-1-5-21-1000000001-2000000002-3000000003-1001\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\PowerToys_is1",
+   "hive_sid": "S-1-5-21-1000000001-2000000002-3000000003-1001",
+   "view": "K64",
+   "display_name": "PowerToys (Preview)",
+   "version": "0.95.1",
+   "publisher": "Microsoft Corporation",
+   "flags": {
+    "system_component": false,
+    "has_display_name": true,
+    "has_uninstall_string": true,
+    "parent_key": null,
+    "release_type": null,
+    "windows_installer": false
+   },
+   "installer_kind": "Burn",
+   "scope": "User",
+   "product_code": null,
+   "upgrade_code": null,
+   "inno_app_id": null,
+   "writable_by": "user",
+   "install_location": "C:\\Users\\Sam\\AppData\\Local\\PowerToys\\",
+   "uninstall_string": "\"C:\\Users\\Sam\\AppData\\Local\\Package Cache\\{d8e9f0a1-b2c3-4d4e-8f5a-6b7c8d9e0f1a}\\PowerToysUserSetup-0.95.1-x64.exe\" /uninstall",
+   "quiet_uninstall_string": null,
+   "display_icon": null,
+   "install_time_evidence": [
+    {
+     "source": "ArpInstallDate",
+     "time": 134376192000000000
+    },
+    {
+     "source": "KeyLastWrite",
+     "time": 134376700200000000
+    }
+   ],
+   "msi": null
+  },
+  {
+   "program_id": "HKLM|64|KeePassXC",
+   "key_path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\KeePassXC",
+   "hive_sid": null,
+   "view": "K64",
+   "display_name": "KeePassXC",
+   "version": "2.7.10",
+   "publisher": "KeePassXC Team",
+   "flags": {
+    "system_component": false,
+    "has_display_name": true,
+    "has_uninstall_string": true,
+    "parent_key": null,
+    "release_type": null,
+    "windows_installer": true
+   },
+   "installer_kind": "Msi",
+   "scope": "Machine",
+   "product_code": null,
+   "upgrade_code": null,
+   "inno_app_id": null,
+   "writable_by": "admin",
+   "install_location": "C:\\Program Files\\KeePassXC\\",
+   "uninstall_string": "MsiExec.exe /X{B9C8D7E6-F5A4-4B3C-9D2E-1F0A9B8C7D6E}",
+   "quiet_uninstall_string": null,
+   "display_icon": null,
+   "install_time_evidence": [
+    {
+     "source": "MsiInstallDate",
+     "time": 134173152000000000
+    },
+    {
+     "source": "KeyLastWrite",
+     "time": 134173660200000000
+    }
+   ],
+   "msi": {
+    "context": "Machine",
+    "local_package": "C:\\Windows\\Installer\\11d0cfc.msi",
+    "install_date": "20260307"
+   }
+  },
+  {
+   "program_id": "HKLM|64|GIMP-3_is1",
+   "key_path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\GIMP-3_is1",
+   "hive_sid": null,
+   "view": "K64",
+   "display_name": "GIMP 3.0.6",
+   "version": "3.0.6",
+   "publisher": "The GIMP Team",
+   "flags": {
+    "system_component": false,
+    "has_display_name": true,
+    "has_uninstall_string": true,
+    "parent_key": null,
+    "release_type": null,
+    "windows_installer": false
+   },
+   "installer_kind": "Inno",
+   "scope": "Machine",
+   "product_code": null,
+   "upgrade_code": null,
+   "inno_app_id": "GIMP-3",
+   "writable_by": "admin",
+   "install_location": "C:\\Program Files\\GIMP 3\\",
+   "uninstall_string": "\"C:\\Program Files\\GIMP 3\\uninst\\unins000.exe\"",
+   "quiet_uninstall_string": null,
+   "display_icon": null,
+   "install_time_evidence": [
+    {
+     "source": "ArpInstallDate",
+     "time": 134300160000000000
+    },
+    {
+     "source": "KeyLastWrite",
+     "time": 134300668200000000
+    }
+   ],
+   "msi": null
+  },
+  {
+   "program_id": "HKLM|64|OBS Studio",
+   "key_path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\OBS Studio",
+   "hive_sid": null,
+   "view": "K64",
+   "display_name": "OBS Studio",
+   "version": "32.0.2",
+   "publisher": "OBS Project",
+   "flags": {
+    "system_component": false,
+    "has_display_name": true,
+    "has_uninstall_string": true,
+    "parent_key": null,
+    "release_type": null,
+    "windows_installer": false
+   },
+   "installer_kind": "Nsis",
+   "scope": "Machine",
+   "product_code": null,
+   "upgrade_code": null,
+   "inno_app_id": null,
+   "writable_by": "admin",
+   "install_location": "C:\\Program Files\\obs-studio",
+   "uninstall_string": "\"C:\\Program Files\\obs-studio\\uninstall.exe\"",
+   "quiet_uninstall_string": null,
+   "display_icon": null,
+   "install_time_evidence": [
+    {
+     "source": "ArpInstallDate",
+     "time": 134364960000000000
+    },
+    {
+     "source": "KeyLastWrite",
+     "time": 134365468200000000
+    }
+   ],
+   "msi": null
+  },
+  {
+   "program_id": "HKU:S-1-5-21-1000000001-2000000002-3000000003-1001|64|Zoom",
+   "key_path": "HKU\\S-1-5-21-1000000001-2000000002-3000000003-1001\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Zoom",
+   "hive_sid": "S-1-5-21-1000000001-2000000002-3000000003-1001",
+   "view": "K64",
+   "display_name": "Zoom Workplace",
+   "version": "6.6.5",
+   "publisher": "Zoom Communications, Inc.",
+   "flags": {
+    "system_component": false,
+    "has_display_name": true,
+    "has_uninstall_string": true,
+    "parent_key": null,
+    "release_type": null,
+    "windows_installer": false
+   },
+   "installer_kind": "Unknown",
+   "scope": "User",
+   "product_code": null,
+   "upgrade_code": null,
+   "inno_app_id": null,
+   "writable_by": "user",
+   "install_location": "C:\\Users\\Sam\\AppData\\Roaming\\Zoom\\bin",
+   "uninstall_string": "\"C:\\Users\\Sam\\AppData\\Roaming\\Zoom\\uninstall\\Installer.exe\" /uninstall",
+   "quiet_uninstall_string": null,
+   "display_icon": null,
+   "install_time_evidence": [
+    {
+     "source": "ArpInstallDate",
+     "time": 134379648000000000
+    },
+    {
+     "source": "KeyLastWrite",
+     "time": 134380156200000000
+    }
+   ],
+   "msi": null
+  },
+  {
+   "program_id": "HKLM|32|{E7F8A9B0-C1D2-4E3F-A4B5-C6D7E8F9A0B1}",
+   "key_path": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{E7F8A9B0-C1D2-4E3F-A4B5-C6D7E8F9A0B1}",
+   "hive_sid": null,
+   "view": "K32",
+   "display_name": "{E7F8A9B0-C1D2-4E3F-A4B5-C6D7E8F9A0B1}",
+   "version": null,
+   "publisher": null,
+   "flags": {
+    "system_component": false,
+    "has_display_name": false,
+    "has_uninstall_string": false,
+    "parent_key": null,
+    "release_type": null,
+    "windows_installer": true
+   },
+   "installer_kind": "Msi",
+   "scope": "Machine",
+   "product_code": "{E7F8A9B0-C1D2-4E3F-A4B5-C6D7E8F9A0B1}",
+   "upgrade_code": null,
+   "inno_app_id": null,
+   "writable_by": "admin",
+   "install_location": null,
+   "uninstall_string": null,
+   "quiet_uninstall_string": null,
+   "display_icon": null,
+   "install_time_evidence": [
+    {
+     "source": "MsiInstallDate",
+     "time": 134091936000000000
+    },
+    {
+     "source": "KeyLastWrite",
+     "time": 134092444200000000
+    }
+   ],
+   "msi": {
+    "context": "Machine",
+    "local_package": "C:\\Windows\\Installer\\9817564.msi",
+    "install_date": "20251203"
+   }
+  },
+  {
+   "program_id": "HKLM|32|HP_Smart_Helper",
+   "key_path": "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\HP_Smart_Helper",
+   "hive_sid": null,
+   "view": "K32",
+   "display_name": "HP_Smart_Helper",
+   "version": null,
+   "publisher": null,
+   "flags": {
+    "system_component": false,
+    "has_display_name": false,
+    "has_uninstall_string": true,
+    "parent_key": null,
+    "release_type": null,
+    "windows_installer": false
+   },
+   "installer_kind": "Unknown",
+   "scope": "Machine",
+   "product_code": null,
+   "upgrade_code": null,
+   "inno_app_id": null,
+   "writable_by": "admin",
+   "install_location": null,
+   "uninstall_string": "\"C:\\Program Files (x86)\\HP\\Helper\\uninst.exe\"",
+   "quiet_uninstall_string": null,
+   "display_icon": null,
+   "install_time_evidence": [
+    {
+     "source": "ArpInstallDate",
+     "time": 134027136000000000
+    },
+    {
+     "source": "KeyLastWrite",
+     "time": 134027644200000000
+    }
+   ],
+   "msi": null
+  },
+  {
+   "program_id": "HKLM|64|KB5068861",
+   "key_path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\KB5068861",
+   "hive_sid": null,
+   "view": "K64",
+   "display_name": "Update for Microsoft Visual Studio Code (KB5068861)",
+   "version": "1.106.0",
+   "publisher": "Microsoft Corporation",
+   "flags": {
+    "system_component": true,
+    "has_display_name": true,
+    "has_uninstall_string": false,
+    "parent_key": "{771FD6B0-FA20-440A-A002-3B3BAC16DC50}_is1",
+    "release_type": "Update",
+    "windows_installer": false
+   },
+   "installer_kind": "Unknown",
+   "scope": "Machine",
+   "product_code": null,
+   "upgrade_code": null,
+   "inno_app_id": null,
+   "writable_by": "admin",
+   "install_location": null,
+   "uninstall_string": null,
+   "quiet_uninstall_string": null,
+   "display_icon": null,
+   "install_time_evidence": [
+    {
+     "source": "ArpInstallDate",
+     "time": 134383968000000000
+    },
+    {
+     "source": "KeyLastWrite",
+     "time": 134384476200000000
+    }
+   ],
+   "msi": null
+  },
+  {
+   "program_id": "HKLM|64|Paint.NET",
+   "key_path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Paint.NET",
+   "hive_sid": null,
+   "view": "K64",
+   "display_name": "paint.net",
+   "version": "5.1.10",
+   "publisher": "dotPDN LLC",
+   "flags": {
+    "system_component": false,
+    "has_display_name": true,
+    "has_uninstall_string": true,
+    "parent_key": null,
+    "release_type": null,
+    "windows_installer": true
+   },
+   "installer_kind": "Msi",
+   "scope": "Machine",
+   "product_code": null,
+   "upgrade_code": null,
+   "inno_app_id": null,
+   "writable_by": "admin",
+   "install_location": "C:\\Program Files\\paint.net\\",
+   "uninstall_string": "MsiExec.exe /X{F0E1D2C3-B4A5-4968-8776-655443322110}",
+   "quiet_uninstall_string": null,
+   "display_icon": null,
+   "install_time_evidence": [
+    {
+     "source": "MsiInstallDate",
+     "time": 134388288000000000
+    },
+    {
+     "source": "KeyLastWrite",
+     "time": 134388796200000000
+    }
+   ],
+   "msi": {
+    "context": "Machine",
+    "local_package": "C:\\Windows\\Installer\\379828b.msi",
+    "install_date": "20261111"
+   }
+  },
+  {
+   "program_id": "HKU:S-1-5-21-1000000001-2000000002-3000000003-1001|64|Rustup",
+   "key_path": "HKU\\S-1-5-21-1000000001-2000000002-3000000003-1001\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Rustup",
+   "hive_sid": "S-1-5-21-1000000001-2000000002-3000000003-1001",
+   "view": "K64",
+   "display_name": "Rust toolchain (rustup)",
+   "version": "1.28.2",
+   "publisher": "The Rust Project Developers",
+   "flags": {
+    "system_component": false,
+    "has_display_name": true,
+    "has_uninstall_string": true,
+    "parent_key": null,
+    "release_type": null,
+    "windows_installer": false
+   },
+   "installer_kind": "Unknown",
+   "scope": "User",
+   "product_code": null,
+   "upgrade_code": null,
+   "inno_app_id": null,
+   "writable_by": "user",
+   "install_location": "C:\\Users\\Sam\\.cargo",
+   "uninstall_string": "\"C:\\Users\\Sam\\.cargo\\bin\\rustup.exe\" self uninstall",
+   "quiet_uninstall_string": null,
+   "display_icon": null,
+   "install_time_evidence": [
+    {
+     "source": "ArpInstallDate",
+     "time": 134356320000000000
+    },
+    {
+     "source": "KeyLastWrite",
+     "time": 134356828200000000
+    }
+   ],
+   "msi": null
+  }
+ ],
+ "msi_only": []
+}

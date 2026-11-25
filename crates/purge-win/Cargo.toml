@@ -16,7 +16,8 @@ read = []
 # purge-mcp may not depend on purge-win at all; `cargo xtask check-deps` enforces it.
 write = ["read"]
 # Process creation (CreateProcessW), Job objects and the MSI mutex probe for the uninstall runner
-# (purge-inventory). Not part of `read`.
+# (purge-inventory), and the UI's two starts (`launch`: the engine over stdio in a kill-on-close job,
+# the broker through ShellExecuteExW "runas"). Not part of `read`.
 run = ["read"]
 # AppX package enumeration through WinRT.
 appx = ["dep:windows"]
