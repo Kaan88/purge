@@ -148,7 +148,8 @@ impl PipeClient {
     }
 
     /// Wakes a read or write in flight (on any thread) and makes every later one fail with
-    /// [`PipeClientError::ShutDown`]. The handle stays open until the client is dropped.
+    /// [`PipeClientError::ShutDown`]. The handle stays open until the client is dropped: a holder
+    /// that wants the server to see the pipe close must also let go of its last reference.
     pub fn shut_down(&self) {
         // SAFETY: valid event handle.
         unsafe { SetEvent(self.shutdown.as_raw_handle()) };
@@ -170,18 +171,25 @@ impl PipeClient {
         let len = u32::try_from(buf.len()).unwrap_or(u32::MAX);
         let event = Event::new()?;
         // SAFETY: plain data; zero is valid.
-        let mut ov: OVERLAPPED = unsafe { mem::zeroed() };
-        ov.hEvent = event.raw();
+        let mut storage: OVERLAPPED = unsafe { mem::zeroed() };
+        storage.hEvent = event.raw();
+        // Only this pointer is used from here on: the kernel writes the structure while the
+        // operation runs, so no Rust reference to it may exist meanwhile.
+        let ov = ptr::addr_of_mut!(storage);
         // SAFETY: `buf` holds `len` writable bytes and, like `ov`, outlives the operation, which
         // `finish` waits for.
-        let ok = unsafe { ReadFile(self.raw(), buf.as_mut_ptr(), len, ptr::null_mut(), &mut ov) };
+        let ok = unsafe { ReadFile(self.raw(), buf.as_mut_ptr(), len, ptr::null_mut(), ov) };
         if ok == 0 {
             let e = Win32Error::last();
             if e.code() != ERROR_IO_PENDING {
                 return map(Err(e.into()), true);
             }
         }
-        map(self.finish(&ov, timeout).map(|n| n as usize), true)
+        // SAFETY: `ov` is the operation just started on this handle; its event is `event`.
+        map(
+            unsafe { self.finish(ov, event.raw(), timeout) }.map(|n| n as usize),
+            true,
+        )
     }
 
     /// Writes all of `buf` within `timeout` in total. After an error an unknown part of `buf` may have
@@ -213,26 +221,42 @@ impl PipeClient {
         let len = u32::try_from(buf.len()).unwrap_or(u32::MAX);
         let event = Event::new()?;
         // SAFETY: plain data; zero is valid.
-        let mut ov: OVERLAPPED = unsafe { mem::zeroed() };
-        ov.hEvent = event.raw();
+        let mut storage: OVERLAPPED = unsafe { mem::zeroed() };
+        storage.hEvent = event.raw();
+        // Only this pointer is used from here on (see `read_with_timeout`).
+        let ov = ptr::addr_of_mut!(storage);
         // SAFETY: `buf` holds `len` readable bytes and, like `ov`, outlives the operation.
-        let ok = unsafe { WriteFile(self.raw(), buf.as_ptr(), len, ptr::null_mut(), &mut ov) };
+        let ok = unsafe { WriteFile(self.raw(), buf.as_ptr(), len, ptr::null_mut(), ov) };
         if ok == 0 {
             let e = Win32Error::last();
             if e.code() != ERROR_IO_PENDING {
                 return map(Err(e.into()), false);
             }
         }
-        map(self.finish(&ov, Some(timeout)).map(|n| n as usize), false)
+        // SAFETY: `ov` is the operation just started on this handle; its event is `event`.
+        map(
+            unsafe { self.finish(ov, event.raw(), Some(timeout)) }.map(|n| n as usize),
+            false,
+        )
     }
 
     /// Waits for the operation behind `ov` up to `timeout` or until [`PipeClient::shut_down`],
     /// cancelling it then. Returns only when the kernel is done with `ov` and its buffer.
-    fn finish(&self, ov: &OVERLAPPED, timeout: Option<Duration>) -> Result<u32, PipeClientError> {
+    ///
+    /// # Safety
+    ///
+    /// `ov` points to the live `OVERLAPPED` of an operation started on this handle, whose `hEvent`
+    /// is `event`, and no reference to it exists while this runs (the kernel may write it).
+    unsafe fn finish(
+        &self,
+        ov: *mut OVERLAPPED,
+        event: HANDLE,
+        timeout: Option<Duration>,
+    ) -> Result<u32, PipeClientError> {
         let ms = timeout.map_or(INFINITE, |t| {
             u32::try_from(t.as_millis()).map_or(INFINITE - 1, |ms| ms.min(INFINITE - 1))
         });
-        let handles = [ov.hEvent, self.shutdown.as_raw_handle()];
+        let handles = [event, self.shutdown.as_raw_handle()];
         // SAFETY: two live event handles; wait for any.
         let waited = unsafe { WaitForMultipleObjects(2, handles.as_ptr(), 0, ms) };
         let cancelled = waited != WAIT_OBJECT_0;
@@ -386,6 +410,68 @@ mod tests {
             c.write_all_with_timeout(b"x", Duration::from_secs(1)),
             Err(PipeClientError::ShutDown)
         );
+    }
+
+    #[test]
+    fn a_read_with_nothing_to_read_times_out_and_the_link_stays_usable() {
+        let mut s = server();
+        let c = PipeClient::open(Path::new(s.path())).unwrap();
+        s.wait_for_client(Some(Duration::from_secs(5))).unwrap();
+        let mut buf = [0u8; 8];
+        let started = Instant::now();
+        assert_eq!(
+            c.read_with_timeout(&mut buf, Some(Duration::from_millis(200))),
+            Err(PipeClientError::TimedOut)
+        );
+        assert!(started.elapsed() >= Duration::from_millis(150));
+        // The cancelled read consumed nothing.
+        std::io::Write::write_all(&mut &s, b"ok").unwrap();
+        assert_eq!(
+            c.read_with_timeout(&mut buf, Some(Duration::from_secs(5))),
+            Ok(2)
+        );
+    }
+
+    /// More than the pipe's buffers hold, so a write waits for a server that does not read.
+    const BIG: usize = 1024 * 1024;
+
+    #[test]
+    fn a_write_the_server_does_not_read_times_out() {
+        let mut s = server();
+        let c = PipeClient::open(Path::new(s.path())).unwrap();
+        s.wait_for_client(Some(Duration::from_secs(5))).unwrap();
+        let big = vec![b'x'; BIG];
+        let started = Instant::now();
+        assert_eq!(
+            c.write_all_with_timeout(&big, Duration::from_millis(300)),
+            Err(PipeClientError::TimedOut)
+        );
+        assert!(started.elapsed() >= Duration::from_millis(250));
+        drop(s);
+    }
+
+    #[test]
+    fn shut_down_wakes_a_blocked_write() {
+        let mut s = server();
+        let c = std::sync::Arc::new(PipeClient::open(Path::new(s.path())).unwrap());
+        s.wait_for_client(Some(Duration::from_secs(5))).unwrap();
+        let writer = {
+            let c = c.clone();
+            std::thread::spawn(move || {
+                let big = vec![b'x'; BIG];
+                let started = Instant::now();
+                (
+                    c.write_all_with_timeout(&big, Duration::from_secs(30)),
+                    started.elapsed(),
+                )
+            })
+        };
+        std::thread::sleep(Duration::from_millis(200));
+        c.shut_down();
+        let (result, took) = writer.join().unwrap();
+        assert_eq!(result, Err(PipeClientError::ShutDown));
+        assert!(took < Duration::from_secs(10), "{took:?}");
+        drop(s);
     }
 
     #[test]
