@@ -838,7 +838,13 @@ fn items(ui: &mut Ui, m: &Model, v: &mut View, r: Rect) {
                     &l.row_name(*row),
                     true,
                 );
-                ui.key(hid, Key::Group(head.name.clone()));
+                ui.key(
+                    hid,
+                    Key::Group {
+                        name: head.name.clone(),
+                        list: l.list_version(),
+                    },
+                );
                 if ui.hot(hid) {
                     draw_row_fill(ui.p, &pal, hit, true, ui.down(hid), false);
                 }
@@ -880,7 +886,10 @@ fn items(ui: &mut Ui, m: &Model, v: &mut View, r: Rect) {
                     );
                     ui.key(
                         Id("GroupTick", group as u32 + 1),
-                        Key::Group(head.name.clone()),
+                        Key::Group {
+                            name: head.name.clone(),
+                            list: l.list_version(),
+                        },
                     );
                 }
             }

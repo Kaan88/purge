@@ -41,7 +41,6 @@ pub const NAV: [(Page, &str); 6] = [
     (Page::Settings, "NavSettings"),
 ];
 
-pub use pipeline::BAR_BUTTONS;
 pub use programs::TAB_IDS as TAB_NAMES;
 pub use settings::swatch_id;
 

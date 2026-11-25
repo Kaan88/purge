@@ -282,11 +282,15 @@ impl Model {
         }
     }
 
-    /// The button `k` of the Uninstall page's bar `bar`.
-    pub fn flow_bar(&mut self, bar: usize, k: usize) {
+    /// The button that does `action` on the Uninstall page's bar `bar`; nothing when that bar
+    /// has no such button any more.
+    pub fn flow_bar(&mut self, bar: usize, action: BarAction) {
         let env = self.flow_env();
         let bars = self.flow_bars();
-        let Some(b) = bars.get(bar).and_then(|b| b.buttons.get(k)) else {
+        let Some(b) = bars
+            .get(bar)
+            .and_then(|b| b.buttons.iter().find(|b| b.action == action))
+        else {
             return;
         };
         if !b.enabled {

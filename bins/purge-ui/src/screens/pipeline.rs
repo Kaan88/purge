@@ -133,17 +133,23 @@ fn bars(ui: &mut Ui, bars: &[Bar], x: f32, mut y: f32, w: f32) -> f32 {
         let mut bar =
             InfoBar::new(severity(b.kind), &b.title, &b.message).closable(b.close != BarClose::No);
         let mut ids = Vec::new();
+        let mut actions = Vec::new();
         for (j, button) in b.buttons.iter().enumerate() {
             if button.enabled {
                 bar = bar.action(ids.len() as u32, button.label);
                 ids.push(Id("BarButton", k as u32 * BAR_BUTTONS + j as u32 + 1));
+                actions.push(button.action);
             }
         }
         let close = (b.close != BarClose::No).then_some(Id("BarClose", k as u32 + 1));
         y = ui.infobar_with(Id("InfoBarHost", k as u32), x, y, w, &bar, close, &ids) + 8.0;
-        // Review SF3: a click acts on the bar it showed, never on its place among the bars.
-        for cid in ids.iter().chain(&close) {
-            ui.key(*cid, Key::bar(&b.title, &b.message));
+        // Review SF3: a click acts on the bar it showed, never on its place among the bars;
+        // review N6: and on the button by what it does, never by its place in the bar.
+        for (cid, action) in ids.iter().zip(actions) {
+            ui.key(*cid, Key::bar_button(&b.title, &b.message, action));
+        }
+        if let Some(cid) = close {
+            ui.key(cid, Key::bar(&b.title, &b.message));
         }
     }
     y

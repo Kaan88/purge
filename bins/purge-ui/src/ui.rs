@@ -94,15 +94,44 @@ pub enum Key {
     Program(purge_model::ProgramId),
     /// An info bar, by what it says ([`Key::bar`]).
     Bar(String),
-    /// A group of the Leftovers list, by its name.
-    Group(String),
+    /// A button of an Uninstall page bar: the bar by what it says, the button by what it does
+    /// ([`Key::bar_button`]), never by its place among the bar's buttons (review N6).
+    BarButton {
+        bar: String,
+        action: purge_ui_model::pipeline::page::BarAction,
+    },
+    /// A group of the Leftovers list, by its name and the list it was drawn from
+    /// ([`purge_ui_model::leftovers::LeftoversModel::list_version`]): a click after a re-scan
+    /// built the list again acts on nothing (review N7).
+    Group { name: String, list: u64 },
 }
 
 impl Key {
     /// The key of the bar that says `title` and `message`.
     pub fn bar(title: &str, message: &str) -> Self {
-        Key::Bar(format!("{title}\n{message}"))
+        Key::Bar(bar_text(title, message))
     }
+
+    /// The key of the button that does `action` on the bar that says `title` and `message`.
+    pub fn bar_button(
+        title: &str,
+        message: &str,
+        action: purge_ui_model::pipeline::page::BarAction,
+    ) -> Self {
+        Key::BarButton {
+            bar: bar_text(title, message),
+            action,
+        }
+    }
+
+    /// Whether this is the key of a button of the bar that says `title` and `message`.
+    pub fn on_bar(&self, title: &str, message: &str) -> bool {
+        matches!(self, Key::BarButton { bar, .. } if *bar == bar_text(title, message))
+    }
+}
+
+fn bar_text(title: &str, message: &str) -> String {
+    format!("{title}\n{message}")
 }
 
 #[derive(Clone, Debug)]

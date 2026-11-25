@@ -549,12 +549,12 @@ impl PurgeApp {
             "SkipButton" => self.model.flow_skip(),
             "RecheckButton" => self.model.flow_recheck(),
             // The bars and groups act on what they showed (`Ctl::key`), never on a place.
-            "BarButton" if n > 0 => {
-                let per = screens::BAR_BUTTONS as usize;
-                let bars = self.model.flow_bars();
-                if let Some(k) = self.keyed(id, bars.iter().map(|b| Key::bar(&b.title, &b.message)))
-                {
-                    self.model.flow_bar(k, (n - 1) % per);
+            "BarButton" => {
+                if let Some(shown @ Key::BarButton { action, .. }) = self.key_of(id) {
+                    let bars = self.model.flow_bars();
+                    if let Some(k) = bars.iter().position(|b| shown.on_bar(&b.title, &b.message)) {
+                        self.model.flow_bar(k, action);
+                    }
                 }
             }
             "BarClose" => {
@@ -581,8 +581,12 @@ impl PurgeApp {
             "Group" | "GroupTick" => {
                 let shown = self.key_of(id);
                 let l = &mut self.model.flow.leftovers;
+                // Only over the list the frame drew: a re-scan (or anything else that built the
+                // list again) since then leaves the click acting on nothing (review N7).
                 let group = match shown {
-                    Some(Key::Group(name)) => l.group_named(&name),
+                    Some(Key::Group { name, list }) if list == l.list_version() => {
+                        l.group_named(&name)
+                    }
                     _ => None,
                 };
                 match group {
