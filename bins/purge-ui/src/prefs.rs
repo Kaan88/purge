@@ -38,6 +38,9 @@ pub struct Prefs {
     pub theme: ThemeChoice,
     /// What shows behind the title row and the rail, in either design.
     pub backdrop: Backdrop,
+    /// UI-FULLFROST: where the backdrop shows and how strongly (`backdrop_covers`,
+    /// `backdrop_strength`; `glass::Glass`).
+    pub glass: crate::glass::GlassPrefs,
 }
 
 impl Default for Prefs {
@@ -48,6 +51,8 @@ impl Default for Prefs {
             preset: Preset::Violet,
             theme: ThemeChoice::System,
             backdrop: Backdrop::Acrylic,
+            // UI-FULLFROST.
+            glass: crate::glass::GlassPrefs::default(),
         }
     }
 }
@@ -58,6 +63,10 @@ impl Prefs {
         let mut p = Prefs::default();
         for (key, value) in settings::pairs(text) {
             let v = settings::unescape(value.trim());
+            // UI-FULLFROST: the backdrop's two keys.
+            if p.glass.read(key, &v) {
+                continue;
+            }
             match key {
                 "design" => p.design = Design::parse(&v).unwrap_or(p.design),
                 "transition" => p.transition = Transition::parse(&v).unwrap_or(p.transition),
@@ -88,6 +97,8 @@ impl Prefs {
         if let Some(state) = window {
             w.line(WINDOW, &state.to_setting());
         }
+        // UI-FULLFROST.
+        self.glass.write(&mut w);
         w.finish()
     }
 }
@@ -204,6 +215,7 @@ mod tests {
             preset: Preset::Amber,
             theme: ThemeChoice::Dark,
             backdrop: Backdrop::Mica,
+            ..Prefs::default()
         };
         assert_eq!(Prefs::parse(&p.text()), p);
         assert!(p.text().starts_with("[purge-ui]\nversion=1\n"));
@@ -325,6 +337,42 @@ mod tests {
         assert_eq!(third.load(), Prefs::default());
         assert_eq!(third.window(), Some(state()), "kept by a prefs save");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // ---- UI-FULLFROST ----
+
+    #[test]
+    fn the_backdrop_keys_round_trip_and_default_when_missing() {
+        use crate::glass::{GlassPrefs, STRENGTH_DEFAULT};
+        use crate::look::Covers;
+        let p = Prefs {
+            glass: GlassPrefs {
+                covers: Covers::Window,
+                strength: 35,
+            },
+            ..Prefs::default()
+        };
+        let text = p.text();
+        assert!(text.contains("backdrop_covers=window\n"), "{text}");
+        assert!(text.contains("backdrop_strength=35\n"), "{text}");
+        assert!(
+            text.starts_with("[purge-ui]\nversion=1\n"),
+            "the version stays 1"
+        );
+        assert_eq!(Prefs::parse(&text), p);
+        // A file from before the two keys: today's look, the default strength.
+        let old = Prefs::parse("[purge-ui]\nversion=1\nbackdrop=mica\n");
+        assert_eq!(
+            (old.glass.covers, old.glass.strength),
+            (Covers::Chrome, STRENGTH_DEFAULT)
+        );
+        // Not understood: the default; past the end: the end.
+        let odd = Prefs::parse(
+            "[purge-ui]\nversion=1\nbackdrop_covers=everything\nbackdrop_strength=lots\n",
+        );
+        assert_eq!(odd.glass, GlassPrefs::default());
+        let big = Prefs::parse("[purge-ui]\nversion=1\nbackdrop_strength=250\n");
+        assert_eq!(big.glass.strength, 100);
     }
 
     #[test]

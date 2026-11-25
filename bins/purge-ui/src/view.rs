@@ -15,7 +15,7 @@ use mdshared_ui::textfield::TextField;
 
 use mdshared_app::backdrop::Backdrop;
 
-use crate::look::{Choice, Design, Preset, ThemeChoice, Transition};
+use crate::look::{Choice, Covers, Design, Preset, ThemeChoice, Transition};
 use crate::model::{Model, Page, SortKey};
 use crate::transition::PageSwitch;
 use crate::ui::{Ctl, Id};
@@ -105,6 +105,8 @@ pub struct Dropdowns {
     pub transition: Dropdown<usize>,
     pub preset: Dropdown<usize>,
     pub backdrop: Dropdown<usize>,
+    /// UI-FULLFROST: what the backdrop covers.
+    pub covers: Dropdown<usize>,
     pub restore: Dropdown<usize>,
 }
 
@@ -114,14 +116,17 @@ pub const DD_DESIGN: Id = Id("LookChoice", 0);
 pub const DD_TRANSITION: Id = Id("TransitionChoice", 0);
 pub const DD_PRESET: Id = Id("ColourChoice", 0);
 pub const DD_BACKDROP: Id = Id("BackdropChoice", 0);
+// UI-FULLFROST.
+pub const DD_COVERS: Id = Id("BackdropCoversChoice", 0);
 pub const DD_RESTORE: Id = Id("RestorePointBox", 0);
-pub const DD_ALL: [Id; 7] = [
+pub const DD_ALL: [Id; 8] = [
     DD_SORT,
     DD_THEME,
     DD_DESIGN,
     DD_TRANSITION,
     DD_PRESET,
     DD_BACKDROP,
+    DD_COVERS,
     DD_RESTORE,
 ];
 
@@ -145,6 +150,7 @@ impl Dropdowns {
             transition: of(titles::<Transition>()),
             preset: of(titles::<Preset>()),
             backdrop: of(titles::<Backdrop>()),
+            covers: of(titles::<Covers>()),
             restore: of(RESTORE_MODES.iter().map(|s| s.to_string()).collect()),
         }
     }
@@ -157,6 +163,7 @@ impl Dropdowns {
             DD_TRANSITION => Some(&mut self.transition),
             DD_PRESET => Some(&mut self.preset),
             DD_BACKDROP => Some(&mut self.backdrop),
+            DD_COVERS => Some(&mut self.covers),
             DD_RESTORE => Some(&mut self.restore),
             _ => None,
         }
@@ -171,6 +178,7 @@ impl Dropdowns {
             (DD_TRANSITION, &self.transition),
             (DD_PRESET, &self.preset),
             (DD_BACKDROP, &self.backdrop),
+            (DD_COVERS, &self.covers),
             (DD_RESTORE, &self.restore),
         ]
         .into_iter()
@@ -191,6 +199,7 @@ impl Dropdowns {
         set(&mut self.transition, m.prefs.transition.index());
         set(&mut self.preset, m.prefs.preset.index());
         set(&mut self.backdrop, Choice::index(m.prefs.backdrop));
+        set(&mut self.covers, m.prefs.glass.covers.index());
         set(&mut self.restore, m.flow_restore_index());
     }
 }
@@ -238,6 +247,8 @@ pub struct View {
     pub preview_b: bool,
     pub preview_shown: Option<bool>,
     pub preview_tx: PageSwitch,
+    /// UI-FULLFROST: the frame as drawn while the window shows it keyed (`glass`).
+    pub glass: crate::glass::Glass,
     /// A development run (a debug build, or `--script`): the launch markers' expander shows.
     pub dev: bool,
     pub toast: Option<Toast>,
@@ -288,6 +299,7 @@ impl View {
             preview_b: false,
             preview_shown: None,
             preview_tx: PageSwitch::new("preview"),
+            glass: crate::glass::Glass::default(),
             dev: cfg!(debug_assertions),
             toast: None,
             palette: None,

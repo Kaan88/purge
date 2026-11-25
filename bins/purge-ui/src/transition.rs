@@ -482,15 +482,19 @@ impl Picture<'_> {
     }
 }
 
-/// `a` and `b` mixed, `w` of 256 parts `b`, rounded, opaque: red with blue in one multiply (each
-/// in its own 16 bits), green in another.
+/// `a` and `b` mixed, `w` of 256 parts `b`, rounded: red with blue in one multiply (each in its
+/// own 16 bits), green in another. The alpha byte is the one of whichever has more of the mix
+/// (UI-FULLFROST): it is opaque, or the mark that says how the glass keys the pixel
+/// (`glass`), and a mark is never a blend of two. So the old page's ground stays glass where it
+/// shows, and never shows through the new page's opaque surfaces past the switch's middle.
 #[inline]
 fn mix(a: u32, b: u32, w: u32) -> u32 {
     const RB: u32 = 0x00FF_00FF;
     let v = 256 - w;
     let rb = (((a & RB) * v + (b & RB) * w + 0x0080_0080) >> 8) & RB;
     let g = ((((a >> 8) & 0xFF) * v + ((b >> 8) & 0xFF) * w + 0x80) >> 8) & 0xFF;
-    rb | (g << 8) | 0xFF00_0000
+    let alpha = (if w < 128 { a } else { b }) & 0xFF00_0000;
+    rb | (g << 8) | alpha
 }
 
 /// Writes `old` and `new` over the region `rect` of a bitmap `width` px wide: mixed (`alpha` of
@@ -707,6 +711,13 @@ mod tests {
         assert_eq!(mix(o, n, 256), n);
         assert_eq!(mix(o, n, 128), u32::from_le_bytes([105, 60, 15, 255]));
         assert_eq!(mix(grey(0), grey(255), 128), grey(128));
+        // UI-FULLFROST: the glass's marks are kept, the one with more of the mix.
+        let (ground, card) = (254u32 << 24, 253u32 << 24);
+        let (o, n) = ((o & 0x00ff_ffff) | ground, (n & 0x00ff_ffff) | card);
+        assert_eq!(mix(o, n, 100) >> 24, 254);
+        assert_eq!(mix(o, n, 200) >> 24, 253);
+        assert_eq!(mix(o, n, 0), o);
+        assert_eq!(mix(o, n, 256), n);
     }
 
     #[test]

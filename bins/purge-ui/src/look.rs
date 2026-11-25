@@ -12,7 +12,8 @@
 //!   with either design; or the Windows accent on the toolkit's own surfaces.
 //! - **Theme mode.** System, light or dark.
 //! - **Backdrop.** What shows behind the title row and the rail: the flat colours, Mica or
-//!   Acrylic (the toolkit's `Backdrop`), with either design.
+//!   Acrylic (the toolkit's `Backdrop`), with either design. UI-FULLFROST: or behind the whole
+//!   window ([`Covers`]), at a strength of the user's (`glass`).
 //!
 //! High contrast is none of these: under a contrast theme the system's colours replace every
 //! preset (`app::PurgeApp::retheme`), and the backdrop is off.
@@ -316,6 +317,35 @@ impl Choice for Backdrop {
     }
 }
 
+// ---- UI-FULLFROST: what the backdrop covers ----------------------------------------------------
+
+/// Where the backdrop shows (`glass`): only behind the title row and the rail, as the toolkit's
+/// frost does, or behind the whole window, the content card and the page's surfaces too.
+/// Without a backdrop (Off, or high contrast) it means nothing.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Covers {
+    Chrome,
+    Window,
+}
+
+impl Choice for Covers {
+    const ALL: &'static [Covers] = &[Covers::Chrome, Covers::Window];
+
+    fn name(self) -> &'static str {
+        match self {
+            Covers::Chrome => "chrome",
+            Covers::Window => "window",
+        }
+    }
+
+    fn title(self) -> &'static str {
+        match self {
+            Covers::Chrome => "Title and rail",
+            Covers::Window => "Whole window",
+        }
+    }
+}
+
 // ---- theme mode --------------------------------------------------------------------------------
 
 /// Light, dark, or what Windows uses.
@@ -378,6 +408,7 @@ mod tests {
         round::<Preset>();
         round::<ThemeChoice>();
         round::<Backdrop>();
+        round::<Covers>();
     }
 
     #[test]

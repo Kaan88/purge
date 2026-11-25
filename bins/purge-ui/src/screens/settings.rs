@@ -20,6 +20,9 @@ use crate::look::{Choice, Design, Preset};
 use crate::model::Model;
 use crate::ui::{BUTTON_H, Id, Role, Style, Ui, grow, id};
 use crate::view::{DD_BACKDROP, DD_DESIGN, DD_PRESET, DD_THEME, DD_TRANSITION, View};
+// UI-FULLFROST.
+use crate::view::DD_COVERS;
+use mdshared_ui::{dropdown, slider};
 
 const ROW_H: f32 = 66.0;
 const GAP: f32 = 18.0;
@@ -37,6 +40,12 @@ enum Control {
     Button(Id, &'static str),
     /// Lines of text under the title instead of a control.
     Facts(&'static [&'static str]),
+    /// UI-FULLFROST: what the backdrop covers, a drop-down that waits while there is no
+    /// backdrop (`true`).
+    Covers(bool),
+    /// UI-FULLFROST: the backdrop's strength, 0 to 100, a slider that waits while there is no
+    /// backdrop.
+    Strength(u8, bool),
 }
 
 struct Row {
@@ -91,10 +100,13 @@ fn sections(m: &Model, animates: bool) -> Vec<(&'static str, Vec<Row>)> {
                 row("Page transition", motion, Control::Dropdown(DD_TRANSITION)),
                 row(
                     Backdrop::TITLE,
-                    "Behind the title row and the rail, with either look. Windows 11; off under high contrast.",
+                    "Mica or Acrylic, with either look. Windows 11; off under high contrast.",
                     Control::Dropdown(DD_BACKDROP),
                 ),
-            ],
+            ]
+            .into_iter()
+            .chain(glass_rows(m))
+            .collect(),
         ),
         (
             "Uninstalling",
@@ -140,7 +152,7 @@ fn sections(m: &Model, animates: bool) -> Vec<(&'static str, Vec<Row>)> {
 /// The width the title and detail of a row with a control have.
 fn control_room(ui: &mut Ui, row: &Row, w: f32) -> f32 {
     let control_w = match &row.control {
-        Control::Dropdown(_) => DD_W.min(w * 0.4),
+        Control::Dropdown(_) | Control::Covers(_) | Control::Strength(..) => DD_W.min(w * 0.4),
         Control::Locked(..) => TOGGLE_W,
         Control::Button(_, label) => ui.button_w(label, None),
         Control::Facts(_) => 0.0,
@@ -643,5 +655,102 @@ fn setting(ui: &mut Ui, v: &View, r: Rect, row: &Row) {
             ui.button(*bid, b, label, Style::Standard, None, true);
         }
         Control::Facts(_) => {}
+        // UI-FULLFROST.
+        Control::Covers(off) => {
+            let field = Rect::new(cx, r.cy() - DROPDOWN_H / 2.0, control_w, DROPDOWN_H);
+            covers_dropdown(ui, v, field, row.title, *off || ui.hc);
+        }
+        Control::Strength(value, off) => {
+            let field = Rect::new(cx, r.cy() - 16.0, control_w, 32.0);
+            strength_slider(ui, field, row.title, *value, *off || ui.hc);
+        }
     }
+}
+
+// ---- UI-FULLFROST: the backdrop's cover and strength ------------------------------------------
+
+/// The slider of the backdrop's strength.
+pub const STRENGTH: Id = Id("BackdropStrength", 0);
+
+/// The two rows under "Window backdrop". They wait while there is no backdrop.
+fn glass_rows(m: &Model) -> Vec<Row> {
+    let off = m.prefs.backdrop == Backdrop::Off;
+    let g = m.prefs.glass;
+    let (covers, strength) = if off {
+        (
+            "Choose Mica or Acrylic to use these.".to_string(),
+            "Choose Mica or Acrylic to use these.".to_string(),
+        )
+    } else {
+        (
+            "Only the title row and the rail, or the whole window: the page and its cards too."
+                .to_string(),
+            "How much of the backdrop shows through. 100% is the most that keeps text readable."
+                .to_string(),
+        )
+    };
+    vec![
+        Row {
+            title: "Backdrop covers",
+            detail: covers,
+            control: Control::Covers(off),
+        },
+        Row {
+            title: "Backdrop strength",
+            detail: strength,
+            control: Control::Strength(g.strength, off),
+        },
+    ]
+}
+
+/// The drop-down of what the backdrop covers; drawn quiet and passed over while `off`.
+fn covers_dropdown(ui: &mut Ui, v: &View, field: Rect, title: &str, off: bool) {
+    let dd = &v.dds.covers;
+    if !off {
+        return ui.dropdown(DD_COVERS, field, dd, title);
+    }
+    let pal = ui.pal;
+    let role = Role::Combo {
+        value: dd.selected_label().to_string(),
+        open: false,
+    };
+    ui.reg_disabled(DD_COVERS, field, role, title);
+    let look = dropdown::Look {
+        hovered: false,
+        focused: false,
+        disabled: true,
+    };
+    dropdown::draw_dropdown_animated(ui.p, &pal, ui.cx.anim(), DD_COVERS, field, dd, look);
+}
+
+/// The strength's slider in `field`, with its value at the right; drawn quiet and passed over
+/// while `off`. The toolkit's slider: the arrows move it by 5 %, Page Up and Down by 25 %.
+fn strength_slider(ui: &mut Ui, field: Rect, title: &str, value: u8, off: bool) {
+    let pal = ui.pal;
+    let label_w = 44.0;
+    let r = Rect::new(field.x, field.y, field.w - label_w - 6.0, field.h);
+    let v = f32::from(value);
+    if off {
+        ui.reg_disabled(STRENGTH, r, Role::Slider(v), title);
+    } else {
+        ui.reg(STRENGTH, r, Role::Slider(v), title, true);
+    }
+    let s = slider::Slider::new(0.0, 100.0, v).step(crate::glass::STEP);
+    let look = slider::Look {
+        hot: !off && ui.hot(STRENGTH),
+        pressed: !off && ui.down(STRENGTH),
+        focused: !off && ui.ringed(STRENGTH),
+        disabled: off,
+        buffered: None,
+    };
+    slider::draw_animated(ui.p, &pal, ui.cx.anim(), STRENGTH, r, &s, look);
+    let ink = if off { pal.faint } else { pal.text };
+    ui.p.text_right(
+        Face::Ui,
+        13.0,
+        field.right(),
+        field.cy(),
+        &format!("{value}%"),
+        ink,
+    );
 }
