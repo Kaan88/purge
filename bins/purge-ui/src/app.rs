@@ -30,7 +30,9 @@ use purge_ui_model::programs::{Filter, ProgramCommand};
 use crate::link::{Link, Source};
 use crate::look::{Choice, Design, Preset, ThemeChoice, Transition};
 use crate::markers;
-use crate::model::{LeftoverPhase, Model, Page, Programs, RunPhase, SortKey, Tab};
+use purge_ui_model::leftovers::LeftoversPhase;
+
+use crate::model::{Model, Page, Programs, SortKey, Tab};
 use crate::prefs::{Prefs, Store};
 use crate::screens::{self, NAV, nav_id};
 use crate::script::Script;
@@ -120,7 +122,6 @@ pub struct PurgeApp {
     /// What the last frame declared, as one number: the accessibility tree is asked for again
     /// when a frame declares something else.
     tree_sig: u64,
-    pipeline_due: Option<Instant>,
     until: Option<Instant>,
     launched: Instant,
     frames: u32,
@@ -184,7 +185,6 @@ impl PurgeApp {
             pointer: (-1.0, -1.0),
             type_ahead: TypeAhead::new(),
             tree_sig: 0,
-            pipeline_due: None,
             until: o.seconds.map(|s| o.launched + Duration::from_secs(s)),
             launched: o.launched,
             frames: 0,
@@ -314,7 +314,7 @@ impl PurgeApp {
     // ---- the controls of the last frame --------------------------------------------------------
 
     fn overlay(&self) -> bool {
-        self.model.confirm.is_some() || self.view.palette.is_some()
+        self.model.flow.dialog_open() || self.view.palette.is_some()
     }
 
     pub fn ctl(&self, id: Id) -> Option<&Ctl> {
@@ -339,8 +339,10 @@ impl PurgeApp {
         let want = self.overlay();
         let open = self.focus.scope() == Some(SCOPE);
         if want && !open {
-            if self.model.confirm.is_some() {
+            if self.model.flow.confirm.is_some() {
                 self.focus.push_scope_on(SCOPE, id("ConfirmNotNowButton"));
+            } else if self.model.flow.elevation.showing().is_some() {
+                self.focus.push_scope_on(SCOPE, id("DialogPrimaryButton"));
             } else {
                 self.focus.push_scope(SCOPE);
             }
@@ -377,7 +379,6 @@ impl PurgeApp {
 
     /// A click, or Enter or Space, on the control `id`.
     pub fn activate(&mut self, cx: &mut Cx<'_, ()>, id: Id) {
-        let now = cx.now();
         let n = id.1 as usize;
         if let Some((page, _)) = NAV.iter().find(|(_, name)| *name == id.0) {
             self.go(*page);
@@ -427,89 +428,71 @@ impl PurgeApp {
             }
             "Commands.Expander" => self.view.commands_open = !self.view.commands_open,
 
-            // The confirmation.
-            "ConfirmUninstallButton" => {
+            // The confirmation and the first-elevation explanation (UI-FLOW).
+            "ConfirmUninstallButton" | "ConfirmCheckAgainButton" | "ConfirmNotNowButton" => {
                 self.close_dropdowns();
-                self.model.confirm_uninstall(now);
+                if let Some(button) = screens::confirm_button(id.0) {
+                    self.model.flow_confirm(button);
+                }
             }
-            "ConfirmCheckAgainButton" => {
-                self.model.pipeline.still_running = false;
-                self.toast(cx, "Checked again: firefox.exe is no longer running.");
-            }
-            "ConfirmNotNowButton" => {
-                self.close_dropdowns();
-                self.model.cancel_confirm();
-            }
-            "QuietSwitch" => self.model.pipeline.quiet = !self.model.pipeline.quiet,
+            "QuietSwitch" => self.model.flow_quiet(),
+            "DialogPrimaryButton" => self.model.flow_elevation(true),
+            "DialogCloseButton" => self.model.flow_elevation(false),
 
-            // The pipeline.
-            "NextButton" => {
-                let finished = self
-                    .model
-                    .pipeline
-                    .run
-                    .as_ref()
-                    .is_some_and(|r| r.phase == RunPhase::Finished);
-                if finished && self.model.leftovers.phase == LeftoverPhase::Review {
-                    self.go(Page::Leftovers);
-                } else if !self.model.pipeline.start_next(now) {
-                    self.go(Page::Programs);
-                }
+            // The Uninstall page.
+            "NextButton" => self.model.flow_next(),
+            "SkipButton" => self.model.flow_skip(),
+            "RecheckButton" => self.model.flow_recheck(),
+            "BarButton" if n > 0 => {
+                let k = n - 1;
+                let per = screens::BAR_BUTTONS as usize;
+                self.model.flow_bar(k / per, k % per);
             }
-            "SkipButton" => {
-                // Leaves the leftovers where they are and goes on with the queue.
-                if self.model.leftovers.phase == LeftoverPhase::Review {
-                    self.model.leftovers.done();
-                }
-                if !self.model.pipeline.start_next(now) {
-                    self.model.pipeline.run = None;
-                }
-            }
+            "BarClose" if n > 0 => self.model.flow_close_bar(n - 1),
             "GoPrograms" => self.go(Page::Programs),
 
             // Leftovers.
-            "Group" => {
-                if let Some(g) = self.model.leftovers.groups.get_mut(n.saturating_sub(1)) {
-                    g.open = !g.open;
+            "LBarButton" if n > 0 => self.model.flow_lbar(n - 1),
+            "LBarClose" if n > 0 => self.model.flow_close_lbar(n - 1),
+            "Group" if n > 0 => self.model.flow.leftovers.toggle_expanded(n - 1),
+            "GroupTick" if n > 0 => self.model.flow.leftovers.toggle_group(n - 1),
+            "Item" => {
+                if let Some(c) = self.model.flow.item_id(n) {
+                    let r = self.model.flow.leftovers.select(c);
+                    self.model.flow.ltake(r);
                 }
             }
-            "GroupTick" => self.model.leftovers.toggle_group(n.saturating_sub(1)),
-            "Item" => self.model.leftovers.selected = Some(item_at(id.1)),
             "ItemTick" => {
-                let at = item_at(id.1);
-                self.model.leftovers.selected = Some(at);
-                if !self.model.leftovers.toggle_item(at) {
-                    self.toast(cx, "Protected: Purge never moves this.");
+                if let Some(c) = self.model.flow.item_id(n) {
+                    let l = &mut self.model.flow.leftovers;
+                    let on = l.items().get(n - 1).is_some_and(|i| i.checked);
+                    l.set_checked(&c, !on);
+                    let r = l.select(c);
+                    self.model.flow.ltake(r);
                 }
             }
-            "ExpandButton" => {
-                let open = !self.model.leftovers.all_open();
-                self.model.leftovers.set_all_open(open);
-            }
-            "WeakButton" => {
-                let on = !self.model.leftovers.likely_ticked();
-                self.model.leftovers.set_likely(on);
-            }
+            "ExpandButton" => self.model.flow.leftovers.expand_all(),
+            "WeakButton" => self.model.flow.leftovers.toggle_weak(),
             "DeleteAfterBox" => {
-                self.model.leftovers.delete_after = !self.model.leftovers.delete_after
+                let l = &mut self.model.flow.leftovers;
+                let on = !l.footer().delete_after;
+                l.set_delete_after(on);
             }
             "MoveButton" => {
-                if !self.model.leftovers.move_ticked() {
-                    self.toast(cx, "Nothing is ticked.");
-                }
+                let r = self.model.flow.leftovers.click_move();
+                self.model.flow.ltake(r);
             }
             "UndoAllButton" => {
-                self.model.leftovers.undo();
+                let r = self.model.flow.leftovers.click_undo_all();
+                self.model.flow.ltake(r);
+            }
+            "RetryHeldButton" => {
+                let r = self.model.flow.leftovers.retry_held();
+                self.model.flow.ltake(r);
             }
             "DoneButton" => {
-                self.model.leftovers.done();
-                if self.model.pipeline.queue.is_empty() {
-                    self.model.pipeline.run = None;
-                    self.go(Page::Programs);
-                } else {
-                    self.model.pipeline.start_next(now);
-                    self.go(Page::Pipeline);
-                }
+                let to = self.model.flow_done_page();
+                self.go(to);
             }
             "OpenHistory" => self.go(Page::History),
             "OpenVault" => self.go(Page::Quarantine),
@@ -575,7 +558,7 @@ impl PurgeApp {
             DD_DESIGN => self.set_design(cx, Design::at(i)),
             DD_TRANSITION => self.set_transition(cx, Transition::at(i)),
             DD_PRESET => self.set_preset(cx, Preset::at(i)),
-            DD_RESTORE => self.model.pipeline.restore_mode = i.min(2),
+            DD_RESTORE => self.model.flow_restore_point(i.min(2)),
             _ => {}
         }
         cx.request_redraw_all();
@@ -632,7 +615,7 @@ impl PurgeApp {
         entries.push(
             Entry::new(22, "Review leftovers")
                 .group(1)
-                .enabled(self.model.leftovers.phase == LeftoverPhase::Review),
+                .enabled(self.model.flow.leftovers.phase() == LeftoversPhase::Review),
         );
         entries.push(Entry::new(23, "Theme: light").group(1));
         entries.push(Entry::new(24, "Theme: dark").group(1));
@@ -672,7 +655,9 @@ impl PurgeApp {
                 self.view.search.select_all();
             }
             // In the flow the review is part of the pipeline page while its run is still shown.
-            22 if Look::of(self.model.prefs.design).flow && self.model.pipeline.run.is_some() => {
+            22 if Look::of(self.model.prefs.design).flow
+                && self.model.flow.page.controller().target().is_some() =>
+            {
                 self.go(Page::Pipeline)
             }
             22 => self.go(Page::Leftovers),
@@ -971,8 +956,12 @@ impl PurgeApp {
 
         match name {
             KeyName::Escape => {
-                if self.model.confirm.is_some() {
-                    self.model.cancel_confirm();
+                if self.model.flow.confirm.is_some() {
+                    self.close_dropdowns();
+                    self.model
+                        .flow_confirm(purge_ui_model::pipeline::page::ConfirmButton::NotNow);
+                } else if self.model.flow.elevation.showing().is_some() {
+                    self.model.flow_elevation(false);
                 } else if self.focus.is_focused(SEARCH) {
                     if self.view.search.is_empty() {
                         self.focus.focus(LIST);
@@ -1183,7 +1172,6 @@ impl PurgeApp {
     fn timers(&mut self, cx: &mut Cx<'_, ()>) {
         let wakes = [
             (self.presented_due || self.names_due).then(|| cx.now()),
-            self.pipeline_due,
             self.until,
             self.view.toast.as_ref().map(|t| t.until),
             self.script.as_ref().and_then(|s| s.due()),
@@ -1225,9 +1213,6 @@ impl PurgeApp {
             if self.end_marker(cx) {
                 return;
             }
-        }
-        if self.pipeline_due.is_some_and(|d| d <= now) {
-            self.pipeline_due = None;
         }
         if self.view.toast.as_ref().is_some_and(|t| t.until <= now) {
             self.view.toast = None;
@@ -1281,15 +1266,6 @@ impl PurgeApp {
             cx.exit();
         }
         self.bench_exit
-    }
-
-    /// Moves the pipeline on to now and arms its next step.
-    fn tick(&mut self, cx: &mut Cx<'_, ()>) {
-        let (changed, next) = self.model.tick(cx.now());
-        self.pipeline_due = next;
-        if changed {
-            cx.request_redraw_all();
-        }
     }
 
     // ---- accessibility -----------------------------------------------------------------------
@@ -1460,8 +1436,10 @@ impl PurgeApp {
             tree.add(a11y::id(row.author), n);
         }
         if !inside.is_empty() {
-            let what = if self.model.confirm.is_some() {
-                "Confirm uninstall"
+            let what = if let Some(c) = &self.model.flow.confirm {
+                c.dialog.title.as_str()
+            } else if self.model.flow.elevation.showing().is_some() {
+                screens::ELEVATION_TITLE
             } else {
                 "Commands"
             };
@@ -1558,17 +1536,6 @@ fn screens_tab_index(name: &str) -> usize {
         .unwrap_or(0)
 }
 
-/// A leftover item's place from its control's number: group and item.
-pub fn item_at(n: u32) -> (usize, usize) {
-    let n = n.saturating_sub(1) as usize;
-    (n / 100, n % 100)
-}
-
-/// The number of the control of a leftover item.
-pub fn item_no(group: usize, item: usize) -> u32 {
-    (group * 100 + item + 1) as u32
-}
-
 impl App for PurgeApp {
     type Message = ();
 
@@ -1644,13 +1611,11 @@ impl App for PurgeApp {
             _ => {}
         }
         self.pump(cx);
-        self.tick(cx);
         self.sync_scope();
         self.timers(cx);
     }
 
     fn draw(&mut self, cx: &mut Cx<'_, ()>, p: &mut Painter, _damage: Rect) {
-        let now = cx.now();
         let size = cx.size();
         self.focus.begin_frame();
         // The scrolled areas are the ones this frame draws: a page left behind keeps none, or
@@ -1673,7 +1638,6 @@ impl App for PurgeApp {
                 hover: self.hover,
                 pressed: self.pressed,
                 modal: false,
-                now,
                 size,
             };
             screens::draw(&mut ui, &self.model, &mut self.view);

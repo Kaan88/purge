@@ -1,19 +1,24 @@
-//! The Uninstall pipeline page: one program going through the steps on a timer, the progress,
-//! and what comes next when it is through. D2 lays the same run out as one flow: the steps in
-//! a strip across the page, the step that runs in a card of its own, and the review of the
-//! leftovers on the same page once the run is through.
+//! The Uninstall page, drawn from `purge-ui-model`'s [`UninstallPageView`] (UI-FLOW): the
+//! program and its route, the exact command, the five steps, the quiet and restore-point choices,
+//! the bars with their actions, and the card of the next queued program. D2 lays the same run out
+//! as one flow: the steps in a strip across the page, the step that runs in a card of its own, and
+//! the review of the leftovers on the same page once the scan is in.
 
 use mdshared_ui::gfx::{Face, Rect};
 use mdshared_ui::glyph;
+use mdshared_ui::infobar::{InfoBar, Severity};
 use mdshared_ui::slider::draw_spinner;
+use purge_ui_model::leftovers::LeftoversPhase;
+use purge_ui_model::pipeline::page::{Bar, BarClose, UninstallPageView};
+use purge_ui_model::pipeline::{NoticeKind, StepState, UninstallStep};
 
-use crate::model::{LeftoverPhase, Model, Page, RunPhase, STEPS, StepState};
+use crate::model::{Model, Page};
 use crate::ui::{BUTTON_H, Id, Look, Role, Style, Tone, Ui, id, ok_ink};
-use crate::view::{RESTORE_MODES, View};
+use crate::view::{DD_RESTORE, View};
 
 const STEP_H: f32 = 58.0;
-const FOOTER: &str = "Purge runs the program's own uninstaller. Nothing else is moved or removed until you confirm the list of leftovers.";
-const SKIPPED: &str = "Restore points are switched off for this run.";
+/// How many buttons a bar may have: its buttons' ids are `BarButton_{bar * BAR_BUTTONS + k + 1}`.
+pub const BAR_BUTTONS: u32 = 8;
 
 /// The mark of a step: in the list of D0 and in the strip of D2.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -23,6 +28,8 @@ enum Mark {
     /// The flow waits for the user here (D2's review).
     Yours,
     Waiting,
+    Warning,
+    Failed,
     Skipped,
 }
 
@@ -30,9 +37,10 @@ impl Mark {
     fn of(state: StepState) -> Mark {
         match state {
             StepState::Done => Mark::Done,
-            StepState::Running => Mark::Busy,
-            StepState::Waiting => Mark::Waiting,
-            StepState::Skipped => Mark::Skipped,
+            StepState::Active => Mark::Busy,
+            StepState::Pending => Mark::Waiting,
+            StepState::Warning => Mark::Warning,
+            StepState::Failed => Mark::Failed,
         }
     }
 
@@ -42,12 +50,15 @@ impl Mark {
             Mark::Busy => "Running",
             Mark::Yours => "Your turn",
             Mark::Waiting => "Waiting",
+            Mark::Warning => "Done, with a warning",
+            Mark::Failed => "Failed",
             Mark::Skipped => "Skipped",
         }
     }
 }
 
-fn mark(ui: &mut Ui, mark: Mark, cx: f32, cy: f32, number: usize) {
+/// `key` tells apart the marks drawn at once (the spinner animates by it).
+fn mark(ui: &mut Ui, mark: Mark, cx: f32, cy: f32, number: usize, key: u32) {
     let pal = ui.pal;
     let r = Rect::new(cx - 11.0, cy - 11.0, 22.0, 22.0);
     match mark {
@@ -61,7 +72,15 @@ fn mark(ui: &mut Ui, mark: Mark, cx: f32, cy: f32, number: usize) {
             }
         }
         Mark::Busy => {
-            draw_spinner(ui.p, &pal, ui.cx.anim(), Id("StepSpinner", 0), cx, cy, 9.5);
+            draw_spinner(
+                ui.p,
+                &pal,
+                ui.cx.anim(),
+                Id("StepSpinner", key),
+                cx,
+                cy,
+                9.5,
+            );
         }
         Mark::Yours => {
             if ui.hc {
@@ -76,11 +95,77 @@ fn mark(ui: &mut Ui, mark: Mark, cx: f32, cy: f32, number: usize) {
             ui.p.ring(cx, cy, 10.0, 1.25, pal.faint, 1.0);
             ui.p.text_center(Face::Ui, 11.5, r, &number.to_string(), pal.muted);
         }
+        Mark::Warning | Mark::Failed => {
+            let (g, ink) = if mark == Mark::Warning {
+                (
+                    glyph::WARN,
+                    mdshared_ui::infobar::severity_colors(Severity::Warning, &pal).ink,
+                )
+            } else {
+                (
+                    glyph::CLOSE,
+                    mdshared_ui::infobar::severity_colors(Severity::Error, &pal).ink,
+                )
+            };
+            let ink = if ui.hc { pal.text } else { ink };
+            ui.p.ring(cx, cy, 10.0, 1.5, ink, 1.0);
+            ui.p.icon(g, 12.0, cx, cy, ink);
+        }
         Mark::Skipped => {
             ui.p.ring(cx, cy, 10.0, 1.25, pal.faint, 1.0);
             ui.p.icon(glyph::MINUS, 11.0, cx, cy, pal.muted);
         }
     }
+}
+
+fn severity(kind: NoticeKind) -> Severity {
+    match kind {
+        NoticeKind::Info => Severity::Info,
+        NoticeKind::Warning => Severity::Warning,
+        NoticeKind::Error => Severity::Error,
+    }
+}
+
+/// The page's bars from `y`, each one Text `InfoBarHost[_n]` named "Title Message", with its
+/// buttons and close button. Returns the y under them.
+fn bars(ui: &mut Ui, bars: &[Bar], x: f32, mut y: f32, w: f32) -> f32 {
+    for (k, b) in bars.iter().enumerate() {
+        let mut bar =
+            InfoBar::new(severity(b.kind), &b.title, &b.message).closable(b.close != BarClose::No);
+        let mut ids = Vec::new();
+        for (j, button) in b.buttons.iter().enumerate() {
+            if button.enabled {
+                bar = bar.action(ids.len() as u32, button.label);
+                ids.push(Id("BarButton", k as u32 * BAR_BUTTONS + j as u32 + 1));
+            }
+        }
+        let close = (b.close != BarClose::No).then_some(Id("BarClose", k as u32 + 1));
+        y = ui.infobar_with(Id("InfoBarHost", k as u32), x, y, w, &bar, close, &ids) + 8.0;
+    }
+    y
+}
+
+/// The share of the run that is through, for the bars and the ring.
+fn fraction(v: &UninstallPageView) -> f32 {
+    let done = v
+        .steps
+        .iter()
+        .map(|s| match s.state {
+            StepState::Done | StepState::Warning | StepState::Failed => 1.0,
+            StepState::Active => 0.5,
+            StepState::Pending => 0.0,
+        })
+        .sum::<f32>();
+    done / v.steps.len().max(1) as f32
+}
+
+/// The step the stepper names now: the active one, else the last one reached.
+fn current(v: &UninstallPageView) -> usize {
+    v.steps
+        .iter()
+        .position(|s| s.state == StepState::Active)
+        .or_else(|| v.steps.iter().rposition(|s| s.state != StepState::Pending))
+        .unwrap_or(0)
 }
 
 pub fn draw(ui: &mut Ui, m: &Model, v: &mut View, content: Rect) {
@@ -89,73 +174,32 @@ pub fn draw(ui: &mut Ui, m: &Model, v: &mut View, content: Rect) {
     }
     let pal = ui.pal;
     let lk = ui.look;
-    let pl = &m.pipeline;
+    let pv = m.flow.page.view(m.flow_env());
     let left = content.x + lk.margin;
     let right = content.right() - lk.margin;
     let w = right - left;
-    let now = ui.now;
 
     let y = content.y + 38.0;
-    let (sub, route, tone) = match &pl.run {
-        None => ("Nothing is running".to_string(), "Waiting", Tone::Neutral),
-        Some(r) if r.phase == RunPhase::Finished => ("Finished".to_string(), "Done", Tone::Good),
-        Some(r) => (
-            format!(
-                "Step {} of {}",
-                r.step.min(STEPS.len() - 1) + 1,
-                STEPS.len()
-            ),
-            "Running",
-            Tone::Accent,
-        ),
-    };
-    let cw = ui.chip_w(route);
-    ui.heading(
-        left,
-        y,
-        m.page.title(),
-        id("SubtitleText"),
-        &sub,
-        w - cw - 16.0,
-    );
-    ui.chip(right - cw, y, route, tone);
-    ui.reg(
-        id("RouteText"),
-        Rect::new(right - cw, y - 10.0, cw, 20.0),
-        Role::Text,
-        route,
-        false,
-    );
+    heading(ui, m, &pv, left, right, y);
 
-    let fy = footer(ui, content);
-
+    let fy = footer(ui, content, pv.footer);
     let mut y = content.y + 76.0 + (lk.margin - 28.0);
-    let Some(run) = &pl.run else {
-        nothing_card(ui, left, y, w);
+    y = bars(ui, &m.flow_bars(), left, y, w);
+    if pv.empty {
+        nothing_card(ui, left, y, w, pv.footer);
         return;
-    };
-    let program = &m.programs.all[run.program.min(m.programs.all.len() - 1)];
-    let finished = run.phase == RunPhase::Finished;
+    }
 
     // The whole run's progress.
-    let f = pl.fraction(now);
-    let status = if finished {
-        format!("{} went through all {} steps.", program.name, STEPS.len())
-    } else {
-        STEPS[run.step.min(STEPS.len() - 1)].title.to_string()
-    };
+    let f = fraction(&pv);
+    let at = current(&pv);
+    let status = pv.steps.get(at).map_or("", |s| s.title).to_string();
     if lk.hero {
         // D3: the run as one ring, with the program and the step beside it.
         let hero = Rect::new(left, y, w, 112.0);
         ui.card(hero);
         let (rcx, rcy, rr) = (hero.x + 64.0, hero.cy(), 36.0);
-        let ink = if ui.hc {
-            pal.text
-        } else if finished {
-            ok_ink(&pal)
-        } else {
-            pal.accent
-        };
+        let ink = if ui.hc { pal.text } else { pal.accent };
         ui.ring_gauge(rcx, rcy, rr, f, &format!("{:.0}%", f * 100.0), ink);
         let ring = Rect::new(rcx - rr, rcy - rr, rr * 2.0, rr * 2.0);
         ui.reg(
@@ -167,15 +211,7 @@ pub fn draw(ui: &mut Ui, m: &Model, v: &mut View, content: Rect) {
         );
         let tx = hero.x + 124.0;
         let tw = hero.right() - 24.0 - tx;
-        let caption = if finished {
-            "FINISHED".to_string()
-        } else {
-            format!(
-                "STEP {} OF {}",
-                run.step.min(STEPS.len() - 1) + 1,
-                STEPS.len()
-            )
-        };
+        let caption = format!("STEP {} OF {}", at + 1, pv.steps.len());
         ui.p.text(
             Face::Semibold,
             11.0,
@@ -185,24 +221,25 @@ pub fn draw(ui: &mut Ui, m: &Model, v: &mut View, content: Rect) {
             pal.muted,
             tw,
         );
-        let status = ui.p.elide(Face::Semibold, 20.0, &status, tw);
+        let s = ui.p.elide(Face::Semibold, 20.0, &status, tw);
         ui.text(
             id("ProgressText"),
             Face::Semibold,
             20.0,
             tx,
             hero.y + 52.0,
-            &status,
+            &s,
             pal.text,
             tw,
         );
+        ui.say_whole(&status);
         ui.tile(
             Rect::new(tx, hero.y + 74.0, 22.0, 22.0),
-            &program.name,
-            &program.publisher,
+            &pv.program_name,
+            "",
         );
-        let name = ui.p.elide(Face::Ui, 13.0, &program.name, tw * 0.5);
-        let nw = ui.text(
+        let name = ui.p.elide(Face::Ui, 13.0, &pv.program_name, tw * 0.5);
+        ui.text(
             id("ProgramNameText"),
             Face::Ui,
             13.0,
@@ -212,30 +249,19 @@ pub fn draw(ui: &mut Ui, m: &Model, v: &mut View, content: Rect) {
             pal.text,
             tw * 0.5,
         );
-        let route = format!("\u{b7}  {}", route_text(m));
-        let rx = tx + 30.0 + nw + 10.0;
-        ui.text(
-            id("RouteDetailText"),
-            Face::Ui,
-            12.0,
-            rx,
-            hero.y + 85.0,
-            &route,
-            pal.muted,
-            hero.right() - 24.0 - rx,
-        );
+        ui.say_whole(&pv.program_name);
         y += hero.h + 16.0;
     } else {
         let size = if lk.soft { 15.0 } else { 13.0 };
         let face = if lk.soft { Face::Semibold } else { Face::Ui };
-        let status = ui.p.elide(face, size, &status, w - 60.0);
+        let s = ui.p.elide(face, size, &status, w - 60.0);
         ui.text(
             id("ProgressText"),
             face,
             size,
             left,
             y + 8.0,
-            &status,
+            &s,
             pal.text,
             w - 60.0,
         );
@@ -256,46 +282,35 @@ pub fn draw(ui: &mut Ui, m: &Model, v: &mut View, content: Rect) {
         y += 44.0;
     }
 
-    // What comes next, once the run is through.
-    if finished {
-        y += next_card(ui, m, left, y, w) + 16.0;
+    if let Some(h) = next_card(ui, &pv, left, y, w) {
+        y += h + 12.0;
+    }
+    if let Some(h) = running_card(ui, &pv, left, y, w) {
+        y += h + 12.0;
     }
 
-    // The program and its steps at the left, the options at the right.
+    // The program and its steps at the left, the choices at the right.
     let side_w = 330.0_f32.min(w * 0.36);
-    // D3 has said the program in the ring's card: its steps begin under the command.
-    let head_h = if lk.hero { 52.0 } else { 104.0 };
+    let head_h = if lk.hero { 60.0 } else { 112.0 };
     let main = Rect::new(
         left,
         y,
         w - side_w - 16.0,
-        head_h + STEPS.len() as f32 * STEP_H + 12.0,
+        (head_h + pv.steps.len() as f32 * STEP_H + 12.0).min(fy - 12.0 - y),
     );
-    let main = Rect::new(main.x, main.y, main.w, main.h.min(fy - 12.0 - y));
     ui.card(main);
     let old = ui.clip(main.inset(1.0));
     let x = main.x + 18.0;
     let mw = main.w - 36.0;
-    if lk.hero {
-        let command = ui.p.elide(Face::Mono, 12.0, &command_text(m), mw);
-        ui.text(
-            id("CommandText"),
-            Face::Mono,
-            12.0,
-            x,
-            main.y + 22.0,
-            &command,
-            pal.text,
-            mw,
-        );
-        ui.divider(x, main.y + 40.0, mw);
-    } else {
+    let mut hy = main.y + 22.0;
+    if !lk.hero {
         ui.tile(
             Rect::new(x, main.y + 16.0, 36.0, 36.0),
-            &program.name,
-            &program.publisher,
+            &pv.program_name,
+            "",
         );
-        let name = ui.p.elide(Face::Semibold, 15.0, &program.name, mw - 48.0);
+        let name =
+            ui.p.elide(Face::Semibold, 15.0, &pv.program_name, mw - 48.0);
         ui.text(
             id("ProgramNameText"),
             Face::Semibold,
@@ -306,71 +321,130 @@ pub fn draw(ui: &mut Ui, m: &Model, v: &mut View, content: Rect) {
             pal.text,
             mw - 48.0,
         );
-        let route = route_text(m);
+        ui.say_whole(&pv.program_name);
+        let rd = ui.p.elide(Face::Ui, 12.0, &pv.route_detail, mw - 48.0);
         ui.text(
             id("RouteDetailText"),
             Face::Ui,
             12.0,
             x + 48.0,
             main.y + 44.0,
-            &route,
+            &rd,
             pal.muted,
             mw - 48.0,
         );
-        let command = ui.p.elide(Face::Mono, 12.0, &command_text(m), mw);
-        ui.text(
-            id("CommandText"),
-            Face::Mono,
-            12.0,
-            x,
-            main.y + 70.0,
-            &command,
-            pal.text,
-            mw,
-        );
-        ui.divider(x, main.y + 90.0, mw);
+        ui.say_whole(&pv.route_detail);
+        hy = main.y + 70.0;
     }
+    command_lines(ui, &pv, x, hy, mw);
+    ui.divider(x, main.y + head_h - 12.0, mw);
+    steps(
+        ui,
+        &pv,
+        Rect::new(x, main.y + head_h, mw, pv.steps.len() as f32 * STEP_H),
+    );
+    ui.p.restore(old);
 
-    let sy = main.y + head_h;
-    let host = Rect::new(x, sy, mw, STEPS.len() as f32 * STEP_H);
+    side_card(ui, m, v, &pv, Rect::new(right - side_w, y, side_w, main.h));
+}
+
+/// The title, and at its right the route chip.
+fn heading(ui: &mut Ui, m: &Model, pv: &UninstallPageView, left: f32, edge: f32, y: f32) {
+    let route = if pv.route_chip {
+        pv.route_text
+    } else {
+        "Waiting"
+    };
+    let tone = if pv.route_chip {
+        Tone::Accent
+    } else {
+        Tone::Neutral
+    };
+    let cw = ui.chip_w(route);
+    ui.heading(
+        left,
+        y,
+        m.page.title(),
+        id("SubtitleText"),
+        &pv.subtitle,
+        edge - cw - 16.0 - left,
+    );
+    ui.say_whole(&pv.subtitle);
+    ui.chip(edge - cw, y, route, tone);
+    ui.reg(
+        id("RouteText"),
+        Rect::new(edge - cw, y - 10.0, cw, 20.0),
+        Role::Text,
+        route,
+        false,
+    );
+}
+
+/// The exact command and its signer.
+fn command_lines(ui: &mut Ui, pv: &UninstallPageView, x: f32, y: f32, w: f32) {
+    let pal = ui.pal;
+    // Before the record step there is no command yet: the route line above says why.
+    let Some(command) = &pv.command else {
+        return;
+    };
+    let c = ui.p.elide(Face::Mono, 12.0, command, w);
+    ui.text(id("CommandText"), Face::Mono, 12.0, x, y, &c, pal.text, w);
+    ui.say_whole(command);
+    let s = ui.p.elide(Face::Ui, 12.0, &pv.signer, w);
+    ui.text(
+        id("SignerText"),
+        Face::Ui,
+        12.0,
+        x,
+        y + 18.0,
+        &s,
+        pal.muted,
+        w,
+    );
+    ui.say_whole(&pv.signer);
+}
+
+/// The stepper: each step a Text `Step_n` named "n. Title: Word. Detail".
+fn steps(ui: &mut Ui, pv: &UninstallPageView, host: Rect) {
+    let pal = ui.pal;
+    let at = current(pv);
+    let status = pv.steps.get(at).map_or("", |s| s.title).to_string();
     ui.reg(id("StepperHost"), host, Role::Text, &status, false);
-    if lk.soft
+    let (x, mw) = (host.x, host.w);
+    if ui.look.soft
         && !ui.hc
-        && let Some(i) = (0..STEPS.len()).find(|i| pl.state_of(*i) == StepState::Running)
+        && let Some(i) = pv.steps.iter().position(|s| s.state == StepState::Active)
     {
-        // D1: the step that runs stands on a tint of the accent. Drawn before the steps, so
-        // the line from the step above still reaches its mark.
+        // D1: the step that runs stands on a tint of the accent.
         let fill = mdshared_ui::gfx::mix(ui.card_fill(), pal.accent, 0.12);
-        let top = sy + i as f32 * STEP_H;
+        let top = host.y + i as f32 * STEP_H;
         ui.p.rbox(
             Rect::new(x - 8.0, top - 5.0, mw + 16.0, STEP_H - 2.0),
             8.0,
             fill,
         );
     }
-    for (i, step) in STEPS.iter().enumerate() {
-        let state = pl.state_of(i);
-        let top = sy + i as f32 * STEP_H;
+    let n = pv.steps.len();
+    for (i, step) in pv.steps.iter().enumerate() {
+        let top = host.y + i as f32 * STEP_H;
         let (cx, cy) = (x + 13.0, top + 15.0);
         let done_ink = ok_ink(&pal);
-
-        // The line to the next step, drawn first so the mark lies over its end.
-        if i + 1 < STEPS.len() {
-            let c = if state == StepState::Done {
+        if i + 1 < n {
+            let c = if step.state == StepState::Done {
                 done_ink
             } else {
                 pal.line
             };
             ui.p.fill(Rect::new(cx - 1.0, cy + 13.0, 2.0, STEP_H - 26.0), c);
         }
-        let mk = Mark::of(state);
-        mark(ui, mk, cx, cy, i + 1);
+        let mk = Mark::of(step.state);
+        mark(ui, mk, cx, cy, i + 1, 0);
         let word = mk.word();
-        let word_ink = match state {
+        let word_ink = match step.state {
             StepState::Done => done_ink,
-            StepState::Running => pal.accent,
-            StepState::Waiting => pal.faint,
-            StepState::Skipped => pal.muted,
+            StepState::Active => pal.accent,
+            StepState::Pending => pal.faint,
+            StepState::Warning | StepState::Failed => pal.text,
         };
         let ww = ui.p.text_right(
             Face::Ui,
@@ -382,20 +456,20 @@ pub fn draw(ui: &mut Ui, m: &Model, v: &mut View, content: Rect) {
         );
         let tx = x + 38.0;
         let tw = mw - 38.0 - ww - 12.0;
-        let (face, ink) = match state {
-            StepState::Running => (Face::Semibold, pal.text),
-            StepState::Done => (Face::Ui, pal.text),
-            _ => (Face::Ui, pal.muted),
+        let (face, ink) = match step.state {
+            StepState::Active => (Face::Semibold, pal.text),
+            StepState::Pending => (Face::Ui, pal.muted),
+            _ => (Face::Ui, pal.text),
         };
         ui.p.text(face, 14.0, tx, cy - 1.0, step.title, ink, tw);
-        let detail = match state {
-            StepState::Done => step.done,
-            StepState::Skipped => SKIPPED,
-            _ => step.detail,
+        let detail = step.detail.clone().unwrap_or_default();
+        let shown = ui.p.elide(Face::Ui, 12.0, &detail, tw);
+        ui.p.text(Face::Ui, 12.0, tx, cy + 18.0, &shown, pal.muted, tw);
+        let label = if detail.is_empty() {
+            format!("{}. {}: {word}.", i + 1, step.title)
+        } else {
+            format!("{}. {}: {word}. {detail}", i + 1, step.title)
         };
-        let detail = ui.p.elide(Face::Ui, 12.0, detail, tw);
-        ui.p.text(Face::Ui, 12.0, tx, cy + 18.0, &detail, pal.muted, tw);
-        let label = format!("{}. {}: {word}. {detail}", i + 1, step.title);
         ui.reg(
             Id("Step", i as u32 + 1),
             Rect::new(x, top, mw, STEP_H),
@@ -403,74 +477,38 @@ pub fn draw(ui: &mut Ui, m: &Model, v: &mut View, content: Rect) {
             &label,
             false,
         );
-        if state == StepState::Running {
+        if step.state == StepState::Active {
             let bar = Rect::new(tx, cy + 31.0, tw.min(360.0), 3.0);
-            ui.progress(
-                Id("StepProgress", 0),
-                bar,
-                Some(pl.step_fraction(now)),
-                step.title,
-            );
+            ui.progress(Id("StepProgress", 0), bar, None, step.title);
         }
     }
-    ui.p.restore(old);
-
-    side_card(ui, m, Rect::new(right - side_w, y, side_w, main.h));
 }
 
 /// The line at the foot of the page. Returns where it begins.
-fn footer(ui: &mut Ui, content: Rect) -> f32 {
+fn footer(ui: &mut Ui, content: Rect, text: &str) -> f32 {
     let pal = ui.pal;
     let left = content.x + ui.look.margin;
     let w = content.w - 2.0 * ui.look.margin;
     let fy = content.bottom() - 30.0;
     ui.divider(content.x + 1.0, fy, content.w);
-    let footer = ui.p.elide(Face::Ui, 12.0, FOOTER, w);
+    let shown = ui.p.elide(Face::Ui, 12.0, text, w);
     ui.text(
         id("FooterText"),
         Face::Ui,
         12.0,
         left,
         fy + 15.0,
-        &footer,
+        &shown,
         pal.muted,
         w,
     );
+    ui.say_whole(text);
     fy
 }
 
-fn route_text(m: &Model) -> String {
-    let pl = &m.pipeline;
-    let Some(program) = pl.run.as_ref().and_then(|r| m.programs.all.get(r.program)) else {
-        return String::new();
-    };
-    format!(
-        "{} uninstaller \u{b7} {}",
-        program.kind,
-        if pl.quiet && program.quiet {
-            "runs quietly"
-        } else {
-            "shows its own windows"
-        }
-    )
-}
-
-fn command_text(m: &Model) -> String {
-    let pl = &m.pipeline;
-    let Some(program) = pl.run.as_ref().and_then(|r| m.programs.all.get(r.program)) else {
-        return String::new();
-    };
-    if pl.quiet && program.quiet {
-        format!("{} /S", program.uninstall)
-    } else {
-        program.uninstall.clone()
-    }
-}
-
-/// The card shown while nothing runs.
-fn nothing_card(ui: &mut Ui, left: f32, y: f32, w: f32) {
+/// The card shown while nothing was started.
+fn nothing_card(ui: &mut Ui, left: f32, y: f32, w: f32, text: &str) {
     let pal = ui.pal;
-    let text = "Select a program on the Programs page and choose Uninstall. It goes through the steps here, one program at a time, and you review what it left behind before anything moves.";
     let cw = w.min(620.0);
     let th = ui.p.paragraph_height(Face::Ui, 13.0, cw - 56.0, text);
     let card = Rect::new(
@@ -510,185 +548,172 @@ fn nothing_card(ui: &mut Ui, left: f32, y: f32, w: f32) {
     );
 }
 
-/// What comes next, once the run is through. Returns the card's height.
-fn next_card(ui: &mut Ui, m: &Model, left: f32, y: f32, w: f32) -> f32 {
+/// The card of the next queued program. Returns its height, when there is one.
+fn next_card(ui: &mut Ui, pv: &UninstallPageView, left: f32, y: f32, w: f32) -> Option<f32> {
     let pal = ui.pal;
-    let pl = &m.pipeline;
-    let name = pl
-        .run
-        .as_ref()
-        .and_then(|r| m.programs.all.get(r.program))
-        .map_or("The program", |p| p.name.as_str());
-    let review = m.leftovers.phase == LeftoverPhase::Review;
-    let (text, detail, button) = if review {
-        (
-            format!(
-                "{name} is uninstalled. {} leftovers found.",
-                m.leftovers.count()
-            ),
-            "Nothing has moved yet. Review the list before anything goes to quarantine."
-                .to_string(),
-            "Review leftovers",
-        )
-    } else if let Some(next) = pl.queue.first() {
-        (
-            format!("Next: {}", m.programs.all[*next].name),
-            format!("{} waiting in the pipeline.", pl.queue.len()),
-            "Uninstall next",
-        )
-    } else {
-        (
-            format!("{name} is uninstalled."),
-            "Nothing else is waiting.".to_string(),
-            "Back to Programs",
-        )
-    };
+    let next = pv.next.as_ref()?;
     let card = Rect::new(left, y, w, 66.0);
     ui.card(card);
-    ui.p.icon(glyph::CHECK, 18.0, card.x + 27.0, card.cy(), ok_ink(&pal));
+    ui.p.icon(glyph::RIGHT, 18.0, card.x + 27.0, card.cy(), pal.accent);
     let list = [
-        (id("NextButton"), button, Style::Accent, None, true),
+        (id("SkipButton"), "Skip", Style::Standard, None, true),
         (
-            id("SkipButton"),
-            "Skip",
-            Style::Standard,
+            id("NextButton"),
+            next.button.as_str(),
+            Style::Accent,
             None,
-            review || !pl.queue.is_empty(),
+            next.enabled,
         ),
     ];
     let bx = ui.buttons_right(card.right() - 18.0, card.cy() - BUTTON_H / 2.0, &list);
+    // The Skip button's name says whom it skips.
+    if let Some(c) = ui_ctl_named(ui, id("SkipButton")) {
+        c.label = next.skip_name.clone();
+    }
     let tw = bx - 16.0 - (card.x + 50.0);
-    let text = ui.p.elide(Face::Semibold, 14.0, &text, tw);
+    let t = ui.p.elide(Face::Semibold, 14.0, &next.text, tw);
     ui.text(
         id("NextText"),
         Face::Semibold,
         14.0,
         card.x + 50.0,
         card.cy() - 9.0,
-        &text,
+        &t,
         pal.text,
         tw,
     );
-    let detail = ui.p.elide(Face::Ui, 12.0, &detail, tw);
+    ui.say_whole(&next.text);
+    let detail = next.tooltip.unwrap_or(next.detail);
+    let d = ui.p.elide(Face::Ui, 12.0, detail, tw);
     ui.text(
         id("NextDetail"),
         Face::Ui,
         12.0,
         card.x + 50.0,
         card.cy() + 10.0,
-        &detail,
+        &d,
         pal.muted,
         tw,
     );
-    card.h
+    ui.say_whole(detail);
+    Some(card.h)
 }
 
-/// The options of this run, and what waits behind it.
-fn side_card(ui: &mut Ui, m: &Model, side: Rect) {
+/// The last control declared with `id`, to rename it.
+fn ui_ctl_named<'a>(ui: &'a mut Ui, cid: Id) -> Option<&'a mut crate::ui::Ctl> {
+    ui.ctls.iter_mut().rev().find(|c| c.id == cid)
+}
+
+/// The card of the processes that hold the program. Returns its height, when there is one.
+fn running_card(ui: &mut Ui, pv: &UninstallPageView, left: f32, y: f32, w: f32) -> Option<f32> {
     let pal = ui.pal;
-    let pl = &m.pipeline;
-    let Some(program) = pl.run.as_ref().and_then(|r| m.programs.all.get(r.program)) else {
-        return;
-    };
+    let running = pv.running.as_ref()?;
+    let card = Rect::new(left, y, w, 56.0);
+    ui.card(card);
+    ui.p.icon(glyph::WARN, 16.0, card.x + 27.0, card.cy(), pal.text);
+    let list = [(
+        id("RecheckButton"),
+        "Check again",
+        Style::Standard,
+        None,
+        running.retry_enabled,
+    )];
+    let bx = ui.buttons_right(card.right() - 18.0, card.cy() - BUTTON_H / 2.0, &list);
+    let tw = bx - 16.0 - (card.x + 50.0);
+    let t = ui.p.elide(Face::Ui, 13.0, &running.text, tw);
+    ui.text(
+        id("RunningText"),
+        Face::Ui,
+        13.0,
+        card.x + 50.0,
+        card.cy(),
+        &t,
+        pal.text,
+        tw,
+    );
+    ui.say_whole(&running.text);
+    Some(card.h)
+}
+
+/// The choices of this run: quiet mode and the restore point.
+fn side_card(ui: &mut Ui, m: &Model, v: &View, pv: &UninstallPageView, side: Rect) {
+    let pal = ui.pal;
     ui.card(side);
     let old = ui.clip(side.inset(1.0));
     let x = side.x + 18.0;
     let sw = side.w - 36.0;
     let mut sy = side.y + 26.0;
     ui.p.text(Face::Semibold, 13.0, x, sy, "This run", pal.text, sw);
-    sy += 20.0;
-    sy = ui.fact(
-        id("RestorePointValue"),
-        x,
-        sy,
-        96.0,
-        sw,
-        "Restore point",
-        RESTORE_MODES[pl.restore_mode.min(2)],
-    );
-    let quiet = if !pl.quiet {
-        "Off: the uninstaller shows its windows"
-    } else if program.quiet {
-        "On"
-    } else {
-        "On, but this uninstaller has none"
-    };
-    sy = ui.fact(id("QuietNote"), x, sy, 96.0, sw, "Quiet mode", quiet);
-    sy = ui.fact(
-        id("SignerText"),
-        x,
-        sy,
-        96.0,
-        sw,
-        "Signed by",
-        &program.publisher,
-    );
-    if pl.state_of(0) == StepState::Done {
-        sy += 4.0;
-        ui.p.icon(glyph::CHECK, 14.0, x + 7.0, sy + 9.0, ok_ink(&pal));
-        let made = format!(
-            "Restore point \u{201c}Purge: before uninstalling {}\u{201d} was made.",
-            program.name
+    sy += 26.0;
+    if pv.quiet_row {
+        ui.p.text(Face::Ui, 13.0, x, sy, "Use quiet mode", pal.text, sw - 50.0);
+        // The confirmation has its own QuietSwitch: under it the page's is another control.
+        let sid = Id("QuietSwitch", u32::from(m.flow.dialog_open()));
+        ui.switch_enabled(
+            sid,
+            x + sw - mdshared_ui::toggle::TOGGLE_W,
+            sy,
+            pv.quiet_on,
+            pv.quiet_enabled,
+            purge_ui_model::pipeline::strings::confirm::QUIET_SWITCH_NAME,
         );
-        let h =
-            ui.p.paragraph(Face::Ui, 12.5, x + 22.0, sy, sw - 22.0, &made, pal.text);
-        ui.reg(
-            id("RestorePointMadeText"),
-            Rect::new(x, sy, sw, h),
-            Role::Text,
-            &made,
-            false,
-        );
-        sy += h + 6.0;
+        sy += 22.0;
     }
-    sy += 8.0;
-    ui.divider(x, sy, sw);
-    sy += 22.0;
+    let h =
+        ui.p.paragraph(Face::Ui, 12.0, x, sy, sw, pv.quiet_note, pal.muted);
+    ui.reg(
+        id("QuietNote"),
+        Rect::new(x, sy, sw, h),
+        Role::Text,
+        pv.quiet_note,
+        false,
+    );
+    sy += h + 16.0;
     ui.p.text(
-        Face::Semibold,
+        Face::Ui,
         13.0,
         x,
         sy,
-        "Waiting behind it",
+        "Restore point for the cleanup step",
         pal.text,
         sw,
     );
-    sy += 22.0;
-    if pl.queue.is_empty() {
-        ui.text(
-            id("QueueEmpty"),
-            Face::Ui,
-            12.5,
-            x,
-            sy,
-            "Nothing else is waiting.",
-            pal.muted,
-            sw,
+    sy += 14.0;
+    let field = Rect::new(x, sy, sw.min(280.0), mdshared_ui::dropdown::DROPDOWN_H);
+    if pv.restore_enabled && !m.flow.dialog_open() {
+        ui.dropdown(
+            DD_RESTORE,
+            field,
+            &v.dds.restore,
+            "Restore point at the cleanup step",
         );
-        sy += 24.0;
-    }
-    for (k, p) in pl.queue.iter().take(6).enumerate() {
-        let g = &m.programs.all[*p];
-        ui.tile(Rect::new(x, sy - 11.0, 22.0, 22.0), &g.name, &g.publisher);
-        let name = if k == 5 && pl.queue.len() > 6 {
-            format!("and {} more", pl.queue.len() - 5)
-        } else {
-            g.name.clone()
-        };
-        let name = ui.p.elide(Face::Ui, 13.0, &name, sw - 32.0);
-        ui.text(
-            Id("Queued", k as u32 + 1),
+    } else {
+        ui.p.frame(field, 4.0, pal.page, pal.line);
+        let value = crate::view::RESTORE_MODES[m.flow_restore_index()];
+        ui.p.text(
             Face::Ui,
             13.0,
-            x + 32.0,
-            sy,
-            &name,
-            pal.text,
-            sw - 32.0,
+            field.x + 10.0,
+            field.cy(),
+            value,
+            pal.muted,
+            field.w - 20.0,
         );
-        sy += 30.0;
+        ui.reg_disabled(
+            DD_RESTORE,
+            field,
+            Role::Combo {
+                value: value.to_string(),
+                open: false,
+            },
+            "Restore point at the cleanup step",
+        );
     }
-    sy += 4.0;
+    sy += field.h + 14.0;
+    if let Some(tip) = pv.choices_tooltip {
+        ui.para(Face::Ui, 12.0, x, sy, sw, tip, pal.muted);
+    }
+    sy = side.bottom() - 74.0;
     ui.divider(x, sy, sw);
     ui.para(
         Face::Ui,
@@ -706,32 +731,36 @@ fn side_card(ui: &mut Ui, m: &Model, side: Rect) {
 
 /// The height of the strip of stages, with the gap under it.
 const STRIP_H: f32 = 76.0;
-/// The stages of the flow: the six steps of the run, then the two that are the user's.
-const STAGES: [&str; 8] = [
-    "Restore point",
-    "Program closed",
+/// The stages of the flow: the five steps of the run, then the two that are the user's.
+const STAGES: [&str; 7] = [
     "Record",
     "Uninstaller",
     "Check gone",
     "Find leftovers",
+    "Ready",
     "Review",
     "Quarantine",
 ];
-const AT_REVIEW: usize = 7;
-const AT_RESULT: usize = 8;
-const AT_END: usize = 9;
+const AT_REVIEW: usize = 6;
+const AT_RESULT: usize = 7;
+const AT_END: usize = 8;
 
-/// Where the flow is: 0 with nothing running, 1 to 6 while that step runs, then the review,
-/// the result of the review, and 9 when the run is through with nothing left to review.
+/// Where the flow is: 0 with nothing started, 1 to 5 for the step reached, then the review, its
+/// result, and 8 when the scan went nowhere (the Leftovers page has none to show).
 fn stage(m: &Model) -> usize {
-    match &m.pipeline.run {
-        None => 0,
-        Some(r) if r.phase != RunPhase::Finished => 1 + r.step.min(STEPS.len() - 1),
-        Some(_) => match m.leftovers.phase {
-            LeftoverPhase::Review => AT_REVIEW,
-            LeftoverPhase::Moved | LeftoverPhase::Undone => AT_RESULT,
-            _ => AT_END,
-        },
+    let c = m.flow.page.controller();
+    if c.target().is_none() {
+        return 0;
+    }
+    let ready = c.state_of(UninstallStep::Ready) == StepState::Done;
+    if !ready || c.is_busy() {
+        let pv = m.flow.page.view(m.flow_env());
+        return 1 + current(&pv);
+    }
+    match m.flow.leftovers.phase() {
+        LeftoversPhase::Scanning | LeftoversPhase::Review | LeftoversPhase::Waiting => AT_REVIEW,
+        LeftoversPhase::Result | LeftoversPhase::Undone | LeftoversPhase::Interrupted => AT_RESULT,
+        LeftoversPhase::Empty => AT_END,
     }
 }
 
@@ -755,65 +784,21 @@ pub fn flow_body(lk: &Look, content: Rect) -> Rect {
 fn flow(ui: &mut Ui, m: &Model, v: &mut View, content: Rect) {
     let pal = ui.pal;
     let lk = ui.look;
-    let pl = &m.pipeline;
+    let pv = m.flow.page.view(m.flow_env());
     let left = content.x + lk.margin;
     let right = content.right() - lk.margin;
     let w = right - left;
-    let now = ui.now;
     let st = stage(m);
-    let moved = m.leftovers.phase == LeftoverPhase::Moved;
-    let name = pl
-        .run
-        .as_ref()
-        .and_then(|r| m.programs.all.get(r.program))
-        .map_or("", |p| p.name.as_str());
+    let moved = m.flow.leftovers.phase() == LeftoversPhase::Result;
 
-    // The title, and at its right what the flow waits for.
     let y = content.y + 38.0;
-    let (sub, route, tone) = match st {
-        0 => ("Nothing is running".to_string(), "Waiting", Tone::Neutral),
-        AT_REVIEW => (
-            format!("{name} \u{b7} {} leftovers to review", m.leftovers.count()),
-            "Your turn",
-            Tone::Caution,
-        ),
-        AT_RESULT if moved => (
-            format!("{name} \u{b7} moved to quarantine"),
-            "Done",
-            Tone::Good,
-        ),
-        AT_RESULT => (format!("{name} \u{b7} put back"), "Done", Tone::Good),
-        AT_END => (format!("{name} \u{b7} finished"), "Done", Tone::Good),
-        _ => (
-            format!("{name} \u{b7} step {st} of {}", STEPS.len()),
-            "Running",
-            Tone::Accent,
-        ),
-    };
     let mut edge = right;
-    if st == AT_REVIEW {
+    if st == AT_REVIEW && m.flow.leftovers.phase() == LeftoversPhase::Review {
         edge = super::leftovers::review_buttons(ui, m, right, y) - 12.0;
     }
-    let cw = ui.chip_w(route);
-    ui.heading(
-        left,
-        y,
-        m.page.title(),
-        id("SubtitleText"),
-        &sub,
-        edge - cw - 16.0 - left,
-    );
-    ui.chip(edge - cw, y, route, tone);
-    ui.reg(
-        id("RouteText"),
-        Rect::new(edge - cw, y - 10.0, cw, 20.0),
-        Role::Text,
-        route,
-        false,
-    );
+    heading(ui, m, &pv, left, edge, y);
 
-    // The strip: every stage, and how far the flow has come. The line out of the step that
-    // runs fills as the step goes.
+    // The strip: every stage, and how far the flow has come.
     let top = content.y + 76.0 + (lk.margin - 28.0);
     let cell = w / STAGES.len() as f32;
     let cy = top + 14.0;
@@ -822,13 +807,14 @@ fn flow(ui: &mut Ui, m: &Model, v: &mut View, content: Rect) {
         id("StepperHost"),
         Rect::new(left, top, w, 52.0),
         Role::Text,
-        &sub,
+        &pv.subtitle,
         false,
     );
     for (k, stage_name) in STAGES.into_iter().enumerate() {
-        let mk = if k < STEPS.len() {
-            Mark::of(pl.state_of(k))
-        } else if k == STEPS.len() {
+        let step = pv.steps.get(k);
+        let mk = if let Some(s) = step {
+            Mark::of(s.state)
+        } else if k == pv.steps.len() {
             match st {
                 AT_REVIEW => Mark::Yours,
                 AT_RESULT => Mark::Done,
@@ -846,34 +832,18 @@ fn flow(ui: &mut Ui, m: &Model, v: &mut View, content: Rect) {
         if k + 1 < STAGES.len() {
             let line = Rect::new(cx + 16.0, cy - 1.0, cell - 32.0, 2.0);
             ui.p.fill(line, pal.line);
-            let f = match mk {
-                Mark::Done => 1.0,
-                Mark::Busy => pl.step_fraction(now),
-                _ => 0.0,
-            };
-            if f > 0.0 {
-                let ink = if ui.hc {
-                    pal.text
-                } else if mk == Mark::Busy {
-                    pal.accent
-                } else {
-                    done_ink
-                };
-                ui.p.fill(Rect::new(line.x, line.y, line.w * f, line.h), ink);
+            if mk == Mark::Done {
+                let ink = if ui.hc { pal.text } else { done_ink };
+                ui.p.fill(line, ink);
             }
         }
-        mark(ui, mk, cx, cy, k + 1);
-        let shown = if k + 1 == STAGES.len() && st == AT_RESULT && !moved {
-            "Put back"
-        } else {
-            stage_name
-        };
+        mark(ui, mk, cx, cy, k + 1, 1);
         let (face, ink) = match mk {
             Mark::Busy | Mark::Yours => (Face::Semibold, pal.text),
-            Mark::Done => (Face::Ui, pal.text),
+            Mark::Done | Mark::Warning | Mark::Failed => (Face::Ui, pal.text),
             _ => (Face::Ui, pal.muted),
         };
-        let label = ui.p.elide(face, 12.5, shown, cell - 8.0);
+        let label = ui.p.elide(face, 12.5, stage_name, cell - 8.0);
         let cell_r = Rect::new(cx - cell / 2.0, top, cell, 52.0);
         ui.p.text_center(
             face,
@@ -882,13 +852,16 @@ fn flow(ui: &mut Ui, m: &Model, v: &mut View, content: Rect) {
             &label,
             ink,
         );
-        let title = STEPS.get(k).map_or(shown, |s| s.title);
-        let said = format!("{}. {title}: {}", k + 1, mk.word());
+        let said = match step {
+            Some(s) => match &s.detail {
+                Some(d) => format!("{}. {}: {}. {d}", k + 1, s.title, mk.word()),
+                None => format!("{}. {}: {}.", k + 1, s.title, mk.word()),
+            },
+            None => format!("{}. {stage_name}: {}.", k + 1, mk.word()),
+        };
         ui.reg(Id("Step", k as u32 + 1), cell_r, Role::Text, &said, false);
     }
 
-    // Under the strip, the stage itself. The review and its result are the Leftovers page's
-    // own, drawn here: the same boxes, the same model.
     let area = Rect::new(
         content.x,
         top + STRIP_H,
@@ -899,40 +872,33 @@ fn flow(ui: &mut Ui, m: &Model, v: &mut View, content: Rect) {
         super::leftovers::body(ui, m, v, area);
         return;
     }
-    let fy = footer(ui, content);
-    match st {
-        0 => nothing_card(ui, left, area.y, w),
-        AT_END => {
-            next_card(ui, m, left, area.y, w);
-        }
-        _ => {
-            let side_w = 330.0_f32.min(w * 0.36);
-            let h = 510.0_f32.min(fy - 12.0 - area.y);
-            step_card(ui, m, Rect::new(left, area.y, w - side_w - 16.0, h));
-            side_card(ui, m, Rect::new(right - side_w, area.y, side_w, h));
-        }
+    let fy = footer(ui, content, pv.footer);
+    let mut y = bars(ui, &m.flow_bars(), left, area.y, w);
+    if st == 0 {
+        nothing_card(ui, left, y, w, pv.footer);
+        return;
     }
+    if let Some(h) = next_card(ui, &pv, left, y, w) {
+        y += h + 12.0;
+    }
+    if let Some(h) = running_card(ui, &pv, left, y, w) {
+        y += h + 12.0;
+    }
+    let side_w = 330.0_f32.min(w * 0.36);
+    let h = 470.0_f32.min(fy - 12.0 - y).max(120.0);
+    step_card(ui, &pv, Rect::new(left, y, w - side_w - 16.0, h));
+    side_card(ui, m, v, &pv, Rect::new(right - side_w, y, side_w, h));
 }
 
 /// D2: the step that runs, alone in a card, with what is done under it.
-fn step_card(ui: &mut Ui, m: &Model, r: Rect) {
+fn step_card(ui: &mut Ui, pv: &UninstallPageView, r: Rect) {
     let pal = ui.pal;
-    let pl = &m.pipeline;
-    let Some(run) = &pl.run else { return };
-    let Some(program) = m.programs.all.get(run.program) else {
-        return;
-    };
-    let now = ui.now;
     ui.card(r);
     let old = ui.clip(r.inset(1.0));
     let x = r.x + 24.0;
     let w = r.w - 48.0;
-    ui.tile(
-        Rect::new(x, r.y + 22.0, 44.0, 44.0),
-        &program.name,
-        &program.publisher,
-    );
-    let name = ui.p.elide(Face::Semibold, 17.0, &program.name, w - 58.0);
+    ui.tile(Rect::new(x, r.y + 22.0, 44.0, 44.0), &pv.program_name, "");
+    let name = ui.p.elide(Face::Semibold, 17.0, &pv.program_name, w - 58.0);
     ui.text(
         id("ProgramNameText"),
         Face::Semibold,
@@ -943,34 +909,29 @@ fn step_card(ui: &mut Ui, m: &Model, r: Rect) {
         pal.text,
         w - 58.0,
     );
-    let route = route_text(m);
+    ui.say_whole(&pv.program_name);
+    let rd = ui.p.elide(Face::Ui, 12.0, &pv.route_detail, w - 58.0);
     ui.text(
         id("RouteDetailText"),
         Face::Ui,
         12.0,
         x + 58.0,
         r.y + 55.0,
-        &route,
+        &rd,
         pal.muted,
         w - 58.0,
     );
-    let command = ui.p.elide(Face::Mono, 12.0, &command_text(m), w);
-    ui.text(
-        id("CommandText"),
-        Face::Mono,
-        12.0,
-        x,
-        r.y + 88.0,
-        &command,
-        pal.text,
-        w,
-    );
-    ui.divider(x, r.y + 110.0, w);
+    ui.say_whole(&pv.route_detail);
+    command_lines(ui, pv, x, r.y + 88.0, w);
+    ui.divider(x, r.y + 122.0, w);
 
-    let i = run.step.min(STEPS.len() - 1);
-    let step = &STEPS[i];
-    let mut y = r.y + 136.0;
-    let caption = format!("STEP {} OF {}", i + 1, STEPS.len());
+    let i = current(pv);
+    let Some(step) = pv.steps.get(i) else {
+        ui.p.restore(old);
+        return;
+    };
+    let mut y = r.y + 146.0;
+    let caption = format!("STEP {} OF {}", i + 1, pv.steps.len());
     ui.text(
         id("StepCaption"),
         Face::Semibold,
@@ -982,15 +943,7 @@ fn step_card(ui: &mut Ui, m: &Model, r: Rect) {
         w,
     );
     y += 32.0;
-    draw_spinner(
-        ui.p,
-        &pal,
-        ui.cx.anim(),
-        Id("StepSpinner", 1),
-        x + 11.0,
-        y,
-        9.5,
-    );
+    mark(ui, Mark::of(step.state), x + 11.0, y, i + 1, 2);
     let title = ui.p.elide(Face::Semibold, 22.0, step.title, w - 36.0);
     ui.text(
         id("ProgressText"),
@@ -1003,33 +956,27 @@ fn step_card(ui: &mut Ui, m: &Model, r: Rect) {
         w - 36.0,
     );
     y += 30.0;
-    let detail = ui.p.elide(Face::Ui, 13.0, step.detail, w - 36.0);
+    let detail = step.detail.clone().unwrap_or_default();
+    let d = ui.p.elide(Face::Ui, 13.0, &detail, w - 36.0);
     ui.text(
         id("StepDetail"),
         Face::Ui,
         13.0,
         x + 36.0,
         y,
-        &detail,
+        &d,
         pal.muted,
         w - 36.0,
     );
+    ui.say_whole(&detail);
     y += 26.0;
-    let f = pl.step_fraction(now);
-    let bar = Rect::new(x + 36.0, y, (w - 36.0 - 48.0).min(520.0), 4.0);
-    ui.progress(Id("StepProgress", 0), bar, Some(f), step.title);
-    ui.p.text_right(
-        Face::Ui,
-        12.0,
-        bar.right() + 44.0,
-        y + 2.0,
-        &format!("{:.0}%", f * 100.0),
-        pal.muted,
-    );
+    if step.state == StepState::Active {
+        let bar = Rect::new(x + 36.0, y, (w - 36.0 - 48.0).min(520.0), 4.0);
+        ui.progress(Id("StepProgress", 0), bar, None, step.title);
+    }
     y += 30.0;
     ui.divider(x, y, w);
     y += 24.0;
-
     ui.p.text(Face::Semibold, 13.0, x, y, "Done so far", pal.text, w);
     y += 26.0;
     if i == 0 {
@@ -1043,47 +990,32 @@ fn step_card(ui: &mut Ui, m: &Model, r: Rect) {
             pal.muted,
             w,
         );
-        y += 24.0;
     }
-    for (k, before) in STEPS.iter().enumerate().take(i) {
-        let skipped = pl.state_of(k) == StepState::Skipped;
-        let (icon, ink) = if skipped {
-            (glyph::MINUS, pal.muted)
-        } else if ui.hc {
-            (glyph::CHECK, pal.text)
-        } else {
-            (glyph::CHECK, ok_ink(&pal))
+    for (k, before) in pv.steps.iter().enumerate().take(i) {
+        ui.p.icon(
+            glyph::CHECK,
+            13.0,
+            x + 7.0,
+            y,
+            if ui.hc { pal.text } else { ok_ink(&pal) },
+        );
+        let said = match &before.detail {
+            Some(d) => format!("{}: {d}", before.title),
+            None => before.title.to_string(),
         };
-        ui.p.icon(icon, 13.0, x + 7.0, y, ink);
-        let said = if skipped { SKIPPED } else { before.done };
-        let said = ui.p.elide(Face::Ui, 12.5, said, w - 24.0);
+        let s = ui.p.elide(Face::Ui, 12.5, &said, w - 24.0);
         ui.text(
             Id("DoneStep", k as u32 + 1),
             Face::Ui,
             12.5,
             x + 24.0,
             y,
-            &said,
+            &s,
             pal.text,
             w - 24.0,
         );
+        ui.say_whole(&said);
         y += 24.0;
     }
-    y += 8.0;
-    let next = match STEPS.get(i + 1) {
-        Some(s) => format!("Next: {}", s.title.to_lowercase()),
-        None => "Next: you review what was found, before anything moves.".to_string(),
-    };
-    let next = ui.p.elide(Face::Ui, 12.5, &next, w);
-    ui.text(
-        id("NextStepText"),
-        Face::Ui,
-        12.5,
-        x,
-        y,
-        &next,
-        pal.muted,
-        w,
-    );
     ui.p.restore(old);
 }

@@ -19,6 +19,9 @@ purge-client = { path = "../../crates/purge-client" }
 purge-ui-model = { path = "../../crates/purge-ui-model" }
 purge-rpc.workspace = true
 purge-model.workspace = true
+# The sample broker answers with the wire fixtures of purge-rpc (`sample_broker.rs`).
+serde.workspace = true
+serde_json.workspace = true
 # The launch markers (process creation time, the precise clock, DwmFlush), the local time zone
 # (the models' clock) and opening a web search (ShellExecuteW).
 windows-sys = { workspace = true, features = [
