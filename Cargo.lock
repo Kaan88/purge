@@ -2122,7 +2122,7 @@ dependencies = [
 
 [[package]]
 name = "purge-broker"
-version = "0.2.0-alpha.2"
+version = "0.2.0-alpha.3"
 dependencies = [
  "purge-engine",
  "purge-exec",
@@ -2142,7 +2142,7 @@ dependencies = [
 
 [[package]]
 name = "purge-client"
-version = "0.2.0-alpha.2"
+version = "0.2.0-alpha.3"
 dependencies = [
  "purge-model",
  "purge-rpc",
@@ -2155,7 +2155,7 @@ dependencies = [
 
 [[package]]
 name = "purge-engine"
-version = "0.2.0-alpha.2"
+version = "0.2.0-alpha.3"
 dependencies = [
  "anyhow",
  "purge-exec",
@@ -2179,7 +2179,7 @@ dependencies = [
 
 [[package]]
 name = "purge-exec"
-version = "0.2.0-alpha.2"
+version = "0.2.0-alpha.3"
 dependencies = [
  "purge-guard",
  "purge-index",
@@ -2195,7 +2195,7 @@ dependencies = [
 
 [[package]]
 name = "purge-guard"
-version = "0.2.0-alpha.2"
+version = "0.2.0-alpha.3"
 dependencies = [
  "flate2",
  "purge-model",
@@ -2205,7 +2205,7 @@ dependencies = [
 
 [[package]]
 name = "purge-harvest"
-version = "0.2.0-alpha.2"
+version = "0.2.0-alpha.3"
 dependencies = [
  "crc32fast",
  "purge-guard",
@@ -2222,7 +2222,7 @@ dependencies = [
 
 [[package]]
 name = "purge-identity"
-version = "0.2.0-alpha.2"
+version = "0.2.0-alpha.3"
 dependencies = [
  "purge-inventory",
  "purge-model",
@@ -2235,7 +2235,7 @@ dependencies = [
 
 [[package]]
 name = "purge-index"
-version = "0.2.0-alpha.2"
+version = "0.2.0-alpha.3"
 dependencies = [
  "flate2",
  "purge-guard",
@@ -2250,7 +2250,7 @@ dependencies = [
 
 [[package]]
 name = "purge-inventory"
-version = "0.2.0-alpha.2"
+version = "0.2.0-alpha.3"
 dependencies = [
  "purge-model",
  "purge-source",
@@ -2262,7 +2262,7 @@ dependencies = [
 
 [[package]]
 name = "purge-kb"
-version = "0.2.0-alpha.2"
+version = "0.2.0-alpha.3"
 dependencies = [
  "purge-guard",
  "purge-model",
@@ -2272,7 +2272,7 @@ dependencies = [
 
 [[package]]
 name = "purge-mcp"
-version = "0.2.0-alpha.2"
+version = "0.2.0-alpha.3"
 dependencies = [
  "purge-model",
  "purge-rpc",
@@ -2280,7 +2280,7 @@ dependencies = [
 
 [[package]]
 name = "purge-model"
-version = "0.2.0-alpha.2"
+version = "0.2.0-alpha.3"
 dependencies = [
  "schemars",
  "serde",
@@ -2290,7 +2290,7 @@ dependencies = [
 
 [[package]]
 name = "purge-plan"
-version = "0.2.0-alpha.2"
+version = "0.2.0-alpha.3"
 dependencies = [
  "purge-guard",
  "purge-model",
@@ -2302,7 +2302,7 @@ dependencies = [
 
 [[package]]
 name = "purge-policy"
-version = "0.2.0-alpha.2"
+version = "0.2.0-alpha.3"
 dependencies = [
  "purge-guard",
  "purge-model",
@@ -2310,7 +2310,7 @@ dependencies = [
 
 [[package]]
 name = "purge-rpc"
-version = "0.2.0-alpha.2"
+version = "0.2.0-alpha.3"
 dependencies = [
  "purge-model",
  "schemars",
@@ -2320,7 +2320,7 @@ dependencies = [
 
 [[package]]
 name = "purge-scan"
-version = "0.2.0-alpha.2"
+version = "0.2.0-alpha.3"
 dependencies = [
  "purge-guard",
  "purge-identity",
@@ -2332,7 +2332,7 @@ dependencies = [
 
 [[package]]
 name = "purge-source"
-version = "0.2.0-alpha.2"
+version = "0.2.0-alpha.3"
 dependencies = [
  "flate2",
  "purge-model",
@@ -2344,7 +2344,7 @@ dependencies = [
 
 [[package]]
 name = "purge-ui"
-version = "0.2.0-alpha.2"
+version = "0.2.0-alpha.3"
 dependencies = [
  "mdshared-app",
  "mdshared-ui",
@@ -2359,7 +2359,7 @@ dependencies = [
 
 [[package]]
 name = "purge-ui-model"
-version = "0.2.0-alpha.2"
+version = "0.2.0-alpha.3"
 dependencies = [
  "purge-model",
  "purge-rpc",
@@ -2369,7 +2369,7 @@ dependencies = [
 
 [[package]]
 name = "purge-win"
-version = "0.2.0-alpha.2"
+version = "0.2.0-alpha.3"
 dependencies = [
  "thiserror 2.0.21",
  "windows",
@@ -3702,7 +3702,7 @@ checksum = "b9cc00251562a284751c9973bace760d86c0276c471b4be569fe6b068ee97a56"
 
 [[package]]
 name = "xtask"
-version = "0.2.0-alpha.2"
+version = "0.2.0-alpha.3"
 dependencies = [
  "anyhow",
  "purge-engine",
