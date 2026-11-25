@@ -1186,17 +1186,18 @@ impl PurgeApp {
             // The WinUI app's approximation: the next DWM composition after the first frame.
             markers::dwm_flush();
             let at = markers::mark("presented");
-            if self.rows_drawn && !self.names_due {
+            let names = self.rows_drawn && !self.names_due;
+            if names {
                 markers::record("names_visible", at);
             }
-            if self.end_marker(cx) {
+            if self.end_marker(cx, names) {
                 return;
             }
         } else if self.names_due && (markers::enabled() || self.bench_exit) {
             self.names_due = false;
             markers::dwm_flush();
             markers::mark("names_visible");
-            if self.end_marker(cx) {
+            if self.end_marker(cx, true) {
                 return;
             }
         }
@@ -1238,11 +1239,9 @@ impl PurgeApp {
 
     /// At the bench's end marker (`presented` with `--bench-until presented`, else
     /// `names_visible`) the marker line is written, once, and `--bench-exit` closes the window.
-    /// True when it closes.
-    fn end_marker(&mut self, cx: &mut Cx<'_, ()>) -> bool {
-        let names = markers::snapshot()
-            .iter()
-            .any(|(n, _)| *n == "names_visible");
+    /// True when it closes. `names`: the names are on screen now. Not read back from the markers,
+    /// which are kept only with `PURGE_BENCH_OUT` (without it `--bench-exit` never closed).
+    fn end_marker(&mut self, cx: &mut Cx<'_, ()>, names: bool) -> bool {
         if self.markers_written || (!names && !self.bench_until_presented) {
             return false;
         }
