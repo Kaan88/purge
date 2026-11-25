@@ -240,11 +240,20 @@ impl Link {
                 .iter()
                 .find(|(_, p)| p.call == call)
                 .map(|(&id, _)| id);
-            id.and_then(|id| state.pending.remove(&id).map(|p| (id, p.entry)))
+            // Still queued: the writer has not started it, so neither the request nor its cancel is
+            // written (a consent request the server never saw cannot show a dialog later; Fable N1).
+            id.and_then(|id| {
+                let unsent = state.queued.remove(&id);
+                state.pending.remove(&id).map(|p| (id, p.entry, unsent))
+            })
         };
-        let Some((id, entry)) = found else {
+        let Some((id, entry, unsent)) = found else {
             return;
         };
+        if unsent {
+            lock(&entry).end(ClientError::Cancelled);
+            return;
+        }
         let cancel = NotificationLine {
             method: "$/cancel",
             params: &CancelParams {
@@ -330,7 +339,7 @@ impl Link {
         }
     }
 
-    /// The writer is about to write request `id`: false when it must not (cancelled, refused, or the
+    /// The writer is about to write request `id`: false when it must not (cancelled while queued, refused, or the
     /// link ended).
     fn begin_write(&self, id: u64) -> bool {
         let mut state = lock(&self.inner.state);
@@ -711,6 +720,66 @@ mod tests {
         fn flush(&mut self) -> io::Result<()> {
             Ok(())
         }
+    }
+
+    /// A writer whose writes wait until it is opened, then keeps what it was given.
+    #[derive(Clone, Default)]
+    struct Held {
+        open: Arc<(Mutex<bool>, Condvar)>,
+        seen: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl Write for Held {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            let mut open = lock(&self.open.0);
+            while !*open {
+                open = self
+                    .open
+                    .1
+                    .wait(open)
+                    .unwrap_or_else(PoisonError::into_inner);
+            }
+            lock(&self.seen).extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Fable N1: a request cancelled while it is still queued is never written, and neither is its
+    /// `$/cancel` (a consent request the server never saw must not show a dialog later).
+    #[test]
+    fn a_request_cancelled_while_queued_is_never_written() {
+        let held = Held::default();
+        let (open, seen) = (held.open.clone(), held.seen.clone());
+        let (_to_client, from_server) = mem_pipe();
+        let link = Link::new(
+            Box::new(held),
+            Box::new(from_server),
+            hooks(1024, Box::new(|| {})),
+            "purge-test",
+        )
+        .unwrap();
+        let _first = request(&link, None);
+        // The writer is now inside the first write, which waits.
+        std::thread::sleep(Duration::from_millis(100));
+        let (tx, second) = mpsc::channel();
+        let call = CallId::next();
+        link.start(call, "engine.hello", None, Box::new(TestCall(tx)), |_| {});
+        link.cancel(call);
+        assert!(matches!(
+            second.recv_timeout(LIMIT).unwrap(),
+            Err(ClientError::Cancelled)
+        ));
+        *lock(&open.0) = true;
+        open.1.notify_all();
+        std::thread::sleep(Duration::from_millis(200));
+        let text = String::from_utf8(lock(&seen).clone()).unwrap();
+        assert_eq!(text.lines().count(), 1, "{text}");
+        assert!(!text.contains("$/cancel"), "{text}");
+        link.close("done");
     }
 
     #[test]
