@@ -1959,6 +1959,13 @@ powershell -NoProfile -File vm\truth\m3-sec-score.ps1 --self-test
   and such a run proves nothing about the toolkit dialog), the broker's arguments held `--consent toolkit`, and every
   attacked dialog was read from high by its ids (the box id on the plan dialog, at least one line). `m3-uac`'s paged
   rows (`page-next`, `arm-current` with `renavigate`) do not apply to it: it has no pages.
+  Before the VM run, `vm\guest\tests\consent-ui-probe.ps1` runs the same tool against the preview harness on the
+  host, tool and dialog both at medium (no VM, no broker, no elevation; 43 checks): the dialog is found and read by its
+  ids, every method cancels it, the posted keys and clicks and the UI Automation calls work when UIPI is not in the
+  way, the approval the rig uses approves, and the broker's own consent service answers Approved, Declined and, when
+  its closer fires, Declined. That is the control side only; T1 itself needs this mode. Not updated: `m3rec.cs`
+  (`m3-recover` presses its dialogs by TaskDialog messages), and the `arm` role's toolkit path (`ArmToolkit`, real
+  clicks before and after the arming delay) is written but called by no mode yet.
 - **`m3-uac`** (G5, T8, 8.1; from `m3-uac-on`, fixture `lookalike45`). (1) The real UI from `C:\Program Files\PurgeUI`
   at medium; `m3sec ui` (UI Automation from high) selects "Purge Rig App", invokes Uninstall and Continue; the host
   answers the secure desktop with Alt+N (Esc only while `consent.exe` is still up); the agent reads the bar "You
