@@ -108,7 +108,11 @@ pub fn steps() -> Vec<Step> {
                 ] {
                     has(app, name)?;
                 }
-                want(app.model.programs.rows.len() == 128, "128 apps")?;
+                let pr = &app.model.programs;
+                want(
+                    pr.loaded && pr.rows.len() == pr.count(Tab::Apps) && pr.rows.len() > 12,
+                    format!("the sample's apps are listed ({})", pr.rows.len()),
+                )?;
                 want(app.view.list.area.h > 200.0, "the list has a viewport")?;
                 Ok(format!("{} controls declared", app.ctls.len()))
             },
@@ -218,14 +222,17 @@ pub fn steps() -> Vec<Step> {
                 app.press_key(cx, KeyName::End, NONE);
             },
             check: |app| {
-                want(app.note == "128", format!("Ctrl+A selected {}", app.note))?;
                 let pr = &app.model.programs;
                 want(
-                    pr.sel.cursor() == Some(127),
+                    app.note == pr.rows.len().to_string(),
+                    format!("Ctrl+A selected {}", app.note),
+                )?;
+                want(
+                    pr.sel.cursor() == Some(pr.rows.len() - 1),
                     "End put the cursor on the last row",
                 )?;
                 want(
-                    app.view.list.offset > 1000.0,
+                    app.view.list.offset > 240.0,
                     format!("the list scrolled to {}", app.view.list.offset),
                 )?;
                 Ok(format!("offset {:.0}", app.view.list.offset))
@@ -328,8 +335,9 @@ pub fn steps() -> Vec<Step> {
             },
             check: |app| {
                 want(app.model.programs.query.is_empty(), "query cleared")?;
-                want(app.model.programs.rows.len() == 128, "all rows back")?;
-                Ok("128 rows".to_string())
+                let pr = &app.model.programs;
+                want(pr.rows.len() == pr.count(Tab::Apps), "all rows back")?;
+                Ok(format!("{} rows", pr.rows.len()))
             },
             settle: 400,
         },
@@ -341,10 +349,12 @@ pub fn steps() -> Vec<Step> {
             check: |app| {
                 let pr = &app.model.programs;
                 want(
-                    pr.tab == Tab::Components && pr.rows.len() == 64,
-                    "64 components",
+                    pr.tab == Tab::Components
+                        && !pr.rows.is_empty()
+                        && pr.rows.len() == pr.count(Tab::Components),
+                    "the components are listed",
                 )?;
-                Ok("Components: 64".to_string())
+                Ok(format!("Components: {}", pr.rows.len()))
             },
             settle: 500,
         },
@@ -374,6 +384,11 @@ pub fn steps() -> Vec<Step> {
         Step {
             name: "search-then-down-selects",
             act: |app, cx| {
+                // Rows ticked earlier stay ticked while a search hides them ("1 selected (3 not
+                // shown)", the WinUI rule) and Uninstall would take them too: Esc on the whole
+                // list unticks them first.
+                app.focus.focus(LIST);
+                app.press_key(cx, KeyName::Escape, NONE);
                 app.press_key(cx, KeyName::Char('f'), CTRL);
                 app.type_text(cx, "firefox");
                 app.press_key(cx, KeyName::Down, NONE);
@@ -381,8 +396,13 @@ pub fn steps() -> Vec<Step> {
             check: |app| {
                 let pr = &app.model.programs;
                 want(
-                    pr.rows.len() == 1 && pr.sel.len() == 1,
-                    format!("{} row(s), {} selected", pr.rows.len(), pr.sel.len()),
+                    pr.rows.len() == 1 && pr.sel.len() == 1 && pr.page.ticked().len() == 1,
+                    format!(
+                        "{} row(s), {} selected, {} ticked",
+                        pr.rows.len(),
+                        pr.sel.len(),
+                        pr.page.ticked().len()
+                    ),
                 )?;
                 Ok("Firefox selected from the search field".to_string())
             },
@@ -535,8 +555,12 @@ pub fn steps() -> Vec<Step> {
                     app.ctl(id("NextButton")).is_some() || app.ctl(id("MoveButton")).is_some(),
                     "a way on to the review",
                 )?;
+                let pr = &app.model.programs;
                 want(
-                    app.model.programs.count(Tab::Apps) == 127,
+                    pr.all
+                        .iter()
+                        .any(|p| p.removed && p.name.contains("Firefox"))
+                        && pr.rows.iter().all(|i| !pr.all[*i].removed),
                     "the program left the list",
                 )?;
                 Ok("finished; 9 leftovers to review".to_string())
@@ -1114,8 +1138,10 @@ fn flow_steps() -> Vec<Step> {
                     .and_then(|p| app.model.programs.all.get(p))
                     .ok_or("the review has no program")?;
                 let first = &l.groups[0].items[0].path;
+                // The sample leftovers are made from the program's name and folder.
+                let word = program.name.split_whitespace().next().unwrap_or_default();
                 want(
-                    *first == program.location,
+                    first.contains(word),
                     format!("the leftovers are {}'s, not {first}", program.name),
                 )?;
                 Ok(format!(

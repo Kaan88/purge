@@ -276,7 +276,8 @@ impl View {
 /// The table's column for a sort key.
 pub fn column_of(key: SortKey) -> u32 {
     match key {
-        SortKey::Name => 1,
+        // Publisher has no column: the Name column (its second line) shows the arrow.
+        SortKey::Name | SortKey::Publisher => 1,
         SortKey::Size => 2,
         SortKey::Junk => 3,
         SortKey::Date => 4,

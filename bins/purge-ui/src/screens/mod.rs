@@ -148,6 +148,10 @@ pub fn draw(ui: &mut Ui, m: &Model, v: &mut View) {
     }
     let old = ui.clip(content);
     match m.page {
+        // With the engine, the pages wave 2 has not wired say so instead of showing sample data.
+        Page::Pipeline | Page::Leftovers | Page::History | Page::Quarantine if !m.sample => {
+            not_yet(ui, m, content)
+        }
         Page::Programs => programs::draw(ui, m, v, content),
         Page::Pipeline => pipeline::draw(ui, m, v, content),
         Page::Leftovers => leftovers::draw(ui, m, v, content),
@@ -192,6 +196,66 @@ pub fn draw(ui: &mut Ui, m: &Model, v: &mut View) {
     }
 }
 
+/// What an unwired page says with the real engine: its title, that it is not available yet in
+/// this preview, and what was handed to it (the Uninstall page's programs, the Leftovers page's
+/// scan), so nothing looks done that was not.
+fn not_yet(ui: &mut Ui, m: &Model, content: Rect) {
+    let pal = ui.pal;
+    let lk = ui.look;
+    let left = content.x + lk.margin;
+    let w = content.w - 2.0 * lk.margin;
+    let y = content.y + 38.0;
+    ui.heading(left, y, m.page.title(), id("Summary"), NOT_YET, w);
+    let mut lines: Vec<String> = Vec::new();
+    match m.page {
+        Page::Pipeline if !m.uninstall_inbox.is_empty() => {
+            lines.push(format!(
+                "Handed over from Programs ({}), not uninstalled:",
+                m.uninstall_inbox.len()
+            ));
+            lines.extend(
+                m.uninstall_inbox
+                    .iter()
+                    .map(|t| format!("\u{2022} {}", t.program_name)),
+            );
+        }
+        Page::Leftovers => {
+            if let Some(scan) = &m.leftovers_inbox {
+                lines.push(format!(
+                    "A leftovers scan of {} is waiting; reviewing it is not available yet.",
+                    scan.program_name
+                ));
+            }
+        }
+        _ => {}
+    }
+    let mut ty = y + 56.0;
+    for (k, line) in lines.iter().enumerate() {
+        ui.text(
+            Id("NotYetLine", k as u32),
+            Face::Ui,
+            13.0,
+            left,
+            ty,
+            line,
+            pal.text,
+            w,
+        );
+        ty += 24.0;
+    }
+    ui.button(
+        id("GoPrograms"),
+        Rect::new(left, ty + 8.0, 160.0, BUTTON_H),
+        "Back to Programs",
+        Style::Standard,
+        None,
+        true,
+    );
+}
+
+/// The sentence of a page that is not wired yet, with the real engine.
+pub const NOT_YET: &str = "Not available yet in this preview.";
+
 /// The place of a page's item in the rail.
 fn nav_row(ui: &Ui, i: usize, page: Page) -> Rect {
     let lk = ui.look;
@@ -208,6 +272,9 @@ fn nav_row(ui: &Ui, i: usize, page: Page) -> Rect {
 /// What a page holds just now, in a few words: the second line of the rail's hover card.
 fn page_status(m: &Model, page: Page) -> String {
     match page {
+        Page::Pipeline | Page::Leftovers | Page::History | Page::Quarantine if !m.sample => {
+            NOT_YET.trim_end_matches('.').to_string()
+        }
         Page::Programs => {
             let pr = &m.programs;
             format!(

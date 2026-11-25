@@ -2,9 +2,10 @@
 //! look is the approved mockup's (`mockup/rust-ui`, 1225d9a): one combined design and Bold, the
 //! colour presets in light and dark, the page transitions, high contrast.
 //!
-//! This is the shell (UI-SHELL): the host loop, the accessibility tree, the title row, the rail,
-//! the pages, the settings, the launch markers. The pages still draw the mockup's placeholder data
-//! (`model`); wave 2 feeds them from `purge-ui-model` and `purge-client`.
+//! The shell (UI-SHELL) is the host loop, the accessibility tree, the title row, the rail, the
+//! pages, the settings and the launch markers. The Programs page is fed by the engine
+//! (`purge-engine.exe` beside this exe) through `link` (UI-WIRE); the other pages wait for wave 2
+//! (`model`).
 #![windows_subsystem = "windows"]
 
 use std::path::PathBuf;
@@ -14,6 +15,9 @@ use mdshared_ui::host::{self, Config};
 use mdshared_ui::platform;
 
 mod app;
+mod clock;
+mod icons;
+mod link;
 mod look;
 mod markers;
 mod model;
@@ -38,11 +42,15 @@ const HELP: &str = "Purge: uninstalls programs and what they leave behind.
   --transition <name>  none, fade, slide, slide-side, flow, slide-up, scale or depth, for this run
   --page <key>         open on programs, queue, leftovers, history, vault or settings
   --sample             show the sample data without starting the engine
+  --bench-stub         the launch bench's sample engine: 300 rows, no engine started
   --bench-exit         close once the launch markers are written (PURGE_BENCH_OUT)
-  --bench-until <m>    the marker the bench waits for: presented (the only one yet)
+  --bench-until <m>    the marker the bench waits for: presented or names_visible (the
+                       default: the program names are in a presented frame)
   --seconds <n>        close by itself after n seconds
-  --script             walk through the screens by made-up events, print what was checked,
-                       close; starts from the default settings and saves nothing
+  --shot <file>        with --seconds: write a PNG of the last frame before closing
+  --script             walk through the screens by made-up events on the sample data,
+                       print what was checked, close; starts from the default settings and
+                       saves nothing
   --shots <dir>        with --script: write a PNG of the frame after each step
   --timeout <n>        end the process after n seconds, whatever it is doing
                        (default: 240 with --script, n + 15 with --seconds, none otherwise)
@@ -74,7 +82,10 @@ fn main() {
     let mut seconds: Option<u64> = None;
     let mut script = false;
     let mut shots: Option<PathBuf> = None;
+    let mut shot_at_end: Option<PathBuf> = None;
     let mut bench_exit = false;
+    let mut bench_until_presented = false;
+    let mut source: Option<link::Source> = None;
     let mut timeout: Option<u64> = None;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -92,13 +103,17 @@ fn main() {
                     std::process::exit(2);
                 }
             },
-            // The shell shows the sample data in every run until wave 2 starts the engine.
-            "--sample" | "--bench-stub" => {}
+            "--sample" => source = Some(link::Source::Sample { bench_rows: 0 }),
+            // The WinUI bench's stub: hello and 300 rows, answered at once.
+            "--bench-stub" => source = Some(link::Source::Sample { bench_rows: 300 }),
             "--bench-exit" => bench_exit = true,
             "--bench-until" => match args.next().as_deref() {
-                Some("presented" | "names_visible") => {}
+                Some("presented") => bench_until_presented = true,
+                Some("names_visible") => bench_until_presented = false,
                 other => {
-                    eprintln!("Purge: --bench-until takes presented, not {other:?}");
+                    eprintln!(
+                        "Purge: --bench-until takes presented or names_visible, not {other:?}"
+                    );
                     std::process::exit(2);
                 }
             },
@@ -106,6 +121,7 @@ fn main() {
             "--script" => script = true,
             "--timeout" => timeout = args.next().and_then(|s| s.parse().ok()),
             "--shots" => shots = args.next().map(PathBuf::from),
+            "--shot" => shot_at_end = args.next().map(PathBuf::from),
             "--help" | "-h" | "/?" => {
                 println!("{HELP}");
                 return;
@@ -158,9 +174,17 @@ fn main() {
         store,
         page,
         bench_exit,
+        bench_until_presented,
+        // The walk checks what it knows: the sample data.
+        source: if script {
+            link::Source::Sample { bench_rows: 0 }
+        } else {
+            source.unwrap_or_else(link::Source::beside_exe)
+        },
         seconds,
         script,
         shots,
+        shot_at_end,
         launched,
     };
     if let Err(e) = host::run(config, PurgeApp::new(o)) {

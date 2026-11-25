@@ -24,9 +24,13 @@ use mdshared_ui::select::TypeAhead;
 use mdshared_ui::theme::Palette;
 use mdshared_ui::tokens::{self, Tokens};
 
+use purge_ui_model::programs::strings as program_strings;
+use purge_ui_model::programs::{Filter, ProgramCommand};
+
+use crate::link::{Link, Source};
 use crate::look::{Choice, Design, Preset, ThemeChoice, Transition};
 use crate::markers;
-use crate::model::{LeftoverPhase, Model, Page, RunPhase, SortKey, Tab};
+use crate::model::{LeftoverPhase, Model, Page, Programs, RunPhase, SortKey, Tab};
 use crate::prefs::{Prefs, Store};
 use crate::screens::{self, NAV, nav_id};
 use crate::script::Script;
@@ -55,7 +59,13 @@ pub struct Options {
     pub script: bool,
     /// Where the walk writes a PNG of each step, if anywhere.
     pub shots: Option<PathBuf>,
+    /// `--shot`: the PNG of the last frame of a `--seconds` run.
+    pub shot_at_end: Option<PathBuf>,
     pub bench_exit: bool,
+    /// `--bench-until presented`: the bench ends at `presented`, not at `names_visible`.
+    pub bench_until_presented: bool,
+    /// Where the program list comes from.
+    pub source: Source,
     /// When `main` began, for the launch time.
     pub launched: Instant,
 }
@@ -117,6 +127,7 @@ pub struct PurgeApp {
     pub script: Option<Script>,
     /// The file the next frame is written to.
     pub shot: Option<PathBuf>,
+    shot_at_end: Option<PathBuf>,
     /// For the script: the modifiers a made-up click is held with, and high contrast as if the
     /// system had switched it on.
     pub fake_mods: Option<Mods>,
@@ -127,15 +138,36 @@ pub struct PurgeApp {
     store: Store,
     saved: Prefs,
     bench_exit: bool,
+    bench_until_presented: bool,
     /// The first frame was drawn and `presented` is still to be marked.
     presented_due: bool,
+    /// A frame with the first real rows was drawn after the first frame, and `names_visible` is
+    /// still to be marked once it is presented.
+    names_due: bool,
+    /// The first real rows were drawn (`rows_set`, `first_row`).
+    rows_drawn: bool,
+    /// The marker line was written.
+    markers_written: bool,
+    /// The engine link, from the host's start on.
+    pub link: Option<Link>,
+    source: Source,
     /// The system's accent, read at each change of theme.
     accent: Option<Rgb>,
 }
 
 impl PurgeApp {
     pub fn new(o: Options) -> PurgeApp {
-        let mut model = Model::new(o.prefs);
+        let sample = matches!(o.source, Source::Sample { .. });
+        // The fingerprint-store probe of the removed-program check; the sample has no records.
+        let programs = if sample {
+            Programs::new(crate::clock::programs(), |_| false)
+        } else {
+            let dir = purge_client::fingerprint::default_directory();
+            Programs::new(crate::clock::programs(), move |id| {
+                purge_client::fingerprint::may_have_record(id, dir.as_deref())
+            })
+        };
+        let mut model = Model::new(o.prefs, programs, sample);
         model.page = o.page;
         let mut view = View::new();
         view.dev |= o.script;
@@ -158,6 +190,7 @@ impl PurgeApp {
             frames: 0,
             script: o.script.then(|| Script::new(o.shots.clone())),
             shot: None,
+            shot_at_end: o.shot_at_end,
             fake_mods: None,
             hc_forced: None,
             note: String::new(),
@@ -165,7 +198,13 @@ impl PurgeApp {
             store: o.store,
             saved: o.saved,
             bench_exit: o.bench_exit,
+            bench_until_presented: o.bench_until_presented,
             presented_due: false,
+            names_due: false,
+            rows_drawn: false,
+            markers_written: false,
+            link: None,
+            source: o.source,
             accent: None,
         }
     }
@@ -361,16 +400,31 @@ impl PurgeApp {
             "SortJunk" => self.model.programs.sort_by(SortKey::Junk),
             "SortDate" => self.model.programs.sort_by(SortKey::Date),
             "FilterButton" => {
-                self.model.programs.only_junk = !self.model.programs.only_junk;
-                self.model.programs.refresh();
+                let on = !self.model.programs.only_junk;
+                self.model.programs.set_filter(Filter::Leftovers, on);
                 self.view.list.jump_top();
             }
             "UninstallButton" | "DUninstallButton" => self.ask_uninstall(cx),
-            "Commands" => self.toast(cx, "Open folder and web site: not available yet."),
-            "DLocationText" => self.toast(
-                cx,
-                "Opening the folder in File Explorer is not available yet.",
-            ),
+            // The page's other commands (folder, web search, refresh, the other filters) are in
+            // the command palette, which the "..." button opens.
+            "Commands" => self.open_palette(),
+            "DLocationText" => self.model.programs.command(ProgramCommand::OpenFolder),
+            "NoticeDismiss" => {
+                self.model.programs.page.dismiss_notice();
+                self.model.programs.sync();
+            }
+            "RemovedCheck" | "RemovedDismiss" => {
+                let pr = &mut self.model.programs;
+                let row = pr.view.removed.as_ref().and_then(|g| g.rows.get(n));
+                if let Some(program_id) = row.map(|r| r.program_id.clone()) {
+                    let r = if id.0 == "RemovedCheck" {
+                        pr.page.check_removed(&program_id)
+                    } else {
+                        pr.page.dismiss_removed(&program_id)
+                    };
+                    pr.take(r);
+                }
+            }
             "Commands.Expander" => self.view.commands_open = !self.view.commands_open,
 
             // The confirmation.
@@ -514,7 +568,7 @@ impl PurgeApp {
             DD_SORT => {
                 let key = SortKey::ALL[i.min(SortKey::ALL.len() - 1)];
                 if self.model.programs.sort != key {
-                    self.model.programs.sort_by(key);
+                    self.model.programs.sort_menu(key);
                 }
             }
             DD_THEME => self.set_theme(cx, ThemeChoice::at(i)),
@@ -555,6 +609,26 @@ impl PurgeApp {
                 .enabled(n > 0),
         );
         entries.push(Entry::new(21, "Search programs").group(1).hint("Ctrl+F"));
+        let c = &self.model.programs.view.commands;
+        entries.push(
+            Entry::new(26, "Open install folder")
+                .group(1)
+                .enabled(c.open_folder_enabled),
+        );
+        entries.push(
+            Entry::new(27, "Search the web")
+                .group(1)
+                .enabled(c.web_enabled),
+        );
+        entries.push(Entry::new(28, "Refresh list").group(1));
+        let f = self.model.programs.view.filters;
+        let mark = |on: bool| if on { " (on)" } else { "" };
+        for (no, text, on) in [
+            (29, program_strings::FILTER_PER_USER, f.only_per_user),
+            (30, program_strings::FILTER_32, f.only_32),
+        ] {
+            entries.push(Entry::new(no, format!("Filter: {text}{}", mark(on))).group(1));
+        }
         entries.push(
             Entry::new(22, "Review leftovers")
                 .group(1)
@@ -602,6 +676,26 @@ impl PurgeApp {
                 self.go(Page::Pipeline)
             }
             22 => self.go(Page::Leftovers),
+            26..=28 => {
+                self.go(Page::Programs);
+                let command = [
+                    ProgramCommand::OpenFolder,
+                    ProgramCommand::Web,
+                    ProgramCommand::Refresh,
+                ][command as usize - 26];
+                self.model.programs.command(command);
+            }
+            29 | 30 => {
+                self.go(Page::Programs);
+                let f = self.model.programs.view.filters;
+                let (filter, on) = if command == 29 {
+                    (Filter::PerUser, !f.only_per_user)
+                } else {
+                    (Filter::Bits32, !f.only_32)
+                };
+                self.model.programs.set_filter(filter, on);
+                self.view.list.jump_top();
+            }
             23..=25 => {
                 let theme = [ThemeChoice::Light, ThemeChoice::Dark, ThemeChoice::System]
                     [command as usize - 23];
@@ -1088,7 +1182,7 @@ impl PurgeApp {
     /// Asks for the earliest of the times still to come: the host gives one wake-up.
     fn timers(&mut self, cx: &mut Cx<'_, ()>) {
         let wakes = [
-            self.presented_due.then(|| cx.now()),
+            (self.presented_due || self.names_due).then(|| cx.now()),
             self.pipeline_due,
             self.until,
             self.view.toast.as_ref().map(|t| t.until),
@@ -1100,6 +1194,15 @@ impl PurgeApp {
     }
 
     fn wake(&mut self, cx: &mut Cx<'_, ()>, now: Instant) {
+        if self.until.is_some_and(|u| u <= now)
+            && let Some(path) = self.shot_at_end.take()
+        {
+            // The last frame is drawn into the file first; the window closes just after.
+            self.shot = Some(path);
+            self.until = Some(now + Duration::from_millis(500));
+            cx.request_redraw_all();
+            return;
+        }
         if self.until.is_some_and(|u| u <= now) {
             println!("Purge: closing after the time asked for");
             cx.exit();
@@ -1109,10 +1212,17 @@ impl PurgeApp {
             // The WinUI app's approximation: the next DWM composition after the first frame.
             markers::dwm_flush();
             let at = markers::mark("presented");
-            markers::record("names_visible", at);
-            markers::flush();
-            if self.bench_exit {
-                cx.exit();
+            if self.rows_drawn && !self.names_due {
+                markers::record("names_visible", at);
+            }
+            if self.end_marker(cx) {
+                return;
+            }
+        } else if self.names_due && (markers::enabled() || self.bench_exit) {
+            self.names_due = false;
+            markers::dwm_flush();
+            markers::mark("names_visible");
+            if self.end_marker(cx) {
                 return;
             }
         }
@@ -1136,6 +1246,41 @@ impl PurgeApp {
                 cx.exit();
             }
         }
+    }
+
+    /// Hands what the selection did to the Programs model, then routes the engine's events and
+    /// the models' requests (`link`). Called after each event and each wake of a client.
+    pub fn pump(&mut self, cx: &mut Cx<'_, ()>) {
+        self.model.programs.commit_sel();
+        let Some(link) = &mut self.link else {
+            return;
+        };
+        if link.pump(&mut self.model) {
+            cx.request_redraw_all();
+        }
+        if let Some(id) = self.model.programs.scroll_to.take()
+            && let Some(row) = self.model.programs.row_of(&id)
+        {
+            self.view.list.reveal(row);
+        }
+    }
+
+    /// At the bench's end marker (`presented` with `--bench-until presented`, else
+    /// `names_visible`) the marker line is written, once, and `--bench-exit` closes the window.
+    /// True when it closes.
+    fn end_marker(&mut self, cx: &mut Cx<'_, ()>) -> bool {
+        let names = markers::snapshot()
+            .iter()
+            .any(|(n, _)| *n == "names_visible");
+        if self.markers_written || (!names && !self.bench_until_presented) {
+            return false;
+        }
+        self.markers_written = true;
+        markers::flush();
+        if self.bench_exit {
+            cx.exit();
+        }
+        self.bench_exit
     }
 
     /// Moves the pipeline on to now and arms its next step.
@@ -1231,16 +1376,28 @@ impl PurgeApp {
                     let g = &pr.all[pr.rows[i]];
                     a11y::Row {
                         key: pr.rows[i],
-                        label: format!(
-                            "{}, {}, {}",
-                            g.name,
-                            g.publisher,
-                            crate::model::size_text(g.size_mb)
-                        ),
+                        label: g.accessible.clone(),
                         author: String::new(),
                         selected: pr.sel.contains(i),
                     }
                 });
+                // Each row holds its two lines as one text, as the WinUI row's TextBlocks read
+                // ("Name[  new]\nPublisher · Kind"): the rig finds a program's row by it.
+                for (i, at) in pr.rows.iter().enumerate() {
+                    let g = &pr.all[*at];
+                    let row = a11y::item_id(list, *at);
+                    let text = a11y::id(&format!("{}.Text.{at}", LIST.0));
+                    let r = Rect::new(
+                        c.rect.x,
+                        c.rect.y + i as f32 * self.view.list.row_h,
+                        c.rect.w,
+                        self.view.list.row_h,
+                    );
+                    tree.add(text, a11y::text(&g.row_text, "", r));
+                    if let Some(n) = tree.get_mut(row) {
+                        n.push_child(text);
+                    }
+                }
                 if overlay && let Some(n) = tree.get_mut(list) {
                     n.set_hidden();
                 }
@@ -1417,8 +1574,20 @@ impl App for PurgeApp {
 
     fn start(&mut self, cx: &mut Cx<'_, ()>) {
         markers::mark("window_ctor");
+        // The engine starts with the window: its events wake the loop with an empty message.
+        let proxy = cx.proxy();
+        let link = Link::new(move || {
+            proxy.send(());
+        });
+        link.start(&self.source);
+        self.link = Some(link);
         self.view.blink = platform::caret_blink_time();
         self.retheme(cx);
+        self.timers(cx);
+    }
+
+    fn message(&mut self, cx: &mut Cx<'_, ()>, _: ()) {
+        self.pump(cx);
         self.timers(cx);
     }
 
@@ -1474,6 +1643,7 @@ impl App for PurgeApp {
             Event::Action(req) => self.request(cx, req),
             _ => {}
         }
+        self.pump(cx);
         self.tick(cx);
         self.sync_scope();
         self.timers(cx);
@@ -1529,14 +1699,31 @@ impl App for PurgeApp {
             }
         }
         self.frames += 1;
+        // The launch markers at the moments they name: `first_tick` when the first frame is
+        // drawn; `rows_set` and `first_row` when a frame first draws the list's rows (the first
+        // frame itself when the list came first); `presented` on the next wake, once the host has
+        // presented the first frame; `names_visible` once a frame with the rows is presented.
+        let rows_now = !self.rows_drawn
+            && self.model.programs.loaded
+            && self.model.page == Page::Programs
+            && !self.model.programs.rows.is_empty();
         if self.frames == 1 {
-            // The launch markers: the first frame is drawn, with the program names in it (the
-            // placeholder rows are there from the start); `presented` follows on the next wake,
-            // once the host has presented it and shown the window.
-            let tick = markers::mark("first_tick");
-            markers::mark("rows_set");
-            markers::record("first_row", tick);
+            markers::mark("first_tick");
             self.presented_due = markers::enabled() || self.bench_exit;
+            // The model's deferred work (sizes, icons, the removed group) waits for this frame.
+            let r = self.model.programs.page.on_first_frame();
+            self.model.programs.take(r);
+            cx.request_redraw_all();
+        }
+        if rows_now {
+            self.rows_drawn = true;
+            let at = markers::mark("rows_set");
+            markers::record("first_row", at);
+            // Rows in the first frame are visible when it is presented; later ones need a
+            // presentation of their own.
+            self.names_due = self.frames > 1;
+        }
+        if self.frames == 1 {
             self.view.first_frame_ms = Some(self.launched.elapsed().as_secs_f64() * 1000.0);
             println!(
                 "first-frame: {:.1} ms after main began ({} x {} at scale {})",
