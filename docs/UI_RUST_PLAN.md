@@ -29,7 +29,10 @@ pre-releases (`0.2.0-alpha.N`). Background: docs/UI_RUST_ASSESSMENT.md (mapping,
 | `crates/purge-ui-model` | UI-MODEL-A, UI-MODEL-B | View models: plain state machines, no I/O, no toolkit, `cargo test`able |
 
 The toolkit is a workspace dependency (`mdshared-ui` with `host`, `a11y`; `mdshared-app`) pinned to
-main `294d330`. No other new third-party crates without the coordinator's OK.
+main `f45a71c` (moved from `294d330`, the mockup's pin, on 2026-11-25; the move needed no change in
+Purge's code, and the toolkit's page switch (`anim::page`) and `Painter::frame`/`gradient` are
+unchanged between the two, so `transition.rs` and `paint.rs` stay). No other new third-party crates
+without the coordinator's OK.
 
 ## Contracts between the packages
 
