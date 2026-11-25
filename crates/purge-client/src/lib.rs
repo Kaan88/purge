@@ -6,6 +6,7 @@
 //! | [`engine`] | [`Engine`] and [`EngineClient`]: `purge-engine --stdio` in a kill-on-close job | `Stdio/*.cs`, `IEngineClient.cs` |
 //! | [`broker`] | [`Broker`], [`BrokerClient`], [`launch`](broker::launch), the server check | `Broker/*.cs`, the broker half of `Pipeline/UninstallPipeline.cs` |
 //! | [`sample`] | [`SampleEngine`] for `--sample` and as the fallback | `Fake/FakeEngineClient.cs` |
+//! | [`sample_history`] | the sample's cleanups, for History and Quarantine under `--sample` | (new) |
 //! | [`startup`] | the first `engine.hello` and `programs.list`, with the sample fallback | `EngineLink.cs` |
 //! | [`fingerprint`] | whether the broker may hold a stored fingerprint | `Broker/FingerprintStore.cs` |
 //!
@@ -27,6 +28,7 @@ pub mod fingerprint;
 mod icon;
 mod link;
 pub mod sample;
+pub mod sample_history;
 pub mod startup;
 #[cfg(test)]
 mod testing;

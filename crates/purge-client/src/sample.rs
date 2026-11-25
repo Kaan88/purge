@@ -19,8 +19,8 @@ use std::time::Duration;
 use purge_model::BaselineTrust;
 use purge_model::{InstallerKind, InventoryDoc, InventoryEntry, ProgramId};
 use purge_rpc::methods::{
-    ElevationType, HistoryIndex, InventoryChanges, MediumHello, ProgramDetails, ProgramPatch,
-    ProgramRef, ProgramRow, ProgramSize, StdioCall,
+    ElevationType, InventoryChanges, MediumHello, ProgramDetails, ProgramPatch, ProgramRef,
+    ProgramRow, ProgramSize, StdioCall,
 };
 use purge_rpc::{BaselineBuild, BaselineStatus, EngineHello};
 
@@ -210,11 +210,8 @@ impl SampleEngine {
             })),
             // Sample data stores no list: nothing to forget.
             StdioCall::InventoryForget(_) => Ok(Answer::Done),
-            // No sample cleanups: History shows its empty state.
-            StdioCall::HistoryIndex(_) => Ok(Answer::HistoryIndex(HistoryIndex {
-                sessions: Vec::new(),
-                volumes: Vec::new(),
-            })),
+            // The sample's cleanups (`sample_history`), for History and Quarantine.
+            StdioCall::HistoryIndex(_) => Ok(Answer::HistoryIndex(crate::sample_history::index())),
             StdioCall::UninstallRoute(_) | StdioCall::UninstallRunUser(_) => {
                 Err(ClientError::NotAvailable(NOT_LIVE.into()))
             }
