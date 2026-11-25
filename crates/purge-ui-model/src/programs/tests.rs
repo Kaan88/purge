@@ -721,6 +721,42 @@ fn reveal_switches_to_the_programs_tab_and_clears_the_search() {
 }
 
 #[test]
+fn the_first_rows_shown_are_the_apps_tab_once_the_patches_after_the_reply_are_in() {
+    // The engine's reply carries raw rows only; the patches that say which rows are system
+    // components, children or unnamed follow it. The start hands the list over with them
+    // (purge_client::startup::PATCH_WAIT), so the first view is the sorted Apps tab.
+    let rows = [
+        row("AddressBook", "AddressBook"),
+        row("Zeta", "Zeta"),
+        row("KB1", "Update for Zeta"),
+        row("Sys", "System Thing"),
+        row("Beta", "Beta"),
+    ];
+    let late = [
+        patch(json!({ "program_id": format!("{HKLM}AddressBook"), "unnamed": true })),
+        patch(json!({ "program_id": format!("{HKLM}KB1"), "parent_key": "Zeta" })),
+        patch(json!({ "program_id": format!("{HKLM}Sys"), "system_component": true })),
+        patch(json!({ "program_id": format!("{HKLM}Beta"), "installer": "Msi" })),
+        patch(json!({ "program_id": format!("{HKLM}Zeta") })),
+    ];
+    let first = |patches: &[ProgramPatch]| {
+        let mut m = ProgramsModel::new(clock(), LIVE, |_| true);
+        m.on_list(Ok(ProgramEntry::from_list(&rows, patches)));
+        m
+    };
+    let m = first(&late);
+    assert_eq!(shown_names(&m), ["Beta", "Zeta"]);
+    let tabs = m.view().tabs;
+    assert!(tabs[0].selected && tabs[0].tab == ProgramTab::Apps);
+    assert_eq!(
+        tabs.iter().map(|t| t.count).collect::<Vec<_>>(),
+        [2, 2, 1, 0]
+    );
+    // Without them every raw row reads as a named app: the list the window must not show.
+    assert_eq!(shown_names(&first(&[])).len(), rows.len());
+}
+
+#[test]
 fn a_late_patch_moves_a_row_to_its_tab() {
     let (mut m, _) = page();
     m.on_late_patches(&[patch(

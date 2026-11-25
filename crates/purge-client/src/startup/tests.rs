@@ -7,6 +7,7 @@ use std::time::Duration;
 use super::*;
 use crate::testing::{
     Events, Peer, ScriptedEngine, events, fixture, healthy, hello_result, id_of, method_of,
+    patch_params,
 };
 
 fn run_startup(startup: Startup) -> (StartupResult, Events) {
@@ -50,6 +51,70 @@ fn an_engine_that_answers_is_used_without_a_notice() {
     let expected: purge_rpc::methods::InventoryChanges =
         serde_json::from_str(&fixture("stdio.inventory.changes.result.json")).unwrap();
     assert_eq!(changes, expected);
+}
+
+/// The real engine's order: the list reply, its rows, then (after `delay`) its patches.
+fn patched_later(delay: Duration) -> impl Fn(&str, &Peer) + Send + 'static {
+    move |line, peer| {
+        healthy(line, peer);
+        if method_of(line) == "programs.list" {
+            std::thread::sleep(delay);
+            peer.send(&format!(
+                r#"{{"jsonrpc":"2.0","method":"programs.patch","params":{}}}"#,
+                patch_params(id_of(line))
+            ));
+        }
+    }
+}
+
+#[test]
+fn the_patches_after_the_list_reply_come_with_the_list() {
+    // The engine sends its reply before the patches; a row without its patch reads as a named
+    // app, so the list waits for them and the page's first rows are already in their tabs.
+    let marks = Arc::new(Mutex::new(Vec::new()));
+    let m = marks.clone();
+    let startup = scripted(patched_later(Duration::from_millis(60)))
+        .on_list_patched(Box::new(move || m.lock().unwrap().push("list_patched")));
+    let (result, mut events) = run_startup(startup);
+    assert_eq!(result.error, None);
+    assert_eq!(result.list.rows.len(), 1);
+    let patch = result
+        .list
+        .patches
+        .last()
+        .expect("the late patch is in the list");
+    assert_eq!(patch.program_id, result.list.rows[0].program_id);
+    assert_eq!(*marks.lock().unwrap(), ["list_patched"]);
+    // It is not delivered to the page a second time.
+    events.drain_for(Duration::from_millis(200));
+    assert!(
+        !events
+            .seen
+            .iter()
+            .any(|e| matches!(e, ClientEvent::ProgramsPatched(_)))
+    );
+}
+
+#[test]
+fn a_list_whose_patches_are_late_is_handed_over_and_they_follow() {
+    let started = Instant::now();
+    let (result, mut events) = run_startup(scripted(patched_later(
+        PATCH_WAIT + Duration::from_millis(1500),
+    )));
+    let waited = started.elapsed();
+    assert!(result.list.patches.is_empty());
+    assert!(waited >= PATCH_WAIT, "{waited:?}");
+    assert!(
+        waited < PATCH_WAIT + Duration::from_millis(1000),
+        "{waited:?}"
+    );
+    events.drain_for(Duration::from_millis(2000));
+    assert!(
+        events
+            .seen
+            .iter()
+            .any(|e| matches!(e, ClientEvent::ProgramsPatched(p) if p.len() == 1))
+    );
 }
 
 #[test]
