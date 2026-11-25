@@ -1,16 +1,27 @@
 # Purge's release, for Hub (Kaan88/mdhub, docs/COMPLIANCE.md). A release is cut by pushing the tag
 # v<version>, where <version> is [workspace.package] version of Cargo.toml (the one version of Purge;
-# the run fails when the tag says another). It builds the release engine and broker (cargo --locked),
-# the Native AOT UI and the Inno setup with install\inno\build-installer.ps1, checks that every exe and
-# the setup carry the version, writes hub.txt from the files it uploads (tools\write-hub-txt.ps1, a
-# copy of Hub's), checks every hash, and creates the GitHub release: never a draft and never a
-# pre-release, because Hub reads only releases/latest, which skips both.
+# the run fails when the tag says another). It builds the release engine, broker and UI (three
+# separate cargo --locked builds; Purge.exe is the Rust UI, bins\purge-ui) and the Inno setup with
+# install\inno\build-installer.ps1, checks that every exe and the setup carry the version, writes
+# hub.txt from the files it uploads (tools\write-hub-txt.ps1, a copy of Hub's), checks every hash, and
+# creates the GitHub release, never a draft.
+#
+# Two kinds of release, chosen by the version alone:
+# - X.Y.Z: a full release, marked latest. Hub reads only releases/latest, so every Hub offers it.
+# - X.Y.Z-alpha.N, -beta.N, -rc.N (N 1..999, no leading zero): a GitHub pre-release, never latest.
+#   Hub's releases/latest skips it, so only people who download it from the Releases page get it.
+#   Its exes' FILEVERSION is X.Y.Z.N (alpha), X.Y.Z.(1000+N) (beta), X.Y.Z.(2000+N) (rc):
+#   install\inno\check-version.ps1 -FileVersion and bins\versioninfo.rs, one rule.
+# Any other suffix (X.Y.Z-dev, ...) is built and checked, never published.
 #
 # workflow_dispatch with publish=false (the default) builds and checks everything and publishes
 # nothing: the files are kept as a workflow artifact. With publish=true it creates the tag v<version>
 # at the commit it ran on, and only from the default branch (main), and fails when that tag already
-# exists; a tag run needs the tagged commit to be on main. So a release is always a commit that is on
-# main. Only X.Y.Z is published: a version X.Y.Z-pre is built and checked, never released.
+# exists; a tag run needs the tagged commit to be on main. So a release, pre-release or not, is always
+# a commit that is on main. To cut 0.2.0-alpha.N: set [workspace.package] version = "0.2.0-alpha.N" in
+# Cargo.toml (cargo update -w for Cargo.lock), write docs/release-notes/0.2.0-alpha.N.md, merge to main,
+# then run this workflow on main with publish=true (version empty, or 0.2.0-alpha.N), or push the tag
+# v0.2.0-alpha.N.
 #
 # Hardening: the version input reaches the scripts only through the environment and is checked
 # against a pattern before use; no cache action (a release builds from a clean runner, and no
@@ -34,7 +45,7 @@ on:
         type: boolean
         default: false
       version:
-        description: 'Version to build when run by hand (X.Y.Z); empty = the one in Cargo.toml. A tag run takes it from the tag'
+        description: 'Version to build when run by hand (X.Y.Z, or X.Y.Z-alpha.N / -beta.N / -rc.N for a pre-release); empty = the one in Cargo.toml. A tag run takes it from the tag'
         type: string
         default: ''
 
@@ -85,16 +96,22 @@ jobs:
           if ($env:GITHUB_REF_TYPE -eq 'tag') { $v = $env:GITHUB_REF_NAME -replace '^v', '' } else { $v = "$env:INPUT_VERSION" }
           if ($v -eq '') { $v = (& ./install/inno/check-version.ps1) }
           if ($v -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$') { throw "bad version '$v'" }
-          # A published release is always the latest one Hub offers to everyone (never --prerelease,
-          # which Hub skips), so X.Y.Z-pre is built and checked but never published.
-          if ($env:PUBLISHING -eq 'true' -and $v.Contains('-')) { throw "v$v is a pre-release version: Purge publishes only X.Y.Z (Hub would offer it to everyone as the latest)" }
+          # X.Y.Z is a full release (the latest, which every Hub offers); X.Y.Z-(alpha|beta|rc).N a
+          # GitHub pre-release (never latest, so Hub skips it); any other suffix is never published.
+          $pre = $v -match '^[0-9]+\.[0-9]+\.[0-9]+-(alpha|beta|rc)\.[1-9][0-9]{0,2}$'
+          if ($env:PUBLISHING -eq 'true' -and $v.Contains('-') -and -not $pre) { throw "v${v}: a pre-release is published only as X.Y.Z-alpha.N, -beta.N or -rc.N (N 1..999), the forms with a FILEVERSION of their own" }
           # Fails when Cargo.toml says another version or Cargo.lock was not updated after a bump.
           $global:LASTEXITCODE = 0
           & ./install/inno/check-version.ps1 -Expect $v
           if ($LASTEXITCODE) { throw "Cargo.toml / Cargo.lock do not say $v" }
+          $fv = & ./install/inno/check-version.ps1 -FileVersion
+          if ($LASTEXITCODE) { throw 'check-version.ps1 -FileVersion failed' }
           "version=$v" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
+          "prerelease=$($pre.ToString().ToLowerInvariant())" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
           # The later steps read the checked version from the environment, never pasted into a script.
           "PURGE_VERSION=$v" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "PURGE_PRERELEASE=$($pre.ToString().ToLowerInvariant())" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          Write-Host "version $v, FILEVERSION $fv, pre-release: $pre"
 
       # A manual publish creates the tag at this commit (gh release create --target). An existing tag
       # v<version> (say, left behind when its release was deleted) would be used as it is, whatever
@@ -115,10 +132,6 @@ jobs:
           if ($LASTEXITCODE) { throw "rustup toolchain install $channel failed" }
           rustc -V
 
-      - uses: actions/setup-dotnet@v5
-        with:
-          dotnet-version: '10.0.x'
-
       - name: Inno Setup
         shell: pwsh
         run: |
@@ -133,9 +146,9 @@ jobs:
           "ISCC=$($iscc.FullName)" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
           & $iscc.FullName /? | Select-Object -First 2
 
-      # cargo build --release --locked -p purge-engine, then -p purge-broker (two builds, never one),
-      # cargo xtask check-deps, dotnet publish of ui\Purge.App (Native AOT), check-version.ps1 on the
-      # three exes, ISCC with /DAppVersion from Cargo.toml, check-version.ps1 on the setup.
+      # cargo build --release --locked -p purge-engine, then -p purge-broker, then -p purge-ui (three
+      # builds, never one), cargo xtask check-deps, check-version.ps1 on the three exes, ISCC with
+      # /DAppVersion and /DAppFileVersion from Cargo.toml, check-version.ps1 on the setup.
       - name: Build (engine, broker, UI, setup)
         shell: powershell
         run: |
@@ -147,7 +160,7 @@ jobs:
         shell: pwsh
         run: |
           $v = $env:PURGE_VERSION
-          $exes = @("$env:CARGO_TARGET_DIR\release\purge-engine.exe", "$env:CARGO_TARGET_DIR\release\purge-broker.exe", 'target\ui-publish\Purge.exe')
+          $exes = @("$env:CARGO_TARGET_DIR\release\purge-engine.exe", "$env:CARGO_TARGET_DIR\release\purge-broker.exe", "$env:CARGO_TARGET_DIR\release\Purge.exe")
           foreach ($e in $exes) { (Get-Item $e).VersionInfo | Format-List FileName, FileVersion, ProductVersion }
           $global:LASTEXITCODE = 0
           & ./install/inno/check-version.ps1 -Expect $v -Exe $exes -Setup "target\installer\Purge-Setup-$v.exe"
@@ -229,14 +242,17 @@ jobs:
             if ($LASTEXITCODE) { throw 'git ls-remote failed' }
             if ($t) { throw "the tag v$v already exists ($t): gh would release that commit, not $env:GITHUB_SHA" }
           }
-          # Never --draft and never --prerelease: Hub's releases/latest skips both (COMPLIANCE.md 2).
-          # The stage (alpha, beta; empty for a final release) only names the release; the version stays
-          # X.Y.Z because Hub's releases/latest skips pre-releases. One word in install/release-stage.txt.
+          # Never --draft. A full release X.Y.Z is --latest (Hub's releases/latest, COMPLIANCE.md 2); a
+          # pre-release X.Y.Z-alpha.N is --prerelease and --latest=false, so Hub never offers it.
+          # The stage (alpha, beta; empty for a final release) only names a full release, whose version
+          # stays X.Y.Z. One word in install/release-stage.txt. A pre-release's version names its stage.
           $stage = ''
           if (Test-Path install/release-stage.txt) { $stage = (Get-Content install/release-stage.txt -TotalCount 1).Trim() }
           if ($stage -and $stage -notmatch '^[a-z]+$') { throw "bad stage '$stage' in install/release-stage.txt (one lower-case word)" }
-          $title = if ($stage) { "Purge $v ($stage)" } else { "Purge $v" }
-          $ghArgs = @('release', 'create', "v$v", '--title', $title, '--notes-file', "dist/release-notes-$v.md", '--latest')
+          $isPre = $env:PURGE_PRERELEASE -eq 'true'
+          $title = if ($isPre) { "Purge $v (pre-release)" } elseif ($stage) { "Purge $v ($stage)" } else { "Purge $v" }
+          $ghArgs = @('release', 'create', "v$v", '--title', $title, '--notes-file', "dist/release-notes-$v.md")
+          if ($isPre) { $ghArgs += @('--prerelease', '--latest=false') } else { $ghArgs += '--latest' }
           if ($env:GITHUB_REF_TYPE -eq 'tag') { $ghArgs += '--verify-tag' } else { $ghArgs += @('--target', $env:GITHUB_SHA) }
           $ghArgs += @("dist/Purge-Setup-$v.exe", "dist/release-notes-$v.md", 'dist/hub.txt')
           gh @ghArgs
@@ -249,8 +265,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $v = $env:PURGE_VERSION
+          $isPre = $env:PURGE_PRERELEASE -eq 'true'
           $r = gh release view "v$v" --json isDraft,isPrerelease,assets | ConvertFrom-Json
-          if ($r.isDraft -or $r.isPrerelease) { throw "v$v is a draft or a pre-release: Hub would not see it" }
+          if ($r.isDraft) { throw "v$v is a draft" }
+          if ($isPre -and -not $r.isPrerelease) { throw "v$v is not marked as a pre-release: Hub would offer it to everyone" }
+          if (-not $isPre -and $r.isPrerelease) { throw "v$v is a pre-release: Hub would not see it" }
+          # releases/latest: the full release for X.Y.Z, never the pre-release.
+          $latest = gh api "repos/$env:GITHUB_REPOSITORY/releases/latest" --jq .tag_name
+          if ($LASTEXITCODE -and -not $isPre) { throw 'releases/latest could not be read' }
+          if ($isPre -and $latest -eq "v$v") { throw "releases/latest is the pre-release v${v}: Hub would offer it to everyone" }
+          if (-not $isPre -and $latest -ne "v$v") { throw "releases/latest is '$latest', not v$v" }
+          $global:LASTEXITCODE = 0
           foreach ($name in @("Purge-Setup-$v.exe", "release-notes-$v.md", 'hub.txt')) {
             $a = $r.assets | Where-Object { $_.name -eq $name }
             if (-not $a) { throw "the release has no asset $name" }
@@ -262,4 +287,5 @@ jobs:
           if ($LASTEXITCODE) { throw 'download of the uploaded setup failed' }
           $sha = (Get-FileHash -Algorithm SHA256 "check/Purge-Setup-$v.exe").Hash.ToLowerInvariant()
           if ((Get-Content dist/hub.txt) -notcontains "windows-x86_64.setup.sha256: $sha") { throw 'the uploaded setup does not match hub.txt' }
-          Write-Host "v$v published: not a draft, not a pre-release, hub.txt matches the uploaded setup"
+          $kind = if ($isPre) { 'a pre-release, not latest' } else { 'the latest release' }
+          Write-Host "v$v published: not a draft, $kind, hub.txt matches the uploaded setup"
