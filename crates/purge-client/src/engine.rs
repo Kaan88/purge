@@ -518,3 +518,6 @@ impl Call for FeedCall {
         });
     }
 }
+
+#[cfg(test)]
+mod tests;

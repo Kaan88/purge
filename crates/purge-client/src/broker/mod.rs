@@ -93,7 +93,12 @@ pub struct BrokerClient {
     /// The handle `ShellExecuteExW` returned, held so the pid is not reused while the session lives.
     /// `None` for a session over streams given by a test.
     _process: Option<Arc<LaunchedProcess>>,
+    /// `AllowSetForegroundWindow(pid)`; a test counts the calls instead.
+    foreground: Foreground,
 }
+
+/// What [`Broker::allow_foreground`] does.
+type Foreground = Arc<dyn Fn() + Send + Sync>;
 
 impl fmt::Debug for BrokerClient {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -108,7 +113,7 @@ impl fmt::Debug for BrokerClient {
 /// How a handshake ended without a session.
 pub(crate) enum HandshakeError {
     /// The broker refused the hello, or the link ended, or the answer is not a hello.
-    Refused(String),
+    Refused(ClientError),
     /// No answer within the limit.
     TimedOut,
     /// The caller stopped the launch.
@@ -129,10 +134,7 @@ impl BrokerClient {
         let stop = AtomicBool::new(false);
         BrokerClient::over_streams(input, output, shut_down, sink, hello_timeout, &stop).map_err(
             |e| match e {
-                HandshakeError::Refused(m) => ClientError::Link {
-                    reason: m,
-                    not_sent: false,
-                },
+                HandshakeError::Refused(e) => e,
                 HandshakeError::TimedOut => ClientError::Link {
                     reason: "The administrator part did not answer.".into(),
                     not_sent: false,
@@ -225,8 +227,12 @@ impl BrokerClient {
             },
             exit_text: Box::new(String::new),
         };
-        let link = Link::new(input, output, hooks, "purge-broker-reader")
-            .map_err(|e| HandshakeError::Refused(e.to_string()))?;
+        let link = Link::new(input, output, hooks, "purge-broker-reader").map_err(|e| {
+            HandshakeError::Refused(ClientError::Link {
+                reason: e.to_string(),
+                not_sent: true,
+            })
+        })?;
         let (tx, rx) = mpsc::channel();
         // `engine.hello` with no params member, as the broker's first line.
         link.start(
@@ -247,12 +253,13 @@ impl BrokerClient {
             }
             match rx.recv_timeout(left.min(Duration::from_millis(50))) {
                 Ok(Ok(hello)) => break Ok(hello),
-                Ok(Err(e)) => break Err(HandshakeError::Refused(e.to_string())),
+                Ok(Err(e)) => break Err(HandshakeError::Refused(e)),
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    break Err(HandshakeError::Refused(
-                        "The administrator part ended.".into(),
-                    ));
+                    break Err(HandshakeError::Refused(ClientError::Link {
+                        reason: "The administrator part ended.".into(),
+                        not_sent: false,
+                    }));
                 }
             }
         };
@@ -261,7 +268,10 @@ impl BrokerClient {
                 announced.store(true, Ordering::SeqCst);
                 if let Some(reason) = link.closed_reason() {
                     // Ended right after the hello: no session.
-                    return Err(HandshakeError::Refused(reason));
+                    return Err(HandshakeError::Refused(ClientError::Link {
+                        reason,
+                        not_sent: false,
+                    }));
                 }
                 Ok(Arc::new(BrokerClient {
                     link,
@@ -270,6 +280,9 @@ impl BrokerClient {
                     pid,
                     path,
                     _process: process,
+                    foreground: Arc::new(move || {
+                        let _ = allow_set_foreground_window(pid);
+                    }),
                 }))
             }
             Err(e) => {
@@ -277,6 +290,14 @@ impl BrokerClient {
                 link.close("The administrator part link was closed.");
                 Err(e)
             }
+        }
+    }
+
+    /// A session whose foreground permission runs `f` (tests).
+    #[cfg(test)]
+    pub(crate) fn set_foreground(self: &mut Arc<Self>, f: Foreground) {
+        if let Some(me) = Arc::get_mut(self) {
+            me.foreground = f;
         }
     }
 
@@ -319,7 +340,7 @@ impl Broker for BrokerClient {
     }
 
     fn allow_foreground(&self) {
-        let _ = allow_set_foreground_window(self.pid);
+        (self.foreground)();
     }
 
     fn request(&self, request: PipeCall) -> CallId {
@@ -336,13 +357,8 @@ impl Broker for BrokerClient {
         if METHODS.iter().any(|s| s.method == method && s.consent) {
             self.allow_foreground();
         }
-        let exec_hook: Option<Box<dyn Fn() + Send>> = match &request {
-            PipeCall::PlanExecute(p) if p.delete_after => {
-                let pid = self.pid;
-                Some(Box::new(move || {
-                    let _ = allow_set_foreground_window(pid);
-                }))
-            }
+        let exec_hook = match &request {
+            PipeCall::PlanExecute(p) if p.delete_after => Some(self.foreground.clone()),
             _ => None,
         };
         let params = pipe_params(&request);
@@ -444,7 +460,7 @@ struct BrokerCall {
     method: Method,
     sink: Sink,
     /// Called for every `exec.progress` of a `plan.execute` with `delete_after`, first.
-    exec_hook: Option<Box<dyn Fn() + Send>>,
+    exec_hook: Option<Foreground>,
 }
 
 impl Call for BrokerCall {
@@ -554,3 +570,6 @@ impl Write for PipeWriter {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests;

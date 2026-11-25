@@ -351,9 +351,9 @@ pub(crate) fn finish(
                     hello_timeout.as_secs()
                 ),
             ),
-            HandshakeError::Refused(m) => LaunchFailure::new(
+            HandshakeError::Refused(e) => LaunchFailure::new(
                 LaunchStatus::CannotStart,
-                format!("The administrator part did not accept Purge's connection. {m}"),
+                format!("The administrator part did not accept Purge's connection. {e}"),
             ),
             HandshakeError::Stopped => stopped(),
         }

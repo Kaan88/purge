@@ -368,3 +368,6 @@ fn sample_result(
         changes,
     }
 }
+
+#[cfg(test)]
+mod tests;

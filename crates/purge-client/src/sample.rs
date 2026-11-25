@@ -367,7 +367,10 @@ mod tests {
         let git: ProgramId = "HKLM|64|Git_is1".parse().unwrap();
         let row = list.rows.iter().find(|r| r.program_id == git).unwrap();
         assert_eq!(row.name, "Git");
-        assert_eq!(row.install_time, Some(purge_model::FileTime(134369280000000000)));
+        assert_eq!(
+            row.install_time,
+            Some(purge_model::FileTime(134369280000000000))
+        );
 
         let call = e.request(StdioCall::ProgramsGet(ProgramParams {
             program_id: git.clone(),

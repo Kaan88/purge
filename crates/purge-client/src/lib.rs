@@ -28,6 +28,8 @@ mod icon;
 mod link;
 pub mod sample;
 pub mod startup;
+#[cfg(test)]
+mod testing;
 
 use std::fmt;
 use std::sync::Arc;

@@ -421,16 +421,14 @@ impl Link {
         format!("{} reported an error.", self.inner.hooks.who)
     }
 
+    /// A known error object: the sentence is `data.message` when the kind has one (`runtime`,
+    /// `store_integrity`), else `error.message`, else "... reported an error.".
     fn rpc_error(&self, error: &ErrorObject) -> ClientError {
-        use purge_rpc::error::ErrorData;
-        let data_message = match &error.data {
-            Some(ErrorData::Runtime { message } | ErrorData::StoreIntegrity { message }) => {
-                Some(message.as_str())
-            }
-            _ => None,
-        };
-        let message = data_message
-            .filter(|m| !m.is_empty())
+        let data = error
+            .data
+            .as_ref()
+            .and_then(|d| serde_json::to_value(d).ok());
+        let message = text(data.as_ref().and_then(|d| d.get("message")))
             .or(Some(error.message.as_str()).filter(|m| !m.is_empty()))
             .map_or_else(|| self.reported(), str::to_owned);
         ClientError::Rpc(RpcError {
@@ -441,8 +439,8 @@ impl Link {
         })
     }
 
-    /// An error object that is not one this client knows in full: its code, message and
-    /// `data.kind`, as written.
+    /// An error object that is not one this client knows in full (a newer kind): its code,
+    /// `error.message` and `data.kind`, as written (the C# client's lenient read).
     fn lenient_error(&self, error: &Value) -> ClientError {
         if let Ok(known) = serde_json::from_value::<ErrorObject>(error.clone()) {
             return self.rpc_error(&known);
@@ -453,9 +451,7 @@ impl Link {
             .and_then(|c| i32::try_from(c).ok())
             .unwrap_or(0);
         let data = error.get("data");
-        let message = text(data.and_then(|d| d.get("message")))
-            .or(text(error.get("message")))
-            .map_or_else(|| self.reported(), str::to_owned);
+        let message = text(error.get("message")).map_or_else(|| self.reported(), str::to_owned);
         ClientError::Rpc(RpcError {
             code,
             kind: text(data.and_then(|d| d.get("kind"))).map(str::to_owned),
