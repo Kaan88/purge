@@ -172,6 +172,30 @@ impl ProcessHandle {
         Ok(ProcessHandle { handle, pid })
     }
 
+    /// Opens process `pid` with `PROCESS_QUERY_LIMITED_INFORMATION` only (no `SYNCHRONIZE`): what a
+    /// medium process may open of an elevated one, for the UI's check of the broker on its pipe (M3
+    /// design 3.3 step 3). Creation time, image path and token can be read through it;
+    /// [`ProcessHandle::wait_exit`] and [`ProcessHandle::has_exited`] cannot.
+    pub fn open_query_limited(pid: u32) -> Result<ProcessHandle, Win32Error> {
+        // SAFETY: plain call; the handle is not inheritable.
+        let h = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+        if h.is_null() {
+            return Err(Win32Error::last());
+        }
+        // SAFETY: we own the handle just opened.
+        let handle = unsafe { OwnedHandle::from_raw_handle(h as _) };
+        // SAFETY: valid process handle.
+        let got = unsafe { GetProcessId(raw(&handle)) };
+        if got != pid {
+            return Err(if got == 0 {
+                Win32Error::last()
+            } else {
+                Win32Error::INVALID_DATA
+            });
+        }
+        Ok(ProcessHandle { handle, pid })
+    }
+
     /// This process.
     pub fn current() -> Result<ProcessHandle, Win32Error> {
         ProcessHandle::open(std::process::id())
@@ -604,6 +628,10 @@ mod tests {
             t
         );
         assert!(ProcessHandle::open(u32::MAX - 3).is_err());
+        let limited = ProcessHandle::open_query_limited(std::process::id()).unwrap();
+        assert_eq!(limited.creation_time().unwrap(), t);
+        assert_eq!(limited.image_path().unwrap(), me.image_path().unwrap());
+        assert!(ProcessHandle::open_query_limited(u32::MAX - 3).is_err());
 
         // A child that has exited: the held handle still answers and reports the exit.
         let mut child = std::process::Command::new("cmd.exe")
