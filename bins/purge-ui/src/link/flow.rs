@@ -654,10 +654,13 @@ impl Link {
                 });
                 model.flow.ltake(r);
             }
-            (Call::RetryHeld, r) => l.on_retried(match r {
-                Ok(Answer::Outcome(o)) => Ok(o),
-                r => Err(failure(r)),
-            }),
+            (Call::RetryHeld, r) => {
+                let r = l.on_retried(match r {
+                    Ok(Answer::Outcome(o)) => Ok(o),
+                    r => Err(failure(r)),
+                });
+                model.flow.ltake(r);
+            }
         }
     }
 

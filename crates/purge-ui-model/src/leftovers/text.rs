@@ -276,6 +276,15 @@ pub const RETRY_MOVED: &str = "The held items were tried again and moved.";
 pub const RETRY_STILL_HELD: &str =
     "The held items were tried again; some are still in use. See History & undo.";
 pub const RETRY_DECLINED: &str = "Nothing was tried: the prompt was cancelled.";
+/// The waiting title of the retry while a new broker is being started (admin explanation, UAC).
+pub const RETRY_STARTING_TITLE: &str = "Starting the administrator part to try the held items again…";
+pub const RETRY_ASKS_PERMISSION_FIRST: &str =
+    "Nothing has been tried yet. Purge asks for administrator permission first.";
+pub const RETRY_NOT_PERMITTED: &str = "Nothing was tried: administrator permission was not given.";
+pub const RETRY_NOT_STARTED: &str =
+    "Nothing was tried: the administrator part could not be started. ";
+pub const RETRY_NEVER_SENT: &str = "Nothing was tried: the administrator part had already ended. \
+     History & undo shows what this cleanup still holds.";
 pub const RETRY_INTERRUPTED: &str = "The administrator part ended during the retry. Purge cannot tell what was moved; \
      check History & undo.";
 

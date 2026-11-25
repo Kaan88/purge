@@ -188,11 +188,21 @@ enum Pending {
     Execute {
         delete_after: bool,
     },
-    Relaunch,
+    /// A new broker is being started; the call it is for goes out over it next.
+    Relaunch(After),
     Undo {
         relaunched: bool,
     },
-    RetryHeld,
+    RetryHeld {
+        relaunched: bool,
+    },
+}
+
+/// What a new broker is started for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum After {
+    Undo,
+    Retry,
 }
 
 /// The Leftovers page's state machine (see the module docs).
@@ -1393,30 +1403,43 @@ impl LeftoversModel {
         }
         self.waiting_title = text::UNDO_STARTING_TITLE.into();
         self.waiting_detail = text::ASKS_PERMISSION_FIRST.into();
-        self.pending = Some(Pending::Relaunch);
+        self.pending = Some(Pending::Relaunch(After::Undo));
         vec![LeftoversCall::Relaunch]
     }
 
     /// The answer to [`LeftoversCall::Relaunch`]: a new broker is the page's link now, or none was
     /// started and nothing was sent.
     pub fn on_relaunch(&mut self, launch: BrokerLaunch) -> Vec<LeftoversCall> {
-        if self.pending != Some(Pending::Relaunch) {
+        let Some(Pending::Relaunch(after)) = self.pending else {
             return Vec::new();
-        }
+        };
         if !launch.started {
             self.pending = None;
             self.phase = LeftoversPhase::Result;
+            let (not_permitted, not_started) = match after {
+                After::Undo => (text::UNDO_NOT_PERMITTED, text::UNDO_NOT_STARTED),
+                After::Retry => (text::RETRY_NOT_PERMITTED, text::RETRY_NOT_STARTED),
+            };
             if launch.cancelled {
-                self.info = Some(text::UNDO_NOT_PERMITTED.into());
+                self.info = Some(not_permitted.into());
             } else {
-                self.error = Some(format!("{}{}", text::UNDO_NOT_STARTED, launch.message));
+                self.error = Some(format!("{not_started}{}", launch.message));
             }
             return Vec::new();
         }
         self.broker_live = true;
-        self.waiting_title = text::UNDO_WAITING_TITLE.into();
-        self.waiting_detail = text::NOTHING_PUT_BACK_YET.into();
-        self.send_undo(true)
+        match after {
+            After::Undo => {
+                self.waiting_title = text::UNDO_WAITING_TITLE.into();
+                self.waiting_detail = text::NOTHING_PUT_BACK_YET.into();
+                self.send_undo(true)
+            }
+            After::Retry => {
+                self.waiting_title = text::CONFIRM_RETRY.into();
+                self.waiting_detail = text::NOTHING_MOVED_YET.into();
+                self.send_retry(true)
+            }
+        }
     }
 
     /// The answer to [`LeftoversCall::Undo`].
@@ -1479,14 +1502,12 @@ impl LeftoversModel {
 
     // ---- Retry the held items -----------------------------------------------------------------
 
-    /// `journal.retry_held`: tries the items a partial run left locked.
+    /// `journal.retry_held`: tries the items a partial run left locked. Over a link that has ended
+    /// (a run ends the broker), a new broker is started first, as for "Put back all".
     pub fn retry_held(&mut self) -> Vec<LeftoversCall> {
-        if self.pending.is_some() {
+        if self.pending.is_some() || self.result.is_none() {
             return Vec::new();
         }
-        let Some(session) = self.result.as_ref().map(|r| r.session.clone()) else {
-            return Vec::new();
-        };
         self.error = None;
         self.info = None;
         self.prompt_up = false;
@@ -1495,18 +1516,44 @@ impl LeftoversModel {
         self.phase = LeftoversPhase::Waiting;
         self.waiting_title = text::CONFIRM_RETRY.into();
         self.waiting_detail = text::NOTHING_MOVED_YET.into();
-        self.pending = Some(Pending::RetryHeld);
+        if !self.broker_live {
+            return self.relaunch_for_retry();
+        }
+        self.send_retry(false)
+    }
+
+    fn send_retry(&mut self, relaunched: bool) -> Vec<LeftoversCall> {
+        let Some(session) = self.result.as_ref().map(|r| r.session.clone()) else {
+            self.phase = LeftoversPhase::Result;
+            self.pending = None;
+            return Vec::new();
+        };
+        self.pending = Some(Pending::RetryHeld { relaunched });
         vec![
             LeftoversCall::AllowForeground,
             LeftoversCall::RetryHeld(SessionParams { session }),
         ]
     }
 
-    /// The answer to [`LeftoversCall::RetryHeld`].
-    pub fn on_retried(&mut self, answer: Result<OutcomeResult, CallError>) {
-        if self.pending != Some(Pending::RetryHeld) {
-            return;
+    fn relaunch_for_retry(&mut self) -> Vec<LeftoversCall> {
+        if !self.options.can_relaunch {
+            // Nothing can reach a broker: nothing was tried, and the result stays.
+            self.phase = LeftoversPhase::Result;
+            self.error = Some(text::RETRY_NEVER_SENT.into());
+            self.pending = None;
+            return Vec::new();
         }
+        self.waiting_title = text::RETRY_STARTING_TITLE.into();
+        self.waiting_detail = text::RETRY_ASKS_PERMISSION_FIRST.into();
+        self.pending = Some(Pending::Relaunch(After::Retry));
+        vec![LeftoversCall::Relaunch]
+    }
+
+    /// The answer to [`LeftoversCall::RetryHeld`].
+    pub fn on_retried(&mut self, answer: Result<OutcomeResult, CallError>) -> Vec<LeftoversCall> {
+        let Some(Pending::RetryHeld { relaunched }) = self.pending else {
+            return Vec::new();
+        };
         self.pending = None;
         match answer {
             Ok(retried) => {
@@ -1523,9 +1570,19 @@ impl LeftoversModel {
                         .join(" "),
                 );
             }
+            Err(e) if !relaunched && self.options.can_relaunch && never_reached_a_broker(&e) => {
+                // The broker was closing after the run, or had just ended: nothing was tried.
+                self.broker_live = false;
+                return self.relaunch_for_retry();
+            }
             Err(e) if e.kind() == Some("consent_declined") => {
                 self.phase = LeftoversPhase::Result;
                 self.info = Some(text::RETRY_DECLINED.into());
+            }
+            Err(e) if never_reached_a_broker(&e) => {
+                // Nothing reached a broker that could act on it: say so, never "cannot tell".
+                self.phase = LeftoversPhase::Result;
+                self.error = Some(text::RETRY_NEVER_SENT.into());
             }
             Err(CallError::Link { .. }) => {
                 self.phase = LeftoversPhase::Interrupted;
@@ -1537,6 +1594,7 @@ impl LeftoversModel {
                 self.error = Some(describe_error(&e));
             }
         }
+        Vec::new()
     }
 
     // ---- Notifications ------------------------------------------------------------------------
