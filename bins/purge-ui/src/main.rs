@@ -37,6 +37,7 @@ use look::{Choice, Design, Preset, ThemeChoice, Transition};
 use mdshared_app::backdrop::Backdrop;
 use model::Page;
 use prefs::Store;
+use purge_client::broker::ConsentUi;
 
 const HELP: &str = "Purge: uninstalls programs and what they leave behind.
 
@@ -47,6 +48,9 @@ const HELP: &str = "Purge: uninstalls programs and what they leave behind.
   --backdrop <name>    off, mica or acrylic, for this run
   --page <key>         open on programs, queue, leftovers, history, vault or settings
   --sample             show the sample data without starting the engine
+  --broker-consent <n> who draws the administrator part's security prompt, for this run:
+                       taskdialog (the default) or toolkit (Purge's own look; the prompt
+                       says and approves the same)
   --bench-stub         the launch bench's sample engine: 300 rows, no engine started
   --bench-exit         close once the launch markers are written (PURGE_BENCH_OUT)
   --bench-until <m>    the marker the bench waits for: presented or names_visible (the
@@ -93,6 +97,7 @@ fn main() {
     let mut bench_until_presented = false;
     let mut source: Option<link::Source> = None;
     let mut timeout: Option<u64> = None;
+    let mut broker_consent = ConsentUi::default();
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -111,6 +116,16 @@ fn main() {
                 }
             },
             "--sample" => source = Some(link::Source::Sample { bench_rows: 0 }),
+            // The command line only, for one run, and not a saved setting: until the toolkit
+            // dialog has passed its review and the VM test, the TaskDialog is what a start of
+            // Purge shows unless this run asked otherwise (M3_DESIGN 8.3).
+            "--broker-consent" => match args.next().as_deref().and_then(ConsentUi::parse) {
+                Some(c) => broker_consent = c,
+                None => {
+                    eprintln!("Purge: --broker-consent takes taskdialog or toolkit");
+                    std::process::exit(2);
+                }
+            },
             // The WinUI bench's stub: hello and 300 rows, answered at once.
             "--bench-stub" => source = Some(link::Source::Sample { bench_rows: 300 }),
             "--bench-exit" => bench_exit = true,
@@ -189,6 +204,7 @@ fn main() {
         } else {
             source.unwrap_or_else(link::Source::beside_exe)
         },
+        broker_consent,
         seconds,
         script,
         shots,

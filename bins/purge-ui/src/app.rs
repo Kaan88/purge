@@ -71,6 +71,8 @@ pub struct Options {
     pub bench_until_presented: bool,
     /// Where the program list comes from.
     pub source: Source,
+    /// `--broker-consent`: who draws the broker's consent dialog.
+    pub broker_consent: purge_client::broker::ConsentUi,
     /// When `main` began, for the launch time.
     pub launched: Instant,
 }
@@ -157,6 +159,8 @@ pub struct PurgeApp {
     /// The engine link, from the host's start on.
     pub link: Option<Link>,
     source: Source,
+    /// Who draws the broker's consent dialog (`--broker-consent`).
+    broker_consent: purge_client::broker::ConsentUi,
     /// The system's accent, read at each change of theme.
     accent: Option<Rgb>,
     /// With `PURGE_TX_LOG` set: the cost of the frames drawn while no page switch runs.
@@ -216,6 +220,7 @@ impl PurgeApp {
             markers_written: false,
             link: None,
             source: o.source,
+            broker_consent: o.broker_consent,
             accent: None,
             idle_draws: Vec::new(),
             paint_check: None,
@@ -1870,6 +1875,7 @@ impl App for PurgeApp {
         let mut link = Link::new(move || {
             proxy.send(());
         });
+        link.broker.consent = self.broker_consent;
         link.start(&self.source);
         self.link = Some(link);
         self.view.blink = platform::caret_blink_time();
