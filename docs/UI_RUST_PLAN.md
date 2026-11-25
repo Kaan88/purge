@@ -59,7 +59,41 @@ The a11y nodes carry the WinUI `x:Name`s the rig scripts find (`vm/guest/m3-e2e-
 `m3-clean.ps1`): `ProgramList`, `UninstallButton`, `DUninstallButton`, `NavQueue`, `NavLeftovers`,
 `MoveButton`, `MoveText`, `FooterCount`, `WaitingTitleText`, `WaitingCodeText`, `ResultTitleText`,
 `ResultDetailText`, `UndoAllButton`, `UndoTitleText`, `UndoDetailText`, `EmptyTitle`, `InfoBarHost`,
-plus ids for dialog buttons (the rig's ContentDialog lookups get updated in UI-SHIP).
+plus ids for dialog buttons (below). The rig's lookups (`vm/guest/m3-e2e-ui.ps1`, `m3-e2e.ps1`,
+`m3-clean.ps1`, `m3sec.cs`) take both the WinUI shapes and these; `vm/guest/tests/ui-a11y-probe.ps1`
+runs them against `Purge.exe --sample` on the host (PASS / FAIL / BLOCKED on a package). Rerun it as
+pages land.
+
+What the rig relies on (UI-RIG, 2026-11-25):
+
+- **Dialogs.** An open dialog is one node `ContentDialog` (UIA Window, IsDialog, modal; the rest of the
+  window is hidden from UIA while it is open). Its buttons have ids of their own, never WinUI's template
+  parts: the rig finds a dialog button by id **and** name and refuses two.
+  - The uninstall confirmation: `ConfirmUninstallButton` "Uninstall", `ConfirmNotNowButton` "Not now",
+    `ConfirmCheckAgainButton` "Check again"; `DialogTitle` "Uninstall <name>?" (whole, not elided);
+    `ConfirmStep_1`..`_5`, the step lines as text, where step 2 names the route: exactly
+    "2. Run its uninstaller as administrator" or "2. Run its uninstaller at your level";
+    `QuietSwitch` (Toggle) and `RestorePointBox` inside the dialog.
+  - Every other dialog: `DialogPrimaryButton`, `DialogSecondaryButton`, `DialogCloseButton`, named by
+    their labels. The first-elevation explanation is `DialogPrimaryButton` "Continue" (the rig focuses
+    it and the host presses it with a real key) and `DialogCloseButton`.
+- **Program rows.** `ProgramList` is a UIA List (Selection, multi-select) with every row in the tree
+  (no Scroll pattern needed); a row is a ListItem named "Name, Publisher, Size" (SelectionItem,
+  ScrollItem). The rig selects the one row whose name starts with "<name>, ", checks that it is the
+  only row selected, and that `DName` (the details pane, whole name) says the name. Keep that label
+  shape, or give rows an AutomationId the rig can know (e.g. from the engine's program id) and say so
+  here.
+- **Text.** A Text's name is its whole text, also where the drawing elides it (`Ui::say_whole`). A bar
+  (`InfoBarHost`, `InfoBarHost_n`) is one Text named "Title Message"; the rig matches a bar text as
+  that Text's title or message (`Test-E2eSaid`), so keep the title and message wording the WinUI app
+  had ("You cancelled the Windows prompt.", "Not started.", "The uninstaller failed.", "Some parts
+  remain", "Nothing was moved: the prompt was cancelled.", ...).
+- **Rail.** `NavPrograms`..`NavSettings` are tabs (SelectionItem only; the rig falls back to it).
+- **Still owed by UI-PAGES** (the probe's BLOCKED lines): the broker consent wait page
+  (`WaitingTitleText` "Confirm ... in the Purge security prompt." and `WaitingCodeText`; today
+  `WaitingTitleText` is the leftovers scan wait), the first-elevation dialog, the cancelled / error /
+  declined bars, `InfoBarHost` on Programs, "exit code N" in the pipeline's step details, and the
+  medium route line.
 
 ## Packages and order
 

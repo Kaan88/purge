@@ -2305,7 +2305,7 @@ row whose text is the ARP DisplayName is realized, then SelectionItemPattern.Sel
 (`UninstallButton` invoked, the first-elevation dialog's `Continue` invoked; `02-uninstall-clicked`) - the UAC prompt
 when one is up: the host answers the secure desktop by scancode (Alt+Y, Left+Enter only while `consent.exe` is still
 up; `02u-uac-1-prompt`, `02u-uac-2-after-alt-y`) - `ui-await-confirm` (`03-confirm`), `ui-confirm` (the steps, the
-command and the quiet toggle read, `PrimaryButton` "Uninstall" invoked; the route from the step text "Run its
+command and the quiet toggle read, `PrimaryButton` "Uninstall" invoked (the Rust UI: `ConfirmUninstallButton`, docs\UI_RUST_PLAN.md "AutomationIds"); the route from the step text "Run its
 uninstaller at your level" / "as administrator") - broker route: `consent-wait run` (`m3sec observe`, `04-consent-run`)
 and `consent-approve run` (`m3sec press`: TDM_CLICK_VERIFICATION + TDM_CLICK_BUTTON 100 after the arming delay, from
 the elevated agent; `05-run-approved`) - `ui-wait-scan` (until `MoveButton` or `EmptyTitle` exists, or a failure bar;
