@@ -32,11 +32,14 @@ pub mod fs_write;
 #[cfg(feature = "read")]
 pub mod icons;
 pub mod known_folders;
+#[cfg(feature = "run")]
+pub mod launch;
 pub mod msi;
 pub mod msi_db;
 pub mod offreg;
 pub mod os;
 pub mod pipe;
+pub mod pipe_client;
 pub mod privilege;
 pub mod process;
 pub mod reg;
