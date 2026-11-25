@@ -2349,6 +2349,7 @@ dependencies = [
  "mdshared-app",
  "mdshared-ui",
  "purge-client",
+ "purge-model",
  "purge-rpc",
  "purge-ui-model",
  "windows-sys 0.61.2",

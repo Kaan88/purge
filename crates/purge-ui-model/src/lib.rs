@@ -2,6 +2,7 @@
 //! take engine and broker results in and give requests and view state out. No I/O, no toolkit.
 
 pub mod broker_link;
+mod call_error;
 mod casefold;
 pub mod history;
 pub mod info_bar;
@@ -11,3 +12,5 @@ pub mod pipeline;
 pub mod programs;
 pub mod registry_label;
 pub mod vault;
+
+pub use call_error::CallError;

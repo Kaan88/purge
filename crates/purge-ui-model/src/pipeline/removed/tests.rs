@@ -96,8 +96,9 @@ impl Script {
                     if self.gone_at == Some("scan") {
                         c.on_scan(Err(rpc_error(json!({ "kind": "gone", "id": "program" }))))
                     } else if self.link_dies_at_scan {
-                        c.on_scan(Err(CallError::Link(
-                            "The administrator part closed the link.".into(),
+                        c.on_scan(Err(CallError::link(
+                            "The administrator part closed the link.",
+                            false,
                         )))
                     } else {
                         c.on_scan_progress("scan");
