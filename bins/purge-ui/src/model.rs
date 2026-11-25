@@ -33,6 +33,11 @@ use purge_ui_model::programs::{
     ProgramTab, ProgramsModel, ProgramsPageView, SortKey as ModelSort,
 };
 
+use purge_model::exec::session::{RetentionClass, SessionId};
+use purge_ui_model::history::{HistoryCall, HistoryModel};
+use purge_ui_model::local_time::Clock as LocalClock;
+use purge_ui_model::vault::{VaultCall, VaultModel};
+
 use crate::icons::AtlasIcon;
 use crate::prefs::Prefs;
 
@@ -268,13 +273,6 @@ impl Program {
             accessible: r.accessible_name(),
         }
     }
-}
-
-/// Noon of 25 Nov 2026, UTC, in Unix seconds: the placeholder pages' "today".
-pub const TODAY_UNIX: i64 = 1_795_608_000;
-
-pub fn date_of(days_ago: u32) -> String {
-    mdshared_app::fmt::date(TODAY_UNIX - i64::from(days_ago) * 86_400, 0)
 }
 
 pub fn size_text(mb: f32) -> String {
@@ -1314,270 +1312,139 @@ pub fn kb_text(kb: u32) -> String {
     mdshared_app::fmt::size(u64::from(kb) * 1024)
 }
 
-// ---- history ---------------------------------------------------------------------------------
+// ---- history (UI-PAGES2) ---------------------------------------------------------------------
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum OpState {
-    /// Its items are in quarantine and can come back.
-    Undoable,
-    Restored,
-    /// The quarantine's time ran out: the items are deleted.
-    Expired,
-}
-
-pub struct Op {
-    pub title: String,
-    pub when_days: u32,
-    pub time: &'static str,
-    pub summary: String,
-    pub items: Vec<(&'static str, &'static str)>,
-    pub kb: u32,
-    pub state: OpState,
-    pub days_left: u32,
-}
-
+/// The History page: `purge-ui-model`'s [`HistoryModel`], its requests waiting for `link`, and
+/// the clock its dates are read with.
 pub struct History {
-    pub ops: Vec<Op>,
-    pub selected: usize,
-    pub show_items: bool,
-    /// The bar at the top: what the last restore did.
-    pub notice: Option<String>,
-    /// "Check for interrupted work" was pressed: its answer is shown.
-    pub checked: bool,
+    pub page: HistoryModel,
+    /// What the page asked for and `link` has not sent yet.
+    pub out: Vec<HistoryCall>,
+    /// The clock of the last answer; read again from `now` at each answer.
+    pub clock: LocalClock,
+    now: fn() -> LocalClock,
+    /// The closable bars the user closed ("title message"); shown again after the next action.
+    pub dismissed: Vec<String>,
 }
 
 impl History {
-    fn new() -> History {
-        let op = |title: &str,
-                  when_days: u32,
-                  time: &'static str,
-                  summary: &str,
-                  items: Vec<(&'static str, &'static str)>,
-                  kb: u32,
-                  state: OpState,
-                  days_left: u32| Op {
-            title: title.to_string(),
-            when_days,
-            time,
-            summary: summary.to_string(),
-            items,
-            kb,
-            state,
-            days_left,
-        };
+    pub fn new(now: fn() -> LocalClock) -> History {
         History {
-            ops: vec![
-                op(
-                    "Uninstalled Zoom Workplace",
-                    2,
-                    "16:42",
-                    "Its own uninstaller ran (code 0). 6 leftovers moved to quarantine.",
-                    vec![
-                        (
-                            "C:\\Users\\kaan\\AppData\\Roaming\\Zoom",
-                            "Folder \u{b7} 18.2 MB",
-                        ),
-                        (
-                            "C:\\Users\\kaan\\AppData\\Local\\Zoom\\logs",
-                            "Folder \u{b7} 2.1 MB",
-                        ),
-                        ("HKCU\\Software\\Zoom", "Registry key"),
-                        ("HKCU\\Software\\Classes\\zoommtg", "Registry key"),
-                        ("\\ZoomUpdateTask-S-1-5-21", "Scheduled task"),
-                        ("C:\\Users\\kaan\\Desktop\\Zoom.lnk", "Shortcut"),
-                    ],
-                    20_840,
-                    OpState::Undoable,
-                    28,
-                ),
-                op(
-                    "Uninstalled CCleaner",
-                    9,
-                    "09:15",
-                    "Its own uninstaller ran (code 0). 4 leftovers moved to quarantine.",
-                    vec![
-                        ("C:\\Program Files\\CCleaner", "Folder \u{b7} 310 KB"),
-                        ("HKLM\\SOFTWARE\\Piriform", "Registry key"),
-                        ("HKCU\\Software\\Piriform", "Registry key"),
-                        ("\\CCleaner Update", "Scheduled task"),
-                    ],
-                    322,
-                    OpState::Undoable,
-                    21,
-                ),
-                op(
-                    "Forced cleanup of WinRAR 6.24",
-                    17,
-                    "21:03",
-                    "The uninstaller was missing. 11 items moved to quarantine.",
-                    vec![
-                        ("C:\\Program Files\\WinRAR", "Folder \u{b7} 9.4 MB"),
-                        ("HKLM\\SOFTWARE\\WinRAR", "Registry key"),
-                        ("HKCU\\Software\\WinRAR", "Registry key"),
-                    ],
-                    9_630,
-                    OpState::Undoable,
-                    13,
-                ),
-                op(
-                    "Uninstalled Skype",
-                    26,
-                    "11:48",
-                    "Its own uninstaller ran (code 0). 3 leftovers moved to quarantine.",
-                    vec![
-                        (
-                            "C:\\Users\\kaan\\AppData\\Roaming\\Skype",
-                            "Folder \u{b7} 44.0 MB",
-                        ),
-                        ("HKCU\\Software\\Skype", "Registry key"),
-                    ],
-                    45_060,
-                    OpState::Undoable,
-                    4,
-                ),
-                op(
-                    "Uninstalled iTunes",
-                    41,
-                    "18:20",
-                    "Its own uninstaller ran (code 0). 7 leftovers were moved; their 30 days ran out.",
-                    vec![(
-                        "C:\\ProgramData\\Apple Computer\\iTunes",
-                        "Folder \u{b7} 1.2 MB",
-                    )],
-                    1_230,
-                    OpState::Expired,
-                    0,
-                ),
-            ],
-            selected: 0,
-            show_items: false,
-            notice: None,
-            checked: false,
+            page: HistoryModel::new(),
+            out: Vec::new(),
+            clock: now(),
+            now,
+            dismissed: Vec::new(),
         }
     }
 
-    pub fn current(&self) -> Option<&Op> {
-        self.ops.get(self.selected)
+    /// Keeps the model's requests for `link`.
+    pub fn take(&mut self, calls: Vec<HistoryCall>) {
+        self.out.extend(calls);
     }
 
-    pub fn restore(&mut self, i: usize) -> bool {
-        let Some(op) = self.ops.get_mut(i) else {
-            return false;
-        };
-        if op.state != OpState::Undoable {
-            return false;
-        }
-        op.state = OpState::Restored;
-        self.notice = Some(format!(
-            "{} item{} put back where {} came from.",
-            op.items.len(),
-            if op.items.len() == 1 { "" } else { "s" },
-            if op.items.len() == 1 { "it" } else { "they" },
-        ));
-        true
+    /// Reads the clock again (before an answer is handed to the model, and before a frame).
+    pub fn tick_clock(&mut self) -> LocalClock {
+        self.clock = (self.now)();
+        self.clock
     }
 
-    pub fn restore_all(&mut self) -> usize {
-        let mut n = 0;
-        for op in &mut self.ops {
-            if op.state == OpState::Undoable {
-                op.state = OpState::Restored;
-                n += 1;
-            }
-        }
-        if n > 0 {
-            self.notice = Some(format!(
-                "{n} operations undone. Everything is back in place."
-            ));
-        }
-        n
+    /// The session at this index of the model's list, and its id.
+    pub fn session_id(&self, at: usize) -> Option<SessionId> {
+        self.page.sessions().get(at).map(|s| s.id.clone())
     }
 
+    /// The position of the selected session in the model's list.
+    pub fn selected_at(&self) -> Option<usize> {
+        let id = &self.page.selected()?.id;
+        self.page.sessions().iter().position(|s| &s.id == id)
+    }
+
+    /// The number of sessions that still hold something to put back.
     pub fn undoable(&self) -> usize {
-        self.ops
-            .iter()
-            .filter(|o| o.state == OpState::Undoable)
-            .count()
+        self.page.sessions().iter().filter(|s| s.held).count()
     }
 }
 
-// ---- quarantine ------------------------------------------------------------------------------
+// ---- quarantine (UI-PAGES2) ------------------------------------------------------------------
 
-pub struct Batch {
-    pub title: &'static str,
-    pub items: u32,
-    pub kb: u32,
-    pub days_left: u32,
-    pub volume: &'static str,
+/// The "Delete now" choice open under a cleanup: whose, and whether its registry backups go too
+/// (off each time it opens).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeleteFlyout {
+    pub session: SessionId,
+    pub also_backups: bool,
 }
 
+/// The Quarantine page: `purge-ui-model`'s [`VaultModel`], its requests waiting for `link`, the
+/// cleanup shown in the side pane and the "Delete now" choice while it is open.
 pub struct Quarantine {
-    pub batches: Vec<Batch>,
-    /// The batch whose items are listed.
-    pub selected: usize,
-    /// Days an item stays before it is deleted.
+    pub page: VaultModel,
+    pub out: Vec<VaultCall>,
+    pub clock: LocalClock,
+    now: fn() -> LocalClock,
+    /// The cleanup the side pane shows.
+    pub selected: Option<SessionId>,
+    pub flyout: Option<DeleteFlyout>,
+    /// Days a quarantined file is kept (the engine's retention, `RetentionClass::Quarantine`).
     pub keep_days: u32,
-    /// The review of what is about to expire was opened.
-    pub reviewing: bool,
 }
 
 impl Quarantine {
-    fn new() -> Quarantine {
+    pub fn new(now: fn() -> LocalClock) -> Quarantine {
         Quarantine {
-            batches: vec![
-                Batch {
-                    title: "Zoom Workplace",
-                    items: 6,
-                    kb: 20_840,
-                    days_left: 28,
-                    volume: "C:",
-                },
-                Batch {
-                    title: "CCleaner",
-                    items: 4,
-                    kb: 322,
-                    days_left: 21,
-                    volume: "C:",
-                },
-                Batch {
-                    title: "WinRAR 6.24",
-                    items: 11,
-                    kb: 9_630,
-                    days_left: 13,
-                    volume: "C:",
-                },
-                Batch {
-                    title: "Skype",
-                    items: 3,
-                    kb: 45_060,
-                    days_left: 4,
-                    volume: "D:",
-                },
-            ],
-            selected: 0,
-            keep_days: 30,
-            reviewing: false,
+            page: VaultModel::new(),
+            out: Vec::new(),
+            clock: now(),
+            now,
+            selected: None,
+            flyout: None,
+            keep_days: RetentionClass::Quarantine.days(),
         }
     }
 
-    pub fn total_kb(&self) -> u32 {
-        self.batches.iter().map(|b| b.kb).sum()
+    pub fn take(&mut self, calls: Vec<VaultCall>) {
+        self.out.extend(calls);
+        self.sync();
+    }
+
+    pub fn tick_clock(&mut self) -> LocalClock {
+        self.clock = (self.now)();
+        self.clock
+    }
+
+    /// Keeps the selection on a listed cleanup (the first when it is gone), and closes a choice
+    /// whose cleanup is no longer listed.
+    pub fn sync(&mut self) {
+        let batches = self.page.batches();
+        let listed = |id: &SessionId| batches.iter().any(|b| &b.id == id);
+        if !self.selected.as_ref().is_some_and(listed) {
+            self.selected = batches.first().map(|b| b.id.clone());
+        }
+        if self
+            .flyout
+            .as_ref()
+            .is_some_and(|f| !listed(&f.session) || self.page.busy())
+        {
+            self.flyout = None;
+        }
+    }
+
+    /// The position of the selected cleanup in the model's list.
+    pub fn selected_at(&self) -> Option<usize> {
+        let id = self.selected.as_ref()?;
+        self.page.batches().iter().position(|b| &b.id == id)
     }
 
     pub fn total_items(&self) -> u32 {
-        self.batches.iter().map(|b| b.items).sum()
+        self.page.batches().iter().map(|b| b.items).sum()
     }
 
-    /// The KB held on each volume, in the order first seen.
-    pub fn volumes(&self) -> Vec<(&'static str, u32)> {
-        let mut out: Vec<(&'static str, u32)> = Vec::new();
-        for b in &self.batches {
-            match out.iter_mut().find(|(v, _)| *v == b.volume) {
-                Some((_, kb)) => *kb += b.kb,
-                None => out.push((b.volume, b.kb)),
-            }
-        }
-        out
+    pub fn total_bytes(&self) -> u64 {
+        self.page
+            .batches()
+            .iter()
+            .fold(0u64, |sum, b| sum.saturating_add(b.bytes))
     }
 }
 
@@ -1639,8 +1506,8 @@ impl Model {
             confirm: None,
             pipeline: Pipeline::new(),
             leftovers: Leftovers::new(),
-            history: History::new(),
-            quarantine: Quarantine::new(),
+            history: History::new(crate::clock::now),
+            quarantine: Quarantine::new(crate::clock::now),
             settings: Settings {
                 markers_open: false,
                 facts: Facts {

@@ -232,7 +232,7 @@ fn held(s: &Sample) -> u64 {
 
 fn summary(at: usize, s: &Sample) -> Option<SessionSummary> {
     let start = started(s);
-    let after = |days: i64| (anchor() - s.ago + days * DAY);
+    let after = |days: i64| anchor() - s.ago + days * DAY;
     let n = s.items.len() as u32;
     let bytes = held(s);
     let (serial, root) = if s.on_d {

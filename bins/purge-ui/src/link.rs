@@ -34,6 +34,9 @@ use purge_ui_model::pipeline::{LaunchResult, LaunchState, RemovedRequest};
 use purge_ui_model::programs::page::{IconWanted, ProgramsRequest};
 use purge_ui_model::programs::{EngineState, ProgramEntry, ProgramIcon};
 
+// ---- UI-PAGES2: the History and Quarantine pages (`pages2`) ----
+mod pages2;
+
 use crate::icons::{self, Atlas};
 use crate::markers;
 use crate::model::{Model, Page};
@@ -95,7 +98,7 @@ fn launch_result(f: LaunchFailure) -> Result<LaunchResult, CallError> {
 
 /// Who holds the one broker session. The broker serves one client at a time, so the pages take
 /// turns.
-// The Uninstall, History and Quarantine pages take the broker when they are wired (UI-PAGES).
+// The Uninstall and Leftovers pages take the broker when they are wired (UI-PAGES).
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Owner {
@@ -250,6 +253,8 @@ pub struct Link {
     /// The broker call of the removed-program check in flight.
     check_call: Option<CallId>,
     pub broker: BrokerHub,
+    /// UI-PAGES2: the History and Quarantine pages' calls.
+    pages: pages2::Pages,
 }
 
 impl Link {
@@ -277,6 +282,7 @@ impl Link {
             atlas: Atlas::open(None),
             check_call: None,
             broker: BrokerHub::default(),
+            pages: pages2::Pages::default(),
         }
     }
 
@@ -312,6 +318,8 @@ impl Link {
                 self.send(model, r);
                 busy = true;
             }
+            // UI-PAGES2.
+            busy |= self.pages_pump(model);
             if !busy {
                 break;
             }
@@ -356,6 +364,11 @@ impl Link {
                 }
             }
             ClientEvent::Progress { call, progress } => {
+                // UI-PAGES2.
+                if self.pages_progress(model, call, &progress) {
+                    return;
+                }
+                let pr = &mut model.programs;
                 if self.check_call == Some(call) {
                     pr.page.on_check_progress(&progress.phase);
                     pr.sync();
@@ -371,9 +384,19 @@ impl Link {
                 let r = pr.page.set_engine(EngineState::default());
                 pr.take(r);
             }
-            ClientEvent::BrokerClosed { .. } => self.broker.closed(),
+            ClientEvent::BrokerClosed { .. } => {
+                self.broker.closed();
+                // UI-PAGES2.
+                self.pages_broker_closed(model);
+            }
             ClientEvent::BrokerLaunched { call, result } => {
                 let owner = self.broker.launched(call, &result);
+                // UI-PAGES2.
+                if let Some(o @ (Owner::History | Owner::Vault)) = owner {
+                    self.pages_launched(model, o, &result);
+                    return;
+                }
+                let pr = &mut model.programs;
                 if owner == Some(Owner::Removed) {
                     let answer = match result {
                         Ok(_) => Ok(LaunchResult::started()),
@@ -429,6 +452,10 @@ impl Link {
         if self.check_call == Some(call) {
             self.check_call = None;
         }
+        // UI-PAGES2.
+        let Some(result) = self.pages_reply(model, call, result) else {
+            return;
+        };
         let Some(what) = self.pending.remove(&call) else {
             return;
         };

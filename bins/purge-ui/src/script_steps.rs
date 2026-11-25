@@ -7,7 +7,7 @@ use mdshared_ui::keys::KeyName;
 
 use crate::app::PurgeApp;
 use crate::look::{Choice, Design, Preset, ThemeChoice, Transition};
-use crate::model::{LeftoverPhase, OpState, Page, Rating, RunPhase, SortKey, Tab};
+use crate::model::{LeftoverPhase, Page, Rating, RunPhase, SortKey, Tab};
 use crate::script::{CTRL, NONE, SHIFT, Step};
 use crate::ui::{Id, Role, id};
 
@@ -768,6 +768,8 @@ pub fn steps() -> Vec<Step> {
             },
             settle: 700,
         },
+        // UI-PAGES2: History and Quarantine on the sample's cleanups. Reads are answered from the
+        // sample; every change is refused with "Sample data".
         Step {
             name: "history",
             act: |app, cx| {
@@ -777,6 +779,8 @@ pub fn steps() -> Vec<Step> {
                 want(app.model.page == Page::History, "on History")?;
                 for name in [
                     "CheckInterrupted",
+                    "StripCard",
+                    "Ops",
                     "RestoreSelected",
                     "RestoreAll",
                     "DTitle",
@@ -786,27 +790,98 @@ pub fn steps() -> Vec<Step> {
                 ] {
                     has(app, name)?;
                 }
-                Ok("drawn".to_string())
+                let h = &app.model.history.page;
+                want(h.sessions().len() == 8, "the sample's eight cleanups")?;
+                want(
+                    h.selected().is_some_and(|s| s.name == "Zoom Workplace"),
+                    "the newest is selected",
+                )?;
+                want(
+                    app.ctls.iter().any(|c| c.id.0 == "StripItem"),
+                    "the strip's markers",
+                )?;
+                Ok(format!("{} cleanups", h.sessions().len()))
             },
             settle: 700,
         },
         Step {
-            name: "history-restore",
+            name: "history-items",
             act: |app, cx| {
-                app.click(cx, Id("Op", 2));
+                app.click(cx, Id("Op", 3));
                 app.click(cx, id("ShowItems"));
+            },
+            check: |app| {
+                let h = &app.model.history.page;
+                want(
+                    h.selected().is_some_and(|s| s.name == "CCleaner"),
+                    "CCleaner selected",
+                )?;
+                want(h.items().is_some_and(|i| i.len() == 4), "its four items")?;
+                Ok("four items".to_string())
+            },
+            settle: 700,
+        },
+        Step {
+            name: "history-item-ticked",
+            act: |app, cx| {
+                app.click(cx, Id("DItemTick", 1));
+            },
+            check: |app| {
+                let h = &app.model.history.page;
+                want(h.checked_count() == 1, "one ticked")?;
+                has(app, "DItems")?;
+                has_id(app, Id("DItemTick", 4))?;
+                let label = app
+                    .ctl(id("RestoreSelected"))
+                    .map(|c| c.label.clone())
+                    .unwrap_or_default();
+                want(
+                    label == "Put back 1 selected",
+                    format!("the button says {label:?}"),
+                )?;
+                Ok(label)
+            },
+            settle: 700,
+        },
+        Step {
+            name: "history-restore-refused",
+            act: |app, cx| {
                 app.click(cx, id("RestoreSelected"));
             },
             check: |app| {
-                let h = &app.model.history;
-                want(h.selected == 1 && h.show_items, "second entry, items shown")?;
+                let h = &app.model.history.page;
+                let error = h.action_error().unwrap_or_default();
                 want(
-                    h.ops.get(1).is_some_and(|o| o.state == OpState::Restored),
-                    "restored",
+                    error.contains("Sample data"),
+                    format!("the error says {error:?}"),
                 )?;
-                want(h.notice.is_some(), "the info bar says so")?;
-                has(app, "InfoBarHost")?;
-                Ok(h.notice.clone().unwrap_or_default())
+                want(!h.busy(), "nothing waits")?;
+                let bar = app
+                    .ctl(id("InfoBarHost"))
+                    .map(|c| c.label.clone())
+                    .unwrap_or_default();
+                want(
+                    bar.starts_with("Couldn't finish that."),
+                    format!("the bar says {bar:?}"),
+                )?;
+                Ok(bar)
+            },
+            settle: 700,
+        },
+        Step {
+            name: "history-interrupted",
+            act: |app, cx| {
+                app.click(cx, Id("Op", 4));
+            },
+            check: |app| {
+                let h = &app.model.history.page;
+                want(
+                    h.selected().is_some_and(|s| s.interrupted),
+                    "the interrupted cleanup",
+                )?;
+                has(app, "RecoverResume")?;
+                has(app, "RecoverRollBack")?;
+                Ok("Resume and Roll back offered".to_string())
             },
             settle: 700,
         },
@@ -817,10 +892,85 @@ pub fn steps() -> Vec<Step> {
             },
             check: |app| {
                 want(app.model.page == Page::Quarantine, "on Quarantine")?;
-                for name in ["ReviewButton", "Volumes", "Totals", "ItemsTitle"] {
+                for name in [
+                    "ReviewButton",
+                    "Volumes",
+                    "Totals",
+                    "ItemsTitle",
+                    "VRestore",
+                    "VDeleteNow",
+                    "BarReview",
+                    "BarOpenHistory",
+                ] {
                     has(app, name)?;
                 }
-                Ok("drawn".to_string())
+                let q = &app.model.quarantine.page;
+                want(q.batches().len() == 6, "six cleanups hold something")?;
+                want(q.review_button().enabled, "something is past its retention")?;
+                Ok(q.totals().to_string())
+            },
+            settle: 700,
+        },
+        Step {
+            name: "quarantine-items",
+            act: |app, cx| {
+                app.click(cx, id("VChooseItems"));
+            },
+            check: |app| {
+                let q = &app.model.quarantine.page;
+                want(!q.items().is_empty(), "the items are listed")?;
+                has_id(app, Id("ItemDelete", 1))?;
+                has(app, "ItemsClose")?;
+                Ok(format!("{} items", q.items().len()))
+            },
+            settle: 700,
+        },
+        Step {
+            name: "quarantine-delete-choice",
+            act: |app, cx| {
+                app.click(cx, id("VDeleteNow"));
+            },
+            check: |app| {
+                want(app.model.quarantine.flyout.is_some(), "the choice is open")?;
+                has(app, "AlsoBackups")?;
+                Ok("Delete now: the choice".to_string())
+            },
+            settle: 700,
+        },
+        Step {
+            name: "quarantine-delete-also-backups",
+            act: |app, cx| {
+                app.click(cx, id("AlsoBackups"));
+            },
+            check: |app| {
+                let f = app
+                    .model
+                    .quarantine
+                    .flyout
+                    .as_ref()
+                    .ok_or("no choice open")?;
+                want(f.also_backups, "the backups ticked")?;
+                has(app, "FlyoutContinue")?;
+                has(app, "FlyoutCancel")?;
+                Ok("Delete now: also its registry backups".to_string())
+            },
+            settle: 700,
+        },
+        Step {
+            name: "quarantine-delete-refused",
+            act: |app, cx| {
+                app.click(cx, id("FlyoutContinue"));
+            },
+            check: |app| {
+                let q = &app.model.quarantine;
+                want(q.flyout.is_none(), "the choice closed")?;
+                let error = q.page.action_error().unwrap_or_default();
+                want(
+                    error.contains("Sample data"),
+                    format!("the error says {error:?}"),
+                )?;
+                want(q.page.batches().len() == 6, "nothing was deleted")?;
+                Ok(error.to_string())
             },
             settle: 700,
         },

@@ -20,8 +20,6 @@ pub fn programs() -> Clock {
 }
 
 /// The History and Quarantine pages' clock: now, and the offset now.
-// Those pages are wired in UI-PAGES; until then only the tests read it.
-#[allow(dead_code)]
 pub fn now() -> local_time::Clock {
     let now = now_unix();
     let ticks = now

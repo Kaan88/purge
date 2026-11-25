@@ -22,6 +22,8 @@ use crate::view::{DD_ALL, DD_RESTORE, View};
 
 mod history;
 mod leftovers;
+// UI-PAGES2: the bars of the History and Quarantine models.
+mod model_bars;
 mod pipeline;
 mod programs;
 mod quarantine;
@@ -149,9 +151,8 @@ pub fn draw(ui: &mut Ui, m: &Model, v: &mut View) {
     let old = ui.clip(content);
     match m.page {
         // With the engine, the pages wave 2 has not wired say so instead of showing sample data.
-        Page::Pipeline | Page::Leftovers | Page::History | Page::Quarantine if !m.sample => {
-            not_yet(ui, m, content)
-        }
+        // (History and Quarantine are wired: UI-PAGES2.)
+        Page::Pipeline | Page::Leftovers if !m.sample => not_yet(ui, m, content),
         Page::Programs => programs::draw(ui, m, v, content),
         Page::Pipeline => pipeline::draw(ui, m, v, content),
         Page::Leftovers => leftovers::draw(ui, m, v, content),
@@ -272,9 +273,7 @@ fn nav_row(ui: &Ui, i: usize, page: Page) -> Rect {
 /// What a page holds just now, in a few words: the second line of the rail's hover card.
 fn page_status(m: &Model, page: Page) -> String {
     match page {
-        Page::Pipeline | Page::Leftovers | Page::History | Page::Quarantine if !m.sample => {
-            NOT_YET.trim_end_matches('.').to_string()
-        }
+        Page::Pipeline | Page::Leftovers if !m.sample => NOT_YET.trim_end_matches('.').to_string(),
         Page::Programs => {
             let pr = &m.programs;
             format!(
@@ -299,15 +298,16 @@ fn page_status(m: &Model, page: Page) -> String {
             LeftoverPhase::Moved => "Moved to quarantine".to_string(),
             LeftoverPhase::Undone => "Put back".to_string(),
         },
+        // UI-PAGES2.
         Page::History => format!(
             "{} cleanups \u{b7} {} can be undone",
-            m.history.ops.len(),
+            m.history.page.sessions().len(),
             m.history.undoable()
         ),
         Page::Quarantine => format!(
             "{} items \u{b7} {}",
             m.quarantine.total_items(),
-            crate::model::kb_text(m.quarantine.total_kb())
+            purge_ui_model::leftovers::format_size(m.quarantine.total_bytes())
         ),
         Page::Settings => format!("Look: {}", m.prefs.design.title()),
     }

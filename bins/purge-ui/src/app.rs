@@ -30,6 +30,7 @@ use purge_ui_model::programs::{Filter, ProgramCommand};
 use crate::link::{Link, Source};
 use crate::look::{Choice, Design, Preset, ThemeChoice, Transition};
 use crate::markers;
+use crate::model::DeleteFlyout;
 use crate::model::{LeftoverPhase, Model, Page, Programs, RunPhase, SortKey, Tab};
 use crate::prefs::{Prefs, Store};
 use crate::screens::{self, NAV, nav_id};
@@ -514,30 +515,8 @@ impl PurgeApp {
             "OpenHistory" => self.go(Page::History),
             "OpenVault" => self.go(Page::Quarantine),
 
-            // History.
-            "Op" | "StripItem" => {
-                self.model.history.selected = n.saturating_sub(1);
-                self.view.page_scroll = scroll::SmoothScroll::new();
-            }
-            "ShowItems" => self.model.history.show_items = !self.model.history.show_items,
-            "RestoreSelected" => {
-                let i = self.model.history.selected;
-                if !self.model.history.restore(i) {
-                    self.toast(cx, "Nothing to restore for this entry.");
-                }
-            }
-            "RestoreAll" => {
-                if self.model.history.restore_all() == 0 {
-                    self.toast(cx, "Nothing left to undo.");
-                }
-            }
-            "CheckInterrupted" => self.model.history.checked = true,
-            "NoticeClose" => self.model.history.notice = None,
-
-            // Quarantine.
-            "Batch" => self.model.quarantine.selected = n.saturating_sub(1),
-            "ReviewButton" => self.model.quarantine.reviewing = !self.model.quarantine.reviewing,
-            "EmptyNow" => self.toast(cx, "Emptying the quarantine is not available yet."),
+            // History and Quarantine (UI-PAGES2).
+            name if self.pages_activate(cx, name, n) => {}
 
             // Settings.
             "ConfirmEach" => {
@@ -1567,6 +1546,137 @@ pub fn item_at(n: u32) -> (usize, usize) {
 /// The number of the control of a leftover item.
 pub fn item_no(group: usize, item: usize) -> u32 {
     (group * 100 + item + 1) as u32
+}
+
+// ---- UI-PAGES2: what the History and Quarantine pages' controls do -----------------------------
+
+impl PurgeApp {
+    /// A click on a control of the History or Quarantine page; false when `name` is not one.
+    fn pages_activate(&mut self, cx: &mut Cx<'_, ()>, name: &str, n: usize) -> bool {
+        let at = n.saturating_sub(1);
+        let h = &mut self.model.history;
+        let q = &mut self.model.quarantine;
+        match name {
+            // History.
+            "StripItem" => {
+                let timeline = h.page.timeline(&h.clock);
+                if let Some(id) = h
+                    .page
+                    .timeline_target(&timeline, at)
+                    .and_then(|i| h.session_id(i))
+                {
+                    h.page.select(&id);
+                    h.dismissed.clear();
+                }
+            }
+            "Op" => {
+                if let Some(id) = h.session_id(at) {
+                    h.page.select(&id);
+                    h.dismissed.clear();
+                    self.view.page_scroll = scroll::SmoothScroll::new();
+                }
+            }
+            "ShowItems" => {
+                h.dismissed.clear();
+                let r = h.page.show_items();
+                h.take(r);
+            }
+            "DItemTick" => {
+                let item = h
+                    .page
+                    .items()
+                    .and_then(|i| i.get(at))
+                    .map(|e| (e.op, e.checked));
+                if let Some((op, checked)) = item {
+                    h.page.set_checked(op, !checked);
+                }
+            }
+            "RestoreSelected" | "RestoreAll" => {
+                h.dismissed.clear();
+                let r = h.page.restore(name == "RestoreAll");
+                h.take(r);
+            }
+            "CheckInterrupted" => {
+                h.dismissed.clear();
+                let r = h.page.check_interrupted();
+                h.take(r);
+            }
+            "RecoverResume" | "RecoverRollBack" => {
+                h.dismissed.clear();
+                let r = h.page.recover(name == "RecoverRollBack");
+                h.take(r);
+            }
+            "StateRetry" => {
+                let r = h.page.load();
+                h.take(r);
+            }
+            "BarClose" => {
+                if let Some(bar) = h.page.bars().get(at) {
+                    h.dismissed.push(format!("{} {}", bar.title, bar.message));
+                }
+            }
+
+            // Quarantine.
+            "Batch" => {
+                let id = q.page.batches().get(at).map(|b| b.id.clone());
+                if id.is_some() && id != q.selected {
+                    q.selected = id;
+                    q.flyout = None;
+                    if q.page.items_for() != q.selected.as_ref() {
+                        q.page.close_items();
+                    }
+                }
+            }
+            "VRestore" => {
+                if let Some(id) = q.selected.clone() {
+                    let r = q.page.restore(&id);
+                    q.take(r);
+                }
+            }
+            "VChooseItems" => {
+                if let Some(id) = q.selected.clone() {
+                    let r = q.page.show_items(&id);
+                    q.take(r);
+                }
+            }
+            "VDeleteNow" => {
+                q.flyout = match (&q.flyout, q.selected.clone()) {
+                    (Some(_), _) | (_, None) => None,
+                    (None, Some(session)) => Some(DeleteFlyout {
+                        session,
+                        also_backups: false,
+                    }),
+                };
+            }
+            "AlsoBackups" => {
+                if let Some(f) = &mut q.flyout {
+                    f.also_backups = !f.also_backups;
+                }
+            }
+            "FlyoutContinue" => {
+                if let Some(f) = q.flyout.take() {
+                    let r = q.page.delete_now(&f.session, f.also_backups);
+                    q.take(r);
+                }
+            }
+            "FlyoutCancel" => q.flyout = None,
+            "ItemsClose" => q.page.close_items(),
+            "ItemDelete" => {
+                if let Some(id) = q.page.items().get(at).map(|i| i.expiry_id) {
+                    let r = q.page.delete_item_now(id);
+                    q.take(r);
+                }
+            }
+            "ReviewButton" | "BarReview" => {
+                let r = q.page.review_expired();
+                q.take(r);
+            }
+            "VDetails" | "BarOpenHistory" => self.go(Page::History),
+            _ => return false,
+        }
+        cx.request_redraw_all();
+        true
+    }
 }
 
 impl App for PurgeApp {
