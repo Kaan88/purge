@@ -175,8 +175,12 @@ pub fn draw(ui: &mut Ui, m: &Model, v: &mut View) {
         if m.flow.elevation.showing().is_some() {
             elevation(ui, m.flow.elevation.showing_read_only());
         } else if let Some(t) = &m.flow.takeover {
-            takeover(ui, t);
+            takeover(ui, v, t);
         }
+    }
+    if m.flow.takeover.is_none() || m.flow.confirm.is_some() || m.flow.elevation.showing().is_some()
+    {
+        v.takeover_at = None;
     }
     v.dialog_opened = m.flow.dialog_open();
 
@@ -893,7 +897,7 @@ fn confirm(ui: &mut Ui, m: &Model, v: &mut View) {
         "Uninstall",
         Style::Accent,
         None,
-        armed,
+        armed && d.can_uninstall(c.quiet_on),
     ));
     let by = o.footer.y + (DIALOG_FOOTER - BUTTON_H) / 2.0;
     ui.buttons_right(o.footer.right() - DIALOG_PAD, by, &list);
@@ -988,9 +992,17 @@ pub fn takeover_title(t: &crate::flow::Takeover) -> String {
 }
 
 /// The question before a launch ends work another page still holds in the one broker session
-/// ([`crate::flow::Takeover`]). "Not now" is where the keyboard starts.
-fn takeover(ui: &mut Ui, t: &crate::flow::Takeover) {
+/// ([`crate::flow::Takeover`]). "Not now" is where the keyboard starts. "End it" sits where the
+/// explanation's "Continue" was, so it waits [`ARM_DELAY`] after the question appears, as the
+/// confirmation's Uninstall does: a double-click meant for the dialog before ends nothing.
+fn takeover(ui: &mut Ui, v: &mut View, t: &crate::flow::Takeover) {
     let pal = ui.pal;
+    let now = ui.cx.now();
+    let opened = *v.takeover_at.get_or_insert(now);
+    let armed = now.saturating_duration_since(opened) >= ARM_DELAY;
+    if !armed {
+        ui.cx.anim().wake_at(opened + ARM_DELAY);
+    }
     let cw = 440.0;
     let title = takeover_title(t);
     let first = format!(
@@ -1043,7 +1055,13 @@ fn takeover(ui: &mut Ui, t: &crate::flow::Takeover) {
             None,
             true,
         ),
-        (id("TakeoverEndButton"), "End it", Style::Accent, None, true),
+        (
+            id("TakeoverEndButton"),
+            "End it",
+            Style::Accent,
+            None,
+            armed,
+        ),
     ];
     let by = o.footer.y + (DIALOG_FOOTER - BUTTON_H) / 2.0;
     ui.buttons_right(o.footer.right() - DIALOG_PAD, by, &list);

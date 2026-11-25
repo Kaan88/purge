@@ -193,6 +193,11 @@ impl Model {
         let Some(c) = self.flow.confirm.take() else {
             return;
         };
+        if button == ConfirmButton::Uninstall && !c.dialog.can_uninstall(c.quiet_on) {
+            // The dialog says the command is not known: it stays open.
+            self.flow.confirm = Some(c);
+            return;
+        }
         let answer = c.dialog.answer(button, c.quiet_on, c.restore_point);
         let env = self.flow_env();
         let r = self.flow.page.answer(answer, env);

@@ -204,6 +204,10 @@ impl Link {
     }
 
     fn launch_now(&mut self, model: &mut Model, owner: Owner) {
+        // Another page's session whose link ended is dropped, and that page told.
+        if let Some(dead) = self.broker.drop_dead().filter(|o| *o != owner) {
+            self.flow_broker_closed(model, dead);
+        }
         if let Some(other) = self.broker.holder().filter(|o| *o != owner) {
             match Self::use_of(model, other) {
                 Use::Busy => {
@@ -305,11 +309,21 @@ impl Link {
     /// on (asked again: the holder may have started a step meanwhile); "Not now" refuses it.
     fn takeover_answered(&mut self, model: &mut Model, t: Takeover, end_it: bool) {
         if !end_it {
-            let message = format!(
-                "{} Nothing was ended: {} is still there.",
-                in_use(t.holder),
-                t.what
-            );
+            // The holder may have ended meanwhile (its broker died): then nothing is "still
+            // there", and nothing stands in the way of asking again.
+            let message = if self.broker.holder() == Some(t.holder) {
+                format!(
+                    "{} Nothing was ended: {} is still there.",
+                    in_use(t.holder),
+                    t.what
+                )
+            } else {
+                format!(
+                    "Nothing was started. The administrator part {} used has ended \
+                     meanwhile, so you can try again now.",
+                    t.what
+                )
+            };
             return self.refuse_launch(model, t.asking, message);
         }
         if self.broker.holder() == Some(t.holder) && Self::use_of(model, t.holder) != Use::Busy {
@@ -323,7 +337,7 @@ impl Link {
     /// from then on.
     pub(super) fn flow_broker_closed(&mut self, model: &mut Model, owner: Owner) {
         match owner {
-            Owner::Leftovers => model.flow.leftovers.set_broker_live(false),
+            Owner::Leftovers => model.flow.leftovers.on_link_ended(),
             Owner::Pipeline => model.flow.page.on_broker_ended(),
             _ => {}
         }
@@ -371,6 +385,9 @@ impl Link {
                 // holds none of its own: the hub keeps one session.
                 if with {
                     self.broker.hand_over(from, Owner::Leftovers);
+                } else {
+                    // The page is offline now: a session it still held idles for nothing.
+                    self.broker.close(Owner::Leftovers);
                 }
                 model.flow.closed_bars.clear();
                 model.flow.ltake(shown.calls);
@@ -378,7 +395,11 @@ impl Link {
                     model.page = leftovers_page(model);
                 }
             }
-            Err(_) => self.broker.close(from),
+            // Refused while a change runs: `from`'s session ends, and its page is told.
+            Err(_) => {
+                self.broker.close(from);
+                self.flow_broker_closed(model, from);
+            }
         }
     }
 
@@ -654,10 +675,13 @@ impl Link {
                 });
                 model.flow.ltake(r);
             }
-            (Call::RetryHeld, r) => l.on_retried(match r {
-                Ok(Answer::Outcome(o)) => Ok(o),
-                r => Err(failure(r)),
-            }),
+            (Call::RetryHeld, r) => {
+                let r = l.on_retried(match r {
+                    Ok(Answer::Outcome(o)) => Ok(o),
+                    r => Err(failure(r)),
+                });
+                model.flow.ltake(r);
+            }
         }
     }
 
@@ -858,7 +882,19 @@ mod tests {
             m.history.page.items().is_some()
         });
         assert_eq!(link.broker.holder(), Some(Owner::History));
-        assert!(!model.flow.leftovers.broker_is_live());
+        let l = &model.flow.leftovers;
+        assert!(!l.broker_is_live());
+        // Review SF2: the review is over, and nothing offers it as if it were live.
+        assert_eq!(l.phase(), LeftoversPhase::Empty);
+        assert!(!l.can_move());
+        assert_eq!(l.waiting_for_review(), 0);
+        assert_eq!(model.badge(Page::Leftovers), None);
+        let (title, text) = l.empty_panel().expect("the ended panel");
+        assert_eq!(title, "The administrator part ended");
+        assert!(
+            text.contains(l.program_name()) && text.contains("Nothing was moved"),
+            "{text}"
+        );
     }
 
     #[test]

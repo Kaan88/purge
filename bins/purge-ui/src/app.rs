@@ -117,6 +117,8 @@ pub struct PurgeApp {
     pub ctls: Vec<Ctl>,
     pub hover: Option<Id>,
     pub pressed: Option<Id>,
+    /// The control the open overlay's focus scope started on (which dialog it was opened for).
+    scope_start: Option<Id>,
     pub pal: Palette,
     pub hc: bool,
     link_ink: Option<Rgb>,
@@ -187,6 +189,7 @@ impl PurgeApp {
             ctls: Vec::new(),
             hover: None,
             pressed: None,
+            scope_start: None,
             pal: mdshared_ui::theme::LIGHT,
             hc: false,
             link_ink: None,
@@ -365,6 +368,12 @@ impl PurgeApp {
         self.ctl(id).and_then(|c| c.key.clone())
     }
 
+    /// The place, among `now`, of what the control `id` showed when it was drawn.
+    fn keyed(&self, id: Id, mut now: impl Iterator<Item = Key>) -> Option<usize> {
+        let shown = self.key_of(id)?;
+        now.position(|k| k == shown)
+    }
+
     /// The control under a point: the last declared wins, and while something is open over the
     /// page only its own controls answer.
     fn hit(&self, x: f32, y: f32) -> Option<&Ctl> {
@@ -382,18 +391,33 @@ impl PurgeApp {
     fn sync_scope(&mut self) {
         let want = self.overlay();
         let open = self.focus.scope() == Some(SCOPE);
+        // The dialog shown (the palette draws over a dialog, so it goes first).
+        let start = if self.view.palette.is_some() {
+            None
+        } else if self.model.flow.confirm.is_some() {
+            Some(id("ConfirmNotNowButton"))
+        } else if self.model.flow.elevation.showing().is_some() {
+            Some(id("DialogPrimaryButton"))
+        } else if self.model.flow.takeover.is_some() {
+            Some(id("TakeoverNotNowButton"))
+        } else {
+            None
+        };
+        // One dialog directly after another: the keyboard starts over on the new one, never on
+        // a control of the one before.
+        if want && open && start != self.scope_start {
+            self.focus.pop_scope();
+        }
+        let open = self.focus.scope() == Some(SCOPE);
         if want && !open {
-            if self.model.flow.confirm.is_some() {
-                self.focus.push_scope_on(SCOPE, id("ConfirmNotNowButton"));
-            } else if self.model.flow.elevation.showing().is_some() {
-                self.focus.push_scope_on(SCOPE, id("DialogPrimaryButton"));
-            } else if self.model.flow.takeover.is_some() {
-                self.focus.push_scope_on(SCOPE, id("TakeoverNotNowButton"));
-            } else {
-                self.focus.push_scope(SCOPE);
+            match start {
+                Some(on) => self.focus.push_scope_on(SCOPE, on),
+                None => self.focus.push_scope(SCOPE),
             }
+            self.scope_start = start;
         } else if !want && open {
             self.focus.pop_scope();
+            self.scope_start = None;
         }
     }
 
@@ -462,9 +486,16 @@ impl PurgeApp {
                 self.model.programs.page.dismiss_notice();
                 self.model.programs.sync();
             }
+            // By the program the row showed (`Ctl::key`): Dismiss cannot be undone.
             "RemovedCheck" | "RemovedDismiss" => {
+                let shown = match self.key_of(id) {
+                    Some(Key::Program(p)) => Some(p),
+                    _ => None,
+                };
                 let pr = &mut self.model.programs;
-                let row = pr.view.removed.as_ref().and_then(|g| g.rows.get(n));
+                let rows = pr.view.removed.as_ref().map(|g| g.rows.as_slice());
+                let row = rows
+                    .and_then(|rows| rows.iter().find(|r| Some(&r.program_id) == shown.as_ref()));
                 if let Some(program_id) = row.map(|r| r.program_id.clone()) {
                     let r = if id.0 == "RemovedCheck" {
                         pr.page.check_removed(&program_id)
@@ -483,6 +514,8 @@ impl PurgeApp {
             "ConfirmUninstallButton" if self.ctl(id).is_none_or(|c| c.disabled) => {}
             "ConfirmUninstallButton" | "ConfirmCheckAgainButton" | "ConfirmNotNowButton" => {
                 self.close_dropdowns();
+                // A confirmation that follows at once waits its own ARM_DELAY.
+                self.view.confirm_at = None;
                 if let Some(button) = screens::confirm_button(id.0) {
                     self.model.flow_confirm(button);
                 }
@@ -490,26 +523,60 @@ impl PurgeApp {
             "QuietSwitch" => self.model.flow_quiet(),
             "DialogPrimaryButton" => self.model.flow_elevation(true),
             "DialogCloseButton" => self.model.flow_elevation(false),
-            "TakeoverEndButton" => self.model.flow_takeover(true),
-            "TakeoverNotNowButton" => self.model.flow_takeover(false),
+            // "End it" waits ARM_DELAY too, with the same guard as the Uninstall.
+            "TakeoverEndButton" if self.ctl(id).is_none_or(|c| c.disabled) => {}
+            "TakeoverEndButton" | "TakeoverNotNowButton" => {
+                self.view.takeover_at = None;
+                self.model.flow_takeover(id.0 == "TakeoverEndButton");
+            }
 
             // The Uninstall page.
             "NextButton" => self.model.flow_next(),
             "SkipButton" => self.model.flow_skip(),
             "RecheckButton" => self.model.flow_recheck(),
+            // The bars and groups act on what they showed (`Ctl::key`), never on a place.
             "BarButton" if n > 0 => {
-                let k = n - 1;
                 let per = screens::BAR_BUTTONS as usize;
-                self.model.flow_bar(k / per, k % per);
+                let bars = self.model.flow_bars();
+                if let Some(k) = self.keyed(id, bars.iter().map(|b| Key::bar(&b.title, &b.message)))
+                {
+                    self.model.flow_bar(k, (n - 1) % per);
+                }
             }
-            "BarClose" if n > 0 => self.model.flow_close_bar(n - 1),
+            "BarClose" => {
+                let bars = self.model.flow_bars();
+                if let Some(k) = self.keyed(id, bars.iter().map(|b| Key::bar(&b.title, &b.message)))
+                {
+                    self.model.flow_close_bar(k);
+                }
+            }
             "GoPrograms" => self.go(Page::Programs),
 
             // Leftovers.
-            "LBarButton" if n > 0 => self.model.flow_lbar(n - 1),
-            "LBarClose" if n > 0 => self.model.flow_close_lbar(n - 1),
-            "Group" if n > 0 => self.model.flow.leftovers.toggle_expanded(n - 1),
-            "GroupTick" if n > 0 => self.model.flow.leftovers.toggle_group(n - 1),
+            "LBarButton" | "LBarClose" => {
+                let bars = self.model.flow_leftovers_bars();
+                if let Some(k) = self.keyed(id, bars.iter().map(|b| Key::bar(&b.title, &b.message)))
+                {
+                    if id.0 == "LBarButton" {
+                        self.model.flow_lbar(k);
+                    } else {
+                        self.model.flow_close_lbar(k);
+                    }
+                }
+            }
+            "Group" | "GroupTick" => {
+                let shown = self.key_of(id);
+                let l = &mut self.model.flow.leftovers;
+                let group = match shown {
+                    Some(Key::Group(name)) => l.group_named(&name),
+                    _ => None,
+                };
+                match group {
+                    Some(g) if id.0 == "Group" => l.toggle_expanded(g),
+                    Some(g) => l.toggle_group(g),
+                    None => {}
+                }
+            }
             // The rows act on what they showed (`Ctl::key`), never on a place in the list.
             "Item" => {
                 if let Some(Key::Candidate(c)) = self.key_of(id) {
@@ -1640,7 +1707,6 @@ fn screens_tab_index(name: &str) -> usize {
 impl PurgeApp {
     /// A click on a control of the History or Quarantine page; false when `name` is not one.
     fn pages_activate(&mut self, cx: &mut Cx<'_, ()>, name: &'static str, n: usize) -> bool {
-        let at = n.saturating_sub(1);
         // The rows act on what they showed when drawn (`Ctl::key`), not on a place in a list
         // that an answer may have changed since.
         let key = self.key_of(Id(name, n as u32));
@@ -1694,9 +1760,15 @@ impl PurgeApp {
                 let r = h.page.load();
                 h.take(r);
             }
+            // By the bar it showed (`Ctl::key`), never by its place among the bars.
             "HBarClose" => {
-                if let Some(bar) = h.page.bars().get(at) {
-                    h.dismissed.push(format!("{} {}", bar.title, bar.message));
+                if let Some(Key::Bar(said)) = key
+                    && h.page
+                        .bars()
+                        .iter()
+                        .any(|b| format!("{} {}", b.title, b.message) == said)
+                {
+                    h.dismissed.push(said);
                 }
             }
 
@@ -1789,6 +1861,9 @@ impl App for PurgeApp {
 
     fn message(&mut self, cx: &mut Cx<'_, ()>, _: ()) {
         self.pump(cx);
+        // A dialog the link's answer opened or closed takes the keyboard now, not at the next
+        // input event.
+        self.sync_scope();
         self.timers(cx);
     }
 

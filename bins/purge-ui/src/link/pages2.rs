@@ -102,9 +102,9 @@ impl Link {
         let owner = Owner::History;
         match call {
             HistoryCall::ReadIndex => {
-                if !self.index(Call::HistoryIndex) {
+                if let Err(e) = self.index(Call::HistoryIndex) {
                     let clock = model.history.tick_clock();
-                    let r = model.history.page.on_index(Err(no_engine()), &clock);
+                    let r = model.history.page.on_index(Err(e), &clock);
                     model.history.take(r);
                 }
             }
@@ -137,9 +137,9 @@ impl Link {
         let owner = Owner::Vault;
         match call {
             VaultCall::ReadIndex => {
-                if !self.index(Call::VaultIndex) {
+                if let Err(e) = self.index(Call::VaultIndex) {
                     let clock = model.quarantine.tick_clock();
-                    model.quarantine.page.on_index(Err(no_engine()), &clock);
+                    model.quarantine.page.on_index(Err(e), &clock);
                     model.quarantine.sync();
                 }
             }
@@ -158,14 +158,19 @@ impl Link {
         }
     }
 
-    /// `history.index` on the medium engine; false when there is no engine to ask.
-    fn index(&mut self, what: Call) -> bool {
+    /// `history.index` on the medium engine; the page's answer when there is none to ask. After
+    /// an engine failure (`Fallback`) the engine is the sample's, whose made-up cleanups are never
+    /// listed: the page gets the engine-failure notice and its list stays empty (review SF5).
+    fn index(&mut self, what: Call) -> Result<(), CallError> {
+        if let Mode::Fallback(notice) = &self.mode {
+            return Err(call_error(ClientError::NotAvailable(notice.clone())));
+        }
         let Some(engine) = &self.engine else {
-            return false;
+            return Err(no_engine());
         };
         let id = engine.request(StdioCall::HistoryIndex(NoParams {}));
         self.pages.pending.insert(id, what);
-        true
+        Ok(())
     }
 
     fn drop_broker(&mut self, owner: Owner) {

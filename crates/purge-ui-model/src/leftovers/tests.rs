@@ -101,6 +101,13 @@ fn undo_complete() -> UndoResult {
     }
 }
 
+fn retried() -> OutcomeResult {
+    OutcomeResult {
+        outcome: Outcome::Complete,
+        alerts: Vec::new(),
+    }
+}
+
 fn rpc(data: ErrorData, message: &str) -> CallError {
     CallError::rpc(data, message)
 }
@@ -127,6 +134,9 @@ struct Broker {
     /// `undo.run` per broker generation: 0 the first, 1 the one a relaunch started.
     undo_calls: [usize; 2],
     undo: [Answer<UndoResult>; 2],
+    /// `journal.retry_held` per broker generation, as for `undo.run`.
+    retry_calls: [usize; 2],
+    retry: [Answer<OutcomeResult>; 2],
     foreground: [usize; 2],
     relaunch: Box<dyn FnMut() -> BrokerLaunch>,
     launches: usize,
@@ -151,6 +161,8 @@ impl Broker {
                 Box::new(|| Ok(undo_complete())),
                 Box::new(|| Ok(undo_complete())),
             ],
+            retry_calls: [0; 2],
+            retry: [Box::new(|| Ok(retried())), Box::new(|| Ok(retried()))],
             foreground: [0; 2],
             relaunch: Box::new(BrokerLaunch::started),
             launches: 0,
@@ -240,11 +252,9 @@ impl Broker {
                 model.on_undone(answer)
             }
             LeftoversCall::RetryHeld(_) => {
-                model.on_retried(Ok(OutcomeResult {
-                    outcome: Outcome::Complete,
-                    alerts: Vec::new(),
-                }));
-                Vec::new()
+                self.retry_calls[self.generation] += 1;
+                let answer = (self.retry[self.generation])();
+                model.on_retried(answer)
             }
             LeftoversCall::AllowForeground => {
                 self.foreground[self.generation] += 1;
@@ -1564,4 +1574,127 @@ fn sizes_read_as_the_winui_app_shows_them() {
     assert_eq!(format_size(2_726_297), "2.6 MB");
     assert_eq!(format_size(345_000_000), "329 MB");
     assert_eq!(format_size(10_737_418_240), "10.0 GB");
+}
+
+/// A partial run that left one item held.
+fn held_result() -> ExecResult {
+    ExecResult {
+        outcome: Outcome::Partial,
+        session: session(),
+        counts: OutcomeCounts {
+            done: 1,
+            held_retry: 1,
+            ..OutcomeCounts::default()
+        },
+        held: vec![HeldItem {
+            op: OpId(2),
+            display_name: r"C:\Program Files\Mozilla\firefox.exe".into(),
+            lockers: Vec::new(),
+        }],
+        restore_point: RestorePointOutcome::NotRequested,
+        timings: None,
+        delete_after: None,
+    }
+}
+
+fn held_page(broker: &mut Broker, options: LeftoversOptions) -> LeftoversModel {
+    broker.rows = vec![safe(1, true), safe(2, true)];
+    broker.execute = Box::new(|| Ok(held_result()));
+    let mut model = scanned(broker, options, false);
+    moved(broker, &mut model);
+    assert!(model.can_retry_held());
+    model
+}
+
+/// Review SF1: a retry that never reached a broker tried nothing, so it is never "cannot tell", and
+/// the result stays on the page.
+#[test]
+fn a_retry_that_never_reached_a_broker_keeps_the_result() {
+    for refusal in [
+        CallError::link("The administrator part is not running.", true),
+        rpc(
+            ErrorData::Runtime {
+                message: "the broker is closing".into(),
+            },
+            "the broker is closing",
+        ),
+    ] {
+        let mut broker = Broker::new();
+        broker.retry[0] = Box::new(move || Err(refusal.clone()));
+        let mut model = held_page(&mut broker, LeftoversOptions::default());
+        let calls = model.retry_held();
+        broker.run(&mut model, calls);
+        assert_eq!(broker.retry_calls, [1, 0]);
+        assert_eq!(model.phase(), LeftoversPhase::Result);
+        assert!(model.result().is_some());
+        assert_eq!(model.error(), Some(text::RETRY_NEVER_SENT));
+        assert!(model.can_retry_held());
+    }
+}
+
+/// Review SF1: with a launcher, the retry starts a new broker and tries again over it, as
+/// "Put back all" does.
+#[test]
+fn a_retry_that_never_reached_a_broker_starts_a_new_one() {
+    let mut broker = Broker::new();
+    broker.retry[0] = Box::new(|| Err(CallError::link("not running", true)));
+    let mut model = held_page(&mut broker, with_launcher());
+    let calls = model.retry_held();
+    broker.run(&mut model, calls);
+    assert_eq!(broker.retry_calls, [1, 1]);
+    assert_eq!(broker.launches, 1);
+    assert_eq!(model.phase(), LeftoversPhase::Result);
+    assert!(model.error().is_none());
+    assert_eq!(model.info(), Some(text::RETRY_MOVED));
+    assert!(model.broker_is_live());
+}
+
+/// Over a link the run ended, the retry starts a new broker first and sends nothing into the dead
+/// link; a declined UAC tries nothing and keeps the result.
+#[test]
+fn a_retry_over_an_ended_link_starts_a_new_broker_first() {
+    let mut broker = Broker::new();
+    let mut model = held_page(&mut broker, with_launcher());
+    model.set_broker_live(false);
+    let calls = model.retry_held();
+    assert_eq!(calls, [LeftoversCall::Relaunch]);
+    assert_eq!(model.waiting_title(), text::RETRY_STARTING_TITLE);
+    broker.run(&mut model, calls);
+    assert_eq!(broker.retry_calls, [0, 1]);
+    assert_eq!(model.info(), Some(text::RETRY_MOVED));
+
+    let mut broker = Broker::new();
+    broker.relaunch = Box::new(|| BrokerLaunch::cancelled("cancelled"));
+    let mut model = held_page(&mut broker, with_launcher());
+    model.set_broker_live(false);
+    let calls = model.retry_held();
+    broker.run(&mut model, calls);
+    assert_eq!(broker.retry_calls, [0, 0]);
+    assert_eq!(model.phase(), LeftoversPhase::Result);
+    assert_eq!(model.info(), Some(text::RETRY_NOT_PERMITTED));
+}
+
+/// Review SF2: a link that ends during a review empties the page to a panel that names the program;
+/// a result keeps showing (undo and retry start a new broker).
+#[test]
+fn a_link_that_ends_during_a_review_ends_the_review() {
+    let mut broker = Broker::with_rows(vec![safe(1, true)]);
+    let mut model = scanned_default(&mut broker);
+    assert_eq!(model.phase(), LeftoversPhase::Review);
+    assert!(model.can_move());
+    model.on_link_ended();
+    assert_eq!(model.phase(), LeftoversPhase::Empty);
+    assert!(!model.can_move());
+    assert_eq!(model.waiting_for_review(), 0);
+    assert!(model.move_items(RestorePoint::HighRisk).is_empty());
+    let (title, text) = model.empty_panel().expect("the panel");
+    assert_eq!(title, text::LINK_GONE_TITLE);
+    assert!(text.contains(model.program_name()), "{text}");
+    assert!(text.contains("Nothing was moved"), "{text}");
+
+    let mut broker = Broker::new();
+    let mut model = moved_with_launcher(&mut broker);
+    model.on_link_ended();
+    assert_eq!(model.phase(), LeftoversPhase::Result);
+    assert!(!model.broker_is_live());
 }

@@ -121,6 +121,9 @@ pub fn draw(ui: &mut Ui, m: &Model, v: &mut View, content: Rect) {
         // Its own ids: "BarClose" is the Uninstall page's (UI-REVIEW1 S3).
         let close = Some(Id("HBarClose", k as u32 + 1));
         y = model_bars::bar(ui, host, left, y, w, bar, close, actions) + 8.0;
+        if let Some(cid) = close {
+            ui.key(cid, Key::Bar(said));
+        }
     }
 
     let bottom = content.bottom() - 16.0;

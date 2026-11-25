@@ -297,6 +297,12 @@ impl ConfirmDialog {
         }
     }
 
+    /// Whether "Uninstall" works for the quiet switch's position: never while the dialog says the
+    /// command is not known (the user turns the quiet switch on, or checks the program).
+    pub fn can_uninstall(&self, quiet_on: bool) -> bool {
+        self.command_for(quiet_on) != strings::confirm::COMMAND_NOT_KNOWN
+    }
+
     /// The answer for the button the dialog closed with and its controls' last positions.
     pub fn answer(
         &self,

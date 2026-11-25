@@ -20,7 +20,9 @@ use purge_ui_model::programs::ForecastLineKind;
 use purge_ui_model::programs::page::RemovedGroupView;
 
 use crate::model::{Expect, Model, Program, SortKey, Tab, size_text};
-use crate::ui::{BUTTON_H, FILTER, Id, Role, Style, Tone, Ui, bad_ink, id, ok_ink, tile_colour};
+use crate::ui::{
+    BUTTON_H, FILTER, Id, Key, Role, Style, Tone, Ui, bad_ink, id, ok_ink, tile_colour,
+};
 use crate::view::{DD_SORT, View, column_of};
 
 pub const TAB_IDS: [&str; 4] = ["TabApps", "TabComponents", "TabUnnamed", "TabRecent"];
@@ -581,6 +583,11 @@ fn removed_group(ui: &mut Ui, group: &RemovedGroupView, x: f32, y: f32, w: f32) 
             None,
             row.can_dismiss,
         );
+        // Review SF3: the row acts on the program it showed, never on its place in the group.
+        ui.key(
+            Id("RemovedDismiss", n),
+            Key::Program(row.program_id.clone()),
+        );
         if row.button_visible {
             bx -= 8.0 + check_w;
             ui.button(
@@ -591,6 +598,7 @@ fn removed_group(ui: &mut Ui, group: &RemovedGroupView, x: f32, y: f32, w: f32) 
                 None,
                 row.can_check,
             );
+            ui.key(Id("RemovedCheck", n), Key::Program(row.program_id.clone()));
         }
         ry += row_h;
     }
