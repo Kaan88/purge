@@ -312,18 +312,23 @@ impl Link {
         if !end_it {
             // The holder may have ended meanwhile (its broker died): then nothing is "still
             // there", and nothing stands in the way of asking again.
-            let message = if self.broker.holder() == Some(t.holder) {
-                format!(
+            let message = match self.broker.holder() {
+                Some(h) if h == t.holder => format!(
                     "{} Nothing was ended: {} is still there.",
                     in_use(t.holder),
                     t.what
-                )
-            } else {
-                format!(
+                ),
+                // Another page took the session meanwhile (review N10): it has not ended, so
+                // trying again now asks about that page's work instead.
+                Some(other) => format!(
+                    "Nothing was ended or started. {} Try again when it has finished.",
+                    in_use(other)
+                ),
+                None => format!(
                     "Nothing was started. The administrator part {} used has ended \
                      meanwhile, so you can try again now.",
                     t.what
-                )
+                ),
             };
             return self.refuse_launch(model, t.asking, message);
         }
@@ -875,6 +880,30 @@ mod tests {
             error.contains("in use by the Leftovers page") && !error.contains("Leftovers)"),
             "{error}"
         );
+    }
+
+    /// Review N10: "Not now" after another page took the session meanwhile names that page; it
+    /// never says the administrator part has ended.
+    #[test]
+    fn not_now_after_another_page_took_the_session_names_that_page() {
+        let (mut link, mut model) = at_review("firefox");
+        history_asks(&mut link, &mut model);
+        assert!(model.flow.takeover.is_some());
+        let session: Arc<dyn Broker> = Arc::new(SampleBroker::new(
+            link.sink.clone(),
+            HashMap::new(),
+            Pace::default(),
+        ));
+        link.broker.adopt(Owner::Vault, session);
+        assert_eq!(link.broker.holder(), Some(Owner::Vault));
+
+        model.flow_takeover(false);
+        link.pump(&mut model);
+        let error = model.history.page.action_error().unwrap_or_default();
+        assert!(error.contains(&in_use(Owner::Vault)), "{error}");
+        assert!(error.contains("Nothing was ended or started"), "{error}");
+        assert!(!error.contains("has ended"), "{error}");
+        assert_eq!(link.broker.holder(), Some(Owner::Vault), "left alone");
     }
 
     #[test]

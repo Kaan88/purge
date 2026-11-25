@@ -153,7 +153,14 @@ impl BrokerHub {
     /// another page holds a live broker or there is no broker beside the app. Another page's
     /// session that is no longer live is dropped, never a reason to refuse.
     pub fn launch(&mut self, owner: Owner, sink: Sink) -> Result<CallId, String> {
-        self.drop_dead();
+        // The caller (`launch_now`) has dropped another page's dead session already and told
+        // that page; the only session that can have died since is `owner`'s own, which it is
+        // replacing. Another page's, dropped here, would go untold (review N10).
+        let dropped = self.drop_dead();
+        debug_assert!(
+            dropped.is_none_or(|o| o == owner),
+            "{dropped:?}'s dead session was dropped without telling its page"
+        );
         if let Some((other, _)) = self.session.as_ref().filter(|(o, _)| *o != owner) {
             return Err(in_use(*other));
         }
