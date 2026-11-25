@@ -29,7 +29,7 @@ use windows_sys::Win32::System::Threading::{
 use windows_sys::Win32::UI::WindowsAndMessaging::{GetShellWindow, GetWindowThreadProcessId};
 
 use crate::os::Win32Error;
-use crate::process::ProcessHandle;
+use crate::process::{ProcessHandle, QueryProcessHandle};
 use crate::sid::sid_bytes_to_string;
 
 /// `SECURITY_MANDATORY_MEDIUM_RID`.
@@ -85,6 +85,13 @@ impl Token {
     /// The primary token of the process behind `process` (which stays open, so it is the process
     /// that was checked).
     pub fn of_process(process: &ProcessHandle) -> Result<Token, Win32Error> {
+        // SAFETY: the process handle is live for the call.
+        unsafe { open_process_token(process.as_raw_handle() as HANDLE) }
+    }
+
+    /// [`Token::of_process`] of a handle opened with the query right only (the UI's look at the
+    /// elevated broker).
+    pub fn of_query_process(process: &QueryProcessHandle) -> Result<Token, Win32Error> {
         // SAFETY: the process handle is live for the call.
         unsafe { open_process_token(process.as_raw_handle() as HANDLE) }
     }

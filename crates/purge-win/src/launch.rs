@@ -386,44 +386,46 @@ pub fn run_as(
     let directory = wide(directory);
     let thread = std::thread::Builder::new()
         .name("purge-broker-launch".into())
-        .spawn(move || -> Result<(usize, u32, Option<Win32Error>), Win32Error> {
-            // SAFETY: plain call on this new thread; balanced by CoUninitialize below when it worked.
-            let hr = unsafe {
-                CoInitializeEx(
-                    ptr::null(),
-                    (COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) as u32,
-                )
-            };
-            let verb = wide("runas");
-            // SAFETY: plain data; zero is valid once cbSize is set.
-            let mut info: SHELLEXECUTEINFOW = unsafe { mem::zeroed() };
-            info.cbSize = mem::size_of::<SHELLEXECUTEINFOW>() as u32;
-            info.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC;
-            info.hwnd = ptr::null_mut();
-            info.lpVerb = verb.as_ptr();
-            info.lpFile = file.as_ptr();
-            info.lpParameters = parameters.as_ptr();
-            info.lpDirectory = directory.as_ptr();
-            info.nShow = SW_SHOWNORMAL;
-            // SAFETY: every string is NUL-terminated and outlives the call.
-            let ok = unsafe { ShellExecuteExW(&mut info) };
-            let result = if ok == 0 {
-                Err(Win32Error::last())
-            } else if info.hProcess.is_null() {
-                Err(Win32Error::INVALID_DATA)
-            } else {
-                // SAFETY: valid process handle the shell handed over.
-                let pid = unsafe { GetProcessId(info.hProcess) };
-                // Read at once: nothing else ran on this thread since the call.
-                let error = (pid == 0).then(Win32Error::last);
-                Ok((info.hProcess as usize, pid, error))
-            };
-            if hr >= 0 {
-                // SAFETY: balances the successful CoInitializeEx of this thread.
-                unsafe { CoUninitialize() };
-            }
-            result
-        })
+        .spawn(
+            move || -> Result<(usize, u32, Option<Win32Error>), Win32Error> {
+                // SAFETY: plain call on this new thread; balanced by CoUninitialize below when it worked.
+                let hr = unsafe {
+                    CoInitializeEx(
+                        ptr::null(),
+                        (COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) as u32,
+                    )
+                };
+                let verb = wide("runas");
+                // SAFETY: plain data; zero is valid once cbSize is set.
+                let mut info: SHELLEXECUTEINFOW = unsafe { mem::zeroed() };
+                info.cbSize = mem::size_of::<SHELLEXECUTEINFOW>() as u32;
+                info.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC;
+                info.hwnd = ptr::null_mut();
+                info.lpVerb = verb.as_ptr();
+                info.lpFile = file.as_ptr();
+                info.lpParameters = parameters.as_ptr();
+                info.lpDirectory = directory.as_ptr();
+                info.nShow = SW_SHOWNORMAL;
+                // SAFETY: every string is NUL-terminated and outlives the call.
+                let ok = unsafe { ShellExecuteExW(&mut info) };
+                let result = if ok == 0 {
+                    Err(Win32Error::last())
+                } else if info.hProcess.is_null() {
+                    Err(Win32Error::INVALID_DATA)
+                } else {
+                    // SAFETY: valid process handle the shell handed over.
+                    let pid = unsafe { GetProcessId(info.hProcess) };
+                    // Read at once: nothing else ran on this thread since the call.
+                    let error = (pid == 0).then(Win32Error::last);
+                    Ok((info.hProcess as usize, pid, error))
+                };
+                if hr >= 0 {
+                    // SAFETY: balances the successful CoInitializeEx of this thread.
+                    unsafe { CoUninitialize() };
+                }
+                result
+            },
+        )
         .map_err(|_| Win32Error::INVALID_PARAMETER)?;
     let (raw, pid, error) = thread.join().map_err(|_| Win32Error::INVALID_DATA)??;
     // SAFETY: the handle the shell returned, owned by nobody else.
