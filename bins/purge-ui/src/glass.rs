@@ -46,8 +46,8 @@ use mdshared_ui::theme::Palette;
 
 use crate::look::{Choice, Covers};
 
-/// The strength a new settings file starts with (see the report in DECISIONS: picked from real
-/// captures over a busy desktop).
+/// The strength a new settings file starts with, picked from real captures over a busy desktop:
+/// the backdrop reads clearly in dark and light, and the page's cards stay apart from its ground.
 pub const STRENGTH_DEFAULT: u8 = 50;
 
 /// A key's step on the slider, in percent.
