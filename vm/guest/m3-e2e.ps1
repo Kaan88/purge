@@ -796,7 +796,7 @@ switch ($Phase) {
             $rec.cli = [ordered]@{ plan = 'run\plan-purge.json'; items = $si.Count; preselected_n = $ids.Count; preselected_keys = $keys; plan_keys = $planKeys; safe_default_n = $safeDefault.Count }
             Set-StateValue $st 'cli' $rec.cli
             Write-JsonFile (New-E2eDeepScope @($items | ForEach-Object { $_.target })) (Join-Path $W 'deepscope.json') 12
-            $rec.settle = Wait-M2BootSettle -MaxSec 300 -MinUptimeSec 180
+            $rec.settle = Wait-M2BootSettle -MaxSec 900 -MinUptimeSec 720
             $null = Invoke-M2Snap (Join-Path $W 'snap-a.tsv.gz')
             $null = Invoke-M2Deep @((Join-Path $W 'deepscope.json')) (Join-Path $AD 'deep-a.json')
             Set-StateValue $st 'sessions_before' @(Get-M2Sessions)
