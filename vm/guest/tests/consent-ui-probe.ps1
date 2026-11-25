@@ -9,6 +9,10 @@
 # shows 0 of the medium attempts reaching the high dialog, it is UIPI that stopped them and not a driver that cannot
 # press this dialog. It is NOT the T1 test itself: that needs the elevated broker and a medium driver (the VM).
 #
+# The last part asks through the broker's own consent service (consent_preview --service: the real ToolkitConsent on a
+# second thread and its window on the first, as under --consent toolkit), approves and cancels through it, and fires the
+# closer while a dialog is up.
+#
 # By default only the methods that are aimed at the dialog's own window are run (uia, postmessage). -WithInput also
 # runs sendinput-key and sendinput-mouse, which move the real pointer and type real keys on this desktop: use it only
 # with nobody at the keyboard and nothing else in front.
@@ -55,10 +59,10 @@ function Invoke-Sec([string[]]$A, [int]$Sec = 60) {
 
 # ---- the preview: one process, the named samples one after another in its one window
 $script:Proc = $null; $script:Log = $null
-function Start-Preview([string]$Samples, [string]$Name) {
+function Start-Preview([string]$Samples, [string]$Name, [string[]]$Extra = @()) {
     $script:Log = Join-Path $Work "preview-$Name.log"
     Remove-Item -LiteralPath $script:Log -Force -ErrorAction SilentlyContinue
-    $script:Proc = Start-Process -FilePath $Preview -ArgumentList @($Samples, '--theme', 'light', '--gap', "$GapMs") -PassThru -RedirectStandardOutput $script:Log -RedirectStandardError (Join-Path $Work "preview-$Name.err") -WindowStyle Normal
+    $script:Proc = Start-Process -FilePath $Preview -ArgumentList (@($Samples, '--theme', 'light', '--gap', "$GapMs") + $Extra) -PassThru -RedirectStandardOutput $script:Log -RedirectStandardError (Join-Path $Work "preview-$Name.err") -WindowStyle Normal
 }
 function Stop-Preview { if ($script:Proc -and -not $script:Proc.HasExited) { try { $script:Proc.Kill() } catch { } }; $script:Proc = $null }
 function Get-Lines { if (Test-Path -LiteralPath $script:Log) { @(Get-Content -LiteralPath $script:Log -ErrorAction SilentlyContinue) } else { @() } }
@@ -170,6 +174,28 @@ try {
     $dr = Invoke-Drive 'purge-close' 'postmessage' 'control' @() $d
     Check 'purge: WM_CLOSE declines' (Wait-Lines '^answered: purge: Declined' 1 15)
     Check 'the preview ends by itself after its last dialog' ($script:Proc.WaitForExit(15000))
+    Stop-Preview
+
+    # ---- 6. the broker's own path: its consent service on a second thread, the window on the first (--service)
+    Start-Preview 'restore,restore' 'service' @('--service')
+    Check 'service: the first dialog is shown (consent.shown would be sent now)' (Wait-Lines '^shown: restore' 1 30)
+    $d = Invoke-Observe 'service-observe'
+    Check 'service: it is the toolkit dialog, read by its ids' ($d -and $d.flavour -eq 'toolkit' -and @($d.uia_ids) -contains 'ConsentApprove' -and $d.primary_enabled -eq $false) "flavour=$($d.flavour) primary=$($d.has_primary)/$($d.primary_enabled)"
+    $ok = Invoke-Press 'service-approve' $true 100 1600
+    Check 'service: the approval reaches the request as Approved' ([int]$ok.pressed -eq 100 -and (Wait-Lines '^outcome: restore: Approved' 1 15)) "pressed=$($ok.pressed)"
+    Check 'service: the next request shows its dialog in the same window' (Wait-Lines '^shown: restore' 2 20)
+    $no = Invoke-Press 'service-cancel' $false 2 100
+    Check 'service: Cancel reaches the request as Declined' ([int]$no.pressed -eq 2 -and (Wait-Lines '^outcome: restore: Declined' 1 15)) "pressed=$($no.pressed)"
+    Check 'service: the process ends after its last request' ($script:Proc.WaitForExit(15000))
+    Stop-Preview
+
+    # The closer (the broker's parent is gone or its pipe broke) while the dialog is up: Declined, and the window goes.
+    Start-Preview 'purge' 'closer' @('--service', '--close-after', '4000')
+    Check 'closer: the dialog is shown' (Wait-Lines '^shown: purge' 1 30)
+    $d = Invoke-Observe 'closer-observe' 2000
+    Check 'closer: the dialog is up before the closer fires' ($d -and $d.found -eq $true -and $d.flavour -eq 'toolkit')
+    Check 'closer: the request is answered Declined when the closer fires' (Wait-Lines '^outcome: purge: Declined' 1 10)
+    Check 'closer: the process ends' ($script:Proc.WaitForExit(15000))
 } finally { Stop-Preview }
 
 $fails = @($results | Where-Object { -not $_.ok }).Count

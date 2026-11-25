@@ -446,6 +446,72 @@ impl UiThread {
     }
 }
 
+/// One dialog of a [`rehearse`].
+pub struct Trial {
+    /// What the report calls it.
+    pub name: String,
+    /// The dialog as the toolkit window draws it.
+    pub sheet: Sheet,
+    /// The same dialog as TaskDialog pages, for the fall back.
+    pub pages: Vec<Page>,
+    /// The id of the button that approves on the pages.
+    pub primary: i32,
+    /// Fire the dialog's [`Closer`] this long after it was asked for, as the broker does when its
+    /// parent is gone or its pipe broke. `None`: the dialog waits for its answer.
+    pub close_after: Option<Duration>,
+}
+
+/// Asks `trials` one after another through a real [`ToolkitConsent`], with the threads the broker
+/// has under `--consent toolkit`: the calling thread, which must be the one the process started
+/// on, becomes the window's, and a second one asks. `report` is told `shown: <name>` when a dialog
+/// is on screen and `outcome: <name>: <answer>` when it ended; `gap` is waited between two
+/// dialogs. The process ends after the last one.
+///
+/// For the preview harness (`examples/consent_preview.rs --service`): the broker's own path from
+/// [`Consent::ask_sheet`] to the window and back, with no pipe and nothing to run. It is here
+/// because a [`Closer`] can be made and fired only inside this crate.
+pub fn rehearse(
+    trials: Vec<Trial>,
+    gap: Duration,
+    report: impl Fn(&str) + Send + Sync + 'static,
+) -> ! {
+    let (consent, window) = ToolkitConsent::new();
+    let asking = std::thread::Builder::new()
+        .name("consent-rehearsal".into())
+        .spawn(move || {
+            for (i, trial) in trials.iter().enumerate() {
+                if i > 0 {
+                    std::thread::sleep(gap);
+                }
+                let closer = Arc::new(Closer::new());
+                if let Some(after) = trial.close_after {
+                    let closer = closer.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(after);
+                        closer.fire();
+                    });
+                }
+                let name = &trial.name;
+                let answer =
+                    consent.ask_sheet(&trial.sheet, &trial.pages, trial.primary, &closer, &|| {
+                        report(&format!("shown: {name}"))
+                    });
+                report(&match answer {
+                    Ok(outcome) => format!("outcome: {name}: {outcome:?}"),
+                    Err(e) => format!("outcome: {name}: not shown ({e})"),
+                });
+            }
+            std::process::exit(0);
+        });
+    if asking.is_ok() {
+        window.run();
+    }
+    // The window's loop ended or never began; the asking thread ends the process.
+    loop {
+        std::thread::park();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};

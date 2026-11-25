@@ -7,6 +7,8 @@
 //! cargo run --release -p purge-broker --example consent_preview -- --shots <dir> [--scale <n>]
 //! cargo run --release -p purge-broker --example consent_preview -- <sample>[,<sample>...]
 //!         [--theme light|dark|system] [--contrast] [--seconds <n>] [--shot <file.png>] [--gap <ms>]
+//! cargo run --release -p purge-broker --example consent_preview -- --service <sample>[,<sample>...]
+//!         [--gap <ms>] [--close-after <ms>]
 //! ```
 //!
 //! - `--shots` draws every sample with the dialog's own measuring, layout and drawing into a bitmap
@@ -20,6 +22,12 @@
 //!   that long between an answer and the next sample, the window hidden meanwhile (the rig's probe,
 //!   `vm/guest/tests/consent-ui-probe.ps1`, uses it).
 //!
+//! - `--service` asks the samples through the broker's own consent service
+//!   (`consent::toolkit::service::rehearse`): the real `ToolkitConsent` on a second thread and its
+//!   window on the first, as in the broker under `--consent toolkit`. It prints `shown: <sample>`
+//!   and `outcome: <sample>: <answer>`. `--close-after` fires each dialog's closer that long after
+//!   it was asked for, as the broker does when its parent is gone: the answer is then `Declined`.
+//!
 //! The process ends by itself after two minutes without `--seconds`, and after the time the samples
 //! need with it.
 
@@ -32,12 +40,14 @@ use mdshared_ui::gfx::{Gfx, Painter, rgb};
 use mdshared_ui::host::{self, Config, Proxy};
 use mdshared_ui::platform;
 use mdshared_ui::tokens::SystemColors;
+use purge_broker::consent::dialog::{PRIMARY, pages};
 use purge_broker::consent::sheet::{Sheet, sheet};
 use purge_broker::consent::toolkit::app::{ConsentApp, Desk, Msg, opening_size, work_height};
 use purge_broker::consent::toolkit::draw::{
     Frame, Hit, Layout, MAX_HEIGHT, MIN_HEIGHT, WIDTH, draw, measure,
 };
 use purge_broker::consent::toolkit::look::{Look, contrast_palette};
+use purge_broker::consent::toolkit::service::{Trial, rehearse};
 use purge_broker::consent::toolkit::state::{ARM_DELAY, Ctl, Prompt};
 use purge_win::taskdialog::Outcome;
 
@@ -51,7 +61,8 @@ mod consent {
 use consent::samples;
 
 const USAGE: &str = "consent_preview --list | --shots <dir> [--scale <n>] | <sample>[,<sample>...] \
-                     [--theme light|dark|system] [--contrast] [--seconds <n>] [--shot <file.png>] [--gap <ms>]";
+                     [--theme light|dark|system] [--contrast] [--seconds <n>] [--shot <file.png>] [--gap <ms>] \
+                     | --service <sample>[,<sample>...] [--gap <ms>] [--close-after <ms>]";
 
 fn fail(why: &str) -> ! {
     eprintln!("consent_preview: {why}\n{USAGE}");
@@ -376,6 +387,8 @@ fn main() {
     let mut seconds: Option<u64> = None;
     let mut shot: Option<PathBuf> = None;
     let mut gap = Duration::ZERO;
+    let mut service = false;
+    let mut close_after: Option<Duration> = None;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         let mut value = |flag: &str| {
@@ -407,6 +420,14 @@ fn main() {
                 );
             }
             "--shot" => shot = Some(PathBuf::from(value("--shot"))),
+            "--service" => service = true,
+            "--close-after" => {
+                close_after = Some(Duration::from_millis(
+                    value("--close-after")
+                        .parse()
+                        .unwrap_or_else(|_| fail("--close-after takes a whole number of ms")),
+                ));
+            }
             "--gap" => {
                 gap = Duration::from_millis(
                     value("--gap")
@@ -430,6 +451,33 @@ fn main() {
         fail("name a sample, or --list, or --shots <dir>");
     }
     let all = samples::all();
+    // Nobody at the keyboard: the process never outlives its limit, whatever the loop does.
+    let limit = seconds.map_or(120 + gap.as_secs() * names.len() as u64, |s| {
+        (s + 3 + gap.as_secs()) * names.len() as u64 + 20
+    });
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(limit));
+        eprintln!("consent_preview: still running after {limit} s, the limit: ending the process");
+        std::process::exit(124);
+    });
+    if service {
+        let trials = names
+            .iter()
+            .map(|name| {
+                let Some(s) = all.iter().find(|s| s.name == name) else {
+                    fail(&format!("no sample is called {name:?} (see --list)"));
+                };
+                Trial {
+                    name: s.name.to_owned(),
+                    sheet: sheet(&s.view),
+                    pages: pages(&s.view),
+                    primary: PRIMARY,
+                    close_after,
+                }
+            })
+            .collect();
+        rehearse(trials, gap, |line| println!("{line}"));
+    }
     let mut waiting = VecDeque::new();
     for (i, name) in names.iter().enumerate() {
         let Some(s) = all.iter().find(|s| s.name == name) else {
@@ -448,15 +496,6 @@ fn main() {
         ("dark", c) => Some(Look::of(true, c)),
         _ => fail("--theme takes light, dark or system"),
     };
-    // Nobody at the keyboard: the process never outlives its limit, whatever the loop does.
-    let limit = seconds.map_or(120 + gap.as_secs() * names.len() as u64, |s| {
-        (s + 3 + gap.as_secs()) * names.len() as u64 + 20
-    });
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_secs(limit));
-        eprintln!("consent_preview: still running after {limit} s, the limit: ending the process");
-        std::process::exit(124);
-    });
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         default_hook(info);
