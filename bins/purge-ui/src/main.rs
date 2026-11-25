@@ -222,7 +222,7 @@ fn main() {
         source: if script {
             link::Source::Sample { bench_rows: 0 }
         } else {
-            source.unwrap_or_else(link::Source::beside_exe)
+            source.unwrap_or_else(|| link::Source::beside_exe(bench_exit))
         },
         seconds,
         script,

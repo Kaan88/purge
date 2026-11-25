@@ -52,11 +52,14 @@ pub enum Source {
 }
 
 impl Source {
-    /// The engine beside this exe, or the file `PURGE_ENGINE` names (development and the launch
-    /// bench's `--engine`, as in the WinUI app).
-    pub fn beside_exe() -> Source {
-        if let Some(path) = std::env::var_os("PURGE_ENGINE").filter(|p| !p.is_empty()) {
-            return Source::Engine(PathBuf::from(path));
+    /// The engine beside this exe, or, in a launch-bench run (`--bench-exit`) or a debug build, the
+    /// file `PURGE_ENGINE` names (the bench's `--engine`). An installed Purge started normally never
+    /// takes its engine from a per-user variable (Fable review of alpha.4, S3).
+    pub fn beside_exe(bench_exit: bool) -> Source {
+        if bench_exit || cfg!(debug_assertions) {
+            if let Some(path) = std::env::var_os("PURGE_ENGINE").filter(|p| !p.is_empty()) {
+                return Source::Engine(PathBuf::from(path));
+            }
         }
         let exe = std::env::current_exe().ok();
         let dir = exe
