@@ -16,7 +16,14 @@
 
 /// Writes `<file>.rc`, compiles it into `<file>.res` in OUT_DIR and links it into the package's
 /// binaries. Only for an MSVC Windows target; a no-op elsewhere.
+#[allow(dead_code)] // Purge.exe's build script calls the form below, with its icon
 fn embed_version_resource(file_name: &str, description: &str) {
+    embed_version_resource_with(file_name, description, "");
+}
+
+/// As [`embed_version_resource`], with more resource-script lines (`extra`, e.g. an `ICON`) in the
+/// same `.rc`, so one `.res` carries them all.
+fn embed_version_resource_with(file_name: &str, description: &str, extra: &str) {
     println!("cargo:rerun-if-changed=../versioninfo.rs");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows")
         || std::env::var("CARGO_CFG_TARGET_ENV").as_deref() != Ok("msvc")
@@ -37,7 +44,7 @@ fn embed_version_resource(file_name: &str, description: &str) {
     let res = out.join(format!("{stem}.res"));
     // FILEOS VOS_NT_WINDOWS32, FILETYPE VFT_APP; language 0409 (en-US), code page 1200 (Unicode).
     let text = format!(
-        "1 VERSIONINFO\n FILEVERSION {a},{b},{c},{d}\n PRODUCTVERSION {a},{b},{c},{d}\n FILEOS 0x40004\n FILETYPE 1\n\
+        "{extra}1 VERSIONINFO\n FILEVERSION {a},{b},{c},{d}\n PRODUCTVERSION {a},{b},{c},{d}\n FILEOS 0x40004\n FILETYPE 1\n\
          BEGIN\n BLOCK \"StringFileInfo\"\n BEGIN\n BLOCK \"040904B0\"\n BEGIN\n\
          VALUE \"CompanyName\", \"Purge\\0\"\n VALUE \"FileDescription\", \"{description}\\0\"\n\
          VALUE \"FileVersion\", \"{version}\\0\"\n VALUE \"InternalName\", \"{stem}\\0\"\n\

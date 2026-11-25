@@ -2351,6 +2351,7 @@ dependencies = [
  "purge-client",
  "purge-rpc",
  "purge-ui-model",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

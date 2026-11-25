@@ -6,6 +6,7 @@ edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 license.workspace = true
+build = "build.rs"
 
 [[bin]]
 name = "Purge"
@@ -17,6 +18,13 @@ mdshared-app.workspace = true
 purge-client = { path = "../../crates/purge-client" }
 purge-ui-model = { path = "../../crates/purge-ui-model" }
 purge-rpc.workspace = true
+# The launch markers (process creation time, the precise clock, DwmFlush).
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Dwm",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+] }
 
 [lints]
 workspace = true
