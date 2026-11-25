@@ -253,9 +253,10 @@ function Get-UiNames($Element) {
 }
 
 # An ARP name shown as a row: an element name that is the name, or starts with it followed by a line break or space
-# (the row's text block: name, then the sub-line). "Purge.App.ProgramRow" (a type name) does not count as "Purge".
+# (WinUI's row text block: name, then the sub-line) or by ", " (the Rust UI's row: "Name, Publisher, Size").
+# "Purge.App.ProgramRow" (a type name) does not count as "Purge".
 function Test-NameShown([string]$Name, [string[]]$Texts) {
-    $rx = '^' + [regex]::Escape($Name) + '(?:$|[\r\n\s])'
+    $rx = '^' + [regex]::Escape($Name) + '(?:$|[\r\n\s]|, )'
     foreach ($t in $Texts) { if ($t -match $rx) { return $true } }
     $false
 }
@@ -487,7 +488,8 @@ switch ($Phase) {
                 if (-not $rec.purge_row) { Start-Sleep -Seconds 1 }
             } while (-not $rec.purge_row -and (Get-Date) -lt $deadline)
             $notice = $win.FindFirst([Windows.Automation.TreeScope]::Descendants, (New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::AutomationIdProperty, 'InfoBarHost')))
-            $rec.notices = $(if ($notice) { @(Get-UiNames $notice) } else { @() })
+            # WinUI: a panel of InfoBars (the names below it); the Rust UI: one Text named "Title Message" (its own name).
+            $rec.notices = $(if ($notice) { @(@("$($notice.Current.Name)") + @(Get-UiNames $notice) | Where-Object { $_ }) } else { @() })
         }
         $rec.ui_modules = $(if ($s.ui_pid) { Get-ModuleReport $s.ui_pid })
         $rec.engine_modules = $(if ($s.engine_pid) { Get-ModuleReport $s.engine_pid })

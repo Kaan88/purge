@@ -557,9 +557,9 @@ switch ($Phase) {
                 if (Test-ConsentUp) { return 'uac' }
                 if (Find-E2eDialogButton $win 'Uninstall') { return 'confirm' }
                 $t = Get-E2eTexts $win
-                if ($t -contains "Uninstall $name?") { return 'confirm' }
-                foreach ($x in 'You cancelled the Windows prompt.', 'Not started.') { if ($t -contains $x) { return 'cancelled' } }
-                foreach ($x in 'The administrator part could not start.', 'Administrator permission is not available.', 'Something went wrong.') { if ($t -contains $x) { return 'error' } }
+                if ($t -contains "Uninstall $($name)?") { return 'confirm' }
+                foreach ($x in 'You cancelled the Windows prompt.', 'Not started.') { if (Test-E2eSaid $t $x) { return 'cancelled' } }
+                foreach ($x in 'The administrator part could not start.', 'Administrator permission is not available.', 'Something went wrong.') { if (Test-E2eSaid $t $x) { return 'error' } }
                 $null
             } 240 -Each {
                 if (-not $script:continued) {
@@ -620,14 +620,11 @@ switch ($Phase) {
         $win = Get-UiWindow $st
         $btn = Find-E2eDialogButton $win 'Uninstall'
         $rec.texts = @(Get-E2eTexts $win)
-        $q = $null
-        try {
-            $qc = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty, 'Use quiet mode when available')
-            $q = $win.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $qc)
-        } catch { }
+        $q = Find-E2eQuietToggle $win
+
         $rec.quiet = Get-E2eToggle $q
         $rec.quiet_enabled = $(if ($q) { [bool]$q.Current.IsEnabled } else { $null })
-        $route = $(if ($rec.texts -contains '2. Run its uninstaller at your level') { 'medium' } elseif ($rec.texts -contains '2. Run its uninstaller as administrator') { 'broker' } else { $null })
+        $route = $(if (Test-E2eSaid $rec.texts '2. Run its uninstaller at your level') { 'medium' } elseif (Test-E2eSaid $rec.texts '2. Run its uninstaller as administrator') { 'broker' } else { $null })
         $rec.route = $route
         Set-StateValue $st 'route' $route
         if ($btn) {
@@ -718,8 +715,8 @@ switch ($Phase) {
             if (Find-E2eById $win 'MoveButton') { return 'review' }
             if (Find-E2eById $win 'EmptyTitle') { return 'empty' }
             $t = Get-E2eTexts $win
-            if ($t -contains 'The uninstaller failed.') { return 'failed' }
-            foreach ($x in 'The wrong part was asked to run this.', 'The administrator part ended.', "Purge's engine ended.", 'Something went wrong.', 'The administrator part refused the request.') { if ($t -contains $x) { return 'error' } }
+            if (Test-E2eSaid $t 'The uninstaller failed.') { return 'failed' }
+            foreach ($x in 'The wrong part was asked to run this.', 'The administrator part ended.', "Purge's engine ended.", 'Something went wrong.', 'The administrator part refused the request.') { if (Test-E2eSaid $t $x) { return 'error' } }
             $null
         } $(if ($WaitSec) { $WaitSec } else { 2400 }) -Each { if (-not (Test-E2eWatcher $st)) { Update-E2eUninstallers $procs $since $loc } } -PollMs 600
         # The watcher (started before Uninstall) saw the uninstallers since then; its records come first.
@@ -746,7 +743,7 @@ switch ($Phase) {
         $rec.seen = @($seen)
         $rec.uninstallers = @($procs)
         $rec.exit_codes = @($seen | ForEach-Object { Get-E2eExitCodeFromText $_ } | Where-Object { $null -ne $_ } | Select-Object -Unique)
-        $mode = $(if ($seen -contains 'Some parts remain') { 'forced' } else { 'post' })
+        $mode = $(if (Test-E2eSaid @($seen) 'Some parts remain') { 'forced' } else { 'post' })
         Set-StateValue $st 'scan_state' $watch.state; Set-StateValue $st 'mode' $mode
         $rec.mode = $mode
         $rec.ok = ($watch.state -in 'review', 'empty')
@@ -862,7 +859,7 @@ switch ($Phase) {
             if (Find-E2eById $win 'ResultTitleText') { return 'result' }
             $t = Get-E2eTexts $win
             if ($t | Where-Object { $_ -like 'The administrator part ended during the move*' }) { return 'interrupted' }
-            if ($t -contains 'Nothing was moved: the prompt was cancelled.') { return 'declined' }
+            if (Test-E2eSaid $t 'Nothing was moved: the prompt was cancelled.') { return 'declined' }
             $null
         } $(if ($WaitSec) { $WaitSec } else { 1800 })
         $rec.state = $watch.state; $rec.seen = $watch.seen

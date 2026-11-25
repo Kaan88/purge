@@ -1073,6 +1073,16 @@ static partial class M3Sec {
             string program = S(spec, "program", "");
             AutomationElement row = null;
             while (row == null && DateTime.Now < end) {
+                // The Rust UI: the one ListItem of ProgramList named "<program>, Publisher, Size" (two are refused:
+                // no row). Else (WinUI) the first element whose name holds the program's name.
+                AutomationElement list = win.FindFirst(TreeScope.Descendants, new PropertyCondition(AutomationElement.AutomationIdProperty, "ProgramList"));
+                if (list != null) {
+                    var hits = new List<AutomationElement>();
+                    foreach (AutomationElement e in list.FindAll(TreeScope.Children, new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.ListItem)))
+                        if ((e.Current.Name ?? "").StartsWith(program + ", ", StringComparison.OrdinalIgnoreCase)) hits.Add(e);
+                    if (hits.Count > 1) { steps.Add(new Dictionary<string, object> { { "step", "find row" }, { "ok", false }, { "ambiguous", hits.Count } }); WriteJson(outPath, rec); return 0; }
+                    if (hits.Count == 1) { row = hits[0]; break; }
+                }
                 foreach (AutomationElement e in win.FindAll(TreeScope.Descendants, Condition.TrueCondition)) {
                     string n = e.Current.Name ?? "";
                     if (n.IndexOf(program, StringComparison.OrdinalIgnoreCase) >= 0) { row = e; break; }
@@ -1105,7 +1115,9 @@ static partial class M3Sec {
             AutomationElement cont = null;
             var end2 = DateTime.Now.AddSeconds(15);
             while (cont == null && DateTime.Now < end2) {
-                cont = win.FindFirst(TreeScope.Descendants, new AndCondition(new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Button), new PropertyCondition(AutomationElement.NameProperty, "Continue")));
+                // The Rust UI's dialog button (docs\UI_RUST_PLAN.md: DialogPrimaryButton), else any "Continue" (WinUI).
+                cont = win.FindFirst(TreeScope.Descendants, new AndCondition(new PropertyCondition(AutomationElement.AutomationIdProperty, "DialogPrimaryButton"), new PropertyCondition(AutomationElement.NameProperty, "Continue")))
+                    ?? win.FindFirst(TreeScope.Descendants, new AndCondition(new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Button), new PropertyCondition(AutomationElement.NameProperty, "Continue")));
                 if (cont == null) {
                     if (Process.GetProcessesByName("consent").Length > 0) break;
                     Thread.Sleep(500);

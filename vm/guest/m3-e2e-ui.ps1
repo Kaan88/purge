@@ -4,11 +4,14 @@
 # window; the reverse is what m3-consent proves impossible). The host self-test dot-sources it for the pure helpers.
 #
 # Elements are found by automation id (the x:Name of the XAML, which WinUI exposes as AutomationId when no explicit
-# id is set: ProgramList, UninstallButton, MoveButton, ResultTitleText, UndoAllButton, UndoTitleText, NavQueue, ...)
-# or, for ContentDialog buttons and the controls built in code, by the template part id (PrimaryButton, CloseButton)
-# plus the name. No coordinates: rows are reached by ScrollPattern / ScrollItemPattern and selected with
-# SelectionItemPattern; buttons are pressed with InvokePattern. Every wait polls with a deadline; each retry is counted
-# and lands in the step record (design 13: "retries are counted and reported").
+# id is set: ProgramList, UninstallButton, MoveButton, ResultTitleText, UndoAllButton, UndoTitleText, NavQueue, ...;
+# the Rust UI, bins\purge-ui, gives its AccessKit nodes the same ids, docs\UI_RUST_PLAN.md "AutomationIds") or, for
+# dialog buttons, by id plus name: the Rust UI's own ids (ConfirmUninstallButton, ConfirmNotNowButton,
+# DialogPrimaryButton, ...), else WinUI's ContentDialog template parts (PrimaryButton, CloseButton). No coordinates:
+# rows are reached by ScrollPattern / ScrollItemPattern (the Rust UI has every row in the tree and no ScrollPattern)
+# and selected with SelectionItemPattern; buttons are pressed with InvokePattern (the Rust UI's rail tabs have only
+# SelectionItem, which Invoke-E2eElement falls back to). Every wait polls with a deadline; each retry is counted and
+# lands in the step record (design 13: "retries are counted and reported").
 
 # ----------------------------------------------------------------------------------------------- pure helpers
 
@@ -23,6 +26,38 @@ function Test-E2eRowText([string]$Text, [string]$Name) {
     $tag = $rest.TrimStart(' ')
     if ($tag.StartsWith('new', [StringComparison]::Ordinal)) { $rest = $tag.Substring(3) }
     return ($rest.Length -eq 0 -or $rest[0] -eq "`r" -or $rest[0] -eq "`n")
+}
+
+# Pure: whether the name of a program row of the Rust UI (bins\purge-ui: one ListItem per row, named "Name, Publisher,
+# Size" by app.rs build_tree) is the row of $Name: the name, then ", ". A name that itself goes on with ", " ("Foo,
+# Bar" for $Name "Foo") also passes here, which is why Select-E2eProgramRow refuses more than one such row and then
+# checks the details pane's DName, which carries the whole name.
+function Test-E2eRowLabel([string]$Label, [string]$Name) {
+    if (-not $Label -or -not $Name) { return $false }
+    $Label.StartsWith("$Name, ", [StringComparison]::OrdinalIgnoreCase)
+}
+
+# Pure: whether a bar's text is in $Texts: an element named exactly $Want (WinUI's InfoBar: title and message are
+# elements of their own), or one that starts with "$Want " or ends with " $Want" (the Rust UI's bar is one Text named
+# "Title Message", ui.rs Ui::infobar). Never a looser substring: "Not started." is not in "Nothing was not started.".
+function Test-E2eSaid([string[]]$Texts, [string]$Want) {
+    if (-not $Want) { return $false }
+    foreach ($t in @($Texts)) {
+        if (-not $t) { continue }
+        if ($t -ceq $Want -or $t.StartsWith("$Want ", [StringComparison]::Ordinal) -or $t.EndsWith(" $Want", [StringComparison]::Ordinal)) { return $true }
+    }
+    $false
+}
+
+# Pure: the AutomationIds of the Rust UI's dialog buttons for a WinUI ContentDialog part (docs\UI_RUST_PLAN.md,
+# AutomationIds): the uninstall confirmation has its own, every other dialog the Dialog* ones.
+function Get-E2eDialogIds([string]$Part) {
+    switch ($Part) {
+        'PrimaryButton' { @('ConfirmUninstallButton', 'DialogPrimaryButton') }
+        'SecondaryButton' { @('ConfirmCheckAgainButton', 'DialogSecondaryButton') }
+        'CloseButton' { @('ConfirmNotNowButton', 'DialogCloseButton') }
+        default { @() }
+    }
 }
 
 # Pure: the first line of a row text without the "new" tag (what the scorer records as the row seen).
@@ -133,19 +168,39 @@ function Find-E2eButton($Root, [string]$Name, [string]$Id = '') {
     try { $Root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.AndCondition([System.Windows.Automation.Condition[]]$conds))) } catch { $null }
 }
 
-# A ContentDialog button: the template part (PrimaryButton, CloseButton) with that name; else any Button with that name
-# that is not one of the pages' own buttons (UninstallButton, DUninstallButton carry the name "Uninstall" too).
+# A dialog button. The Rust UI: a Button with that name and one of the ids Get-E2eDialogIds gives for $Part
+# (ConfirmUninstallButton, DialogPrimaryButton, ...); two such buttons are ambiguous and give $null. WinUI: the
+# ContentDialog template part (PrimaryButton, CloseButton) with that name; else any Button with that name that is not
+# one of the pages' own buttons (UninstallButton, DUninstallButton carry the name "Uninstall" too).
 function Find-E2eDialogButton($Root, [string]$Name, [string]$Part = 'PrimaryButton') {
-    $b = Find-E2eButton $Root $Name $Part
-    if ($b) { return $b }
     if (-not $Root) { return $null }
     $ae = [System.Windows.Automation.AutomationElement]
+    $ids = @(Get-E2eDialogIds $Part)
+    if ($ids.Count) {
+        $hits = @()
+        foreach ($id in $ids) {
+            try {
+                $c = New-Object System.Windows.Automation.AndCondition(
+                    (New-Object System.Windows.Automation.PropertyCondition($ae::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button)),
+                    (New-Object System.Windows.Automation.PropertyCondition($ae::NameProperty, $Name)),
+                    (New-Object System.Windows.Automation.PropertyCondition($ae::AutomationIdProperty, $id)))
+                $hits += @($Root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $c))
+            } catch { }
+        }
+        if ($hits.Count -eq 1) { return $hits[0] }
+        if ($hits.Count -gt 1) { return $null }
+    }
+    $b = Find-E2eButton $Root $Name $Part
+    if ($b) { return $b }
+    # The name-only fallback never takes a page's own button, nor a Rust UI dialog button of another part (asked for
+    # "Uninstall" as the CloseButton, ConfirmUninstallButton is not the answer).
+    $not = @('UninstallButton', 'DUninstallButton') + @('PrimaryButton', 'SecondaryButton', 'CloseButton' | ForEach-Object { Get-E2eDialogIds $_ })
     $c = New-Object System.Windows.Automation.AndCondition(
         (New-Object System.Windows.Automation.PropertyCondition($ae::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button)),
         (New-Object System.Windows.Automation.PropertyCondition($ae::NameProperty, $Name)))
     try {
         foreach ($e in $Root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $c)) {
-            if (@('UninstallButton', 'DUninstallButton') -notcontains "$($e.Current.AutomationId)") { return $e }
+            if ($not -notcontains "$($e.Current.AutomationId)") { return $e }
         }
     } catch { }
     $null
@@ -185,6 +240,20 @@ function Get-E2eToggle($El) {
     $null
 }
 
+# The confirmation's quiet-mode toggle: WinUI's CheckBox by its name; the Rust UI's QuietSwitch inside the dialog
+# node (ContentDialog), never the Uninstall page's own QuietSwitch of WinUI.
+function Find-E2eQuietToggle($Root) {
+    if (-not $Root) { return $null }
+    $q = $null
+    try {
+        $qc = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty, 'Use quiet mode when available')
+        $q = $Root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $qc)
+    } catch { }
+    if ($q) { return $q }
+    $dlg = Find-E2eById $Root 'ContentDialog'
+    if ($dlg) { Find-E2eById $dlg 'QuietSwitch' } else { $null }
+}
+
 function Get-E2eName($El) { if ($El) { try { "$($El.Current.Name)" } catch { $null } } else { $null } }
 
 # Names of every Text element (and every element with a name, capped) under $Root: what the page says now.
@@ -203,9 +272,11 @@ function Get-E2eTexts($Root, [int]$Max = 600) {
     @($out)
 }
 
-# The program row of $Name in the list ProgramList: scrolls from the top a page at a time until a Text element whose
-# name is the row of $Name (Test-E2eRowText) is realized, then selects its ListItem (SelectionItemPattern). $Match (a
-# regex on the first line) is the fallback when no row has the exact name. Returns {ok, row_text, how, scrolls}.
+# The program row of $Name in the list ProgramList, selected (SelectionItemPattern), and then the only row selected.
+# The Rust UI: the one ListItem whose name is the row of $Name (Test-E2eRowLabel; two are refused), and the details
+# pane's DName must then say $Name. WinUI: scrolls from the top a page at a time until a Text element whose name is
+# the row of $Name (Test-E2eRowText) is realized, then selects its ListItem. $Match (a regex on the name part) is the
+# fallback when no row has the exact name. Returns {ok, row_text, how, scrolls, by, selected_n, dname}.
 function Select-E2eProgramRow($Win, [string]$Name, [string]$Match = '', [int]$TimeoutSec = 120) {
     Initialize-E2eUia
     $rec = [ordered]@{ ok = $false; row_text = $null; how = $null; scrolls = 0; list_found = $false; by = $null }
@@ -215,18 +286,37 @@ function Select-E2eProgramRow($Win, [string]$Name, [string]$Match = '', [int]$Ti
     $rec.list_found = $true
     $ae = [System.Windows.Automation.AutomationElement]
     $textCond = New-Object System.Windows.Automation.PropertyCondition($ae::ControlTypeProperty, [System.Windows.Automation.ControlType]::Text)
+    $itemCond = New-Object System.Windows.Automation.PropertyCondition($ae::ControlTypeProperty, [System.Windows.Automation.ControlType]::ListItem)
+    $rowCond = New-Object System.Windows.Automation.OrCondition($textCond, $itemCond)
     $sp = $null
+    # The Rust UI's list has no Scroll pattern (AccessKit has none) and needs none: every row is in the tree.
     $hasScroll = $list.TryGetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern, [ref]$sp)
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     $hit = $null
     # The list fills asynchronously (programs.batch, then patches): wait for a first row, then search page by page.
-    $null = Wait-E2eElement { $list.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $textCond) } 60
+    $null = Wait-E2eElement { $list.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $rowCond) } 60
     if ($hasScroll -and $sp.Current.VerticallyScrollable) { try { $sp.SetScrollPercent([System.Windows.Automation.ScrollPattern]::NoScroll, 0) } catch { } }
     while (-not $hit -and (Get-Date) -lt $deadline) {
-        $texts = $list.FindAll([System.Windows.Automation.TreeScope]::Descendants, $textCond)
-        foreach ($t in $texts) { $n = Get-E2eName $t; if (Test-E2eRowText $n $Name) { $hit = $t; $rec.by = 'name'; break } }
-        if (-not $hit -and $Match) {
-            foreach ($t in $texts) { $n = Get-E2eName $t; if ($n -and (Get-E2eRowName $n) -match $Match) { $hit = $t; $rec.by = 'match'; break } }
+        # The Rust UI: the rows are the list's ListItems, named "Name, Publisher, Size" (Test-E2eRowLabel). More than
+        # one row of the name (or of the match) is ambiguous: refused, never the first of them. WinUI: the row's Text.
+        $items = @($list.FindAll([System.Windows.Automation.TreeScope]::Children, $itemCond))
+        $texts = @($list.FindAll([System.Windows.Automation.TreeScope]::Descendants, $textCond))
+        $tries = @(
+            @('name', { param($e) Test-E2eRowLabel (Get-E2eName $e) $Name }, $items, $true),
+            @('name', { param($e) Test-E2eRowText (Get-E2eName $e) $Name }, $texts, $false))
+        if ($Match) {
+            $tries += , @('match', { param($e) $n = Get-E2eName $e; $n -and (($n -split ', ', 2)[0]) -match $Match }, $items, $true)
+            $tries += , @('match', { param($e) $n = Get-E2eName $e; $n -and (Get-E2eRowName $n) -match $Match }, $texts, $false)
+        }
+        foreach ($try in $tries) {
+            $found = @($try[2] | Where-Object { & $try[1] $_ })
+            if (-not $found.Count) { continue }
+            if ($try[3] -and $found.Count -gt 1) {
+                $rec.how = "ambiguous: $($found.Count) rows by $($try[0])"; $rec.candidates = @($found | ForEach-Object { Get-E2eName $_ })
+                return $rec
+            }
+            $hit = $found[0]; $rec.by = $try[0]
+            break
         }
         if ($hit) { break }
         if ($hasScroll -and $sp.Current.VerticallyScrollable -and $sp.Current.VerticalScrollPercent -lt 99.5) {
@@ -241,19 +331,34 @@ function Select-E2eProgramRow($Win, [string]$Name, [string]$Match = '', [int]$Ti
     }
     if (-not $hit) { return $rec }
     $rec.row_text = Get-E2eName $hit
-    # Up to the ListItem; ScrollIntoView, then Select (single selection: the list's other ticks are cleared).
+    # Up to the ListItem (the Rust UI's hit is one); ScrollIntoView, then Select.
     $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
     $item = $hit
     while ($item -and $item.Current.ControlType -ne [System.Windows.Automation.ControlType]::ListItem) { $item = $walker.GetParent($item); if ($item -and $item.Current.AutomationId -eq 'ProgramList') { $item = $null } }
     if (-not $item) { $rec.how = 'no ListItem above the row text'; return $rec }
     $p = $null
     if ($item.TryGetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern, [ref]$p)) { try { $p.ScrollIntoView() } catch { } }
-    if ($item.TryGetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern, [ref]$p)) {
-        $p.Select()
-        Start-Sleep -Milliseconds 600
-        $rec.how = 'SelectionItem.Select'
-        $rec.ok = [bool]$p.Current.IsSelected
-    } else { $rec.how = 'no SelectionItemPattern on the ListItem' }
+    if (-not $item.TryGetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern, [ref]$p)) { $rec.how = 'no SelectionItemPattern on the ListItem'; return $rec }
+    $p.Select()
+    Start-Sleep -Milliseconds 600
+    $rec.how = 'SelectionItem.Select'
+    $ok = [bool]$p.Current.IsSelected
+    # Only this row: the Rust UI's list is multi-select, and Select on a row already selected among others changes
+    # nothing (AccessKit sends no request then), so Uninstall would take them all.
+    $lp = $null
+    if ($ok -and $list.TryGetCurrentPattern([System.Windows.Automation.SelectionPattern]::Pattern, [ref]$lp)) {
+        $sel = @($lp.Current.GetSelection())
+        $rec.selected_n = $sel.Count
+        if ($sel.Count -ne 1) { $ok = $false; $rec.how = "SelectionItem.Select, but $($sel.Count) rows are selected" }
+    }
+    # The details pane names the selected program in full (DName, in both UIs): by name, it must be $Name exactly
+    # (a row label "Foo, Bar, ..." passes Test-E2eRowLabel for $Name "Foo").
+    if ($ok -and $rec.by -eq 'name') {
+        $dn = Wait-E2eElement { $d = Find-E2eById $Win 'DName'; if ($d -and (Get-E2eName $d) -ceq $Name) { $d } } 5
+        $rec.dname = Get-E2eName (Find-E2eById $Win 'DName')
+        if (-not $dn.el -and $null -ne $rec.dname) { $ok = $false; $rec.how = "SelectionItem.Select, but the details pane names '$($rec.dname)'" }
+    }
+    $rec.ok = $ok
     $rec
 }
 

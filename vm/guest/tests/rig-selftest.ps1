@@ -2496,6 +2496,29 @@ exit 0
     Check 'm3-e2e-ui: the user VS Code is not the system one' (-not (Test-E2eRowText "Microsoft Visual Studio Code (User)new`nMicrosoft Corporation" 'Microsoft Visual Studio Code'))
     Check 'm3-e2e-ui: a longer name is not the row' (-not (Test-E2eRowText 'Gitnew' 'Git ') -and -not (Test-E2eRowText 'GitHub Desktop' 'Git'))
     Check 'm3-e2e-ui: the row name drops the tag' ((Get-E2eRowName "Gitnew`r`nThe Git Development Community") -eq 'Git')
+    # The Rust UI (bins\purge-ui): a row is a ListItem named "Name, Publisher, Size"; dialog buttons have ids of their
+    # own; a bar is one Text "Title Message".
+    Check 'm3-e2e-ui: a Rust UI row of the name' ((Test-E2eRowLabel 'Notepad++ (64-bit x64), Notepad++ Team, 15.2 MB' 'Notepad++ (64-bit x64)') -and (Test-E2eRowLabel 'Unnamed, , 1.0 MB' 'Unnamed'))
+    Check 'm3-e2e-ui: a Rust UI row of another name is not the row' (-not (Test-E2eRowLabel 'Microsoft Visual Studio Code (User), Microsoft Corporation, 300 MB' 'Microsoft Visual Studio Code') -and
+        -not (Test-E2eRowLabel 'GitHub Desktop, GitHub, Inc., 300 MB' 'Git') -and -not (Test-E2eRowLabel 'Git' 'Git') -and -not (Test-E2eRowLabel '' 'Git') -and -not (Test-E2eRowLabel 'Git, x, 1 MB' ''))
+    Check 'm3-e2e-ui: a Rust UI row whose name goes on with ", " passes the label (Select-E2eProgramRow refuses two, then checks DName)' (Test-E2eRowLabel 'Foo, Bar, Contoso, 1 MB' 'Foo')
+    Check 'm3-e2e-ui: dialog ids per part (Rust UI)' ((((Get-E2eDialogIds 'PrimaryButton') -join ',') -ceq 'ConfirmUninstallButton,DialogPrimaryButton') -and
+        (((Get-E2eDialogIds 'CloseButton') -join ',') -ceq 'ConfirmNotNowButton,DialogCloseButton') -and (((Get-E2eDialogIds 'SecondaryButton') -join ',') -ceq 'ConfirmCheckAgainButton,DialogSecondaryButton') -and
+        @(Get-E2eDialogIds 'Other').Count -eq 0)
+    Check 'm3-e2e-ui: a bar said as its own element (WinUI) or as the title or message of one Text (Rust UI)' ((Test-E2eSaid @('x', 'Not started.') 'Not started.') -and
+        (Test-E2eSaid @('You cancelled the Windows prompt. Not started.') 'Not started.') -and (Test-E2eSaid @('You cancelled the Windows prompt. Not started.') 'You cancelled the Windows prompt.') -and
+        (Test-E2eSaid @('Some parts remain The uninstaller ended, but its entry is still there.') 'Some parts remain'))
+    Check 'm3-e2e-ui: a bar is never a looser substring or another case' (-not (Test-E2eSaid @('Nothing was not started.') 'Not started.') -and -not (Test-E2eSaid @('Not started.x') 'Not started.') -and
+        -not (Test-E2eSaid @('not started.') 'Not started.') -and -not (Test-E2eSaid @() 'x') -and -not (Test-E2eSaid @('x') '') -and -not (Test-E2eSaid @($null, '') 'x'))
+    $uiText = [IO.File]::ReadAllText((Join-Path $Guest 'm3-e2e-ui.ps1'))
+    $selFn = [regex]::Match($uiText, '(?s)\nfunction Select-E2eProgramRow\(.*?\n\}').Value
+    Check 'm3-e2e-ui: Select-E2eProgramRow refuses two rows, wants one row selected and DName to say the name' (
+        $selFn -match [regex]::Escape('$rec.how = "ambiguous: $($found.Count) rows by $($try[0])"') -and $selFn -match 'return \$rec' -and
+        $selFn -match [regex]::Escape('if ($sel.Count -ne 1) { $ok = $false') -and $selFn -match [regex]::Escape("(Get-E2eName `$d) -ceq `$Name") -and $selFn -match 'Test-E2eRowLabel \(Get-E2eName \$e\) \$Name')
+    $dlgFn = [regex]::Match($uiText, '(?s)\nfunction Find-E2eDialogButton\(.*?\n\}').Value
+    Check 'm3-e2e-ui: Find-E2eDialogButton takes the Rust UI id and name first and refuses two' ($dlgFn -match 'Get-E2eDialogIds \$Part' -and
+        $dlgFn -match 'AutomationIdProperty, \$id' -and $dlgFn -match 'NameProperty, \$Name' -and $dlgFn -match [regex]::Escape('if ($hits.Count -gt 1) { return $null }') -and
+        $dlgFn.IndexOf('Get-E2eDialogIds') -lt $dlgFn.IndexOf('Find-E2eButton $Root $Name $Part'))
     Check 'm3-e2e-ui: exit code from a step detail' ((Get-E2eExitCodeFromText 'Finished, exit code 3010 · quiet mode') -eq 3010 -and $null -eq (Get-E2eExitCodeFromText 'Confirmed gone'))
     Check 'm3-e2e-ui: target keys' ((Get-E2eTargetKey ([pscustomobject]@{ type = 'RegValue'; path = 'HKU\S-1\Software\X'; name = 'Y' })) -eq 'RegValue|hku\s-1\software\x|y|' -and (Get-E2eTargetKey ([pscustomobject]@{ type = 'Task'; path = '\PurgeExecApp\Simple Update' })) -eq 'Task|\purgeexecapp\simple update')
     $c = Compare-E2eSets @('a', 'b') @('b', 'a')
@@ -2558,6 +2581,11 @@ exit 0
     Check 'm3-clean: -NoMotw drops the two MOTW steps' ($orderNo -eq 'pre install:1 ui-start ui-stop bench:6 uninstall-no install:2 uninstall-yes-start uninstall-yes-answer rollback') $orderNo
     $gm = [IO.File]::ReadAllText((Join-Path $Guest 'm3-clean.ps1'))
     Check 'm3-clean: the guest writes ZoneId=3 with a GitHub release HostUrl' ($gm.Contains('ZoneId=3') -and $gm.Contains('HostUrl=https://github.com/') -and $gm.Contains('-Stream Zone.Identifier'))
+    . ([ScriptBlock]::Create([regex]::Match($gm, '(?s)\nfunction Test-NameShown\(.*?\n\}').Value))
+    Check 'm3-clean: an ARP name shown as a WinUI row text or a Rust UI row ("Name, Publisher, Size"), not as a type name or a longer name' (
+        (Test-NameShown 'Purge' @("Purge`r`nKaan")) -and (Test-NameShown 'Purge' @('Purge, Kaan, 12.0 MB')) -and -not (Test-NameShown 'Purge' @('Purge.App.ProgramRow')) -and
+        -not (Test-NameShown 'Purge' @('PurgeX, Kaan, 1 MB')) -and -not (Test-NameShown 'Purge' @('Purge,x')))
+    Check 'm3-clean: the notices are the InfoBarHost''s own name (the Rust UI''s one Text) and the names under it (WinUI)' ($gm -match [regex]::Escape('@(@("$($notice.Current.Name)") + @(Get-UiNames $notice) | Where-Object { $_ })'))
     Check 'm3-clean: the names and the data-folder dialog have screenshots' ((@($steps | Where-Object { $_.shot -eq 'ui-names' }).Count -eq 1) -and (@($steps | Where-Object { $_.shot -eq 'uninstall-yes-dialog' }).Count -eq 1))
     $guestText = [IO.File]::ReadAllText((Join-Path $Guest 'm3-clean.ps1'))
     $missing = @(@(@($steps | ForEach-Object { $_.phase }) + 'pack') | Sort-Object -Unique | Where-Object { $guestText -notmatch ("(?m)^\s*'" + [regex]::Escape($_) + "' \{") })
