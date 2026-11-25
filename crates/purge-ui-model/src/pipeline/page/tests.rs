@@ -388,6 +388,9 @@ fn the_switched_off_dialog_never_shows_the_quiet_command() {
     let d = ConfirmDialog::new(confirmation);
     assert_eq!(d.command_for(true), QUIET);
     assert_eq!(d.command_for(false), strings::confirm::COMMAND_NOT_KNOWN);
+    // Nothing runs a command the dialog does not show.
+    assert!(d.can_uninstall(true));
+    assert!(!d.can_uninstall(false));
 }
 
 #[test]

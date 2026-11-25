@@ -836,7 +836,7 @@ fn confirm(ui: &mut Ui, m: &Model, v: &mut View) {
         "Uninstall",
         Style::Accent,
         None,
-        armed,
+        armed && d.can_uninstall(c.quiet_on),
     ));
     let by = o.footer.y + (DIALOG_FOOTER - BUTTON_H) / 2.0;
     ui.buttons_right(o.footer.right() - DIALOG_PAD, by, &list);
