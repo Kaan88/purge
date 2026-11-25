@@ -1,68 +1,26 @@
-//! The mockup's state: plain data and the rules that change it. Nothing here draws, measures
-//! text or knows a rectangle; `mdshared_ui::select::Selection` is the toolkit's own selection
-//! model (ranges of row numbers), used so that the rules of click, Ctrl, Shift and the arrow keys
-//! are the toolkit's and not a second copy.
+//! The window's state: the page shown, and one placeholder model per page, with the rules that
+//! change them. Nothing here draws, measures text or knows a rectangle;
+//! `mdshared_ui::select::Selection` is the toolkit's own selection model (ranges of row
+//! numbers), used so that the rules of click, Ctrl, Shift and the arrow keys are the toolkit's.
 //!
-//! All of it is made up. No program is listed, started, removed or changed.
+//! **Placeholder data (UI-SHELL).** Every program, leftover, cleanup and quarantine batch here is
+//! the approved mockup's made-up data: no program is listed, started, removed or changed. Each
+//! page draws from one struct of its own ([`Programs`], [`Pipeline`], [`Leftovers`], [`History`],
+//! [`Quarantine`]), and the screens read only those structs' fields and methods. That is the seam
+//! for wave 2 (UI-PAGES): each struct is fed from `purge-ui-model`'s view state and
+//! `purge-client`'s events instead of the made-up seeds, and the drawing in `screens` stays as it
+//! is. Their rules that guard safety (Likely and Protected start unticked, nothing reaches the
+//! pipeline without the confirmation) are the ones the real models must keep; the tests below
+//! say so.
 
 use std::time::{Duration, Instant};
 
 use mdshared_ui::keys::Mods;
 use mdshared_ui::select::Selection;
 
-// ---- designs and pages -----------------------------------------------------------------------
+use crate::prefs::Prefs;
 
-/// The four designs of the ladder. One model serves them all.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub enum Design {
-    /// D0: today's WinUI layout, the reference.
-    Winui,
-    /// D1: the same structure, refined.
-    Refined,
-    /// D2: the pipeline and the leftovers as one flow.
-    Flow,
-    /// D3: command palette first, compact rail.
-    Bold,
-}
-
-impl Design {
-    pub const ALL: [Design; 4] = [Design::Winui, Design::Refined, Design::Flow, Design::Bold];
-
-    pub fn name(self) -> &'static str {
-        match self {
-            Design::Winui => "winui",
-            Design::Refined => "refined",
-            Design::Flow => "flow",
-            Design::Bold => "bold",
-        }
-    }
-
-    pub fn title(self) -> &'static str {
-        match self {
-            Design::Winui => "D0 \u{b7} WinUI (reference)",
-            Design::Refined => "D1 \u{b7} Refined",
-            Design::Flow => "D2 \u{b7} Flow",
-            Design::Bold => "D3 \u{b7} Bold",
-        }
-    }
-
-    pub fn parse(s: &str) -> Option<Design> {
-        let s = s.trim().to_ascii_lowercase();
-        Design::ALL
-            .into_iter()
-            .enumerate()
-            .find(|(i, d)| d.name() == s || s == format!("d{i}") || s == i.to_string())
-            .map(|(_, d)| d)
-    }
-
-    pub fn index(self) -> usize {
-        Design::ALL.iter().position(|d| *d == self).unwrap_or(0)
-    }
-
-    pub fn next(self) -> Design {
-        Design::ALL[(self.index() + 1) % Design::ALL.len()]
-    }
-}
+// ---- pages -----------------------------------------------------------------------------------
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Page {
@@ -97,6 +55,24 @@ impl Page {
 
     pub fn index(self) -> usize {
         Page::ALL.iter().position(|p| *p == self).unwrap_or(0)
+    }
+
+    /// The WinUI app's key for the page (`--page`, the rail's tags).
+    pub fn key(self) -> &'static str {
+        match self {
+            Page::Programs => "programs",
+            Page::Pipeline => "queue",
+            Page::Leftovers => "leftovers",
+            Page::History => "history",
+            Page::Quarantine => "vault",
+            Page::Settings => "settings",
+        }
+    }
+
+    /// The page with this key (any case).
+    pub fn parse_key(s: &str) -> Option<Page> {
+        let s = s.trim().to_ascii_lowercase();
+        Page::ALL.into_iter().find(|p| p.key() == s)
     }
 }
 
@@ -507,7 +483,7 @@ fn made_up() -> Vec<Program> {
             4 => 400.0 + rng.below(900) as f32,
             _ => 1200.0 + rng.below(5000) as f32,
         };
-        let days = rng.below(900) + if n.is_multiple_of(11) { 0 } else { 31 };
+        let days = rng.below(900) + if n % 11 == 0 { 0 } else { 31 };
         let mut p = Program {
             name,
             publisher: PUBLISHERS[rng.below(PUBLISHERS.len() as u32) as usize].to_string(),
@@ -517,11 +493,7 @@ fn made_up() -> Vec<Program> {
             expect,
             junk,
             junk_mb,
-            days_ago: if n.is_multiple_of(11) {
-                rng.below(29) + 1
-            } else {
-                days
-            },
+            days_ago: if n % 11 == 0 { rng.below(29) + 1 } else { days },
             version: format!("{}.{}.{}", 1 + rng.below(12), rng.below(20), rng.below(900)),
             location: String::new(),
             uninstall: String::new(),
@@ -1719,43 +1691,21 @@ impl Quarantine {
 
 // ---- settings --------------------------------------------------------------------------------
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub enum ThemeChoice {
-    System,
-    Light,
-    Dark,
-}
-
-impl ThemeChoice {
-    pub const ALL: [ThemeChoice; 3] = [ThemeChoice::System, ThemeChoice::Light, ThemeChoice::Dark];
-
-    pub fn title(self) -> &'static str {
-        match self {
-            ThemeChoice::System => "Use system setting",
-            ThemeChoice::Light => "Light",
-            ThemeChoice::Dark => "Dark",
-        }
-    }
-
-    pub fn index(self) -> usize {
-        ThemeChoice::ALL
-            .iter()
-            .position(|t| *t == self)
-            .unwrap_or(0)
-    }
-}
-
+/// What the Settings page shows besides the look (`prefs::Prefs`), which is saved; this is not.
 pub struct Settings {
-    pub theme: ThemeChoice,
-    /// Days the quarantine keeps an item: an index into `KEEP_DAYS`.
-    pub keep: usize,
-    pub confirm_each: bool,
-    pub show_components: bool,
+    /// The launch markers' expander is open.
     pub markers_open: bool,
-    pub send_nothing: bool,
+    pub facts: Facts,
 }
 
-pub const KEEP_DAYS: [u32; 4] = [7, 14, 30, 90];
+/// The versions the About line names. Wave 2 fills `engine` and `policy` from the engine's hello;
+/// while they are `None` the window shows the sample data and says so.
+pub struct Facts {
+    /// This build's version: the workspace version, which is also the exe's FILEVERSION.
+    pub version: &'static str,
+    pub engine: Option<String>,
+    pub policy: Option<String>,
+}
 
 // ---- the whole model -------------------------------------------------------------------------
 
@@ -1765,7 +1715,8 @@ pub struct Confirm {
 }
 
 pub struct Model {
-    pub design: Design,
+    /// The look and the theme the user chose, as saved (`prefs`).
+    pub prefs: Prefs,
     pub page: Page,
     pub programs: Programs,
     pub confirm: Option<Confirm>,
@@ -1777,9 +1728,9 @@ pub struct Model {
 }
 
 impl Model {
-    pub fn new(design: Design) -> Model {
+    pub fn new(prefs: Prefs) -> Model {
         Model {
-            design,
+            prefs,
             page: Page::Programs,
             programs: Programs::new(),
             confirm: None,
@@ -1788,12 +1739,12 @@ impl Model {
             history: History::new(),
             quarantine: Quarantine::new(),
             settings: Settings {
-                theme: ThemeChoice::System,
-                keep: 2,
-                confirm_each: true,
-                show_components: false,
                 markers_open: false,
-                send_nothing: true,
+                facts: Facts {
+                    version: env!("CARGO_PKG_VERSION"),
+                    engine: None,
+                    policy: None,
+                },
             },
         }
     }
@@ -1933,7 +1884,7 @@ mod tests {
 
     #[test]
     fn nothing_reaches_the_pipeline_without_the_confirmation() {
-        let mut m = Model::new(Design::Winui);
+        let mut m = Model::new(Prefs::default());
         assert!(!m.ask_uninstall(), "nothing selected, nothing asked");
         m.programs.click(3, Mods::default());
         assert!(m.pipeline.run.is_none() && m.pipeline.queue.is_empty());
@@ -1950,7 +1901,7 @@ mod tests {
 
     #[test]
     fn the_pipeline_runs_to_the_review() {
-        let mut m = Model::new(Design::Winui);
+        let mut m = Model::new(Prefs::default());
         let before = m.programs.count(Tab::Apps);
         m.programs.click(0, Mods::default());
         m.ask_uninstall();
@@ -1970,7 +1921,7 @@ mod tests {
 
     #[test]
     fn the_lists_have_the_sizes_the_mockups_show() {
-        let m = Model::new(Design::Winui);
+        let m = Model::new(Prefs::default());
         assert_eq!(m.programs.count(Tab::Apps), 128);
         assert_eq!(m.programs.count(Tab::Components), 64);
         assert_eq!(m.programs.count(Tab::Unnamed), 9);
@@ -1978,20 +1929,12 @@ mod tests {
 
     #[test]
     fn a_sort_keeps_the_selection_on_the_same_programs() {
-        let mut m = Model::new(Design::Winui);
+        let mut m = Model::new(Prefs::default());
         m.programs.click(2, Mods::default());
         let before = m.programs.selected();
         m.programs.sort_by(SortKey::Size);
         assert_eq!(m.programs.selected(), before);
         m.programs.set_query("zzzz-no-such");
         assert!(m.programs.rows.is_empty());
-    }
-
-    #[test]
-    fn designs_parse() {
-        assert_eq!(Design::parse("flow"), Some(Design::Flow));
-        assert_eq!(Design::parse("D3"), Some(Design::Bold));
-        assert_eq!(Design::parse("0"), Some(Design::Winui));
-        assert_eq!(Design::parse("nope"), None);
     }
 }

@@ -6,9 +6,8 @@ use mdshared_ui::host::{App, Cx, Event};
 use mdshared_ui::keys::KeyName;
 
 use crate::app::PurgeApp;
-use crate::model::{
-    Design, LeftoverPhase, OpState, Page, Rating, RunPhase, SortKey, Tab, ThemeChoice,
-};
+use crate::look::{Choice, Design, Preset, ThemeChoice, Transition};
+use crate::model::{LeftoverPhase, OpState, Page, Rating, RunPhase, SortKey, Tab};
 use crate::script::{CTRL, NONE, SHIFT, Step};
 use crate::ui::{Id, Role, id};
 
@@ -22,6 +21,10 @@ fn ok(_: &PurgeApp) -> Result<String, String> {
 
 fn want(cond: bool, what: impl Into<String>) -> Result<(), String> {
     if cond { Ok(()) } else { Err(what.into()) }
+}
+
+fn has_id(app: &PurgeApp, i: Id) -> Result<(), String> {
+    want(app.ctl(i).is_some(), format!("no control {}", i.author()))
 }
 
 fn has(app: &PurgeApp, name: &'static str) -> Result<(), String> {
@@ -527,7 +530,11 @@ pub fn steps() -> Vec<Step> {
                     app.model.leftovers.phase == LeftoverPhase::Review,
                     "leftovers wait for review",
                 )?;
-                has(app, "NextButton")?;
+                // The flow shows the review on this page; the other layout has a Next button.
+                want(
+                    app.ctl(id("NextButton")).is_some() || app.ctl(id("MoveButton")).is_some(),
+                    "a way on to the review",
+                )?;
                 want(
                     app.model.programs.count(Tab::Apps) == 127,
                     "the program left the list",
@@ -539,7 +546,11 @@ pub fn steps() -> Vec<Step> {
         Step {
             name: "leftovers-review",
             act: |app, cx| {
-                app.click(cx, id("NextButton"));
+                if app.ctl(id("NextButton")).is_some() {
+                    app.click(cx, id("NextButton"));
+                } else {
+                    app.press_key(cx, KeyName::Char('3'), CTRL);
+                }
             },
             check: |app| {
                 want(app.model.page == Page::Leftovers, "on the leftovers page")?;
@@ -797,23 +808,86 @@ pub fn steps() -> Vec<Step> {
                 want(app.model.page == Page::Settings, "on Settings")?;
                 for name in [
                     "ThemeChoice",
-                    "DesignChoice",
-                    "KeepChoice",
-                    "ShowComponents",
-                    "MarkersExpander",
-                    "AboutLine",
+                    "LookChoice",
+                    "ColourChoice",
+                    "TransitionChoice",
+                    "PreviewTransition",
+                    "TransitionPreview",
+                    "ConfirmEach",
                 ] {
                     has(app, name)?;
                 }
-                Ok("drawn".to_string())
+                has_id(app, Id("TickRule", 1))?;
+                for i in 0..Preset::ALL.len() {
+                    let sid = crate::screens::swatch_id(i);
+                    want(app.ctl(sid).is_some(), format!("no swatch {sid:?}"))?;
+                }
+                let about = app
+                    .ctl(id("AboutLine"))
+                    .map(|c| c.label.clone())
+                    .unwrap_or_default();
+                want(
+                    about.starts_with(&format!("Purge {}", env!("CARGO_PKG_VERSION")))
+                        && about.ends_with("sample data"),
+                    format!("About says {about:?}"),
+                )?;
+                Ok(about)
             },
             settle: 700,
         },
         Step {
-            name: "settings-toggle-and-dropdown-by-keys",
+            name: "settings-scrolled-down",
             act: |app, cx| {
-                app.click(cx, id("ShowComponents"));
+                let r = app.view.page_area;
+                app.event(
+                    cx,
+                    Event::PointerMove {
+                        x: r.cx(),
+                        y: r.cy(),
+                    },
+                );
+                for _ in 0..12 {
+                    app.event(
+                        cx,
+                        Event::Wheel {
+                            dx: 0.0,
+                            dy: -120.0,
+                            precise: true,
+                        },
+                    );
+                }
+            },
+            check: |app| {
+                for name in ["MarkersExpander", "AboutLine", "OpenQuarantine"] {
+                    has(app, name)?;
+                }
+                Ok("the foot of the page".to_string())
+            },
+            settle: 900,
+        },
+        Step {
+            name: "settings-markers-expander",
+            act: |app, cx| {
                 app.click(cx, id("MarkersExpander"));
+            },
+            check: |app| {
+                want(app.model.settings.markers_open, "the expander opened")?;
+                has(app, "Markers")?;
+                Ok("launch markers shown".to_string())
+            },
+            settle: 700,
+        },
+        Step {
+            name: "settings-back-to-top",
+            act: |app, _| {
+                app.view.page_scroll = mdshared_ui::scroll::SmoothScroll::new();
+            },
+            check: |_| Ok("back at the top".to_string()),
+            settle: 300,
+        },
+        Step {
+            name: "settings-theme-by-keys",
+            act: |app, cx| {
                 // The theme drop-down by keyboard: focus it, open it, go down to Dark, choose.
                 app.focus.focus(id("ThemeChoice"));
                 app.press_key(cx, KeyName::Enter, NONE);
@@ -823,15 +897,13 @@ pub fn steps() -> Vec<Step> {
                 app.press_key(cx, KeyName::Enter, NONE);
             },
             check: |app| {
-                want(app.model.settings.show_components, "the switch turned on")?;
-                want(app.model.settings.markers_open, "the expander opened")?;
                 want(app.note == "true", "Enter opened the menu")?;
                 want(
-                    app.model.settings.theme == ThemeChoice::Dark,
-                    format!("theme is {:?}", app.model.settings.theme),
+                    app.model.prefs.theme == ThemeChoice::Dark,
+                    format!("theme is {:?}", app.model.prefs.theme),
                 )?;
                 want(app.pal.dark, "the palette is dark")?;
-                Ok("switch, expander, drop-down by keys; dark".to_string())
+                Ok("drop-down by keys; dark".to_string())
             },
             settle: 800,
         },
@@ -888,11 +960,14 @@ pub fn steps() -> Vec<Step> {
             app.model.leftovers.found_for(0, &app.model.programs.all[0]);
             app.press_key(cx, KeyName::Char('3'), CTRL);
         }),
+        page_step("high-contrast-settings", |app, cx| {
+            app.press_key(cx, KeyName::Char('6'), CTRL);
+        }),
         Step {
             name: "contrast-off-light",
             act: |app, cx| {
                 app.hc_forced = None;
-                app.model.settings.theme = ThemeChoice::Light;
+                app.set_theme(cx, ThemeChoice::Light);
                 app.event(cx, Event::Contrast(false));
                 app.model.leftovers.done();
                 app.press_key(cx, KeyName::Char('1'), CTRL);
@@ -903,154 +978,117 @@ pub fn steps() -> Vec<Step> {
             },
             settle: 600,
         },
-        Step {
-            name: "ctrl-shift-d-keeps-state",
-            act: |app, cx| {
-                click_row(app, cx, 2);
-                app.note = format!("{:?}", app.model.programs.selected());
-                app.press_key(cx, KeyName::Char('d'), Mods_CTRL_SHIFT);
-            },
-            check: |app| {
-                want(app.model.design == Design::Refined, "the next design")?;
-                want(
-                    !app.model.programs.sel.is_empty(),
-                    "a row was selected before the switch",
-                )?;
-                want(
-                    app.note == format!("{:?}", app.model.programs.selected()),
-                    "the selection is kept",
-                )?;
-                Ok("D1, same selection".to_string())
-            },
-            settle: 800,
-        },
     ];
-    // Every design opens and shows every screen, with a run under way so no page is empty.
-    for design in [Design::Refined, Design::Flow, Design::Bold] {
-        s.extend(design_steps(design));
-    }
+    s.extend(flow_steps());
+    s.extend(appearance_steps());
+    s.extend(bold_steps());
     s
 }
 
-#[allow(non_upper_case_globals)]
-const Mods_CTRL_SHIFT: mdshared_ui::keys::Mods = mdshared_ui::keys::Mods {
-    ctrl: true,
-    shift: true,
-    alt: false,
-    control: false,
-};
+fn on(app: &PurgeApp, page: Page, design: Design) -> Result<String, String> {
+    want(
+        app.model.prefs.design == design,
+        format!("design is {:?}", app.model.prefs.design),
+    )?;
+    want(
+        app.model.page == page,
+        format!("page is {:?}", app.model.page),
+    )?;
+    want(app.ctls.len() > 12, "controls are declared")?;
+    Ok(format!("{} controls", app.ctls.len()))
+}
 
-fn design_steps(design: Design) -> Vec<Step> {
-    fn on(app: &PurgeApp, page: Page, design: Design) -> Result<String, String> {
-        want(
-            app.model.design == design,
-            format!("design is {:?}", app.model.design),
-        )?;
-        want(
-            app.model.page == page,
-            format!("page is {:?}", app.model.page),
-        )?;
-        want(app.ctls.len() > 12, "controls are declared")?;
-        Ok(format!("{} controls", app.ctls.len()))
-    }
-    macro_rules! page {
-        ($name:literal, $page:expr, $key:literal, $design:expr, $check:expr) => {
-            Step {
-                name: $name,
-                act: |app, cx| {
-                    app.set_design(cx, $design);
-                    app.press_key(cx, KeyName::Char($key), CTRL);
-                },
-                check: $check,
-                settle: 800,
-            }
-        };
-    }
-    match design {
-        Design::Refined => vec![
-            page!("d1-programs", Page::Programs, '1', Design::Refined, |a| on(
-                a,
-                Page::Programs,
-                Design::Refined
-            )),
-            Step {
-                name: "d1-confirm",
-                act: |app, cx| {
-                    app.click(cx, id("UninstallButton"));
-                },
-                check: |app| {
-                    want(app.model.confirm.is_some(), "the confirmation opens in D1")?;
-                    Ok("open".to_string())
-                },
-                settle: 700,
+macro_rules! page {
+    ($name:literal, $page:expr, $key:literal, $design:expr) => {
+        Step {
+            name: $name,
+            act: |app, cx| {
+                app.set_design(cx, $design);
+                app.press_key(cx, KeyName::Char($key), CTRL);
             },
-            Step {
-                name: "d1-pipeline",
-                act: |app, cx| {
-                    app.click(cx, id("PrimaryButton"));
-                },
-                check: |app| {
-                    want(
-                        app.model.page == Page::Pipeline && app.model.pipeline.run.is_some(),
-                        "running in D1",
-                    )?;
-                    Ok("running".to_string())
-                },
-                settle: 2500,
+            check: |a| on(a, $page, $design),
+            settle: 800,
+        }
+    };
+}
+
+/// The flow of the standard look: the review of the leftovers inside the pipeline page.
+fn flow_steps() -> Vec<Step> {
+    vec![
+        Step {
+            name: "flow-select",
+            act: |app, cx| click_row(app, cx, 4),
+            check: |app| {
+                want(
+                    app.model.programs.sel.len() == 1,
+                    format!("{} selected", app.model.programs.sel.len()),
+                )?;
+                Ok("one program selected".to_string())
             },
-            page!(
-                "d1-leftovers-waiting",
-                Page::Leftovers,
-                '3',
-                Design::Refined,
-                |a| on(a, Page::Leftovers, Design::Refined)
-            ),
-            page!("d1-history", Page::History, '4', Design::Refined, |a| on(
-                a,
-                Page::History,
-                Design::Refined
-            )),
-            page!(
-                "d1-quarantine",
-                Page::Quarantine,
-                '5',
-                Design::Refined,
-                |a| on(a, Page::Quarantine, Design::Refined)
-            ),
-            page!("d1-settings", Page::Settings, '6', Design::Refined, |a| on(
-                a,
-                Page::Settings,
-                Design::Refined
-            )),
-            Step {
-                name: "d1-leftovers",
-                act: |app, cx| app.press_key(cx, KeyName::Char('3'), CTRL),
-                check: |app| {
-                    want(
-                        app.model.leftovers.phase == LeftoverPhase::Review,
-                        "the run finished meanwhile",
-                    )?;
-                    let l = &app.model.leftovers;
-                    want(
-                        l.groups
-                            .iter()
-                            .flat_map(|g| &g.items)
-                            .all(|i| i.ticked == (i.rating == Rating::Safe)),
-                        "defaults hold in D1",
-                    )?;
-                    Ok("review, defaults hold".to_string())
-                },
-                settle: 6500,
+            settle: 500,
+        },
+        Step {
+            name: "flow-confirm",
+            act: |app, cx| {
+                app.click(cx, id("UninstallButton"));
             },
-        ],
-        Design::Flow => vec![
-            page!("d2-programs", Page::Programs, '1', Design::Flow, |a| on(
-                a,
-                Page::Programs,
-                Design::Flow
-            )),
-            page!("d2-flow-review", Page::Pipeline, '2', Design::Flow, |app| {
-                on(app, Page::Pipeline, Design::Flow)?;
+            check: |app| {
+                want(app.model.confirm.is_some(), "the confirmation opens")?;
+                want(
+                    app.model.pipeline.queue.is_empty()
+                        && !app
+                            .model
+                            .pipeline
+                            .run
+                            .as_ref()
+                            .is_some_and(|r| r.phase == RunPhase::Running),
+                    "nothing runs before it is confirmed",
+                )?;
+                Ok("open".to_string())
+            },
+            settle: 700,
+        },
+        Step {
+            name: "flow-runs",
+            act: |app, cx| {
+                app.click(cx, id("PrimaryButton"));
+            },
+            check: |app| {
+                want(app.model.page == Page::Pipeline, "on the pipeline page")?;
+                let run = app.model.pipeline.run.as_ref().ok_or("no run")?;
+                want(
+                    run.phase == RunPhase::Running && run.step >= 1,
+                    format!("steps advance: step {}", run.step + 1),
+                )?;
+                for name in [
+                    "StepperHost",
+                    "StepCaption",
+                    "ProgressText",
+                    "ProgramNameText",
+                    "CommandText",
+                ] {
+                    has(app, name)?;
+                }
+                want(
+                    app.ctl(id("MoveButton")).is_none(),
+                    "no review while it runs",
+                )?;
+                Ok(format!("running, step {} of 6", run.step + 1))
+            },
+            settle: 2600,
+        },
+        Step {
+            name: "flow-arrives-at-review",
+            act: nothing,
+            check: |app| {
+                want(
+                    app.model.page == Page::Pipeline,
+                    "still on the pipeline page",
+                )?;
+                want(
+                    app.model.leftovers.phase == LeftoverPhase::Review,
+                    "the run finished and the review is there",
+                )?;
                 has(app, "MoveButton")?;
                 for c in &app.ctls {
                     if c.id.0 == "ItemTick" {
@@ -1065,311 +1103,376 @@ fn design_steps(design: Design) -> Vec<Step> {
                         )?;
                         want(
                             item.ticked == (item.rating == Rating::Safe),
-                            "defaults hold in D2",
+                            "defaults hold in the flow",
                         )?;
                     }
                 }
-                Ok("the review is part of the flow; defaults hold".to_string())
-            }),
-            // The flow goes on without leaving the page: move, the result, Done.
-            Step {
-                name: "d2-flow-moved",
-                act: |app, cx| {
-                    app.click(cx, id("MoveButton"));
-                },
-                check: |app| {
-                    want(
-                        app.model.page == Page::Pipeline,
-                        "the result stays in the flow",
-                    )?;
-                    want(app.model.leftovers.phase == LeftoverPhase::Moved, "moved")?;
-                    for name in [
-                        "ResultTitleText",
-                        "UndoAllButton",
-                        "DoneButton",
-                        "StepperHost",
-                    ] {
-                        has(app, name)?;
-                    }
-                    Ok(format!(
-                        "{} items moved, shown in the flow",
-                        app.model.leftovers.moved.0
-                    ))
-                },
-                settle: 900,
+                let l = &app.model.leftovers;
+                let program = l
+                    .program
+                    .and_then(|p| app.model.programs.all.get(p))
+                    .ok_or("the review has no program")?;
+                let first = &l.groups[0].items[0].path;
+                want(
+                    *first == program.location,
+                    format!("the leftovers are {}'s, not {first}", program.name),
+                )?;
+                Ok(format!(
+                    "review in the flow, {} ticked of {}",
+                    l.ticked().0,
+                    l.count()
+                ))
             },
-            Step {
-                name: "d2-flow-done",
-                act: |app, cx| {
-                    app.click(cx, id("DoneButton"));
-                },
-                check: |app| {
-                    want(
-                        app.model.page == Page::Programs,
-                        "Done goes back to Programs",
-                    )?;
-                    want(app.model.pipeline.run.is_none(), "nothing runs")?;
-                    want(
-                        app.model.leftovers.phase == LeftoverPhase::Empty,
-                        "nothing left to review",
-                    )?;
-                    Ok("back on Programs".to_string())
-                },
-                settle: 800,
+            settle: 9000,
+        },
+        Step {
+            name: "flow-moved",
+            act: |app, cx| {
+                app.click(cx, id("MoveButton"));
             },
-            // A second run, to see the flow while it runs. The click on Uninstall is a step of
-            // its own for the same reason as in D0.
-            Step {
-                name: "d2-flow-select",
-                act: |app, cx| click_row(app, cx, 4),
-                check: |app| {
-                    want(
-                        app.model.programs.sel.len() == 1,
-                        format!("{} selected", app.model.programs.sel.len()),
-                    )?;
-                    Ok("one program selected".to_string())
-                },
-                settle: 500,
+            check: |app| {
+                want(
+                    app.model.page == Page::Pipeline,
+                    "the result stays in the flow",
+                )?;
+                want(app.model.leftovers.phase == LeftoverPhase::Moved, "moved")?;
+                for name in [
+                    "ResultTitleText",
+                    "UndoAllButton",
+                    "DoneButton",
+                    "StepperHost",
+                ] {
+                    has(app, name)?;
+                }
+                Ok(format!(
+                    "{} items moved, shown in the flow",
+                    app.model.leftovers.moved.0
+                ))
             },
-            Step {
-                name: "d2-flow-confirm",
-                act: |app, cx| {
-                    app.click(cx, id("UninstallButton"));
-                },
-                check: |app| {
-                    want(app.model.confirm.is_some(), "the confirmation opens in D2")?;
-                    want(
-                        app.model.pipeline.run.is_none(),
-                        "nothing runs before it is confirmed",
-                    )?;
-                    Ok("open".to_string())
-                },
-                settle: 700,
+            settle: 900,
+        },
+        Step {
+            name: "flow-done",
+            act: |app, cx| {
+                app.click(cx, id("DoneButton"));
             },
-            Step {
-                name: "d2-flow-runs",
-                act: |app, cx| {
-                    app.click(cx, id("PrimaryButton"));
-                },
-                check: |app| {
-                    want(app.model.page == Page::Pipeline, "on the pipeline page")?;
-                    let run = app.model.pipeline.run.as_ref().ok_or("no run")?;
-                    want(
-                        run.phase == RunPhase::Running && run.step >= 1,
-                        format!("steps advance: step {}", run.step + 1),
-                    )?;
-                    for name in [
-                        "StepperHost",
-                        "StepCaption",
-                        "ProgressText",
-                        "ProgramNameText",
-                        "CommandText",
-                    ] {
-                        has(app, name)?;
-                    }
-                    want(
-                        app.ctl(id("MoveButton")).is_none(),
-                        "no review while it runs",
-                    )?;
-                    Ok(format!("running, step {} of 6", run.step + 1))
-                },
-                settle: 2600,
+            check: |app| {
+                want(
+                    app.model.page == Page::Programs,
+                    "Done goes back to Programs",
+                )?;
+                want(app.model.pipeline.run.is_none(), "nothing runs")?;
+                Ok("back on Programs".to_string())
             },
-            Step {
-                name: "d2-flow-arrives-at-review",
-                act: nothing,
-                check: |app| {
-                    want(
-                        app.model.page == Page::Pipeline,
-                        "still on the pipeline page",
-                    )?;
-                    want(
-                        app.model.leftovers.phase == LeftoverPhase::Review,
-                        "the run finished and the review is there",
-                    )?;
-                    has(app, "MoveButton")?;
-                    let l = &app.model.leftovers;
-                    want(
-                        l.groups
-                            .iter()
-                            .flat_map(|g| &g.items)
-                            .all(|i| i.ticked == (i.rating == Rating::Safe)),
-                        "defaults hold for the second program",
-                    )?;
-                    let program = l
-                        .program
-                        .and_then(|p| app.model.programs.all.get(p))
-                        .ok_or("the review has no program")?;
-                    let first = &l.groups[0].items[0].path;
-                    want(
-                        *first == program.location,
-                        format!("the leftovers are {}'s, not {first}", program.name),
-                    )?;
-                    Ok(format!(
-                        "review in the flow, {} ticked of {}",
-                        l.ticked().0,
-                        l.count()
-                    ))
-                },
-                settle: 9000,
+            settle: 800,
+        },
+    ]
+}
+
+/// The look's choices: presets in light and dark, the transitions, and none.
+fn appearance_steps() -> Vec<Step> {
+    vec![
+        page_step("settings-again", |app, cx| {
+            app.press_key(cx, KeyName::Char('6'), CTRL);
+        }),
+        Step {
+            name: "preset-teal-light",
+            act: |app, cx| {
+                app.click(cx, crate::screens::swatch_id(Preset::Teal.index()));
+                app.press_key(cx, KeyName::Char('1'), CTRL);
             },
-            page!("d2-leftovers", Page::Leftovers, '3', Design::Flow, |a| on(
-                a,
-                Page::Leftovers,
-                Design::Flow
-            )),
-            page!("d2-history", Page::History, '4', Design::Flow, |a| on(
-                a,
-                Page::History,
-                Design::Flow
-            )),
-            page!(
-                "d2-quarantine",
-                Page::Quarantine,
-                '5',
-                Design::Flow,
-                |a| on(a, Page::Quarantine, Design::Flow)
-            ),
-            page!("d2-settings", Page::Settings, '6', Design::Flow, |a| on(
-                a,
-                Page::Settings,
-                Design::Flow
-            )),
-        ],
-        Design::Bold => vec![
-            page!("d3-programs", Page::Programs, '1', Design::Bold, |a| on(
-                a,
-                Page::Programs,
-                Design::Bold
-            )),
-            Step {
-                name: "d3-palette",
-                act: |app, cx| {
-                    app.press_key(cx, KeyName::Char('k'), CTRL);
-                    app.type_text(cx, "quar");
-                },
-                check: |app| {
-                    let p = app
-                        .view
-                        .palette
-                        .as_ref()
-                        .ok_or("Ctrl+K opened no palette")?;
-                    want(
-                        p.query() == "quar",
-                        format!("the palette's query is {:?}", p.query()),
-                    )?;
-                    want(
-                        p.selected_id() == Some(4),
-                        format!("it found {:?}", p.selected_id()),
-                    )?;
-                    Ok("palette open, Quarantine found".to_string())
-                },
-                settle: 700,
+            check: |app| {
+                want(
+                    app.model.prefs.preset == Preset::Teal,
+                    "a click on the swatch chose Teal",
+                )?;
+                want(
+                    app.pal.accent == Preset::Teal.palette(false, None).accent,
+                    "the palette is Teal's",
+                )?;
+                Ok("Teal, light".to_string())
             },
-            Step {
-                name: "d3-palette-runs",
-                act: |app, cx| app.press_key(cx, KeyName::Enter, NONE),
-                check: |app| {
-                    want(app.view.palette.is_none(), "closed")?;
-                    want(
-                        app.model.page == Page::Quarantine,
-                        "Enter went to Quarantine",
-                    )?;
-                    on(app, Page::Quarantine, Design::Bold)?;
-                    want(
-                        app.focus.focused() == Some(crate::screens::nav_id(Page::Quarantine)),
-                        format!(
-                            "the keyboard went with the page, is on {:?}",
-                            app.focus.focused()
-                        ),
-                    )?;
-                    Ok("Quarantine".to_string())
-                },
-                settle: 800,
+            settle: 800,
+        },
+        Step {
+            name: "preset-teal-dark",
+            act: |app, cx| app.set_theme(cx, ThemeChoice::Dark),
+            check: |app| {
+                want(app.pal.dark, "dark")?;
+                want(
+                    app.pal.accent == Preset::Teal.palette(true, None).accent,
+                    "the palette is Teal's dark one",
+                )?;
+                Ok("Teal, dark".to_string())
             },
-            page!("d3-pipeline", Page::Pipeline, '2', Design::Bold, |a| on(
-                a,
-                Page::Pipeline,
-                Design::Bold
-            )),
-            page!("d3-leftovers", Page::Leftovers, '3', Design::Bold, |a| on(
-                a,
-                Page::Leftovers,
-                Design::Bold
-            )),
-            page!("d3-history", Page::History, '4', Design::Bold, |a| on(
-                a,
-                Page::History,
-                Design::Bold
-            )),
-            page!("d3-settings", Page::Settings, '6', Design::Bold, |a| on(
-                a,
-                Page::Settings,
-                Design::Bold
-            )),
-            // The compact rail says what an icon is when the pointer is over it.
-            Step {
-                name: "d3-rail-hover",
-                act: |app, cx| {
-                    if let Some(r) = app
-                        .ctl(crate::screens::nav_id(Page::History))
-                        .map(|c| c.rect)
-                    {
-                        app.event(
-                            cx,
-                            Event::PointerMove {
-                                x: r.cx(),
-                                y: r.cy(),
-                            },
-                        );
-                    }
-                },
-                check: |app| {
-                    let tip = app
-                        .ctl(Id("NavTip", 0))
-                        .ok_or("no card beside the rail's item")?;
-                    want(
-                        tip.label.starts_with("History"),
-                        format!("the card says {:?}", tip.label),
-                    )?;
-                    want(tip.label.ends_with("Ctrl+4"), "the card names the shortcut")?;
-                    Ok(tip.label.clone())
-                },
-                settle: 700,
+            settle: 700,
+        },
+        page_step("settings-dark", |app, cx| {
+            app.press_key(cx, KeyName::Char('6'), CTRL);
+        }),
+        Step {
+            name: "preset-rose-dark-settings",
+            act: |app, cx| {
+                app.focus.focus(id("ColourChoice"));
+                // Enter opens the menu on Teal; Rose is three further down.
+                app.press_key(cx, KeyName::Enter, NONE);
+                for _ in 0..(Preset::Rose.index() - Preset::Teal.index()) {
+                    app.press_key(cx, KeyName::Down, NONE);
+                }
+                app.press_key(cx, KeyName::Enter, NONE);
             },
-            Step {
-                name: "d3-command-field",
-                act: |app, cx| {
-                    app.click(cx, id("CommandField"));
-                },
-                check: |app| {
-                    want(
-                        app.view.palette.is_some(),
-                        "the field in the title row opens the palette",
-                    )?;
-                    want(
-                        app.ctl(Id("NavTip", 0)).is_none(),
-                        "the rail's card is gone",
-                    )?;
-                    Ok("palette open".to_string())
-                },
-                settle: 700,
+            check: |app| {
+                want(
+                    app.model.prefs.preset == Preset::Rose,
+                    format!("the drop-down chose {:?}", app.model.prefs.preset),
+                )?;
+                want(app.pal.dark, "still dark")?;
+                Ok("Rose, dark".to_string())
             },
-            Step {
-                name: "d3-dark",
-                act: |app, cx| {
-                    app.press_key(cx, KeyName::Escape, NONE);
-                    app.model.settings.theme = ThemeChoice::Dark;
-                    app.event(cx, Event::Theme { dark: true });
-                    app.press_key(cx, KeyName::Char('5'), CTRL);
-                },
-                check: |app| {
-                    want(app.pal.dark, "dark")?;
-                    Ok("dark".to_string())
-                },
-                settle: 800,
+            settle: 800,
+        },
+        Step {
+            name: "preset-rose-light-history",
+            act: |app, cx| {
+                app.set_theme(cx, ThemeChoice::Light);
+                app.press_key(cx, KeyName::Char('4'), CTRL);
             },
-        ],
-        Design::Winui => Vec::new(),
-    }
+            check: |app| {
+                want(!app.pal.dark, "light")?;
+                want(app.model.page == Page::History, "on History")?;
+                Ok("Rose, light".to_string())
+            },
+            settle: 800,
+        },
+        page_step("settings-light", |app, cx| {
+            app.press_key(cx, KeyName::Char('6'), CTRL);
+        }),
+        Step {
+            name: "transition-by-keys",
+            act: |app, cx| {
+                app.focus.focus(id("TransitionChoice"));
+                app.press_key(cx, KeyName::Enter, NONE);
+                // From Slide (the third) down to Scale (the seventh).
+                for _ in 0..4 {
+                    app.press_key(cx, KeyName::Down, NONE);
+                }
+                app.press_key(cx, KeyName::Enter, NONE);
+                app.note = format!("{}", app.view.preview_tx.running());
+            },
+            check: |app| {
+                want(
+                    app.model.prefs.transition == Transition::Scale,
+                    format!("chose {:?}", app.model.prefs.transition),
+                )?;
+                Ok("Scale; its preview played".to_string())
+            },
+            settle: 120,
+        },
+        Step {
+            name: "transition-scale-midway",
+            act: |app, cx| app.press_key(cx, KeyName::Char('1'), CTRL),
+            check: |app| {
+                want(app.view.page_tx.running(), "the page is still scaling in")?;
+                Ok("midway".to_string())
+            },
+            settle: 90,
+        },
+        Step {
+            name: "transition-depth-midway",
+            act: |app, cx| {
+                app.set_transition(cx, Transition::Depth);
+                app.press_key(cx, KeyName::Char('5'), CTRL);
+            },
+            check: |app| {
+                want(app.view.page_tx.running(), "the page is still settling")?;
+                Ok("midway".to_string())
+            },
+            settle: 120,
+        },
+        Step {
+            name: "transition-none-is-still",
+            act: |app, cx| {
+                app.set_transition(cx, Transition::None);
+                app.press_key(cx, KeyName::Char('1'), CTRL);
+            },
+            check: |app| {
+                want(!app.view.page_tx.running(), "no motion")?;
+                want(app.model.page == Page::Programs, "on Programs")?;
+                Ok("none".to_string())
+            },
+            settle: 60,
+        },
+    ]
+}
+
+/// Bold: every page, the palette, the rail's card, the command field, dark and contrast.
+fn bold_steps() -> Vec<Step> {
+    vec![
+        Step {
+            name: "bold-keeps-state",
+            act: |app, cx| {
+                app.set_transition(cx, Transition::Fade);
+                click_row(app, cx, 2);
+                app.note = format!("{:?}", app.model.programs.selected());
+                app.set_preset(cx, Preset::Violet);
+                app.set_design(cx, Design::Bold);
+            },
+            check: |app| {
+                on(app, Page::Programs, Design::Bold)?;
+                want(
+                    !app.model.programs.sel.is_empty()
+                        && app.note == format!("{:?}", app.model.programs.selected()),
+                    "the selection is kept",
+                )?;
+                Ok("Bold, violet, same selection".to_string())
+            },
+            settle: 800,
+        },
+        Step {
+            name: "bold-palette",
+            act: |app, cx| {
+                app.press_key(cx, KeyName::Char('k'), CTRL);
+                app.type_text(cx, "quar");
+            },
+            check: |app| {
+                let p = app
+                    .view
+                    .palette
+                    .as_ref()
+                    .ok_or("Ctrl+K opened no palette")?;
+                want(
+                    p.query() == "quar",
+                    format!("the palette's query is {:?}", p.query()),
+                )?;
+                want(
+                    p.selected_id() == Some(4),
+                    format!("it found {:?}", p.selected_id()),
+                )?;
+                Ok("palette open, Quarantine found".to_string())
+            },
+            settle: 700,
+        },
+        Step {
+            name: "bold-palette-runs",
+            act: |app, cx| app.press_key(cx, KeyName::Enter, NONE),
+            check: |app| {
+                want(app.view.palette.is_none(), "closed")?;
+                on(app, Page::Quarantine, Design::Bold)?;
+                want(
+                    app.focus.focused() == Some(crate::screens::nav_id(Page::Quarantine)),
+                    format!(
+                        "the keyboard went with the page, is on {:?}",
+                        app.focus.focused()
+                    ),
+                )?;
+                Ok("Quarantine".to_string())
+            },
+            settle: 800,
+        },
+        page!("bold-pipeline", Page::Pipeline, '2', Design::Bold),
+        page!("bold-leftovers", Page::Leftovers, '3', Design::Bold),
+        page!("bold-history", Page::History, '4', Design::Bold),
+        page!("bold-settings", Page::Settings, '6', Design::Bold),
+        // The compact rail says what an icon is when the pointer is over it.
+        Step {
+            name: "bold-rail-hover",
+            act: |app, cx| {
+                if let Some(r) = app
+                    .ctl(crate::screens::nav_id(Page::History))
+                    .map(|c| c.rect)
+                {
+                    app.event(
+                        cx,
+                        Event::PointerMove {
+                            x: r.cx(),
+                            y: r.cy(),
+                        },
+                    );
+                }
+            },
+            check: |app| {
+                let tip = app
+                    .ctl(Id("NavTip", 0))
+                    .ok_or("no card beside the rail's item")?;
+                want(
+                    tip.label.starts_with("History"),
+                    format!("the card says {:?}", tip.label),
+                )?;
+                want(tip.label.ends_with("Ctrl+4"), "the card names the shortcut")?;
+                Ok(tip.label.clone())
+            },
+            settle: 700,
+        },
+        Step {
+            name: "bold-command-field",
+            act: |app, cx| {
+                app.click(cx, id("CommandField"));
+            },
+            check: |app| {
+                want(
+                    app.view.palette.is_some(),
+                    "the field in the title row opens the palette",
+                )?;
+                want(
+                    app.ctl(Id("NavTip", 0)).is_none(),
+                    "the rail's card is gone",
+                )?;
+                Ok("palette open".to_string())
+            },
+            settle: 700,
+        },
+        Step {
+            name: "bold-programs",
+            act: |app, cx| {
+                app.press_key(cx, KeyName::Escape, NONE);
+                app.press_key(cx, KeyName::Char('1'), CTRL);
+            },
+            check: |a| on(a, Page::Programs, Design::Bold),
+            settle: 800,
+        },
+        Step {
+            name: "bold-dark",
+            act: |app, cx| {
+                app.press_key(cx, KeyName::Escape, NONE);
+                app.set_theme(cx, ThemeChoice::Dark);
+                app.press_key(cx, KeyName::Char('5'), CTRL);
+            },
+            check: |app| {
+                want(app.pal.dark, "dark")?;
+                Ok("dark".to_string())
+            },
+            settle: 800,
+        },
+        page_step("bold-dark-programs", |app, cx| {
+            app.press_key(cx, KeyName::Char('1'), CTRL);
+        }),
+        Step {
+            name: "bold-high-contrast",
+            act: |app, cx| {
+                app.hc_forced = Some(true);
+                app.event(cx, Event::Contrast(true));
+                app.press_key(cx, KeyName::Char('2'), CTRL);
+            },
+            check: |app| {
+                want(app.hc, "the high-contrast palette is in use")?;
+                Ok("Bold under high contrast".to_string())
+            },
+            settle: 700,
+        },
+        Step {
+            name: "back-to-standard",
+            act: |app, cx| {
+                app.hc_forced = None;
+                app.event(cx, Event::Contrast(false));
+                app.set_design(cx, Design::Standard);
+                app.press_key(cx, KeyName::Char('1'), CTRL);
+            },
+            check: |app| {
+                on(app, Page::Programs, Design::Standard)?;
+                want(!app.hc, "contrast off")?;
+                Ok("standard again".to_string())
+            },
+            settle: 700,
+        },
+    ]
 }

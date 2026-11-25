@@ -12,7 +12,7 @@ use mdshared_ui::a11y::{self, accesskit};
 use mdshared_ui::cursor::Cursor;
 use mdshared_ui::dropdown::Outcome as DdOutcome;
 use mdshared_ui::focus::Focus;
-use mdshared_ui::gfx::{Painter, Rect, Rgb, rgb};
+use mdshared_ui::gfx::{Painter, Rect, Rgb};
 use mdshared_ui::host::{App, Button, Cx, Event, KeyPress};
 use mdshared_ui::keys::{KeyName, Mods};
 use mdshared_ui::palette::{Entry, Outcome as PaletteOutcome, Palette as CommandPalette};
@@ -22,29 +22,40 @@ use mdshared_ui::scroll;
 use mdshared_ui::segments;
 use mdshared_ui::select::TypeAhead;
 use mdshared_ui::theme::Palette;
-use mdshared_ui::tokens::Tokens;
+use mdshared_ui::tokens::{self, Tokens};
 
-use crate::model::{
-    Design, KEEP_DAYS, LeftoverPhase, Model, Page, RunPhase, SortKey, Tab, ThemeChoice,
-};
+use crate::look::{Choice, Design, Preset, ThemeChoice, Transition};
+use crate::markers;
+use crate::model::{LeftoverPhase, Model, Page, RunPhase, SortKey, Tab};
+use crate::prefs::{Prefs, Store};
 use crate::screens::{self, NAV, nav_id};
 use crate::script::Script;
 use crate::ui::{Ctl, Id, Look, Role, SCOPE, Ui, id};
-use crate::view::{DD_ALL, DD_DESIGN, DD_KEEP, DD_RESTORE, DD_SORT, DD_THEME, Toast, View};
+use crate::view::{
+    DD_ALL, DD_DESIGN, DD_PRESET, DD_RESTORE, DD_SORT, DD_THEME, DD_TRANSITION, Toast, View,
+};
 
 const LIST: Id = Id("ProgramList", 0);
 const SEARCH: Id = Id("SearchBox", 0);
 
 /// What the command line asked for.
 pub struct Options {
-    pub design: Design,
+    /// The look and theme to start with: the saved settings, with the command line's over them.
+    pub prefs: Prefs,
+    /// The settings as the file has them: a choice made on the command line is for this run.
+    pub saved: Prefs,
+    /// Where the settings are saved.
+    pub store: Store,
+    /// The page to open on (`--page`).
+    pub page: Page,
+    /// `--bench-exit`: close once the launch markers are written.
     /// Close after this many seconds (for a run with nobody at the keyboard).
     pub seconds: Option<u64>,
     /// Run the built-in walk through the screens, by made-up events.
     pub script: bool,
     /// Where the walk writes a PNG of each step, if anywhere.
     pub shots: Option<PathBuf>,
-    pub theme: ThemeChoice,
+    pub bench_exit: bool,
     /// When `main` began, for the launch time.
     pub launched: Instant,
 }
@@ -113,15 +124,24 @@ pub struct PurgeApp {
     /// For the script: what a step's act leaves for its check.
     pub note: String,
     pub visited: Vec<Id>,
+    store: Store,
+    saved: Prefs,
+    bench_exit: bool,
+    /// The first frame was drawn and `presented` is still to be marked.
+    presented_due: bool,
+    /// The system's accent, read at each change of theme.
+    accent: Option<Rgb>,
 }
 
 impl PurgeApp {
     pub fn new(o: Options) -> PurgeApp {
-        let mut model = Model::new(o.design);
-        model.settings.theme = o.theme;
+        let mut model = Model::new(o.prefs);
+        model.page = o.page;
+        let mut view = View::new();
+        view.dev |= o.script;
         PurgeApp {
             model,
-            view: View::new(),
+            view,
             focus: Focus::new(),
             ctls: Vec::new(),
             hover: None,
@@ -142,32 +162,28 @@ impl PurgeApp {
             hc_forced: None,
             note: String::new(),
             visited: Vec::new(),
+            store: o.store,
+            saved: o.saved,
+            bench_exit: o.bench_exit,
+            presented_due: false,
+            accent: None,
         }
     }
 
     // ---- the look ----------------------------------------------------------------------------
 
     /// Makes the palette again from the system (light or dark, high contrast, the accent) and
-    /// the Settings page's choice.
+    /// the user's choices: the colour preset in the theme mode, or under high contrast the
+    /// system's own colours, with no backdrop.
     fn retheme(&mut self, cx: &mut Cx<'_, ()>) {
         let hc = self.hc_forced.unwrap_or(cx.high_contrast());
-        let dark = match self.model.settings.theme {
-            ThemeChoice::System => platform::system_is_dark(),
-            ThemeChoice::Light => false,
-            ThemeChoice::Dark => true,
-        };
-        let tokens = if hc {
-            Tokens::high_contrast_with(platform::system_contrast_colors().as_ref(), dark)
+        let dark = self.model.prefs.theme.dark(platform::system_is_dark());
+        self.accent = platform::system_accent();
+        self.pal = if hc {
+            Tokens::high_contrast_with(platform::system_contrast_colors().as_ref(), dark).palette
         } else {
-            let t = Tokens::new(dark);
-            match (self.model.design, platform::system_accent()) {
-                // D3 has a colour of its own.
-                (Design::Bold, _) => t.with_accent(rgb(if dark { 0xB8A2FF } else { 0x6B4DE6 })),
-                (_, Some(accent)) => t.with_accent(accent),
-                _ => t,
-            }
+            self.model.prefs.preset.palette(dark, self.accent)
         };
-        self.pal = tokens.palette;
         self.hc = hc;
         // A contrast theme names its own colour for links.
         self.link_ink = if hc {
@@ -176,17 +192,76 @@ impl PurgeApp {
             None
         };
         cx.set_dark(dark);
-        cx.set_backdrop(screens::backdrop_of(self.model.design), &self.pal);
+        let backdrop = tokens::allowed_backdrop(screens::backdrop_of(self.model.prefs.design), hc);
+        cx.set_backdrop(backdrop, &self.pal);
+        cx.request_redraw_all();
+    }
+
+    /// Changes the user's choices, applies them at once and saves them.
+    pub fn set_prefs(&mut self, cx: &mut Cx<'_, ()>, prefs: Prefs) {
+        if self.model.prefs == prefs {
+            return;
+        }
+        let old = self.model.prefs;
+        let looks =
+            (prefs.design, prefs.preset, prefs.theme) != (old.design, old.preset, old.theme);
+        // Only what changed is written over the saved settings: what the command line chose
+        // for this run stays this run's.
+        let s = &mut self.saved;
+        if prefs.design != old.design {
+            s.design = prefs.design;
+        }
+        if prefs.preset != old.preset {
+            s.preset = prefs.preset;
+        }
+        if prefs.theme != old.theme {
+            s.theme = prefs.theme;
+        }
+        if prefs.transition != old.transition {
+            s.transition = prefs.transition;
+        }
+        self.model.prefs = prefs;
+        self.store.save(&self.saved);
+        if looks {
+            self.retheme(cx);
+        }
         cx.request_redraw_all();
     }
 
     pub fn set_design(&mut self, cx: &mut Cx<'_, ()>, design: Design) {
-        if self.model.design == design {
-            return;
+        let p = Prefs {
+            design,
+            ..self.model.prefs
+        };
+        self.set_prefs(cx, p);
+    }
+
+    pub fn set_preset(&mut self, cx: &mut Cx<'_, ()>, preset: Preset) {
+        let p = Prefs {
+            preset,
+            ..self.model.prefs
+        };
+        self.set_prefs(cx, p);
+    }
+
+    pub fn set_theme(&mut self, cx: &mut Cx<'_, ()>, theme: ThemeChoice) {
+        let p = Prefs {
+            theme,
+            ..self.model.prefs
+        };
+        self.set_prefs(cx, p);
+    }
+
+    /// A new transition also plays itself in the Settings page's preview.
+    pub fn set_transition(&mut self, cx: &mut Cx<'_, ()>, transition: Transition) {
+        let p = Prefs {
+            transition,
+            ..self.model.prefs
+        };
+        if p != self.model.prefs {
+            self.view.preview_b = !self.view.preview_b;
         }
-        self.model.design = design;
-        self.retheme(cx);
-        self.toast(cx, design.title());
+        self.set_prefs(cx, p);
     }
 
     pub fn toast(&mut self, cx: &mut Cx<'_, ()>, text: &str) {
@@ -271,7 +346,6 @@ impl PurgeApp {
             return;
         }
         match id.0 {
-            "DesignChip" => self.set_design(cx, self.model.design.next()),
             "Minimize" => cx.minimize(),
             "Maximize" => cx.toggle_maximize(),
             "Close" => cx.exit(),
@@ -292,10 +366,10 @@ impl PurgeApp {
                 self.view.list.jump_top();
             }
             "UninstallButton" | "DUninstallButton" => self.ask_uninstall(cx),
-            "Commands" => self.toast(cx, "Open folder and web site: the mockup opens nothing."),
+            "Commands" => self.toast(cx, "Open folder and web site: not available yet."),
             "DLocationText" => self.toast(
                 cx,
-                "Would open the folder in File Explorer. The mockup opens nothing.",
+                "Opening the folder in File Explorer is not available yet.",
             ),
             "Commands.Expander" => self.view.commands_open = !self.view.commands_open,
 
@@ -409,10 +483,7 @@ impl PurgeApp {
             // Quarantine.
             "Batch" => self.model.quarantine.selected = n.saturating_sub(1),
             "ReviewButton" => self.model.quarantine.reviewing = !self.model.quarantine.reviewing,
-            "EmptyNow" => self.toast(
-                cx,
-                "Emptying the quarantine deletes for good: not in the mockup.",
-            ),
+            "EmptyNow" => self.toast(cx, "Emptying the quarantine is not available yet."),
 
             // Settings.
             "ConfirmEach" => {
@@ -422,10 +493,13 @@ impl PurgeApp {
                     "Purge always asks before an uninstall. This cannot be turned off.",
                 );
             }
-            "ShowComponents" => {
-                self.model.settings.show_components = !self.model.settings.show_components
-            }
-            "SendNothing" => self.model.settings.send_nothing = !self.model.settings.send_nothing,
+            "SendNothing" => self.toast(
+                cx,
+                "Purge sends nothing and has nothing to send: there is no switch.",
+            ),
+            "OpenQuarantine" => self.go(Page::Quarantine),
+            "ColourSwatch" => self.set_preset(cx, Preset::at(n.saturating_sub(1))),
+            "PreviewTransition" => self.view.preview_b = !self.view.preview_b,
             "MarkersExpander" => {
                 self.model.settings.markers_open = !self.model.settings.markers_open
             }
@@ -443,15 +517,10 @@ impl PurgeApp {
                     self.model.programs.sort_by(key);
                 }
             }
-            DD_THEME => {
-                self.model.settings.theme = ThemeChoice::ALL[i.min(2)];
-                self.retheme(cx);
-            }
-            DD_DESIGN => self.set_design(cx, Design::ALL[i.min(3)]),
-            DD_KEEP => {
-                self.model.settings.keep = i.min(KEEP_DAYS.len() - 1);
-                self.model.quarantine.keep_days = KEEP_DAYS[self.model.settings.keep];
-            }
+            DD_THEME => self.set_theme(cx, ThemeChoice::at(i)),
+            DD_DESIGN => self.set_design(cx, Design::at(i)),
+            DD_TRANSITION => self.set_transition(cx, Transition::at(i)),
+            DD_PRESET => self.set_preset(cx, Preset::at(i)),
             DD_RESTORE => self.model.pipeline.restore_mode = i.min(2),
             _ => {}
         }
@@ -467,7 +536,7 @@ impl PurgeApp {
         p.set_groups(vec![
             (0, "Go to".to_string()),
             (1, "Do".to_string()),
-            (2, "Design".to_string()),
+            (2, "Look".to_string()),
         ]);
         let mut entries: Vec<Entry> = Page::ALL
             .iter()
@@ -495,7 +564,7 @@ impl PurgeApp {
         entries.push(Entry::new(24, "Theme: dark").group(1));
         entries.push(Entry::new(25, "Theme: use system setting").group(1));
         for (i, d) in Design::ALL.iter().enumerate() {
-            entries.push(Entry::new(10 + i as u32, d.title()).group(2));
+            entries.push(Entry::new(10 + i as u32, format!("Look: {}", d.title())).group(2));
         }
         p.set_entries(entries);
         // The toolkit writes "Enter to choose  Esc to close" at the right of the footer itself.
@@ -517,7 +586,7 @@ impl PurgeApp {
                 self.sync_scope();
                 self.focus.focus(nav_id(page));
             }
-            10..=13 => self.set_design(cx, Design::ALL[command as usize - 10]),
+            10..=13 => self.set_design(cx, Design::at(command as usize - 10)),
             20 => {
                 self.go(Page::Programs);
                 self.ask_uninstall(cx);
@@ -528,16 +597,15 @@ impl PurgeApp {
                 self.focus.focus(SEARCH);
                 self.view.search.select_all();
             }
-            // In D2 the review is part of the pipeline page while its run is still shown.
-            22 if self.model.design == Design::Flow && self.model.pipeline.run.is_some() => {
+            // In the flow the review is part of the pipeline page while its run is still shown.
+            22 if Look::of(self.model.prefs.design).flow && self.model.pipeline.run.is_some() => {
                 self.go(Page::Pipeline)
             }
             22 => self.go(Page::Leftovers),
             23..=25 => {
-                self.model.settings.theme =
-                    [ThemeChoice::Light, ThemeChoice::Dark, ThemeChoice::System]
-                        [command as usize - 23];
-                self.retheme(cx);
+                let theme = [ThemeChoice::Light, ThemeChoice::Dark, ThemeChoice::System]
+                    [command as usize - 23];
+                self.set_theme(cx, theme);
             }
             _ => {}
         }
@@ -628,7 +696,7 @@ impl PurgeApp {
         }
         let Some(c) = self.hit(x, y).cloned() else {
             // The title row: drag the window, or maximize it on a double click.
-            if y < Look::of(self.model.design).title_h && !self.overlay() {
+            if y < Look::of(self.model.prefs.design).title_h && !self.overlay() {
                 if clicks == 2 {
                     cx.title_double_click();
                 } else {
@@ -780,12 +848,6 @@ impl PurgeApp {
         let plain = !mods.ctrl && !mods.alt && !mods.shift;
         cx.request_redraw_all();
 
-        // Ctrl+Shift+D: the next design, whatever is open.
-        if mods.ctrl && mods.shift && name == KeyName::Char('d') {
-            self.view.palette = None;
-            let next = self.model.design.next();
-            return self.set_design(cx, next);
-        }
         if let Some(p) = &mut self.view.palette {
             let o = p.key(&name, mods, k.text.as_deref());
             return self.palette_outcome(cx, o);
@@ -1026,6 +1088,7 @@ impl PurgeApp {
     /// Asks for the earliest of the times still to come: the host gives one wake-up.
     fn timers(&mut self, cx: &mut Cx<'_, ()>) {
         let wakes = [
+            self.presented_due.then(|| cx.now()),
             self.pipeline_due,
             self.until,
             self.view.toast.as_ref().map(|t| t.until),
@@ -1038,9 +1101,20 @@ impl PurgeApp {
 
     fn wake(&mut self, cx: &mut Cx<'_, ()>, now: Instant) {
         if self.until.is_some_and(|u| u <= now) {
-            println!("purge-mockup: closing after the time asked for");
+            println!("Purge: closing after the time asked for");
             cx.exit();
             return;
+        }
+        if std::mem::take(&mut self.presented_due) {
+            // The WinUI app's approximation: the next DWM composition after the first frame.
+            markers::dwm_flush();
+            let at = markers::mark("presented");
+            markers::record("names_visible", at);
+            markers::flush();
+            if self.bench_exit {
+                cx.exit();
+                return;
+            }
         }
         if self.pipeline_due.is_some_and(|d| d <= now) {
             self.pipeline_due = None;
@@ -1342,6 +1416,7 @@ impl App for PurgeApp {
     type Message = ();
 
     fn start(&mut self, cx: &mut Cx<'_, ()>) {
+        markers::mark("window_ctor");
         self.view.blink = platform::caret_blink_time();
         self.retheme(cx);
         self.timers(cx);
@@ -1408,12 +1483,19 @@ impl App for PurgeApp {
         let now = cx.now();
         let size = cx.size();
         self.focus.begin_frame();
+        // The scrolled areas are the ones this frame draws: a page left behind keeps none, or
+        // the wheel over Settings would scroll the leftovers list it last drew there.
+        self.view.left_area = Rect::default();
+        self.view.page_area = Rect::default();
+        if self.model.page != Page::Programs {
+            self.view.list.area = Rect::default();
+        }
         let ctls = {
             let mut ui = Ui {
                 p: &mut *p,
                 cx: &mut *cx,
                 pal: self.pal,
-                look: Look::of(self.model.design),
+                look: Look::of(self.model.prefs.design),
                 hc: self.hc,
                 link_ink: self.link_ink,
                 focus: &mut self.focus,
@@ -1448,7 +1530,13 @@ impl App for PurgeApp {
         }
         self.frames += 1;
         if self.frames == 1 {
-            // The marker for the launch time: the first frame is drawn (it is presented next).
+            // The launch markers: the first frame is drawn, with the program names in it (the
+            // placeholder rows are there from the start); `presented` follows on the next wake,
+            // once the host has presented it and shown the window.
+            let tick = markers::mark("first_tick");
+            markers::mark("rows_set");
+            markers::record("first_row", tick);
+            self.presented_due = markers::enabled() || self.bench_exit;
             self.view.first_frame_ms = Some(self.launched.elapsed().as_secs_f64() * 1000.0);
             println!(
                 "first-frame: {:.1} ms after main began ({} x {} at scale {})",

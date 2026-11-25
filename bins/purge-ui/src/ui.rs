@@ -19,7 +19,7 @@ use mdshared_ui::slider;
 use mdshared_ui::theme::Palette;
 use mdshared_ui::toggle::{self, TOGGLE_H, TOGGLE_W, Toggle, draw_toggle_animated};
 
-use crate::model::Design;
+use crate::look::Design;
 
 /// The height of a push button.
 pub const BUTTON_H: f32 = 32.0;
@@ -111,7 +111,8 @@ pub struct Look {
     pub radius: f32,
     /// The height of a row of the programs list.
     pub row_h: f32,
-    /// Pages slide and fade in; rows fade their hover.
+    /// The rail's pill moves; rows fade their hover. (Page transitions are a setting of their
+    /// own: `look::Transition`.)
     pub motion: bool,
     /// The rail is frosted over Acrylic instead of Mica.
     pub acrylic: bool,
@@ -122,55 +123,30 @@ pub struct Look {
     /// D3: a tinted band behind the page's title, the command field in the title row, and
     /// rings where the other designs have bars.
     pub hero: bool,
+    /// D2: the pipeline page is the whole uninstall, the review of its leftovers included.
+    pub flow: bool,
 }
 
 impl Look {
     pub fn of(design: Design) -> Look {
         match design {
-            Design::Winui => Look {
-                design,
-                title_h: 48.0,
-                rail_w: 232.0,
-                rail_icons: false,
-                margin: 28.0,
-                h1: 28.0,
-                radius: 8.0,
-                row_h: 40.0,
-                motion: false,
-                acrylic: false,
-                stacked: false,
-                soft: false,
-                hero: false,
-            },
-            Design::Refined => Look {
+            // D1's measures, quiet cards and stacked headings, with D2's rounder cards and its
+            // uninstall flow on the pipeline page.
+            Design::Standard => Look {
                 design,
                 title_h: 48.0,
                 rail_w: 248.0,
                 rail_icons: false,
                 margin: 36.0,
                 h1: 30.0,
-                radius: 10.0,
+                radius: 12.0,
                 row_h: 46.0,
                 motion: true,
                 acrylic: true,
                 stacked: true,
                 soft: true,
                 hero: false,
-            },
-            Design::Flow => Look {
-                design,
-                title_h: 48.0,
-                rail_w: 220.0,
-                rail_icons: false,
-                margin: 32.0,
-                h1: 28.0,
-                radius: 12.0,
-                row_h: 44.0,
-                motion: true,
-                acrylic: true,
-                stacked: false,
-                soft: false,
-                hero: false,
+                flow: true,
             },
             Design::Bold => Look {
                 design,
@@ -186,6 +162,7 @@ impl Look {
                 stacked: false,
                 soft: false,
                 hero: true,
+                flow: false,
             },
         }
     }

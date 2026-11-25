@@ -7,7 +7,7 @@ use mdshared_ui::gfx::{Face, Rect};
 use mdshared_ui::glyph;
 use mdshared_ui::slider::draw_spinner;
 
-use crate::model::{Design, LeftoverPhase, Model, Page, RunPhase, STEPS, StepState};
+use crate::model::{LeftoverPhase, Model, Page, RunPhase, STEPS, StepState};
 use crate::ui::{BUTTON_H, Id, Look, Role, Style, Tone, Ui, id, ok_ink};
 use crate::view::{RESTORE_MODES, View};
 
@@ -84,7 +84,7 @@ fn mark(ui: &mut Ui, mark: Mark, cx: f32, cy: f32, number: usize) {
 }
 
 pub fn draw(ui: &mut Ui, m: &Model, v: &mut View, content: Rect) {
-    if ui.look.design == Design::Flow {
+    if ui.look.flow {
         return flow(ui, m, v, content);
     }
     let pal = ui.pal;
@@ -735,10 +735,10 @@ fn stage(m: &Model) -> usize {
     }
 }
 
-/// The stage D2's pipeline page shows; `None` for any other page or design. The window pushes
-/// the old stage out when this changes.
-pub fn flow_stage(m: &Model) -> Option<usize> {
-    (m.design == Design::Flow && m.page == Page::Pipeline).then(|| stage(m))
+/// The stage the flow's pipeline page shows; `None` for any other page, and in a design without
+/// the flow. The window pushes the old stage out when this changes.
+pub fn flow_stage(m: &Model, lk: &Look) -> Option<usize> {
+    (lk.flow && m.page == Page::Pipeline).then(|| stage(m))
 }
 
 /// The part of D2's pipeline page that changes with the stage: all of it under the strip.

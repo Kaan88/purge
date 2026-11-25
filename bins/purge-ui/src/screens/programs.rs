@@ -14,7 +14,7 @@ use mdshared_ui::segments::{self, SEGMENT_H, draw_selector_animated};
 use mdshared_ui::table::{self, Align, HeaderHit, Sort};
 use mdshared_ui::textfield::FieldColors;
 
-use crate::model::{Design, Expect, Model, Program, SortKey, Tab, date_of, size_text};
+use crate::model::{Expect, Model, Program, SortKey, Tab, date_of, size_text};
 use crate::ui::{BUTTON_H, FILTER, Id, Role, Style, Tone, Ui, bad_ink, id, ok_ink, tile_colour};
 use crate::view::{DD_SORT, View, column_of};
 
@@ -154,11 +154,7 @@ pub fn draw(ui: &mut Ui, m: &Model, v: &mut View, content: Rect) {
     let status_h = 30.0;
     let top = y + SEGMENT_H + 12.0;
     let bottom = content.bottom() - status_h - 12.0;
-    let details_w = if lk.design == Design::Refined {
-        348.0
-    } else {
-        330.0
-    };
+    let details_w = if lk.soft { 348.0 } else { 330.0 };
     let details = Rect::new(right - details_w, top, details_w, bottom - top);
     let list = Rect::new(left, top, details.x - 16.0 - left, bottom - top);
     program_list(ui, m, v, list);

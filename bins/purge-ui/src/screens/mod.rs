@@ -15,7 +15,8 @@ use mdshared_ui::overlay::{
 use mdshared_ui::pane::draw_row_fill;
 use mdshared_ui::toggle::TOGGLE_W;
 
-use crate::model::{Design, LeftoverPhase, Model, Page, RunPhase, STEPS};
+use crate::look::{Choice, Design, Effect, Transition};
+use crate::model::{LeftoverPhase, Model, Page, RunPhase, STEPS};
 use crate::ui::{BOX, BUTTON_H, GEAR, Id, Role, SHIELD, Style, Ui, id};
 use crate::view::{DD_ALL, DD_RESTORE, View};
 
@@ -36,6 +37,7 @@ pub const NAV: [(Page, &str); 6] = [
 ];
 
 pub use programs::TAB_IDS as TAB_NAMES;
+pub use settings::swatch_id;
 
 /// The tab of the Programs page a control is, if it is one.
 pub fn programs_tab(id: Id) -> Option<crate::model::Tab> {
@@ -73,8 +75,7 @@ pub const CAPTIONS: [(WinButton, &str, &str); 3] = [
 /// The backdrop a design asks for behind its chrome.
 pub fn backdrop_of(design: Design) -> Backdrop {
     match design {
-        Design::Winui => Backdrop::Mica,
-        Design::Refined | Design::Flow => Backdrop::Acrylic,
+        Design::Standard => Backdrop::Acrylic,
         Design::Bold => Backdrop::Off,
     }
 }
@@ -94,46 +95,39 @@ pub fn draw(ui: &mut Ui, m: &Model, v: &mut View) {
     let content = content_rect(ui);
     v.dds.sync(m);
 
-    // D2: on the pipeline page the next stage of the flow pushes the old one out to the left
-    // (and back from the left when the flow starts over). Not while the page itself changes.
-    let stage = pipeline::flow_stage(m);
+    // The flow (D2's pipeline page): the next stage of the uninstall pushes the old one out to
+    // the left (and back from the left when the flow starts over), unless the user chose no
+    // motion. Not while the page itself changes.
+    let moves = m.prefs.transition != Transition::None;
+    let stage = pipeline::flow_stage(m, &lk);
     let flow_body = pipeline::flow_body(&lk, content);
     match (v.flow_shown, stage) {
         (Some(old), Some(new))
-            if old != new && lk.motion && v.shown == Some((m.page, m.design)) =>
+            if old != new && moves && v.shown == Some((m.page, m.prefs.design)) =>
         {
             let from = if new > old { Edge::Right } else { Edge::Left };
-            v.flow_tx
-                .begin(ui.cx.anim(), ui.p, flow_body, PageEffect::Push { from });
+            let push = Effect::Toolkit(PageEffect::Push { from });
+            v.flow_tx.begin(ui.cx.anim(), ui.p, flow_body, push);
         }
         (_, None) if v.flow_tx.running() => v.flow_tx.cancel(ui.cx.anim()),
         _ => {}
     }
     v.flow_shown = stage;
 
-    // A page that changed slides in over the old one, which the bitmap still holds.
+    // A page that changed comes in over the old one, which the bitmap still holds, by the
+    // transition the user chose (`look::Transition`). A change of design redraws plainly.
     if let Some((page, design)) = v.shown
-        && design == m.design
+        && design == m.prefs.design
         && page != m.page
-        && lk.motion
     {
-        let effect = match lk.design {
-            Design::Flow => PageEffect::Push {
-                from: if m.page.index() > page.index() {
-                    Edge::Bottom
-                } else {
-                    Edge::Top
-                },
-            },
-            Design::Bold => PageEffect::Crossfade,
-            _ => PageEffect::SlideFade {
-                from: Edge::Bottom,
-                distance: 28.0,
-            },
-        };
-        v.page_tx.begin(ui.cx.anim(), ui.p, content, effect);
+        match m.prefs.transition.effect(page.index(), m.page.index()) {
+            Some(effect) => v.page_tx.begin(ui.cx.anim(), ui.p, content, effect),
+            // No motion: a switch still running from the page before ends here, or the page
+            // before that would go on blending over this one.
+            None => v.page_tx.cancel(ui.cx.anim()),
+        }
     }
-    v.shown = Some((m.page, m.design));
+    v.shown = Some((m.page, m.prefs.design));
 
     chrome(ui, m);
 
@@ -248,7 +242,7 @@ fn page_status(m: &Model, page: Page) -> String {
             m.quarantine.total_items(),
             crate::model::kb_text(m.quarantine.total_kb())
         ),
-        Page::Settings => m.design.title().to_string(),
+        Page::Settings => format!("Look: {}", m.prefs.design.title()),
     }
 }
 
@@ -361,22 +355,6 @@ fn chrome(ui: &mut Ui, m: &Model) {
     let name_w =
         ui.p.text(Face::Semibold, 13.0, name_x, cy, "Purge", pal.text, 80.0);
 
-    // Which design this is; a click moves to the next one. Mockup only.
-    let label = format!("{}  \u{b7}  Ctrl+Shift+D", m.design.title());
-    let cw = ui.p.measure(Face::Ui, 12.0, &label) + 24.0;
-    let chip = Rect::new(name_x + name_w + 14.0, cy - 12.0, cw, 24.0);
-    let chip_id = id("DesignChip");
-    ui.reg(
-        chip_id,
-        chip,
-        Role::Button,
-        &format!("Design: {}", m.design.title()),
-        false,
-    );
-    let fill = if ui.hot(chip_id) { pal.hover } else { pal.page };
-    ui.p.frame(chip, 12.0, fill, pal.popup_line);
-    ui.p.text_center(Face::Ui, 12.0, chip, &label, pal.muted);
-
     // Shown only while Purge runs elevated: here, while an uninstall runs.
     let elevated = m
         .pipeline
@@ -388,7 +366,7 @@ fn chrome(ui: &mut Ui, m: &Model) {
         title_end -= ui.p.measure(Face::Ui, 12.0, "Administrator") + 40.0;
     }
     if lk.hero {
-        command_field(ui, chip.right(), title_end);
+        command_field(ui, name_x + name_w + 14.0, title_end);
     }
     if elevated {
         let label = "Administrator";

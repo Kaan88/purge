@@ -5,7 +5,6 @@
 
 use std::time::{Duration, Instant};
 
-use mdshared_ui::anim::PageTransition;
 use mdshared_ui::dropdown::Dropdown;
 use mdshared_ui::gfx::Rect;
 use mdshared_ui::palette::Palette as CommandPalette;
@@ -14,7 +13,9 @@ use mdshared_ui::scroll::SmoothScroll;
 use mdshared_ui::table::{Align, Column, Table};
 use mdshared_ui::textfield::TextField;
 
-use crate::model::{Design, KEEP_DAYS, Model, Page, SortKey, ThemeChoice};
+use crate::look::{Choice, Design, Preset, ThemeChoice, Transition};
+use crate::model::{Model, Page, SortKey};
+use crate::transition::PageSwitch;
 use crate::ui::Id;
 
 /// A list of rows of one height, scrolled: the scroll on its way and the last frame's place.
@@ -99,16 +100,30 @@ pub struct Dropdowns {
     pub sort: Dropdown<usize>,
     pub theme: Dropdown<usize>,
     pub design: Dropdown<usize>,
-    pub keep: Dropdown<usize>,
+    pub transition: Dropdown<usize>,
+    pub preset: Dropdown<usize>,
     pub restore: Dropdown<usize>,
 }
 
 pub const DD_SORT: Id = Id("SortButton", 0);
 pub const DD_THEME: Id = Id("ThemeChoice", 0);
-pub const DD_DESIGN: Id = Id("DesignChoice", 0);
-pub const DD_KEEP: Id = Id("KeepChoice", 0);
+pub const DD_DESIGN: Id = Id("LookChoice", 0);
+pub const DD_TRANSITION: Id = Id("TransitionChoice", 0);
+pub const DD_PRESET: Id = Id("ColourChoice", 0);
 pub const DD_RESTORE: Id = Id("RestorePointBox", 0);
-pub const DD_ALL: [Id; 5] = [DD_SORT, DD_THEME, DD_DESIGN, DD_KEEP, DD_RESTORE];
+pub const DD_ALL: [Id; 6] = [
+    DD_SORT,
+    DD_THEME,
+    DD_DESIGN,
+    DD_TRANSITION,
+    DD_PRESET,
+    DD_RESTORE,
+];
+
+/// The titles of a choice, for its drop-down.
+fn titles<C: Choice>() -> Vec<String> {
+    C::ALL.iter().map(|c| c.title().to_string()).collect()
+}
 
 pub const RESTORE_MODES: [&str; 3] = ["Off", "High-risk changes only (default)", "Always"];
 
@@ -120,12 +135,10 @@ impl Dropdowns {
                 .iter()
                 .map(|s| format!("Sort: {}", s.title()))
                 .collect()),
-            theme: of(ThemeChoice::ALL
-                .iter()
-                .map(|t| t.title().to_string())
-                .collect()),
-            design: of(Design::ALL.iter().map(|d| d.title().to_string()).collect()),
-            keep: of(KEEP_DAYS.iter().map(|d| format!("{d} days")).collect()),
+            theme: of(titles::<ThemeChoice>()),
+            design: of(titles::<Design>()),
+            transition: of(titles::<Transition>()),
+            preset: of(titles::<Preset>()),
             restore: of(RESTORE_MODES.iter().map(|s| s.to_string()).collect()),
         }
     }
@@ -135,7 +148,8 @@ impl Dropdowns {
             DD_SORT => Some(&mut self.sort),
             DD_THEME => Some(&mut self.theme),
             DD_DESIGN => Some(&mut self.design),
-            DD_KEEP => Some(&mut self.keep),
+            DD_TRANSITION => Some(&mut self.transition),
+            DD_PRESET => Some(&mut self.preset),
             DD_RESTORE => Some(&mut self.restore),
             _ => None,
         }
@@ -147,7 +161,8 @@ impl Dropdowns {
             (DD_SORT, &self.sort),
             (DD_THEME, &self.theme),
             (DD_DESIGN, &self.design),
-            (DD_KEEP, &self.keep),
+            (DD_TRANSITION, &self.transition),
+            (DD_PRESET, &self.preset),
             (DD_RESTORE, &self.restore),
         ]
         .into_iter()
@@ -163,9 +178,10 @@ impl Dropdowns {
             }
         };
         set(&mut self.sort, m.programs.sort.index());
-        set(&mut self.theme, m.settings.theme.index());
-        set(&mut self.design, m.design.index());
-        set(&mut self.keep, m.settings.keep);
+        set(&mut self.theme, m.prefs.theme.index());
+        set(&mut self.design, m.prefs.design.index());
+        set(&mut self.transition, m.prefs.transition.index());
+        set(&mut self.preset, m.prefs.preset.index());
         set(&mut self.restore, m.pipeline.restore_mode);
     }
 }
@@ -198,10 +214,16 @@ pub struct View {
     pub page_content: f32,
     /// The page and design the last frame drew, to start a transition when they change.
     pub shown: Option<(Page, Design)>,
-    pub page_tx: PageTransition,
+    pub page_tx: PageSwitch,
     /// D2: the stage of the flow the last frame drew, and the push from one stage to the next.
     pub flow_shown: Option<usize>,
-    pub flow_tx: PageTransition,
+    pub flow_tx: PageSwitch,
+    /// Settings: the transition's preview tile, which of its two pages it shows, and its switch.
+    pub preview_b: bool,
+    pub preview_shown: Option<bool>,
+    pub preview_tx: PageSwitch,
+    /// A development run (a debug build, or `--script`): the launch markers' expander shows.
+    pub dev: bool,
     pub toast: Option<Toast>,
     /// D3's command palette, while open.
     pub palette: Option<CommandPalette>,
@@ -236,9 +258,13 @@ impl View {
             page_area: Rect::default(),
             page_content: 0.0,
             shown: None,
-            page_tx: PageTransition::new("page"),
+            page_tx: PageSwitch::new("page"),
             flow_shown: None,
-            flow_tx: PageTransition::new("flow"),
+            flow_tx: PageSwitch::new("flow"),
+            preview_b: false,
+            preview_shown: None,
+            preview_tx: PageSwitch::new("preview"),
+            dev: cfg!(debug_assertions),
             toast: None,
             palette: None,
             dialog_opened: false,
