@@ -47,7 +47,10 @@ def shade(u, v, arrow):
     t = max(0.0, min(1.0, (u + v) / 2 * 1.1 - 0.05))
     bg = tuple(TOP_LEFT[i] + (BOTTOM_RIGHT[i] - TOP_LEFT[i]) * t for i in range(3))
     stem = sd_box(u, v, 0.32, 0.49, 0.085, 0.30, 0.065)
-    bowl = sd_box(u, v, 0.50, 0.41, 0.265, 0.22, 0.215)
+    # The bowl's round right side, and a block that carries its flat top and bottom edges into the
+    # stem, so the top of the P is one piece (no dip where the bowl's curve meets the stem).
+    bowl = min(sd_box(u, v, 0.50, 0.41, 0.265, 0.22, 0.215),
+               sd_box(u, v, 0.40, 0.41, 0.165, 0.22, 0.065))
     p = min(stem, bowl)
     if arrow:
         head = sd_triangle_left(u, v, 0.335, 0.455, 0.36, 0.09)
