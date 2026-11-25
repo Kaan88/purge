@@ -977,6 +977,28 @@ fn planted_index_objects_are_refused_and_renamed_aside() {
 }
 
 #[test]
+fn check_inspects_the_index_and_refuses_one_others_can_write() {
+    let (_s, roots) = fixture("checkindex");
+    let index = roots.index_path();
+    roots.check().unwrap();
+    // A missing index passes the pre-flight (the installer's `{}` may not exist yet).
+    std::fs::remove_file(&index).unwrap();
+    roots.check().unwrap();
+    // A file written by an ordinary tool (inherited, unprotected DACL) stops the pre-flight.
+    std::fs::write(&index, b"{}").unwrap();
+    assert!(
+        matches!(
+            roots.check(),
+            Err(StorageError::Integrity {
+                failure: IntegrityFailure::UnprotectedDacl,
+                ..
+            })
+        ),
+        "an unprotected index passed check()"
+    );
+}
+
+#[test]
 fn cap_check_uses_the_volume_size() {
     let (s, roots) = fixture("cap");
     let mut index = SessionIndex::default();

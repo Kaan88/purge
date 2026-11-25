@@ -38,6 +38,8 @@ impl Win32Error {
     pub const MORE_DATA: Win32Error = Win32Error(234);
     /// `ERROR_NO_MORE_ITEMS`.
     pub const NO_MORE_ITEMS: Win32Error = Win32Error(259);
+    /// `ERROR_ENVVAR_NOT_FOUND`.
+    pub const ENVVAR_NOT_FOUND: Win32Error = Win32Error(203);
     /// `ERROR_CANT_RESOLVE_FILENAME`: returned by `reg` when a registry path would have to pass
     /// through a symbolic link key, which is never followed.
     pub const LINK_ON_PATH: Win32Error = Win32Error(1921);

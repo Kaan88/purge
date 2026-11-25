@@ -1131,9 +1131,24 @@ impl StorageRoots {
     }
 
     /// Checks the data root, `sessions`, `Quarantine` and `fp` (creating the last three when missing,
-    /// as the installer would). A pre-flight for callers; every other method checks on its own.
+    /// as the installer would), and `sessions\index.json` when it exists (inspected on a handle: the
+    /// `Index` rule, not read or parsed). A pre-flight for callers; every other method checks on its
+    /// own. The broker runs it before its pipe exists (M3_DESIGN 3.4), so an index others can write
+    /// stops the start (m3-broker `index-user-writable`), not only the first read.
     pub fn check(&self) -> Result<(), StorageError> {
-        self.layout()?;
+        let layout = self.layout()?;
+        let inspect_only = at::Open {
+            access: at::READ_CONTROL | at::FILE_READ_ATTRIBUTES,
+            share: at::SHARE_ALL,
+            create: None,
+            kind: at::Kind::File,
+        };
+        self.open_file_at(
+            &layout.sessions,
+            INDEX_FILE,
+            ObjectKind::Index,
+            inspect_only,
+        )?;
         self.fp_dir().map(|_| ())
     }
 

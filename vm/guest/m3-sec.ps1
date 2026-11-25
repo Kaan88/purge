@@ -147,7 +147,13 @@ function Test-JournalSame($A, $B) { ((@($A.sessions) -join '|') -eq (@($B.sessio
 
 function Get-PurgeEvents([datetime]$Since) {
     @(Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = 'Purge'; StartTime = $Since } -ErrorAction SilentlyContinue |
-        Sort-Object TimeCreated | ForEach-Object { [ordered]@{ id = $_.Id; time = $_.TimeCreated.ToString('o'); message = "$($_.Message)" } })
+        Sort-Object TimeCreated | ForEach-Object {
+            # The Purge source has no message file (install\README.md): Windows renders no .Message, and the
+            # broker's line is the event's insertion string (m3-broker 2026-11-25: every message read empty).
+            $msg = "$($_.Message)"
+            if (-not $msg.Trim()) { $msg = (@($_.Properties | ForEach-Object { "$($_.Value)" }) -join ' ').Trim() }
+            [ordered]@{ id = $_.Id; time = $_.TimeCreated.ToString('o'); message = $msg }
+        })
 }
 
 function Get-DaclSddl([string]$Path) {

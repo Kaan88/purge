@@ -51,6 +51,10 @@ fn main() -> ExitCode {
         failure.report();
         return ExitCode::from(failure.exit_code());
     }
+    if let Err(failure) = start::pin_machine_environment() {
+        failure.report();
+        return ExitCode::from(failure.exit_code());
+    }
     // Timing (design 9.1): marks count from the process creation; nothing depends on them. The
     // event-log sink is attached once the pipe exists, so a refused start writes no timing line.
     let timings = Arc::new(Timings::new(

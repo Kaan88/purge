@@ -276,6 +276,43 @@ pub fn restrict_working_directory() -> Result<(), StartFailure> {
     })
 }
 
+/// The machine-wide variables the broker resets at start, before anything else reads the environment
+/// (M3_DESIGN 3.4, threat T7). An elevated process gets the caller's environment, including values from
+/// `HKCU\Environment`, so a caller could point `ProgramData` and the others at a tree it writes. Purge's
+/// own paths never read them (known folders and the registry); this also covers Windows components
+/// loaded into the broker and the uninstallers it starts (m3-broker 2026-11-25: `env-planted` found the
+/// shell's `Caches` databases written into a planted `ProgramData`).
+pub fn pin_machine_environment() -> Result<(), StartFailure> {
+    use purge_win::env::set_process_var;
+    use purge_win::known_folders::{machine_program_data, system_windows_dir};
+
+    let fail = |what: &str, e: purge_win::os::Win32Error| {
+        StartFailure::StoreIntegrity(format!(
+            "the machine environment could not be set ({what}): {e}"
+        ))
+    };
+    let windows = system_windows_dir().map_err(|e| fail("the Windows directory", e))?;
+    let program_data = machine_program_data().map_err(|e| fail("ProgramData", e))?;
+    let windows_s = windows.to_string_lossy().trim_end_matches('\\').to_string();
+    let program_data_s = program_data
+        .to_string_lossy()
+        .trim_end_matches('\\')
+        .to_string();
+    let drive = windows_s.get(..2).unwrap_or("C:").to_string();
+    let pins: [(&str, Option<&str>); 6] = [
+        ("SystemDrive", Some(&drive)),
+        ("SystemRoot", Some(&windows_s)),
+        ("windir", Some(&windows_s)),
+        ("ProgramData", Some(&program_data_s)),
+        ("ALLUSERSPROFILE", Some(&program_data_s)),
+        ("PURGE_KB_DIR", None),
+    ];
+    for (name, value) in pins {
+        set_process_var(name, value).map_err(|e| fail(name, e))?;
+    }
+    Ok(())
+}
+
 /// The start checks on the live machine ([`check_with`] of [`LiveFacts`]).
 pub fn check() -> Result<Started<StorageRoots>, StartFailure> {
     check_with(&LiveFacts)

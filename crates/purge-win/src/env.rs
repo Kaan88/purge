@@ -125,9 +125,44 @@ pub fn expand(s: &str) -> Result<String, crate::os::Win32Error> {
     }
 }
 
+/// Sets (`Some`) or removes (`None`) `name` in this process's environment with
+/// `SetEnvironmentVariableW`. Child processes created afterwards inherit the change. Used by the
+/// broker at start to replace machine-wide variables a caller could have planted (M3_DESIGN 3.4, T7).
+#[cfg(feature = "read")]
+pub fn set_process_var(name: &str, value: Option<&str>) -> Result<(), crate::os::Win32Error> {
+    use windows_sys::Win32::System::Environment::SetEnvironmentVariableW;
+
+    let name_w = crate::os::wide(name);
+    let value_w = value.map(crate::os::wide);
+    let value_ptr = value_w.as_ref().map_or(std::ptr::null(), |v| v.as_ptr());
+    // SAFETY: `name_w` is NUL-terminated; `value_ptr` is null or points to the NUL-terminated `value_w`,
+    // which lives until the call returns. The Win32 environment block is guarded by the system.
+    let ok = unsafe { SetEnvironmentVariableW(name_w.as_ptr(), value_ptr) };
+    if ok == 0 {
+        // Removing a variable that is not set is not an error.
+        let err = crate::os::Win32Error::last();
+        if value.is_none() && err == crate::os::Win32Error::ENVVAR_NOT_FOUND {
+            return Ok(());
+        }
+        return Err(err);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn set_process_var_sets_and_removes() {
+        let name = "PURGE_WIN_ENV_TEST_7F3A";
+        set_process_var(name, Some(r"C:\x")).unwrap();
+        assert_eq!(std::env::var(name).unwrap(), r"C:\x");
+        set_process_var(name, None).unwrap();
+        assert!(std::env::var(name).is_err());
+        // Removing it again is fine.
+        set_process_var(name, None).unwrap();
+    }
 
     fn map() -> EnvMap {
         [
