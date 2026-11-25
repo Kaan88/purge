@@ -14,7 +14,7 @@ use std::path::Path;
 
 use purge_win::pipe::same_path;
 use purge_win::pipe_client::PipeClient;
-use purge_win::process::ProcessHandle;
+use purge_win::process::QueryProcessHandle;
 use purge_win::token::Token;
 
 use crate::engine::win32_text;
@@ -83,7 +83,7 @@ pub fn check_server(
     if server_pid != expected_pid {
         return ServerCheck::fail(ServerCheckStatus::PidMismatch, NOT_OURS);
     }
-    let process = match ProcessHandle::open_query_limited(server_pid) {
+    let process = match QueryProcessHandle::open(server_pid) {
         Ok(p) => p,
         Err(e) => {
             return ServerCheck::fail(
@@ -107,7 +107,7 @@ pub fn check_server(
     }
     if require_elevation {
         // A token that cannot be read is not known to be elevated.
-        let elevated = Token::of_process(&process)
+        let elevated = Token::of_query_process(&process)
             .and_then(|t| t.elevated())
             .unwrap_or(false);
         if !elevated {

@@ -75,23 +75,34 @@ fn peer(on_line: impl Fn(&str, &Peer) + Send + 'static) -> (Peer, PipeClient) {
     (peer, client)
 }
 
-/// A session over `client`, through the one handshake.
+/// A session over `client` with the launcher's pipe wiring, through the one handshake, not handed
+/// out yet.
+fn pending_session(
+    client: PipeClient,
+    sink: Sink,
+    hello_timeout: Duration,
+) -> Result<Arc<BrokerClient>, HandshakeError> {
+    let stop = AtomicBool::new(false);
+    BrokerClient::pipe_session(
+        client,
+        None,
+        std::process::id(),
+        std::path::PathBuf::new(),
+        sink,
+        hello_timeout,
+        &stop,
+    )
+}
+
+/// [`pending_session`], handed out.
 fn session_over(
     client: PipeClient,
     sink: Sink,
     hello_timeout: Duration,
 ) -> Result<Arc<BrokerClient>, HandshakeError> {
-    let pipe = Arc::new(client);
-    let shut = pipe.clone();
-    let stop = AtomicBool::new(false);
-    BrokerClient::over_streams(
-        Box::new(PipeWriter(pipe.clone())),
-        Box::new(PipeReader(pipe)),
-        Box::new(move || shut.shut_down()),
-        sink,
-        hello_timeout,
-        &stop,
-    )
+    let session = pending_session(client, sink, hello_timeout)?;
+    session.hand_over(|| {})?;
+    Ok(session)
 }
 
 fn send_result(peer: &Peer, id: u64, result: &str) {
@@ -312,7 +323,9 @@ fn a_server_that_ends_fails_the_open_request() {
     );
     assert!(!session.is_live());
     let closed = events.find(|e| match e {
-        ClientEvent::BrokerClosed { reason } => Some(reason.clone()),
+        ClientEvent::BrokerClosed { reason, session: s } if *s == session.session() => {
+            Some(reason.clone())
+        }
         _ => None,
     });
     assert_eq!(closed, "The administrator part ended.");
@@ -825,4 +838,260 @@ fn hello_completes_against_the_real_broker_pipe_server() {
     );
     session.close();
     let _ = child.kill();
+}
+
+#[test]
+fn close_ends_the_pipe_while_the_session_is_still_held() {
+    // Review S1: the broker must see the pipe end (and take its consent dialog down) when the UI
+    // closes the session, even while a page still holds the session.
+    let (server, client) = connect();
+    let server = Arc::new(server);
+    let (tx, rx) = std::sync::mpsc::channel();
+    let s = server.clone();
+    std::thread::spawn(move || {
+        use std::io::BufRead;
+        let mut reader = io::BufReader::new(ServerIo(s.clone()));
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        let answer = format!(
+            "{{\"jsonrpc\":\"2.0\",\"id\":{},\"result\":{}}}\n",
+            id_of(line.trim()),
+            hello_result()
+        );
+        ServerIo(s).write_all(answer.as_bytes()).unwrap();
+        // The next read is the end of the stream once the client's handle is closed.
+        let mut rest = String::new();
+        let _ = tx.send(reader.read_line(&mut rest).unwrap_or(0));
+    });
+    let (sink, _events) = events();
+    let session = session_over(client, sink, LIMIT).unwrap_or_else(|_| panic!("no session"));
+    let held = session.clone();
+    session.close();
+    assert_eq!(
+        rx.recv_timeout(Duration::from_secs(5)),
+        Ok(0),
+        "the server did not see the pipe end"
+    );
+    assert!(!held.is_live());
+}
+
+/// A broker that answers the hello and ends at the next request.
+fn ends_after_hello() -> (Peer, PipeClient) {
+    peer(|line, p| match method_of(line).as_str() {
+        "engine.hello" => send_result(p, id_of(line), &hello_result()),
+        _ => p.end(),
+    })
+}
+
+#[test]
+fn a_session_whose_link_ended_before_the_launch_answer_is_not_handed_out() {
+    // Review S3: no BrokerClosed may come for a session the UI never got.
+    let (_peer, client) = ends_after_hello();
+    let (sink, mut events) = events();
+    let session = pending_session(client, sink.clone(), LIMIT).unwrap_or_else(|_| panic!());
+    let call = session.request(PipeCall::JournalPending(NoParams {}));
+    assert!(events.reply(call).is_err());
+    assert!(!session.is_live());
+    let launch = CallId::next();
+    launcher::deliver(launch, Ok(session), &sink);
+    let failure = events.find(|e| match e {
+        ClientEvent::BrokerLaunched { call, result } if *call == launch => {
+            Some(result.clone().map(|_| ()))
+        }
+        _ => None,
+    });
+    assert_eq!(failure.unwrap_err().status, LaunchStatus::CannotStart);
+    events.drain_for(Duration::from_millis(200));
+    assert!(
+        !events
+            .seen
+            .iter()
+            .any(|e| matches!(e, ClientEvent::BrokerClosed { .. }))
+    );
+}
+
+#[test]
+fn a_launched_session_announces_its_end_after_the_launch_answer() {
+    let (_peer, client) = ends_after_hello();
+    let (sink, mut events) = events();
+    let session = pending_session(client, sink.clone(), LIMIT).unwrap_or_else(|_| panic!());
+    let id = session.session();
+    assert_ne!(id, 0);
+    let launch = CallId::next();
+    launcher::deliver(launch, Ok(session.clone()), &sink);
+    let call = session.request(PipeCall::JournalPending(NoParams {}));
+    assert!(events.reply(call).is_err());
+    events.drain_for(Duration::from_millis(200));
+    let launched = events
+        .seen
+        .iter()
+        .position(
+            |e| matches!(e, ClientEvent::BrokerLaunched { call, result: Ok(_) } if *call == launch),
+        )
+        .expect("launched");
+    let closed = events
+        .seen
+        .iter()
+        .position(|e| matches!(e, ClientEvent::BrokerClosed { session, .. } if *session == id))
+        .expect("closed, naming its session");
+    assert!(launched < closed);
+}
+
+/// A started broker for [`launcher::connect`]: a pid, an exit code, the terminations.
+struct FakeProcess {
+    pid: u32,
+    exit_code: Option<u32>,
+    terminated: AtomicUsize,
+}
+
+impl FakeProcess {
+    fn running() -> FakeProcess {
+        FakeProcess {
+            pid: 4242,
+            exit_code: None,
+            terminated: AtomicUsize::new(0),
+        }
+    }
+
+    fn terminations(&self) -> usize {
+        self.terminated.load(Ordering::SeqCst)
+    }
+}
+
+impl launcher::BrokerProcess for FakeProcess {
+    fn pid(&self) -> u32 {
+        self.pid
+    }
+
+    fn exit_code(&self) -> Option<u32> {
+        self.exit_code
+    }
+
+    fn terminate(&self) {
+        self.terminated.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+fn pipe_path(name: &str) -> std::path::PathBuf {
+    std::path::PathBuf::from(format!(r"\\.\pipe\purge-{name}"))
+}
+
+fn options() -> PipeOptions {
+    PipeOptions {
+        read_timeout: Some(Duration::from_secs(10)),
+        write_timeout: Duration::from_secs(10),
+        buffer_size: 4096,
+    }
+}
+
+fn passes(_: &PipeClient, _: u32) -> ServerCheck {
+    ServerCheck {
+        status: ServerCheckStatus::Ok,
+        reason: String::new(),
+    }
+}
+
+#[test]
+fn connect_retries_until_the_pipe_exists_then_checks_the_expected_pid() {
+    let name = random_name();
+    let n = name.clone();
+    let server = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(300));
+        let me = purge_win::sid::current_user_sid().unwrap();
+        let mut server = PipeServer::create(&n, &me, options()).unwrap();
+        server.wait_for_client(Some(LIMIT)).unwrap();
+        server
+    });
+    let process = FakeProcess::running();
+    let checked = std::sync::Mutex::new(None);
+    let stop = AtomicBool::new(false);
+    let pipe = launcher::connect(&process, &pipe_path(&name), LIMIT, &stop, |pipe, pid| {
+        *checked.lock().unwrap() = Some(pid);
+        passes(pipe, pid)
+    });
+    assert!(pipe.is_ok(), "{:?}", pipe.err());
+    assert_eq!(*checked.lock().unwrap(), Some(4242));
+    assert_eq!(process.terminations(), 0);
+    drop(server.join().unwrap());
+}
+
+#[test]
+fn connect_reports_the_exit_code_of_a_broker_that_ended_before_its_pipe() {
+    let process = FakeProcess {
+        exit_code: Some(3),
+        ..FakeProcess::running()
+    };
+    let stop = AtomicBool::new(false);
+    let failure =
+        launcher::connect(&process, &pipe_path(&random_name()), LIMIT, &stop, passes).unwrap_err();
+    assert_eq!(failure.status, LaunchStatus::CannotStart);
+    assert_eq!(failure.exit_code, Some(3));
+    assert!(
+        failure.message.contains("exit code 3"),
+        "{}",
+        failure.message
+    );
+}
+
+#[test]
+fn connect_times_out_and_ends_the_broker() {
+    let process = FakeProcess::running();
+    let stop = AtomicBool::new(false);
+    let failure = launcher::connect(
+        &process,
+        &pipe_path(&random_name()),
+        Duration::from_millis(300),
+        &stop,
+        passes,
+    )
+    .unwrap_err();
+    assert_eq!(failure.status, LaunchStatus::TimedOut);
+    assert_eq!(process.terminations(), 1);
+}
+
+#[test]
+fn a_stopped_connect_ends_the_broker() {
+    let process = FakeProcess::running();
+    let stop = AtomicBool::new(true);
+    let failure =
+        launcher::connect(&process, &pipe_path(&random_name()), LIMIT, &stop, passes).unwrap_err();
+    assert_eq!(failure.status, LaunchStatus::Stopped);
+    assert_eq!(process.terminations(), 1);
+}
+
+#[test]
+fn a_failed_server_check_writes_nothing_and_ends_the_broker() {
+    let name = random_name();
+    let me = purge_win::sid::current_user_sid().unwrap();
+    let mut server = PipeServer::create(&name, &me, options()).unwrap();
+    let process = FakeProcess::running();
+    let stop = AtomicBool::new(false);
+    let failure = launcher::connect(&process, &pipe_path(&name), LIMIT, &stop, |_, _| {
+        ServerCheck {
+            status: ServerCheckStatus::PidMismatch,
+            reason: "not ours".into(),
+        }
+    })
+    .unwrap_err();
+    assert_eq!(failure.status, LaunchStatus::ServerCheckFailed);
+    assert_eq!(failure.message, "not ours");
+    assert_eq!(process.terminations(), 1);
+    // The client connected and left without a byte.
+    let _ = server.wait_for_client(Some(Duration::from_secs(1)));
+    let mut buf = [0u8; 16];
+    assert_eq!(ServerIo(Arc::new(server)).read(&mut buf).unwrap(), 0);
+}
+
+#[test]
+fn a_pipe_that_refuses_this_client_ends_the_broker() {
+    // Review S4: an open error other than missing or busy (here access denied: the pipe admits only
+    // SYSTEM) ends the launch at once, and the broker with it.
+    let name = random_name();
+    let _server = PipeServer::create(&name, "S-1-5-18", options()).unwrap();
+    let process = FakeProcess::running();
+    let stop = AtomicBool::new(false);
+    let failure = launcher::connect(&process, &pipe_path(&name), LIMIT, &stop, passes).unwrap_err();
+    assert_eq!(failure.status, LaunchStatus::CannotStart);
+    assert_eq!(failure.win32_error, 5);
+    assert_eq!(process.terminations(), 1);
 }

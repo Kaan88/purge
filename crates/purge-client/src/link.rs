@@ -1,7 +1,7 @@
 //! One newline-delimited JSON-RPC 2.0 link (crates/purge-rpc, `frame.rs`), shared by the engine and
-//! the broker clients: a writer, one reader thread, requests numbered from 1 that may overlap, the
-//! notifications of a request routed to it by their `params.request`, `$/cancel`, and the end of the
-//! link.
+//! the broker clients: a writer thread, a reader thread, requests numbered from 1 that may overlap,
+//! the notifications of a request routed to it by their `params.request`, `$/cancel`, and the end of
+//! the link.
 //!
 //! The rules, as in the C# clients (`StdioEngineClient`, `BrokerRpcClient`):
 //!
@@ -14,14 +14,30 @@
 //! - When the link ends, every request in flight gets its answer (the link's error), then the
 //!   `closed` callback runs once.
 //! - A request is answered exactly once ([`Entry::done`]); its notifications before its answer.
+//! - A request line is serialised and checked against the server's limit on the caller's thread (an
+//!   oversize request is refused at once and the link stays up), then queued for the writer thread:
+//!   no caller ever waits on the transport, so a server that stops reading cannot block the UI. A
+//!   request the writer had not started when the link ended is answered "not sent".
+//! - [`Link::close`] shuts the transport down first (the hook wakes a blocked read or write), then
+//!   answers the requests in flight, then runs `closed`; it never waits for the writer.
+//!
+//! # Threads
+//!
+//! Both threads are detached; neither is joined, because `close` may run on either of them. The
+//! reader ends when the transport ends: the server closes its end, or the `shut_down` hook wakes it.
+//! The writer holds only a weak reference to the link and ends once its queue is dropped (by
+//! `close`, or with the last [`Link`]) and its current write has returned, which the `shut_down`
+//! hook makes happen at once. Each holds its end of the transport, so the transport is released
+//! when both have ended.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, BufReader, Read, Write};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 
 use purge_rpc::error::ErrorObject;
 use purge_rpc::frame::{
-    FrameError, FrameReader, FrameWriter, NotificationLine, RequestId, RequestLine, ServerMessage,
+    FrameError, FrameReader, NotificationLine, RequestId, RequestLine, ServerMessage,
     parse_server_line,
 };
 use purge_rpc::methods::CancelParams;
@@ -71,8 +87,19 @@ struct Pending {
 
 struct State {
     pending: HashMap<u64, Pending>,
+    /// Requests queued for the writer that it has not started to write: none of their bytes is in
+    /// the transport.
+    queued: HashSet<u64>,
     closed: Option<String>,
     next_id: u64,
+}
+
+/// A line for the writer thread.
+enum Out {
+    /// Request `id`'s line, written only while the request is still queued.
+    Request { id: u64, line: Vec<u8> },
+    /// A notification line (`$/cancel`).
+    Notice(Vec<u8>),
 }
 
 /// The handler of notifications no request claims.
@@ -85,7 +112,8 @@ pub(crate) struct Hooks {
     /// The longest request line the server reads (`sets::Transport::in_limit`); a longer request is
     /// refused here before anything is written.
     pub out_limit: usize,
-    /// Wakes the reader and ends the transport (closes the pipe, or the engine's job).
+    /// Wakes the reader and the writer and ends the transport (shuts the pipe down, or closes the
+    /// engine's job). Called once, by the first [`Link::close`], before anything else it does.
     pub shut_down: Box<dyn Fn() + Send + Sync>,
     /// A notification no request in flight claims (no `params.request`, or one already answered).
     pub unrouted: Unrouted,
@@ -97,7 +125,8 @@ pub(crate) struct Hooks {
 
 struct Inner {
     hooks: Hooks,
-    writer: Mutex<Option<FrameWriter<Box<dyn Write + Send>>>>,
+    /// The writer thread's queue; `None` once the link is closed.
+    queue: Mutex<Option<Sender<Out>>>,
     state: Mutex<State>,
 }
 
@@ -108,29 +137,36 @@ pub(crate) struct Link {
 }
 
 impl Link {
-    /// A link over `output` (the server's lines in) and `input` (requests out); starts the reader
-    /// thread.
+    /// A link over `output` (the server's lines in) and `input` (requests out); starts the writer
+    /// thread `<name>-writer` and the reader thread `<name>-reader`.
     pub fn new(
         input: Box<dyn Write + Send>,
         output: Box<dyn Read + Send>,
         hooks: Hooks,
-        thread_name: &str,
+        name: &str,
     ) -> io::Result<Link> {
-        let limit = hooks.out_limit;
+        let (tx, rx) = mpsc::channel();
         let link = Link {
             inner: Arc::new(Inner {
                 hooks,
-                writer: Mutex::new(Some(FrameWriter::new(input, limit))),
+                queue: Mutex::new(Some(tx)),
                 state: Mutex::new(State {
                     pending: HashMap::new(),
+                    queued: HashSet::new(),
                     closed: None,
                     next_id: 1,
                 }),
             }),
         };
+        // The writer first: should the reader not start, dropping `link` drops the queue, and the
+        // writer ends.
+        let weak = Arc::downgrade(&link.inner);
+        std::thread::Builder::new()
+            .name(format!("{name}-writer"))
+            .spawn(move || write_loop(weak, rx, input))?;
         let reader = link.clone();
         std::thread::Builder::new()
-            .name(thread_name.into())
+            .name(format!("{name}-reader"))
             .spawn(move || reader.read_loop(output))?;
         Ok(link)
     }
@@ -141,7 +177,8 @@ impl Link {
     }
 
     /// Sends `method` with `params` (`None`: no `params` member) as request `call`. `before_send`
-    /// gets the wire id before the line is written. The answer goes through `entry`.
+    /// gets the wire id before the line is queued. The answer goes through `handler`. Never waits for
+    /// the transport.
     pub fn start(
         &self,
         call: CallId,
@@ -173,6 +210,7 @@ impl Link {
                     entry: entry.clone(),
                 },
             );
+            state.queued.insert(id);
             id
         };
         before_send(id);
@@ -181,15 +219,19 @@ impl Link {
             method,
             params,
         };
-        if let Err(error) = self.write(&line) {
-            // Never received as a request: no whole line of it reached the server.
-            self.take(id);
-            lock(&entry).end(error);
+        match self.encode(&line) {
+            Ok(line) => self.enqueue(Out::Request { id, line }),
+            Err(error) => {
+                // Refused before anything was written; the link stays up.
+                self.take(id);
+                lock(&self.inner.state).queued.remove(&id);
+                lock(&entry).end(error);
+            }
         }
     }
 
-    /// Cancels request `call`: sends `$/cancel` and ends the call with [`ClientError::Cancelled`]. A
-    /// call that is not in flight (answered already) is left alone.
+    /// Cancels request `call`: queues `$/cancel` and ends the call with [`ClientError::Cancelled`].
+    /// A call that is not in flight (answered already) is left alone.
     pub fn cancel(&self, call: CallId) {
         let found = {
             let mut state = lock(&self.inner.state);
@@ -209,37 +251,106 @@ impl Link {
                 request: RequestId(id),
             },
         };
-        // A failed write ends the link; the cancel itself is best effort.
-        let _ = self.write(&cancel);
+        // Best effort: the server ignores a cancel of an id it does not know.
+        if let Ok(line) = self.encode(&cancel) {
+            self.enqueue(Out::Notice(line));
+        }
         lock(&entry).end(ClientError::Cancelled);
     }
 
-    /// Ends the link with `reason` (the first reason wins): every request in flight is answered with
-    /// it, the transport is shut down, then `closed` runs once.
+    /// Ends the link with `reason` (the first reason wins): the transport is shut down, every request
+    /// in flight is answered with it (those the writer had not started as "not sent"), then `closed`
+    /// runs once. Never waits for a write in progress.
     pub fn close(&self, reason: &str) {
-        let (first, pending) = {
+        let (first, reason, pending) = {
             let mut state = lock(&self.inner.state);
             let first = state.closed.is_none();
             if first {
                 state.closed = Some(reason.to_owned());
             }
             let reason = state.closed.clone().unwrap_or_default();
-            let pending: Vec<_> = state.pending.drain().map(|(_, p)| p.entry).collect();
-            ((first, reason), pending)
+            let queued = std::mem::take(&mut state.queued);
+            let pending: Vec<_> = state
+                .pending
+                .drain()
+                .map(|(id, p)| (p.entry, queued.contains(&id)))
+                .collect();
+            (first, reason, pending)
         };
-        let (first, reason) = first;
-        for entry in pending {
+        if first {
+            // Before anything else: wakes a write blocked on a server that stopped reading, and the
+            // reader.
+            (self.inner.hooks.shut_down)();
+            // The writer ends once out of its write, and closes our end of the requests.
+            lock(&self.inner.queue).take();
+        }
+        for (entry, not_sent) in pending {
             lock(&entry).end(ClientError::Link {
                 reason: reason.clone(),
-                not_sent: false,
+                not_sent,
             });
         }
         if first {
-            // Closing our end of the requests: the engine sees the end of its input.
-            lock(&self.inner.writer).take();
-            (self.inner.hooks.shut_down)();
             (self.inner.hooks.closed)(&reason);
         }
+    }
+
+    /// One line, serialised compactly with its newline. A line over the server's limit is refused:
+    /// it is not sent, and the link stays up.
+    fn encode<T: serde::Serialize>(&self, line: &T) -> Result<Vec<u8>, ClientError> {
+        let who = self.inner.hooks.who;
+        let limit = self.inner.hooks.out_limit;
+        // Compact serde_json output never holds a raw newline: one in a string is escaped.
+        let mut bytes = serde_json::to_vec(line).map_err(|e| ClientError::Link {
+            reason: format!(
+                "Purge could not write its request to {}: {e}",
+                who.to_lowercase()
+            ),
+            not_sent: true,
+        })?;
+        if bytes.len() > limit {
+            return Err(ClientError::Link {
+                reason: format!(
+                    "Purge's request of {} bytes is over the {limit}-byte limit of {}.",
+                    bytes.len(),
+                    who.to_lowercase()
+                ),
+                not_sent: true,
+            });
+        }
+        bytes.push(b'\n');
+        Ok(bytes)
+    }
+
+    /// Hands a line to the writer. After the link closed there is no writer and nothing to do: the
+    /// request was answered by `close`.
+    fn enqueue(&self, out: Out) {
+        if let Some(queue) = lock(&self.inner.queue).as_ref() {
+            let _ = queue.send(out);
+        }
+    }
+
+    /// The writer is about to write request `id`: false when it must not (cancelled, refused, or the
+    /// link ended).
+    fn begin_write(&self, id: u64) -> bool {
+        let mut state = lock(&self.inner.state);
+        state.closed.is_none() && state.queued.remove(&id)
+    }
+
+    /// A write failed: the request being written (if any) was not received as a request, and the link
+    /// ends (a part of the line may be in the transport, so the stream is no longer framed).
+    fn write_failed(&self, id: Option<u64>) {
+        let who = self.inner.hooks.who;
+        let reason = self
+            .closed_reason()
+            .unwrap_or_else(|| format!("{who} is not running."));
+        if let Some(entry) = id.and_then(|id| self.take(id)) {
+            lock(&entry).end(ClientError::Link {
+                reason: reason.clone(),
+                not_sent: true,
+            });
+        }
+        self.close(&reason);
     }
 
     fn take(&self, id: u64) -> Option<Arc<Mutex<Entry>>> {
@@ -262,46 +373,6 @@ impl Link {
             .is_some_and(|p| Arc::ptr_eq(&p.entry, entry))
         {
             state.pending.remove(&id);
-        }
-    }
-
-    /// Writes one line. An oversize line writes nothing and leaves the link up; a failed write ends
-    /// the link. Either way the request was not sent.
-    fn write<T: serde::Serialize>(&self, line: &T) -> Result<(), ClientError> {
-        let who = self.inner.hooks.who;
-        let not_running = || {
-            self.closed_reason()
-                .unwrap_or_else(|| format!("{who} is not running."))
-        };
-        let result = {
-            let mut writer = lock(&self.inner.writer);
-            match writer.as_mut() {
-                None => {
-                    return Err(ClientError::Link {
-                        reason: not_running(),
-                        not_sent: true,
-                    });
-                }
-                Some(w) => w.send(line),
-            }
-        };
-        match result {
-            Ok(()) => Ok(()),
-            Err(FrameError::OutOversize { len, limit }) => Err(ClientError::Link {
-                reason: format!(
-                    "Purge's request of {len} bytes is over the {limit}-byte limit of {}.",
-                    who.to_lowercase()
-                ),
-                not_sent: true,
-            }),
-            Err(_) => {
-                let reason = not_running();
-                self.close(&reason);
-                Err(ClientError::Link {
-                    reason: self.closed_reason().unwrap_or(reason),
-                    not_sent: true,
-                })
-            }
         }
     }
 
@@ -461,6 +532,34 @@ impl Link {
     }
 }
 
+/// The writer thread: writes each queued line in order until the queue is gone or a write fails.
+fn write_loop(link: Weak<Inner>, queue: Receiver<Out>, mut input: Box<dyn Write + Send>) {
+    while let Ok(out) = queue.recv() {
+        let Some(inner) = link.upgrade() else {
+            return;
+        };
+        let link = Link { inner };
+        let (id, line) = match out {
+            Out::Request { id, line } => {
+                if !link.begin_write(id) {
+                    continue;
+                }
+                (Some(id), line)
+            }
+            Out::Notice(line) => {
+                if link.closed_reason().is_some() {
+                    continue;
+                }
+                (None, line)
+            }
+        };
+        if input.write_all(&line).and_then(|()| input.flush()).is_err() {
+            link.write_failed(id);
+            return;
+        }
+    }
+}
+
 /// A non-empty string member.
 fn text(v: Option<&Value>) -> Option<&str> {
     v.and_then(Value::as_str).filter(|s| !s.is_empty())
@@ -471,4 +570,195 @@ pub(crate) fn decode<T: DeserializeOwned>(method: &str, value: Value) -> Result<
     let name = std::any::type_name::<T>().rsplit("::").next().unwrap_or("");
     serde_json::from_value(value)
         .map_err(|e| ClientError::BadReply(format!("the {method} result is not a {name}: {e}")))
+}
+
+#[cfg(test)]
+mod tests {
+    //! The link alone: its size limits, and a writer that blocks (review of UI-CLIENT, S2).
+
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::mpsc::RecvTimeoutError;
+    use std::sync::{Condvar, mpsc};
+    use std::time::{Duration, Instant};
+
+    use super::*;
+    use crate::testing::{LIMIT, MemReader, MemWriter, mem_pipe};
+
+    /// A call whose answer goes to a channel.
+    struct TestCall(mpsc::Sender<Result<Value, ClientError>>);
+
+    impl Call for TestCall {
+        fn notification(&mut self, _: &str, _: Value) -> bool {
+            false
+        }
+
+        fn reply(&mut self, result: Result<Value, ClientError>) -> bool {
+            let _ = self.0.send(result);
+            true
+        }
+
+        fn end(&mut self, error: ClientError) {
+            let _ = self.0.send(Err(error));
+        }
+    }
+
+    fn hooks(out_limit: usize, shut_down: Box<dyn Fn() + Send + Sync>) -> Hooks {
+        Hooks {
+            who: "The engine",
+            out_limit,
+            shut_down,
+            unrouted: Box::new(|_, _| {}),
+            closed: Box::new(|_| {}),
+            exit_text: Box::new(String::new),
+        }
+    }
+
+    fn request(link: &Link, params: Option<&Value>) -> mpsc::Receiver<Result<Value, ClientError>> {
+        let (tx, rx) = mpsc::channel();
+        link.start(
+            CallId::next(),
+            "engine.hello",
+            params,
+            Box::new(TestCall(tx)),
+            |_| {},
+        );
+        rx
+    }
+
+    /// A link over in-memory pipes: the link, the server's view of the requests, and the server's
+    /// output.
+    fn mem_link(out_limit: usize) -> (Link, MemReader, MemWriter) {
+        let (to_server, from_client) = mem_pipe();
+        let (to_client, from_server) = mem_pipe();
+        let link = Link::new(
+            Box::new(to_server),
+            Box::new(from_server),
+            hooks(out_limit, Box::new(|| {})),
+            "purge-test",
+        )
+        .unwrap();
+        (link, from_client, to_client)
+    }
+
+    #[test]
+    fn a_request_over_the_servers_limit_is_refused_and_the_link_stays_up() {
+        let (link, mut server_in, mut server_out) = mem_link(64);
+        let big = Value::String("x".repeat(100));
+        let answer = request(&link, Some(&big)).recv_timeout(LIMIT).unwrap();
+        let Err(ClientError::Link { reason, not_sent }) = answer else {
+            panic!("{answer:?}")
+        };
+        assert!(not_sent);
+        assert!(reason.contains("over the 64-byte limit"), "{reason}");
+        assert!(link.closed_reason().is_none());
+        // Nothing of it was written: the next line the server reads is the next request.
+        let small = request(&link, None);
+        let mut line = Vec::new();
+        let mut byte = [0u8; 1];
+        while byte[0] != b'\n' {
+            assert_eq!(server_in.read(&mut byte).unwrap(), 1);
+            line.push(byte[0]);
+        }
+        let sent: Value = serde_json::from_slice(&line).unwrap();
+        assert_eq!(sent["id"], 2);
+        server_out
+            .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{}}\n")
+            .unwrap();
+        assert_eq!(
+            small.recv_timeout(LIMIT).unwrap(),
+            Ok(serde_json::json!({}))
+        );
+    }
+
+    #[test]
+    fn a_server_line_over_the_read_limit_ends_the_link() {
+        let (link, _server_in, mut server_out) = mem_link(1024);
+        let open = request(&link, None);
+        let mut line = vec![b' '; OUT_LIMIT + 1];
+        line.push(b'\n');
+        server_out.write_all(&line).unwrap();
+        let Err(ClientError::Link { reason, not_sent }) = open.recv_timeout(LIMIT).unwrap() else {
+            panic!()
+        };
+        assert!(
+            reason.starts_with("The engine sent a line that is not JSON-RPC: "),
+            "{reason}"
+        );
+        assert!(!not_sent);
+        assert!(link.closed_reason().is_some());
+    }
+
+    /// A transport whose writes block until `shut_down` is called, as a server that stopped reading.
+    #[derive(Clone, Default)]
+    struct Stuck(Arc<(Mutex<bool>, Condvar)>);
+
+    impl Stuck {
+        fn shut_down(&self) {
+            *lock(&self.0.0) = true;
+            self.0.1.notify_all();
+        }
+    }
+
+    impl Write for Stuck {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            let mut down = lock(&self.0.0);
+            while !*down {
+                down = self.0.1.wait(down).unwrap_or_else(PoisonError::into_inner);
+            }
+            Err(io::Error::from(io::ErrorKind::BrokenPipe))
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn requests_and_close_never_wait_for_a_blocked_write() {
+        let stuck = Stuck::default();
+        let shut = stuck.clone();
+        let shut_down = Arc::new(AtomicBool::new(false));
+        let s = shut_down.clone();
+        let (_to_client, from_server) = mem_pipe();
+        let link = Link::new(
+            Box::new(stuck),
+            Box::new(from_server),
+            hooks(
+                1024,
+                Box::new(move || {
+                    s.store(true, Ordering::SeqCst);
+                    shut.shut_down();
+                }),
+            ),
+            "purge-test",
+        )
+        .unwrap();
+        let started = Instant::now();
+        let first = request(&link, None);
+        // The writer is now inside the first write, which does not return.
+        std::thread::sleep(Duration::from_millis(100));
+        let second = request(&link, None);
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "a request waited"
+        );
+        assert_eq!(
+            first.recv_timeout(Duration::from_millis(100)),
+            Err(RecvTimeoutError::Timeout)
+        );
+        let closing = Instant::now();
+        link.close("The engine link was closed.");
+        assert!(closing.elapsed() < Duration::from_secs(2), "close waited");
+        assert!(shut_down.load(Ordering::SeqCst));
+        // The first was being written: what the server got of it is unknown. The second never left
+        // the queue.
+        let Err(ClientError::Link { not_sent, .. }) = first.recv_timeout(LIMIT).unwrap() else {
+            panic!()
+        };
+        assert!(!not_sent);
+        let Err(ClientError::Link { not_sent, .. }) = second.recv_timeout(LIMIT).unwrap() else {
+            panic!()
+        };
+        assert!(not_sent);
+    }
 }

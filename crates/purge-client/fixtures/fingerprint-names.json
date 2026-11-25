@@ -1,0 +1,17 @@
+{
+  "comment": "Program ids and the file names the broker stores their fingerprints under (fingerprint_name in bins/purge-broker/src/uninstall.rs, fingerprint::file_name in crates/purge-client). Both crates test against this file, so the two cannot drift apart.",
+  "names": [
+    {
+      "program_id": "HKLM|64|Git_is1",
+      "file": "fp-5e39ed2d8623f27f07147899ba6bc1923643f17253c971c665109765b1d9554c.json"
+    },
+    {
+      "program_id": "HKLM|32|Helper",
+      "file": "fp-efc48fabc977a023993787ad11c0c571c5e4d0842c974246dbb075f1064e8e4f.json"
+    },
+    {
+      "program_id": "HKLM|64|{771FD6B0-FA20-440A-A002-3B3BAC16DC50}_is1",
+      "file": "fp-8601db1ccae7f1eb8a3cc3358a3619435c576d5f948f1fb3795a0c806a161d8a.json"
+    }
+  ]
+}

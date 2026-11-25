@@ -304,10 +304,13 @@ impl PipeServer {
     pub fn wait_for_client(&mut self, timeout: Option<Duration>) -> Result<(), PipeError> {
         let event = Event::new()?;
         // SAFETY: plain data; zero is valid.
-        let mut ov: OVERLAPPED = unsafe { mem::zeroed() };
-        ov.hEvent = event.raw();
+        let mut storage: OVERLAPPED = unsafe { mem::zeroed() };
+        storage.hEvent = event.raw();
+        // Only this pointer is used from here on: the kernel writes the structure while the
+        // operation runs, so no Rust reference to it may exist meanwhile.
+        let ov = ptr::addr_of_mut!(storage);
         // SAFETY: valid pipe handle; `ov` lives on this frame until the operation has finished.
-        if unsafe { ConnectNamedPipe(self.raw(), &mut ov) } == 0 {
+        if unsafe { ConnectNamedPipe(self.raw(), ov) } == 0 {
             let e = Win32Error::last();
             match e.code() {
                 ERROR_PIPE_CONNECTED => return Ok(()),
@@ -319,7 +322,8 @@ impl PipeServer {
                 _ => return Err(e.into()),
             }
         }
-        match self.finish(&ov, timeout) {
+        // SAFETY: `ov` is the operation just started on this handle; its event is `event`.
+        match unsafe { self.finish(ov, event.raw(), timeout) } {
             Ok(_) => Ok(()),
             Err(PipeError::Win32(e)) if e.code() == ERROR_NO_DATA => {
                 self.disconnect()?;
@@ -355,18 +359,21 @@ impl PipeServer {
         let len = u32::try_from(buf.len()).unwrap_or(u32::MAX);
         let event = Event::new()?;
         // SAFETY: plain data; zero is valid.
-        let mut ov: OVERLAPPED = unsafe { mem::zeroed() };
-        ov.hEvent = event.raw();
+        let mut storage: OVERLAPPED = unsafe { mem::zeroed() };
+        storage.hEvent = event.raw();
+        // Only this pointer is used from here on (see `wait_for_client`).
+        let ov = ptr::addr_of_mut!(storage);
         // SAFETY: `buf` holds `len` writable bytes and, like `ov`, outlives the operation, which
         // `finish` waits for.
-        let ok = unsafe { ReadFile(self.raw(), buf.as_mut_ptr(), len, ptr::null_mut(), &mut ov) };
+        let ok = unsafe { ReadFile(self.raw(), buf.as_mut_ptr(), len, ptr::null_mut(), ov) };
         if ok == 0 {
             let e = Win32Error::last();
             if e.code() != ERROR_IO_PENDING {
                 return map_read(Err(e.into()));
             }
         }
-        map_read(self.finish(&ov, timeout).map(|n| n as usize))
+        // SAFETY: `ov` is the operation just started on this handle; its event is `event`.
+        map_read(unsafe { self.finish(ov, event.raw(), timeout) }.map(|n| n as usize))
     }
 
     /// Writes some of `buf`, waiting up to `timeout`.
@@ -374,17 +381,20 @@ impl PipeServer {
         let len = u32::try_from(buf.len()).unwrap_or(u32::MAX);
         let event = Event::new()?;
         // SAFETY: plain data; zero is valid.
-        let mut ov: OVERLAPPED = unsafe { mem::zeroed() };
-        ov.hEvent = event.raw();
+        let mut storage: OVERLAPPED = unsafe { mem::zeroed() };
+        storage.hEvent = event.raw();
+        // Only this pointer is used from here on (see `wait_for_client`).
+        let ov = ptr::addr_of_mut!(storage);
         // SAFETY: `buf` holds `len` readable bytes and, like `ov`, outlives the operation.
-        let ok = unsafe { WriteFile(self.raw(), buf.as_ptr(), len, ptr::null_mut(), &mut ov) };
+        let ok = unsafe { WriteFile(self.raw(), buf.as_ptr(), len, ptr::null_mut(), ov) };
         if ok == 0 {
             let e = Win32Error::last();
             if e.code() != ERROR_IO_PENDING {
                 return map_write(Err(e.into()));
             }
         }
-        map_write(self.finish(&ov, timeout).map(|n| n as usize))
+        // SAFETY: `ov` is the operation just started on this handle; its event is `event`.
+        map_write(unsafe { self.finish(ov, event.raw(), timeout) }.map(|n| n as usize))
     }
 
     /// Writes all of `buf` within `timeout` in total. After a [`PipeError::TimedOut`] an unknown part
@@ -412,9 +422,19 @@ impl PipeServer {
     /// Waits for the overlapped operation behind `ov` (started on this handle with `ov.hEvent` set)
     /// up to `timeout`, cancelling it on timeout. Returns only when the kernel is done with `ov` and
     /// the operation's buffer.
-    fn finish(&self, ov: &OVERLAPPED, timeout: Option<Duration>) -> Result<u32, PipeError> {
-        // SAFETY: `ov.hEvent` is the live event of the pending operation.
-        let waited = unsafe { WaitForSingleObject(ov.hEvent, wait_ms(timeout)) };
+    ///
+    /// # Safety
+    ///
+    /// `ov` points to the live `OVERLAPPED` of an operation started on this handle, whose `hEvent`
+    /// is `event`, and no reference to it exists while this runs (the kernel may write it).
+    unsafe fn finish(
+        &self,
+        ov: *mut OVERLAPPED,
+        event: HANDLE,
+        timeout: Option<Duration>,
+    ) -> Result<u32, PipeError> {
+        // SAFETY: `event` is the live event of the pending operation.
+        let waited = unsafe { WaitForSingleObject(event, wait_ms(timeout)) };
         let mut cancelled = false;
         if waited != WAIT_OBJECT_0 {
             // Timeout or a failed wait: cancel, then wait below for the cancellation to complete.

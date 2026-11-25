@@ -90,6 +90,23 @@ mod tests {
     }
 
     #[test]
+    fn the_names_match_the_shared_vector() {
+        // The same file is checked against the broker's own `fingerprint_name`.
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/fixtures/fingerprint-names.json"
+        );
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let names = v["names"].as_array().unwrap();
+        assert!(!names.is_empty());
+        for n in names {
+            let program = id(n["program_id"].as_str().unwrap());
+            assert_eq!(file_name(&program), n["file"].as_str().unwrap());
+        }
+    }
+
+    #[test]
     fn only_a_definite_not_found_is_no_record() {
         let dir = std::env::temp_dir().join(format!("purge-client-fp-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);

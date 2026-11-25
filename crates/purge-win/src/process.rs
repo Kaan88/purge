@@ -172,30 +172,6 @@ impl ProcessHandle {
         Ok(ProcessHandle { handle, pid })
     }
 
-    /// Opens process `pid` with `PROCESS_QUERY_LIMITED_INFORMATION` only (no `SYNCHRONIZE`): what a
-    /// medium process may open of an elevated one, for the UI's check of the broker on its pipe (M3
-    /// design 3.3 step 3). Creation time, image path and token can be read through it;
-    /// [`ProcessHandle::wait_exit`] and [`ProcessHandle::has_exited`] cannot.
-    pub fn open_query_limited(pid: u32) -> Result<ProcessHandle, Win32Error> {
-        // SAFETY: plain call; the handle is not inheritable.
-        let h = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
-        if h.is_null() {
-            return Err(Win32Error::last());
-        }
-        // SAFETY: we own the handle just opened.
-        let handle = unsafe { OwnedHandle::from_raw_handle(h as _) };
-        // SAFETY: valid process handle.
-        let got = unsafe { GetProcessId(raw(&handle)) };
-        if got != pid {
-            return Err(if got == 0 {
-                Win32Error::last()
-            } else {
-                Win32Error::INVALID_DATA
-            });
-        }
-        Ok(ProcessHandle { handle, pid })
-    }
-
     /// This process.
     pub fn current() -> Result<ProcessHandle, Win32Error> {
         ProcessHandle::open(std::process::id())
@@ -209,25 +185,7 @@ impl ProcessHandle {
     /// Creation time as a `FILETIME` value (100 ns units since 1601-01-01 UTC), the form of
     /// `--parent-ctime`.
     pub fn creation_time(&self) -> Result<u64, Win32Error> {
-        let zero = FILETIME {
-            dwLowDateTime: 0,
-            dwHighDateTime: 0,
-        };
-        let (mut created, mut exited, mut kernel, mut user) = (zero, zero, zero, zero);
-        // SAFETY: valid process handle; four writable FILETIME locals.
-        if unsafe {
-            GetProcessTimes(
-                raw(&self.handle),
-                &mut created,
-                &mut exited,
-                &mut kernel,
-                &mut user,
-            )
-        } == 0
-        {
-            return Err(Win32Error::last());
-        }
-        Ok(((created.dwHighDateTime as u64) << 32) | created.dwLowDateTime as u64)
+        creation_time_of(&self.handle)
     }
 
     /// Full Win32 image path (`QueryFullProcessImageNameW`, `PROCESS_NAME_WIN32`).
@@ -258,6 +216,83 @@ impl AsRawHandle for ProcessHandle {
     fn as_raw_handle(&self) -> std::os::windows::io::RawHandle {
         self.handle.as_raw_handle()
     }
+}
+
+/// A process handle opened with `PROCESS_QUERY_LIMITED_INFORMATION` only (no `SYNCHRONIZE`): what a
+/// medium process may open of an elevated one, for the UI's check of the broker on its pipe (M3 design
+/// 3.3 step 3). Creation time, image path and token can be read through it; it cannot be waited on,
+/// so unlike [`ProcessHandle`] it offers no exit query. While it is open the pid is not reused.
+#[derive(Debug)]
+pub struct QueryProcessHandle {
+    handle: OwnedHandle,
+    pid: u32,
+}
+
+impl QueryProcessHandle {
+    /// Opens process `pid`. The handle's own `GetProcessId` must equal `pid`.
+    pub fn open(pid: u32) -> Result<QueryProcessHandle, Win32Error> {
+        // SAFETY: plain call; the handle is not inheritable.
+        let h = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+        if h.is_null() {
+            return Err(Win32Error::last());
+        }
+        // SAFETY: we own the handle just opened.
+        let handle = unsafe { OwnedHandle::from_raw_handle(h as _) };
+        // SAFETY: valid process handle.
+        let got = unsafe { GetProcessId(raw(&handle)) };
+        if got != pid {
+            return Err(if got == 0 {
+                Win32Error::last()
+            } else {
+                Win32Error::INVALID_DATA
+            });
+        }
+        Ok(QueryProcessHandle { handle, pid })
+    }
+
+    /// The process id the handle was opened for.
+    pub fn pid(&self) -> u32 {
+        self.pid
+    }
+
+    /// Creation time as a `FILETIME` value, as [`ProcessHandle::creation_time`].
+    pub fn creation_time(&self) -> Result<u64, Win32Error> {
+        creation_time_of(&self.handle)
+    }
+
+    /// Full Win32 image path (`QueryFullProcessImageNameW`, `PROCESS_NAME_WIN32`).
+    pub fn image_path(&self) -> Result<PathBuf, Win32Error> {
+        image_path_of(&self.handle)
+    }
+}
+
+impl AsRawHandle for QueryProcessHandle {
+    fn as_raw_handle(&self) -> std::os::windows::io::RawHandle {
+        self.handle.as_raw_handle()
+    }
+}
+
+/// `GetProcessTimes`' creation time of a process handle with a query right.
+fn creation_time_of(handle: &OwnedHandle) -> Result<u64, Win32Error> {
+    let zero = FILETIME {
+        dwLowDateTime: 0,
+        dwHighDateTime: 0,
+    };
+    let (mut created, mut exited, mut kernel, mut user) = (zero, zero, zero, zero);
+    // SAFETY: valid process handle; four writable FILETIME locals.
+    if unsafe {
+        GetProcessTimes(
+            raw(handle),
+            &mut created,
+            &mut exited,
+            &mut kernel,
+            &mut user,
+        )
+    } == 0
+    {
+        return Err(Win32Error::last());
+    }
+    Ok(((created.dwHighDateTime as u64) << 32) | created.dwLowDateTime as u64)
 }
 
 /// Puts the **calling thread** into background mode (`on`: `THREAD_MODE_BACKGROUND_BEGIN`, which lowers
@@ -628,10 +663,12 @@ mod tests {
             t
         );
         assert!(ProcessHandle::open(u32::MAX - 3).is_err());
-        let limited = ProcessHandle::open_query_limited(std::process::id()).unwrap();
+        let limited = QueryProcessHandle::open(std::process::id()).unwrap();
+        assert_eq!(limited.pid(), std::process::id());
         assert_eq!(limited.creation_time().unwrap(), t);
         assert_eq!(limited.image_path().unwrap(), me.image_path().unwrap());
-        assert!(ProcessHandle::open_query_limited(u32::MAX - 3).is_err());
+        assert!(crate::token::Token::of_query_process(&limited).is_ok());
+        assert!(QueryProcessHandle::open(u32::MAX - 3).is_err());
 
         // A child that has exited: the held handle still answers and reports the exit.
         let mut child = std::process::Command::new("cmd.exe")
