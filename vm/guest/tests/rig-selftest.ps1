@@ -20,7 +20,7 @@ Write-Host "PowerShell $($PSVersionTable.PSVersion) ($($PSVersionTable.PSEdition
 
 try {
 # ------------------------------------------------------------------------------------------ parse
-foreach ($f in @(Get-ChildItem -LiteralPath $Guest -Filter '*.ps1') + @(Get-Item (Join-Path $Vm 'rig.ps1')) + @(Get-Item (Join-Path $Vm 'rig-baseline-local.ps1')) + @(Get-Item (Join-Path $Vm 'rig-m3.ps1')) + @(Get-Item (Join-Path $Vm 'truth\m3-sec-score.ps1')) + @(Get-Item (Join-Path $Vm 'rig-m3-clean.ps1')) + @(Get-Item (Join-Path $Vm 'truth\m3-clean-score.ps1')) + @(Get-Item (Join-Path $Vm 'truth\m3-e2e-score.ps1')) + @(Get-Item $PSCommandPath)) {
+foreach ($f in @(Get-ChildItem -LiteralPath $Guest -Filter '*.ps1') + @(Get-Item (Join-Path $Vm 'rig.ps1')) + @(Get-Item (Join-Path $Vm 'rig-baseline-local.ps1')) + @(Get-Item (Join-Path $Vm 'rig-m3.ps1')) + @(Get-Item (Join-Path $Vm 'truth\m3-sec-score.ps1')) + @(Get-Item (Join-Path $Vm 'rig-m3-clean.ps1')) + @(Get-Item (Join-Path $Vm 'truth\m3-clean-score.ps1')) + @(Get-Item (Join-Path $Vm 'truth\m3-e2e-score.ps1')) + @(Get-Item (Join-Path $PSScriptRoot 'ui-a11y-probe.ps1')) + @(Get-Item $PSCommandPath)) {
     $tok = $null; $err = $null
     $null = [Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$tok, [ref]$err)
     Check "parse $($f.Name)" (@($err).Count -eq 0) (@($err | ForEach-Object { "line $($_.Extent.StartLineNumber): $($_.Message)" }) -join '; ')
