@@ -43,6 +43,7 @@ use crate::view::{
     DD_ALL, DD_BACKDROP, DD_DESIGN, DD_PRESET, DD_RESTORE, DD_SORT, DD_THEME, DD_TRANSITION, Toast,
     View,
 };
+use crate::winplace::Placer;
 
 const LIST: Id = Id("ProgramList", 0);
 const SEARCH: Id = Id("SearchBox", 0);
@@ -55,6 +56,9 @@ pub struct Options {
     pub saved: Prefs,
     /// Where the settings are saved.
     pub store: Store,
+    /// Put the window where it was last time and save where it goes (`winplace`): false for the
+    /// walk, timed runs and the bench.
+    pub remember_place: bool,
     /// The page to open on (`--page`).
     pub page: Page,
     /// `--bench-exit`: close once the launch markers are written.
@@ -143,6 +147,9 @@ pub struct PurgeApp {
     pub visited: Vec<Id>,
     store: Store,
     saved: Prefs,
+    /// Whether the window's place is remembered, and from the start on, its placer.
+    remember_place: bool,
+    place: Option<Placer>,
     bench_exit: bool,
     bench_until_presented: bool,
     /// The first frame was drawn and `presented` is still to be marked.
@@ -208,6 +215,8 @@ impl PurgeApp {
             visited: Vec::new(),
             store: o.store,
             saved: o.saved,
+            remember_place: o.remember_place,
+            place: None,
             bench_exit: o.bench_exit,
             bench_until_presented: o.bench_until_presented,
             presented_due: false,
@@ -460,7 +469,7 @@ impl PurgeApp {
         match id.0 {
             "Minimize" => cx.minimize(),
             "Maximize" => cx.toggle_maximize(),
-            "Close" => cx.exit(),
+            "Close" => self.close(cx),
 
             // Programs.
             "TabApps" | "TabComponents" | "TabUnnamed" | "TabRecent" => {
@@ -1350,12 +1359,21 @@ impl PurgeApp {
     // ---- timers ------------------------------------------------------------------------------
 
     /// Asks for the earliest of the times still to come: the host gives one wake-up.
+    /// The window closes: its place is saved first.
+    fn close(&mut self, cx: &mut Cx<'_, ()>) {
+        if let Some(state) = self.place.as_mut().and_then(|p| p.close(cx)) {
+            self.store.save_window(&self.saved, state);
+        }
+        cx.exit();
+    }
+
     fn timers(&mut self, cx: &mut Cx<'_, ()>) {
         let wakes = [
             (self.presented_due || self.names_due).then(|| cx.now()),
             self.until,
             self.view.toast.as_ref().map(|t| t.until),
             self.script.as_ref().and_then(|s| s.due()),
+            self.place.as_ref().and_then(|p| p.due(cx.now())),
         ];
         if let Some(at) = wakes.into_iter().flatten().min() {
             cx.wake_at(at);
@@ -1363,6 +1381,9 @@ impl PurgeApp {
     }
 
     fn wake(&mut self, cx: &mut Cx<'_, ()>, now: Instant) {
+        if let Some(state) = self.place.as_mut().and_then(|p| p.wake(cx, now)) {
+            self.store.save_window(&self.saved, state);
+        }
         if self.until.is_some_and(|u| u <= now)
             && let Some(path) = self.shot_at_end.take()
         {
@@ -1874,6 +1895,9 @@ impl App for PurgeApp {
         self.link = Some(link);
         self.view.blink = platform::caret_blink_time();
         self.retheme(cx);
+        if self.remember_place {
+            self.place = Some(Placer::start(cx, self.store.window()));
+        }
         self.timers(cx);
     }
 
@@ -1964,17 +1988,23 @@ impl App for PurgeApp {
             }
             Event::Theme { .. } | Event::Contrast(_) => self.retheme(cx),
             Event::Wake(now) => self.wake(cx, now),
-            Event::CloseRequested => cx.exit(),
+            Event::CloseRequested => self.close(cx),
             Event::Action(req) => self.request(cx, req),
             _ => {}
         }
         self.pump(cx);
         self.sync_scope();
+        if let Some(place) = &mut self.place {
+            place.watch(cx, cx.now());
+        }
         self.timers(cx);
     }
 
     fn draw(&mut self, cx: &mut Cx<'_, ()>, p: &mut Painter, _damage: Rect) {
         let began = Instant::now();
+        if let Some(place) = &mut self.place {
+            place.drawn(cx);
+        }
         let size = cx.size();
         self.focus.begin_frame();
         let switching = self.view.page_tx.running();

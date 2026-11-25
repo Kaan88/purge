@@ -31,6 +31,7 @@ mod script_steps;
 mod transition;
 mod ui;
 mod view;
+mod winplace;
 
 use app::{Options, PurgeApp};
 use look::{Choice, Design, Preset, ThemeChoice, Transition};
@@ -170,9 +171,21 @@ fn main() {
     prefs.transition = transition.unwrap_or(prefs.transition);
     prefs.backdrop = backdrop.unwrap_or(prefs.backdrop);
 
+    // The window's place is remembered only in a run a person sees: the walk, a timed run (and its
+    // shot) and the launch bench keep a fixed size and the system's position, and neither read
+    // nor write the saved place (`winplace`).
+    let bench = bench_exit
+        || std::env::var_os("PURGE_BENCH_OUT").is_some_and(|v| !v.is_empty())
+        || matches!(source, Some(link::Source::Sample { bench_rows }) if bench_rows > 0);
+    let remember_place = !script && !bench && seconds.is_none() && shot_at_end.is_none();
+    let size = if remember_place {
+        winplace::DEFAULT
+    } else {
+        winplace::FIXED
+    };
     let config = Config::new("Purge")
-        .size(1360.0, 860.0)
-        .min_size(1080.0, 700.0)
+        .size(size.0, size.1)
+        .min_size(winplace::MIN.0, winplace::MIN.1)
         .app_id("Purge")
         .icon_png(include_bytes!("../assets/Purge.png"))
         .dark(prefs.theme.dark(platform::system_is_dark()));
@@ -180,6 +193,7 @@ fn main() {
         prefs,
         saved,
         store,
+        remember_place,
         page,
         bench_exit,
         bench_until_presented,

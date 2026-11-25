@@ -7,6 +7,10 @@
 //! window from opening. A file that cannot be read for any other reason (locked, no access) is
 //! left alone: the defaults are used and nothing is written over it this run.
 //!
+//! The same file keeps where the window was (`window`, the toolkit's
+//! [`WindowState::to_setting`]): not a choice shown on the Settings page, so it is kept apart from
+//! [`Prefs`], in the [`Store`]. A missing or damaged value is a first launch (`winplace`).
+//!
 //! Deliberately not here: anything the engine or the broker decides (what is ticked, how long the
 //! quarantine keeps things). Those are facts of the version, stated on the Settings page.
 
@@ -14,6 +18,7 @@ use std::path::PathBuf;
 
 use mdshared_app::backdrop::Backdrop;
 use mdshared_app::settings;
+use mdshared_ui::window_state::WindowState;
 
 use crate::look::{Choice, Design, Preset, ThemeChoice, Transition};
 
@@ -21,6 +26,8 @@ use crate::look::{Choice, Design, Preset, ThemeChoice, Transition};
 /// came later than version 1 and needed none: a file without it has the default).
 pub const VERSION: u32 = 1;
 const SECTION: &str = "purge-ui";
+/// The key of the window's place.
+const WINDOW: &str = "window";
 
 /// What the user chose on the Settings page.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -63,8 +70,14 @@ impl Prefs {
         p
     }
 
-    /// The text of the settings file.
+    /// The text of the settings file, with no window place.
+    #[cfg(test)]
     pub fn text(&self) -> String {
+        self.text_with(None)
+    }
+
+    /// The text of the settings file, with the window's place when there is one.
+    pub fn text_with(&self, window: Option<&WindowState>) -> String {
         let mut w = settings::Writer::new(SECTION);
         w.line("version", &VERSION.to_string());
         w.line("design", self.design.name());
@@ -72,14 +85,28 @@ impl Prefs {
         w.line("colour", self.preset.name());
         w.line("backdrop", self.backdrop.key());
         w.line("theme", self.theme.name());
+        if let Some(state) = window {
+            w.line(WINDOW, &state.to_setting());
+        }
         w.finish()
     }
+}
+
+/// The window's place a settings file keeps, or `None` (a first launch) when it has none or one
+/// that does not read. The last `window` line counts.
+pub fn window_of(text: &str) -> Option<WindowState> {
+    settings::pairs(text)
+        .filter(|(key, _)| *key == WINDOW)
+        .last()
+        .and_then(|(_, value)| WindowState::from_setting(value.trim()))
 }
 
 /// Where the settings live, and whether they may be written.
 pub struct Store {
     path: Option<PathBuf>,
     writable: bool,
+    /// The window's place, as read and as last saved: written with every save.
+    window: Option<WindowState>,
 }
 
 impl Store {
@@ -88,6 +115,7 @@ impl Store {
         Store {
             path: settings::data_dir("Purge").map(|d| d.join("ui-settings.ini")),
             writable: true,
+            window: None,
         }
     }
 
@@ -96,6 +124,7 @@ impl Store {
         Store {
             path: None,
             writable: false,
+            window: None,
         }
     }
 
@@ -105,6 +134,7 @@ impl Store {
         Store {
             path: Some(path),
             writable: true,
+            window: None,
         }
     }
 
@@ -115,7 +145,10 @@ impl Store {
             return Prefs::default();
         };
         match settings::read_patiently(path) {
-            Ok(Some(text)) => Prefs::parse(&text),
+            Ok(Some(text)) => {
+                self.window = window_of(&text);
+                Prefs::parse(&text)
+            }
             Ok(None) => Prefs::default(),
             Err(e) => {
                 eprintln!(
@@ -140,9 +173,22 @@ impl Store {
             eprintln!("Purge: {} could not be made ({e})", dir.display());
             return;
         }
-        if let Err(e) = settings::write_atomic(path, &p.text()) {
+        if let Err(e) = settings::write_atomic(path, &p.text_with(self.window.as_ref())) {
             eprintln!("Purge: {} could not be written ({e})", path.display());
         }
+    }
+}
+
+impl Store {
+    /// The window's place the file had: `None` is a first launch.
+    pub fn window(&self) -> Option<WindowState> {
+        self.window.clone()
+    }
+
+    /// Saves the window's place with the settings `p` (the file's, not this run's).
+    pub fn save_window(&mut self, p: &Prefs, state: WindowState) {
+        self.window = Some(state);
+        self.save(p);
     }
 }
 
@@ -214,6 +260,70 @@ mod tests {
         };
         store.save(&p);
         assert_eq!(Store::at(path).load(), p);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    fn state() -> WindowState {
+        WindowState::from_setting(
+            r"x=120.5;y=64;w=1480;h=940;max=1;scale=1.5;mon=\\.\DISPLAY1;monx=0;mony=0;monw=2560;monh=1440",
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn the_window_key_reads_back_and_keeps_the_version() {
+        let s = state();
+        let text = Prefs::default().text_with(Some(&s));
+        assert!(text.starts_with("[purge-ui]\nversion=1\n"));
+        assert!(text.contains("\nwindow=x=120.50;y=64.00;w=1480.00;h=940.00;max=1;"));
+        assert_eq!(window_of(&text), Some(s.clone()));
+        assert_eq!(Prefs::parse(&text), Prefs::default(), "the prefs ignore it");
+        assert_eq!(
+            window_of(&Prefs::default().text()),
+            None,
+            "missing: first launch"
+        );
+        assert_eq!(s.monitor.name.as_deref(), Some(r"\\.\DISPLAY1"));
+    }
+
+    #[test]
+    fn a_damaged_window_value_is_a_first_launch() {
+        for bad in [
+            "window=",
+            "window=garbage",
+            "window=x=1;y=2;w=0;h=10;max=0;scale=1;mon=;monx=0;mony=0;monw=10;monh=10",
+            "window=x=1;y=2;w=10;h=10;max=2;scale=1;mon=;monx=0;mony=0;monw=10;monh=10",
+            "window=x=NaN;y=2;w=10;h=10;max=0;scale=1;mon=;monx=0;mony=0;monw=10;monh=10",
+            "window=x=1;y=2;w=10;h=10;max=0;scale=1",
+        ] {
+            let text = format!("[purge-ui]\nversion=1\n{bad}\n");
+            assert_eq!(window_of(&text), None, "{bad}");
+        }
+        // The last line counts.
+        let good = state().to_setting();
+        let text = format!("window=garbage\nwindow={good}\n");
+        assert_eq!(window_of(&text), Some(state()));
+    }
+
+    #[test]
+    fn a_prefs_save_keeps_the_window_and_a_window_save_keeps_the_prefs() {
+        let dir = std::env::temp_dir().join(format!("purge-ui-window-{}", std::process::id()));
+        let path = dir.join("ui-settings.ini");
+        let mut store = Store::at(path.clone());
+        store.load();
+        assert_eq!(store.window(), None);
+        let p = Prefs {
+            preset: Preset::Rose,
+            ..Prefs::default()
+        };
+        store.save_window(&p, state());
+        let mut again = Store::at(path.clone());
+        assert_eq!(again.load(), p);
+        assert_eq!(again.window(), Some(state()));
+        again.save(&Prefs::default());
+        let mut third = Store::at(path);
+        assert_eq!(third.load(), Prefs::default());
+        assert_eq!(third.window(), Some(state()), "kept by a prefs save");
         let _ = std::fs::remove_dir_all(dir);
     }
 
