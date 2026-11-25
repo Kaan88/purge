@@ -19,8 +19,8 @@ pub mod strings;
 pub mod uninstall;
 
 use purge_model::ProgramId;
-use purge_rpc::error::{ErrorData, ErrorObject};
 
+pub use crate::call_error::CallError;
 pub use page::{PageEnv, PageRequest, UninstallPage, UninstallPageView};
 pub use queue::UninstallQueue;
 pub use removed::{
@@ -31,47 +31,6 @@ pub use uninstall::{
     PipelineRequest, StepState, UninstallAnswer, UninstallConfirmation, UninstallController,
     UninstallNotice, UninstallOutcome, UninstallStep,
 };
-
-/// Why a call to the engine or the broker failed, as the models need to tell it apart. The UI maps
-/// `purge-client`'s errors onto it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CallError {
-    /// The server answered a JSON-RPC error (`error.data.kind` says which, when it is a server error).
-    Rpc(ErrorObject),
-    /// The link broke: it could not be written to, or it ended. The text says why, in a sentence.
-    Link(String),
-    /// The call was cancelled (the user stopped it).
-    Cancelled,
-    /// Anything else: an answer that could not be read, an unexpected failure.
-    Other(String),
-}
-
-impl CallError {
-    /// `error.data.kind` of an RPC error, e.g. `gone` or `wrong_route`.
-    pub fn kind(&self) -> Option<&'static str> {
-        match self {
-            CallError::Rpc(e) => e.data.as_ref().map(ErrorData::kind),
-            _ => None,
-        }
-    }
-
-    /// The error's text: the RPC error's message, or the link's or the failure's sentence.
-    pub fn message(&self) -> &str {
-        match self {
-            CallError::Rpc(e) => &e.message,
-            CallError::Link(m) | CallError::Other(m) => m,
-            CallError::Cancelled => "The operation was canceled.",
-        }
-    }
-
-    /// The `error.data` of an RPC error.
-    pub fn data(&self) -> Option<&ErrorData> {
-        match self {
-            CallError::Rpc(e) => e.data.as_ref(),
-            _ => None,
-        }
-    }
-}
 
 /// What the Uninstall click asked for: one program (the queue runs one after the other).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

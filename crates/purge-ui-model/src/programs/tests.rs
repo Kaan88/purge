@@ -733,7 +733,7 @@ fn a_late_patch_moves_a_row_to_its_tab() {
 #[test]
 fn a_failed_reload_keeps_the_list_and_says_why() {
     let (mut m, _) = page();
-    m.on_list(Err(CallError::Link("The engine ended.".into())));
+    m.on_list(Err(CallError::link("The engine ended.", false)));
     assert_eq!(
         m.view().notice.map(|n| n.message),
         Some("Couldn't read the program list: The engine ended.".into())

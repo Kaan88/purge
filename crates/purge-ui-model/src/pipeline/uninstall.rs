@@ -1192,7 +1192,7 @@ impl UninstallController {
                     strings::STOPPED_MESSAGE,
                 ));
             }
-            CallError::Link(message) => {
+            CallError::Link { message, .. } => {
                 self.fail_running_step();
                 let notice = match side {
                     Side::Broker => UninstallNotice::new(

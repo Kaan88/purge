@@ -531,7 +531,7 @@ fn a_restart_request_is_text_only() {
 #[test]
 fn a_broker_that_dies_mid_run_keeps_the_page_and_offers_a_start_over() {
     let mut broker = Broker::new(prepared_for(Route::Broker, Some(QUIET)));
-    broker.run_error = Some(CallError::Link("The administrator part ended.".into()));
+    broker.run_error = Some(CallError::link("The administrator part ended.", false));
     let mut rig = Rig::new(broker, Medium::new());
     let mut c = UninstallController::new();
     run_through(&mut rig, &mut c);
@@ -565,7 +565,7 @@ fn a_broker_that_dies_mid_run_keeps_the_page_and_offers_a_start_over() {
 #[test]
 fn an_engine_that_dies_mid_run_asks_for_a_restart_of_purge() {
     let mut medium = Medium::new();
-    medium.run_error = Some(CallError::Link("The engine ended (exit code 3).".into()));
+    medium.run_error = Some(CallError::link("The engine ended (exit code 3).", false));
     let mut rig = Rig::new(
         Broker::new(prepared_for(Route::Medium, Some(QUIET))),
         medium,

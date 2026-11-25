@@ -398,7 +398,7 @@ impl RemovedLeftovers {
                     e.message.clone(),
                 ));
             }
-            CallError::Link(m) => {
+            CallError::Link { message: m, .. } => {
                 self.set(id, RemovedCheckState::Record);
                 self.set_notice(RemovedNotice::new(
                     NoticeKind::Error,

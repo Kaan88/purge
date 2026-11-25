@@ -1,91 +1,11 @@
 //! What the Leftovers, History and Quarantine models share about a broker call: how one ended
-//! ([`CallError`]), how a broker launch ended ([`BrokerLaunch`]) and the reconcile-alert sentences
+//! ([`CallError`], the crate's one error type, re-exported here), how a broker launch ended ([`BrokerLaunch`]) and the reconcile-alert sentences
 //! (the port of `Rpc/ReconcileAlert.cs`). The models never hold a broker: the UI does, and tells
 //! the model how each call it sent ended.
 
-use purge_rpc::error::{ErrorData, ErrorObject};
 use purge_rpc::methods::{Alert, ConflictRow};
 
-/// How a broker (or engine) call failed, as the UI hands it to a model. The port of the C#
-/// `BrokerRpcException` (an `error` answer), `BrokerLinkException` (the link broke) and
-/// `OperationCanceledException` (the call was cancelled).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CallError {
-    /// The broker answered with an error: switch on `error.data.kind`, never on the message.
-    Rpc(ErrorObject),
-    /// The link to the broker broke: it could not be written to, or it ended.
-    Link {
-        /// Why, in a sentence for the UI.
-        message: String,
-        /// The request never went out (the link had ended before, or writing it failed), so the
-        /// broker did nothing for it. False: it may have been received, and what it did is unknown.
-        not_sent: bool,
-    },
-    /// The call was cancelled before it answered.
-    Cancelled,
-    /// Anything else the client could not turn into an answer (an answer that would not read): its
-    /// message. Treated like an error answer without a kind.
-    Other(String),
-}
-
-/// The message of an error answer when the broker sent none (`BrokerRpcClient.cs`).
-const NO_MESSAGE: &str = "The administrator part reported an error.";
-
-impl CallError {
-    /// An error answer of this kind, for tests and for clients that build one.
-    pub fn rpc(data: ErrorData, message: impl Into<String>) -> Self {
-        CallError::Rpc(ErrorObject {
-            code: purge_rpc::error::SERVER_ERROR,
-            message: message.into(),
-            data: Some(data),
-        })
-    }
-
-    /// A broken link.
-    pub fn link(message: impl Into<String>, not_sent: bool) -> Self {
-        CallError::Link {
-            message: message.into(),
-            not_sent,
-        }
-    }
-
-    /// `error.data.kind` of an error answer; `None` for every other failure or an answer without one.
-    pub fn kind(&self) -> Option<&'static str> {
-        match self {
-            CallError::Rpc(ErrorObject { data: Some(d), .. }) => Some(d.kind()),
-            _ => None,
-        }
-    }
-
-    /// `error.data` of an error answer.
-    pub fn data(&self) -> Option<&ErrorData> {
-        match self {
-            CallError::Rpc(e) => e.data.as_ref(),
-            _ => None,
-        }
-    }
-
-    /// Whether this is an error answer (`BrokerRpcException`), as opposed to a broken link or a cancel.
-    pub fn is_rpc(&self) -> bool {
-        matches!(self, CallError::Rpc(_) | CallError::Other(_))
-    }
-
-    /// Whether the link broke (`BrokerLinkException`).
-    pub fn is_link(&self) -> bool {
-        matches!(self, CallError::Link { .. })
-    }
-
-    /// The text the C# exception carried: the answer's message, the link's reason.
-    pub fn message(&self) -> &str {
-        match self {
-            CallError::Rpc(e) if e.message.is_empty() => NO_MESSAGE,
-            CallError::Rpc(e) => &e.message,
-            CallError::Link { message, .. } => message,
-            CallError::Cancelled => "The operation was canceled.",
-            CallError::Other(message) => message,
-        }
-    }
-}
+pub use crate::call_error::CallError;
 
 /// How a broker launch for a page ended (the UI maps its launcher onto this): the port of
 /// `HistoryBrokerLaunch`, `VaultBrokerLaunch` and `LeftoversBrokerLaunch`. The broker itself stays
@@ -197,14 +117,5 @@ mod tests {
             conflict_text(&row(UndoConflict::Expired)),
             r"C:\Program Files\Git: what Purge kept of it was deleted, so it cannot be put back"
         );
-    }
-
-    #[test]
-    fn an_error_answer_reads_its_kind_and_message() {
-        let e = CallError::rpc(ErrorData::Busy, "");
-        assert_eq!(e.kind(), Some("busy"));
-        assert_eq!(e.message(), NO_MESSAGE);
-        assert!(CallError::link("gone", true).is_link());
-        assert_eq!(CallError::Cancelled.kind(), None);
     }
 }
