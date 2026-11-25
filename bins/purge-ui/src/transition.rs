@@ -99,10 +99,11 @@ impl PageSwitch {
             x1.min(bmp.width as i32),
             y1.min(bmp.height as i32),
         );
-        if rect.0 >= rect.2
-            || rect.1 >= rect.3
-            || bmp.pixels.len() < (bmp.width * bmp.height * 4) as usize
-        {
+        // In usize, checked: a huge bitmap never wraps the size it is checked against.
+        let size = (bmp.width as usize)
+            .checked_mul(bmp.height as usize)
+            .and_then(|n| n.checked_mul(4));
+        if rect.0 >= rect.2 || rect.1 >= rect.3 || size.is_none_or(|n| bmp.pixels.len() < n) {
             return;
         }
         words(bmp.width, &bmp.pixels, rect, &mut old);
@@ -439,10 +440,26 @@ fn compose(
     if threads == 1 {
         return band(0, rows);
     }
+    // Each band is handed over through its slot, so a band whose thread cannot be made is drawn
+    // here instead (`spawn` would panic).
+    let slots: Vec<std::sync::Mutex<Option<&mut [u8]>>> = rows
+        .chunks_mut(per * stride)
+        .map(|c| std::sync::Mutex::new(Some(c)))
+        .collect();
+    let run = |k: usize, slot: &std::sync::Mutex<Option<&mut [u8]>>| {
+        if let Some(chunk) = slot.lock().ok().and_then(|mut c| c.take()) {
+            band(k * per, chunk);
+        }
+    };
     std::thread::scope(|s| {
-        for (k, chunk) in rows.chunks_mut(per * stride).enumerate() {
-            let band = &band;
-            s.spawn(move || band(k * per, chunk));
+        for (k, slot) in slots.iter().enumerate() {
+            let run = &run;
+            if std::thread::Builder::new()
+                .spawn_scoped(s, move || run(k, slot))
+                .is_err()
+            {
+                run(k, slot);
+            }
         }
     });
 }
