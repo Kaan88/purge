@@ -564,6 +564,7 @@ pub fn steps() -> Vec<Step> {
                 for name in [
                     "TitleText",
                     "MoveButton",
+                    "MoveText",
                     "FooterCount",
                     "ExpandButton",
                     "WeakButton",

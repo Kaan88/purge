@@ -416,7 +416,7 @@ fn review(ui: &mut Ui, m: &Model, v: &mut View, area: Rect) {
     let bar = InfoBar::new(
         Severity::Info,
         "Sample data.",
-        "Made up for the mockup: nothing was scanned and nothing will be moved.",
+        "Nothing was scanned and nothing will be moved: the engine is not connected yet.",
     )
     .closable(false);
     let mut y = ui.infobar(id("InfoBarHost"), left, area.y, w, &bar, None) + 12.0;
@@ -635,6 +635,8 @@ fn review(ui: &mut Ui, m: &Model, v: &mut View, area: Rect) {
         None,
         n > 0,
     );
+    // The WinUI button's text block, which the VM rig reads for the count.
+    ui.reg(id("MoveText"), move_r, Role::Text, &move_label, false);
 }
 
 /// The groups and their items, scrolled as one list.

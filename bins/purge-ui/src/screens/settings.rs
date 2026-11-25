@@ -402,7 +402,11 @@ fn preview(ui: &mut Ui, m: &Model, v: &mut View, r: Rect) {
         12.0,
         x,
         r.y + 44.0,
-        "Colours: a click chooses one",
+        if ui.hc {
+            "High contrast is on: Windows' colours are used"
+        } else {
+            "Colours: a click chooses one"
+        },
         pal.muted,
         260.0,
     );
@@ -414,18 +418,19 @@ fn preview(ui: &mut Ui, m: &Model, v: &mut View, r: Rect) {
         let sr = Rect::new(cx - SWATCH / 2.0, cy - SWATCH / 2.0, SWATCH, SWATCH);
         let on = m.prefs.preset == *preset;
         ui.reg(sid, grow(sr, 4.0), Role::Item(on), preset.title(), true);
-        let c = if ui.hc {
-            pal.text
-        } else {
-            preset.swatch(pal.dark, accent)
-        };
         if on {
             ui.p.ring(cx, cy, SWATCH / 2.0 + 4.0, 2.0, pal.text, 1.0);
         } else if ui.hot(sid) {
             ui.p.ring(cx, cy, SWATCH / 2.0 + 4.0, 1.0, pal.muted, 1.0);
         }
-        ui.p.rbox(sr, SWATCH / 2.0, c);
-        if *preset == Preset::Windows {
+        if ui.hc {
+            // Under a contrast theme the presets wait: an outline each, the chosen one filled.
+            let fill = if on { pal.text } else { pal.page };
+            ui.p.frame(sr, SWATCH / 2.0, fill, pal.text);
+        } else {
+            ui.p.rbox(sr, SWATCH / 2.0, preset.swatch(pal.dark, accent));
+        }
+        if *preset == Preset::Windows && (on || !ui.hc) {
             // The Windows accent's swatch carries four small panes, as the Windows mark does.
             let ink = if ui.hc { pal.page } else { [255, 255, 255] };
             for (dx, dy) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {

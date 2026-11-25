@@ -179,7 +179,7 @@ pub fn draw(ui: &mut Ui, m: &Model, v: &mut View, content: Rect) {
         pal.muted,
         300.0,
     );
-    let engine = "Mockup: no engine \u{b7} made-up data";
+    let engine = "Sample data \u{b7} no engine yet";
     let ew = ui.p.measure(Face::Ui, 12.0, engine);
     ui.text(
         id("StatusRight"),
