@@ -87,8 +87,10 @@ pub(crate) fn win32_text(code: u32) -> String {
 pub struct EngineClient {
     link: Link,
     sink: Sink,
-    /// The job; dropping it ends the engine. `None` for a client over plain streams (tests).
-    child: Arc<Mutex<Option<JobChild>>>,
+    /// The job; dropping the last reference ends the engine. `None` for a client over plain streams
+    /// (tests), and once the link closed. Shared so the exit code is read without holding the lock
+    /// (`exit_text` may wait up to 1.5 s, and `close` or `pid` must not wait behind it).
+    child: Arc<Mutex<Option<Arc<JobChild>>>>,
     /// The wire id of the last `programs.list`: its patches that come after the call ended are still
     /// delivered ([`ClientEvent::ProgramsPatched`]).
     last_list: Arc<AtomicU64>,
@@ -141,7 +143,7 @@ impl EngineClient {
         child: Option<JobChild>,
         sink: Sink,
     ) -> std::io::Result<EngineClient> {
-        let child = Arc::new(Mutex::new(child));
+        let child = Arc::new(Mutex::new(child.map(Arc::new)));
         let last_list = Arc::new(AtomicU64::new(0));
         let hooks = Hooks {
             who: "The engine",
@@ -169,14 +171,15 @@ impl EngineClient {
             exit_text: {
                 let child = child.clone();
                 Box::new(move || {
-                    let code = lock(&child)
-                        .as_ref()
-                        .and_then(|c| c.exit_code(Some(Duration::from_millis(1500))));
+                    // Called once the engine's output ended. The wait is outside the lock; a close
+                    // meanwhile takes the job, and the engine ends once this wait let go of it too.
+                    let job = lock(&child).clone();
+                    let code = job.and_then(|c| c.exit_code(Some(Duration::from_millis(1500))));
                     code.map_or_else(String::new, |c| format!(" (exit code {c})"))
                 })
             },
         };
-        let link = Link::new(input, output, hooks, "purge-engine-reader")?;
+        let link = Link::new(input, output, hooks, "purge-engine")?;
         Ok(EngineClient {
             link,
             sink,
@@ -187,7 +190,7 @@ impl EngineClient {
 
     /// The engine's pid, while its job is open.
     pub fn pid(&self) -> Option<u32> {
-        lock(&self.child).as_ref().map(JobChild::pid)
+        lock(&self.child).as_deref().map(JobChild::pid)
     }
 }
 
