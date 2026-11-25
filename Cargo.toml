@@ -18,9 +18,12 @@ members = [
     "crates/purge-exec",
     "crates/purge-kb",
     "crates/purge-rpc",
+    "crates/purge-client",
+    "crates/purge-ui-model",
     "bins/purge-engine",
     "bins/purge-broker",
     "bins/purge-mcp",
+    "bins/purge-ui",
     "tools/xtask",
 ]
 exclude = ["vm"]
@@ -60,6 +63,11 @@ purge-plan = { path = "crates/purge-plan" }
 purge-exec = { path = "crates/purge-exec" }
 purge-kb = { path = "crates/purge-kb" }
 purge-rpc = { path = "crates/purge-rpc" }
+
+# The shared Rust UI toolkit (markdown-shared-rs), pinned to main 294d330 (feat/anim merged), as the
+# approved mockup uses it (DECISIONS 2026-11-25).
+mdshared-ui = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "294d330", features = ["host", "a11y"] }
+mdshared-app = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "294d330" }
 
 [workspace.lints.rust]
 missing_docs = "warn"
