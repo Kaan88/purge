@@ -75,6 +75,8 @@ pub enum Role {
     List,
     /// One row of a short list, selected or not.
     Item(bool),
+    /// UI-FULLFROST: a slider, at its value (0 to 100). UIA RangeValue.
+    Slider(f32),
 }
 
 /// What a row's control stands for, kept with the control when it is drawn (UI-REVIEW1 S7): a

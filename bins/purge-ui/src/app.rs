@@ -43,6 +43,8 @@ use crate::view::{
     DD_ALL, DD_BACKDROP, DD_DESIGN, DD_PRESET, DD_RESTORE, DD_SORT, DD_THEME, DD_TRANSITION, Toast,
     View,
 };
+// UI-FULLFROST.
+use crate::view::DD_COVERS;
 
 const LIST: Id = Id("ProgramList", 0);
 const SEARCH: Id = Id("SearchBox", 0);
@@ -164,6 +166,8 @@ pub struct PurgeApp {
     /// For the walk: whether `paint`'s boxes and gradients came out as the toolkit's, checked
     /// on the first frame.
     pub paint_check: Option<Result<usize, String>>,
+    /// UI-FULLFROST: the keys of the look in force and what they were made for.
+    glass_keys: Option<(Palette, crate::glass::GlassPrefs, crate::glass::Keys)>,
 }
 
 impl PurgeApp {
@@ -219,6 +223,8 @@ impl PurgeApp {
             accent: None,
             idle_draws: Vec::new(),
             paint_check: None,
+            // UI-FULLFROST.
+            glass_keys: None,
         }
     }
 
@@ -274,6 +280,13 @@ impl PurgeApp {
         }
         if prefs.backdrop != old.backdrop {
             s.backdrop = prefs.backdrop;
+        }
+        // UI-FULLFROST: each of the backdrop's two settings on its own.
+        if prefs.glass.covers != old.glass.covers {
+            s.glass.covers = prefs.glass.covers;
+        }
+        if prefs.glass.strength != old.glass.strength {
+            s.glass.strength = prefs.glass.strength;
         }
         self.model.prefs = prefs;
         self.store.save(&self.saved);
@@ -678,6 +691,8 @@ impl PurgeApp {
             DD_TRANSITION => self.set_transition(cx, Transition::at(i)),
             DD_PRESET => self.set_preset(cx, Preset::at(i)),
             DD_BACKDROP => self.set_backdrop(cx, Backdrop::at(i)),
+            // UI-FULLFROST.
+            DD_COVERS => self.set_covers(cx, crate::look::Covers::at(i)),
             DD_RESTORE => self.model.flow_restore_point(i.min(2)),
             _ => {}
         }
@@ -827,6 +842,10 @@ impl PurgeApp {
 
     fn pointer_move(&mut self, cx: &mut Cx<'_, ()>, x: f32, y: f32) {
         self.pointer = (x, y);
+        // UI-FULLFROST: the strength slider's thumb in hand follows the pointer.
+        if self.slider_drag(cx, x, y) {
+            return;
+        }
         if let Some(p) = &mut self.view.palette {
             if p.pointer_move(x, y) {
                 cx.request_redraw_all();
@@ -931,6 +950,10 @@ impl PurgeApp {
                 if let Some(d) = self.view.dds.get(c.id) {
                     d.press(c.rect, x, y);
                 }
+            }
+            // UI-FULLFROST.
+            Role::Slider(_) => {
+                self.slider_drag(cx, x, y);
             }
             Role::Edit(_) => {
                 let area = self.view.search_area;
@@ -1255,6 +1278,8 @@ impl PurgeApp {
             Role::Button | Role::Link | Role::Check(_) | Role::Switch(_) if press => {
                 self.activate(cx, c.id);
             }
+            // UI-FULLFROST.
+            Role::Slider(_) if !mods.ctrl && !mods.alt => self.slider_key(cx, c.id, &name),
             _ => {}
         }
     }
@@ -1482,13 +1507,23 @@ impl PurgeApp {
             Role::Link => a11y::link(label, &author, r, c.disabled),
             Role::Check(on) => a11y::check_box(label, &author, r, *on, c.disabled),
             Role::Switch(on) => a11y::switch(label, &author, r, *on, c.disabled),
-            Role::Combo { value, open } => a11y::combo_box(label, &author, r, value, *open),
+            Role::Combo { value, open } => {
+                let mut n = a11y::combo_box(label, &author, r, value, *open);
+                // UI-FULLFROST: a drop-down that waits (the backdrop's cover, with none).
+                if c.disabled {
+                    n.set_disabled();
+                    n.clear_actions();
+                }
+                n
+            }
             // Its place in its row of tabs is set by `build_tree`, which knows the row.
             Role::Tab(on) => a11y::tab(label, &author, r, *on, 0),
             Role::Expander(open) => a11y::expander(label, &author, r, *open),
             Role::Text | Role::List => a11y::text(label, &author, r),
             Role::Edit(value) => a11y::text_input(label, &author, r, value, false),
             Role::Progress(f) => a11y::progress(label, &author, r, *f),
+            // UI-FULLFROST.
+            Role::Slider(v) => slider_node(label, &author, r, *v, c.disabled),
             Role::Item(on) => {
                 let mut n = a11y::button(label, &author, r, c.disabled);
                 n.set_role(accesskit::Role::ListBoxOption);
@@ -1708,7 +1743,8 @@ impl PurgeApp {
                 self.model.programs.set_query(&text);
                 self.view.list.jump_top();
             }
-            _ => {}
+            // UI-FULLFROST: the strength slider's RangeValue.
+            other => self.slider_request(cx, other),
         }
     }
 }
@@ -1976,6 +2012,8 @@ impl App for PurgeApp {
     fn draw(&mut self, cx: &mut Cx<'_, ()>, p: &mut Painter, _damage: Rect) {
         let began = Instant::now();
         let size = cx.size();
+        // UI-FULLFROST: where this frame draws (`glass`).
+        self.view.glass.begin(p);
         self.focus.begin_frame();
         let switching = self.view.page_tx.running();
         let ctls = {
@@ -1998,9 +2036,6 @@ impl App for PurgeApp {
         };
         self.focus.end_frame();
         self.ctls = ctls;
-        if crate::transition::logging() {
-            self.log_draw(began.elapsed().as_secs_f64() * 1000.0, switching);
-        }
         if self.script.is_some() && self.paint_check.is_none() {
             self.paint_check = Some(crate::paint::self_check(p));
         }
@@ -2031,12 +2066,8 @@ impl App for PurgeApp {
             if cx.frosted() {
                 let over = path.with_extension("over-desktop.png");
                 let mut shot = p.bmp.clone();
-                over_desktop(
-                    &mut shot.pixels,
-                    shot.width as usize,
-                    &self.pal,
-                    self.model.prefs.backdrop,
-                );
+                let keys = self.glass_keys();
+                over_desktop(&mut shot.pixels, shot.width as usize, &keys);
                 match shot.write_png(&over) {
                     Ok(()) => println!("shot over a made-up desktop: {}", over.display()),
                     Err(e) => println!("shot failed: {}: {e}", over.display()),
@@ -2044,6 +2075,16 @@ impl App for PurgeApp {
             } else if self.model.prefs.backdrop != Backdrop::Off && self.script.is_none() {
                 println!("shot: the chrome was not frosted (no keyboard, or no backdrop here)");
             }
+        }
+        // UI-FULLFROST: the marked pixels keyed with the user's strength, the frame as drawn
+        // kept for the next (`glass`). After the shot: it is the frame as drawn.
+        let keys = cx.frosted().then(|| self.glass_keys());
+        let lk = Look::of(self.model.prefs.design);
+        let areas = crate::glass::areas(self.model.prefs.glass.covers, lk.title_h, lk.rail_w, size);
+        let areas: Vec<Rect> = areas.into_iter().flatten().collect();
+        self.view.glass.end(p, keys.as_ref(), &areas);
+        if crate::transition::logging() {
+            self.log_draw(began.elapsed().as_secs_f64() * 1000.0, switching);
         }
         self.frames += 1;
         // The launch markers at the moments they name: `first_tick` when the first frame is
@@ -2094,18 +2135,19 @@ impl App for PurgeApp {
 /// when it presents (`frost::key_out`), then laid over a made-up "desktop": a smooth diagonal of
 /// strong colours, about what Acrylic's blur makes of a busy screen behind the window (Mica's
 /// tinted wallpaper is much flatter, so this is the harder case for it). `pixels` are BGRA.
-fn over_desktop(pixels: &mut [u8], width: usize, pal: &Palette, backdrop: Backdrop) {
-    use mdshared_ui::frost;
+/// UI-FULLFROST: keyed as the window is (`glass::Keys`: the user's strength, the whole window
+/// when it covers it).
+fn over_desktop(pixels: &mut [u8], width: usize, keys: &crate::glass::Keys) {
     if width == 0 {
         return;
     }
-    let key = frost::Key::new(frost::key_colour(pal), frost::veil(backdrop));
-    let mut px: Vec<u32> = pixels
+    let mut keyed = pixels.to_vec();
+    crate::glass::key_copy(&mut keyed, keys);
+    let px: Vec<u32> = keyed
         .chunks_exact(4)
         .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect();
     let rows = px.len() / width;
-    frost::key_out(&key, &mut px, width, (0, 0, width, rows));
     let span = (width + rows).max(1) as f32;
     for (i, (out, v)) in pixels.chunks_exact_mut(4).zip(px).enumerate() {
         let a = v >> 24;
@@ -2126,4 +2168,134 @@ fn over_desktop(pixels: &mut [u8], width: usize, pal: &Palette, backdrop: Backdr
         let ch = |k: usize| (c[k] as f32 + keep * d[k]).round().min(255.0) as u8;
         out.copy_from_slice(&[ch(2), ch(1), ch(0), 255]);
     }
+}
+
+// ---- UI-FULLFROST: the backdrop's cover and strength ------------------------------------------
+
+impl PurgeApp {
+    /// The keys of the look in force (`glass::Keys`), made again when the palette or the
+    /// setting changed.
+    fn glass_keys(&mut self) -> crate::glass::Keys {
+        let want = (self.pal, self.model.prefs.glass);
+        match self.glass_keys {
+            Some((pal, g, keys)) if (pal, g) == want => keys,
+            _ => {
+                let keys = crate::glass::Keys::new(&want.0, want.1.covers, want.1.strength);
+                self.glass_keys = Some((want.0, want.1, keys));
+                keys
+            }
+        }
+    }
+
+    pub fn set_covers(&mut self, cx: &mut Cx<'_, ()>, covers: crate::look::Covers) {
+        let mut p = self.model.prefs;
+        p.glass.covers = covers;
+        self.set_prefs(cx, p);
+    }
+
+    pub fn set_strength(&mut self, cx: &mut Cx<'_, ()>, strength: u8) {
+        let mut p = self.model.prefs;
+        p.glass.strength = strength.min(100);
+        self.set_prefs(cx, p);
+    }
+
+    /// The strength slider as the last frame declared it, if it can be used.
+    fn strength_ctl(&self, id: Id) -> Option<Ctl> {
+        self.ctl(id)
+            .filter(|c| matches!(c.role, Role::Slider(_)) && !c.disabled)
+            .cloned()
+    }
+
+    fn strength_slider(&self) -> mdshared_ui::slider::Slider {
+        let v = f32::from(self.model.prefs.glass.strength);
+        mdshared_ui::slider::Slider::new(0.0, 100.0, v).step(crate::glass::STEP)
+    }
+
+    /// With the slider's thumb in hand (pressed, or the press itself): the value under the
+    /// pointer. False when no slider is held.
+    fn slider_drag(&mut self, cx: &mut Cx<'_, ()>, x: f32, y: f32) -> bool {
+        let Some(c) = self.pressed.and_then(|id| self.strength_ctl(id)) else {
+            return false;
+        };
+        let v = self.strength_slider().value_at(c.rect, x, y);
+        self.set_strength(cx, v.round() as u8);
+        cx.request_redraw_all();
+        true
+    }
+
+    /// The keys on the slider: the arrows a step of 5 %, Page Up and Down five steps, Home and
+    /// End the ends.
+    fn slider_key(&mut self, cx: &mut Cx<'_, ()>, id: Id, name: &KeyName) {
+        use mdshared_ui::slider::Step;
+        if self.strength_ctl(id).is_none() {
+            return;
+        }
+        let step = match name {
+            KeyName::Left | KeyName::Down => Step::Less,
+            KeyName::Right | KeyName::Up => Step::More,
+            KeyName::PageDown => Step::PageLess,
+            KeyName::PageUp => Step::PageMore,
+            KeyName::Home => Step::Min,
+            KeyName::End => Step::Max,
+            _ => return,
+        };
+        let mut s = self.strength_slider();
+        if s.step_by(step) {
+            self.set_strength(cx, s.value().round() as u8);
+        }
+    }
+
+    /// What a reader asks of the slider: a value, or a step either way.
+    fn slider_request(&mut self, cx: &mut Cx<'_, ()>, req: a11y::Request) {
+        let (node, to) = match req {
+            a11y::Request::SetNumber(node, v) => (node, Some(v)),
+            a11y::Request::Other(r) => match r.action {
+                accesskit::Action::Increment | accesskit::Action::Decrement => {
+                    let mut s = self.strength_slider();
+                    let up = r.action == accesskit::Action::Increment;
+                    s.step_by(if up {
+                        mdshared_ui::slider::Step::More
+                    } else {
+                        mdshared_ui::slider::Step::Less
+                    });
+                    (r.target_node, Some(f64::from(s.value())))
+                }
+                _ => return,
+            },
+            _ => return,
+        };
+        let usable = self
+            .ctls
+            .iter()
+            .find(|c| a11y::id(&c.id.author()) == node)
+            .and_then(|c| self.strength_ctl(c.id))
+            .is_some();
+        if let Some(v) = to.filter(|v| usable && v.is_finite()) {
+            self.set_strength(cx, v.round().clamp(0.0, 100.0) as u8);
+        }
+    }
+}
+
+/// The slider's node: UIA RangeValue from 0 to 100 in steps of 5, settable, with Increment and
+/// Decrement.
+fn slider_node(label: &str, author: &str, r: Rect, value: f32, disabled: bool) -> accesskit::Node {
+    let mut n = accesskit::Node::new(accesskit::Role::Slider);
+    n.set_label(label);
+    n.set_author_id(author);
+    n.set_bounds(a11y::bounds(r));
+    n.set_min_numeric_value(0.0);
+    n.set_max_numeric_value(100.0);
+    n.set_numeric_value_step(f64::from(crate::glass::STEP));
+    n.set_numeric_value_jump(f64::from(crate::glass::STEP) * 5.0);
+    n.set_numeric_value(f64::from(value));
+    n.set_value(format!("{value:.0}%"));
+    if disabled {
+        n.set_disabled();
+    } else {
+        n.add_action(accesskit::Action::SetValue);
+        n.add_action(accesskit::Action::Increment);
+        n.add_action(accesskit::Action::Decrement);
+        n.add_action(accesskit::Action::Focus);
+    }
+    n
 }

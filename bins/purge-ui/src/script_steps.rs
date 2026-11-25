@@ -1340,7 +1340,6 @@ pub fn steps() -> Vec<Step> {
                 ] {
                     has(app, name)?;
                 }
-                has_id(app, Id("TickRule", 1))?;
                 for i in 0..Preset::ALL.len() {
                     let sid = crate::screens::swatch_id(i);
                     want(app.ctl(sid).is_some(), format!("no swatch {sid:?}"))?;
@@ -1357,6 +1356,20 @@ pub fn steps() -> Vec<Step> {
                 Ok(about)
             },
             settle: 700,
+        },
+        Step {
+            // UI-FULLFROST: the backdrop's two rows took the room the tick rules had at the
+            // first sight of the page; they are a little way down.
+            name: "settings-tick-rules",
+            act: |app, _| {
+                let v = &mut app.view;
+                v.page_scroll.jump_to(360.0, v.page_content, v.page_area.h);
+            },
+            check: |app| {
+                has_id(app, Id("TickRule", 1))?;
+                Ok("the tick rules".to_string())
+            },
+            settle: 400,
         },
         Step {
             name: "settings-scrolled-down",
@@ -1773,6 +1786,91 @@ fn appearance_steps() -> Vec<Step> {
                 Ok("Mica".to_string())
             },
             settle: 600,
+        },
+        // ---- UI-FULLFROST: the backdrop's cover and strength ----
+        Step {
+            name: "glass-whole-window-by-keys",
+            act: |app, cx| {
+                // "Title and rail" down to "Whole window", then the slider two steps up.
+                app.focus.focus(id("BackdropCoversChoice"));
+                app.press_key(cx, KeyName::Enter, NONE);
+                app.press_key(cx, KeyName::Down, NONE);
+                app.press_key(cx, KeyName::Enter, NONE);
+                app.focus.focus(id("BackdropStrength"));
+                app.press_key(cx, KeyName::Right, NONE);
+                app.press_key(cx, KeyName::Right, NONE);
+            },
+            check: |app| {
+                let g = app.model.prefs.glass;
+                want(
+                    g.covers == crate::look::Covers::Window,
+                    format!("covers {:?}", g.covers),
+                )?;
+                let to = (crate::glass::STRENGTH_DEFAULT + 10).min(100);
+                want(
+                    g.strength == to,
+                    format!("strength {} (want {to})", g.strength),
+                )?;
+                let c = app
+                    .ctl(id("BackdropStrength"))
+                    .ok_or("no strength slider")?;
+                want(
+                    c.role == Role::Slider(f32::from(to)) && c.label == "Backdrop strength",
+                    format!("the slider says {:?} {:?}", c.label, c.role),
+                )?;
+                want(!c.disabled, "the slider is usable")?;
+                Ok(format!("whole window, {to}%"))
+            },
+            settle: 600,
+        },
+        Step {
+            name: "glass-strength-by-pointer",
+            act: |app, cx| {
+                // A press a fifth of the way along the slider's travel, then the arrows
+                // and Home.
+                if let Some(r) = app.ctl(id("BackdropStrength")).map(|c| c.rect) {
+                    let t = mdshared_ui::slider::THUMB;
+                    app.click_at(cx, r.x + t / 2.0 + 0.2 * (r.w - t), r.cy());
+                }
+                app.note = app.model.prefs.glass.strength.to_string();
+                app.press_key(cx, KeyName::Left, NONE);
+                app.press_key(cx, KeyName::PageUp, NONE);
+            },
+            check: |app| {
+                want(app.note == "20", format!("the press set {}", app.note))?;
+                let s = app.model.prefs.glass.strength;
+                want(s == 40, format!("Left then Page Up gave {s}"))?;
+                Ok("20% by a press, 40% by the keys".to_string())
+            },
+            settle: 600,
+        },
+        Step {
+            name: "glass-waits-without-a-backdrop",
+            act: |app, cx| app.set_backdrop(cx, Backdrop::Off),
+            check: |app| {
+                for name in ["BackdropCoversChoice", "BackdropStrength"] {
+                    let c = app.ctl(id(name)).ok_or(format!("no {name}"))?;
+                    want(c.disabled && !c.focusable, format!("{name} still usable"))?;
+                }
+                Ok("both wait".to_string())
+            },
+            settle: 500,
+        },
+        Step {
+            name: "glass-back",
+            act: |app, cx| {
+                app.set_backdrop(cx, Backdrop::Mica);
+                app.set_covers(cx, crate::look::Covers::Chrome);
+                app.set_strength(cx, crate::glass::STRENGTH_DEFAULT);
+            },
+            check: |app| {
+                want(
+                    app.model.prefs.glass == crate::glass::GlassPrefs::default(),
+                    "back to the defaults",
+                )?;
+                Ok("title and rail, the default strength".to_string())
+            },
+            settle: 500,
         },
         Step {
             name: "transition-by-keys",

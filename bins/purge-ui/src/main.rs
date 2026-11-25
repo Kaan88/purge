@@ -17,6 +17,8 @@ use mdshared_ui::platform;
 mod app;
 mod clock;
 mod flow;
+// UI-FULLFROST.
+mod glass;
 mod icons;
 mod link;
 mod look;
@@ -45,6 +47,9 @@ const HELP: &str = "Purge: uninstalls programs and what they leave behind.
   --colour <name>      windows, blue, teal, violet, amber, rose or graphite, for this run
   --transition <name>  none, fade, slide, slide-side, flow, slide-up, scale or depth, for this run
   --backdrop <name>    off, mica or acrylic, for this run
+  --backdrop-covers <c> chrome (the title row and the rail) or window (the whole window),
+                       for this run
+  --backdrop-strength <n>  0 to 100: how much of the backdrop shows, for this run
   --page <key>         open on programs, queue, leftovers, history, vault or settings
   --sample             show the sample data without starting the engine
   --bench-stub         the launch bench's sample engine: 300 rows, no engine started
@@ -84,6 +89,9 @@ fn main() {
     let mut preset: Option<Preset> = None;
     let mut transition: Option<Transition> = None;
     let mut backdrop: Option<Backdrop> = None;
+    // UI-FULLFROST.
+    let mut covers: Option<look::Covers> = None;
+    let mut strength: Option<u8> = None;
     let mut page = Page::Programs;
     let mut seconds: Option<u64> = None;
     let mut script = false;
@@ -101,6 +109,15 @@ fn main() {
             "--colour" | "--color" => preset = Some(choice("--colour", args.next())),
             "--transition" => transition = Some(choice("--transition", args.next())),
             "--backdrop" => backdrop = Some(choice("--backdrop", args.next())),
+            // UI-FULLFROST.
+            "--backdrop-covers" => covers = Some(choice("--backdrop-covers", args.next())),
+            "--backdrop-strength" => match args.next().as_deref().and_then(glass::parse_strength) {
+                Some(n) => strength = Some(n),
+                None => {
+                    eprintln!("Purge: --backdrop-strength takes a number from 0 to 100");
+                    std::process::exit(2);
+                }
+            },
             "--page" => match args.next().as_deref().and_then(Page::parse_key) {
                 Some(p) => page = p,
                 None => {
@@ -169,6 +186,9 @@ fn main() {
     prefs.preset = preset.unwrap_or(prefs.preset);
     prefs.transition = transition.unwrap_or(prefs.transition);
     prefs.backdrop = backdrop.unwrap_or(prefs.backdrop);
+    // UI-FULLFROST.
+    prefs.glass.covers = covers.unwrap_or(prefs.glass.covers);
+    prefs.glass.strength = strength.unwrap_or(prefs.glass.strength);
 
     let config = Config::new("Purge")
         .size(1360.0, 860.0)

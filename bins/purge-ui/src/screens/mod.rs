@@ -104,6 +104,8 @@ pub fn draw(ui: &mut Ui, m: &Model, v: &mut View) {
             if old != new && moves && v.shown == Some((m.page, m.prefs.design)) =>
         {
             let push = Effect::Toolkit(PageEffect::Push { from: Edge::Left });
+            // UI-FULLFROST: the old stage as drawn, not as the glass keyed it.
+            v.glass.restore(ui.p, flow_body);
             v.flow_tx.begin(ui.cx.anim(), ui.p, flow_body, push);
         }
         (_, None) if v.flow_tx.running() => v.flow_tx.cancel(ui.cx.anim()),
@@ -118,7 +120,11 @@ pub fn draw(ui: &mut Ui, m: &Model, v: &mut View) {
         && page != m.page
     {
         match m.prefs.transition.effect(page.index(), m.page.index()) {
-            Some(effect) => v.page_tx.begin(ui.cx.anim(), ui.p, content, effect),
+            Some(effect) => {
+                // UI-FULLFROST: the old page as drawn, not as the glass keyed it.
+                v.glass.restore(ui.p, content);
+                v.page_tx.begin(ui.cx.anim(), ui.p, content, effect)
+            }
             // No motion: a switch still running from the page before ends here, or the page
             // before that would go on blending over this one.
             None => v.page_tx.cancel(ui.cx.anim()),
@@ -162,6 +168,12 @@ pub fn draw(ui: &mut Ui, m: &Model, v: &mut View) {
         v.page_tx.lay(ui.p);
     } else {
         v.page_ctls.clear();
+    }
+    // UI-FULLFROST: the page is laid (drawn, or the switch's pictures blended): its opaque
+    // surfaces become the glass's second layer. What follows (the rail's cards, dialogs, menus,
+    // the palette, toasts) stays opaque.
+    if whole_glass(ui, m) {
+        crate::glass::raise(ui.p, content);
     }
     if lk.rail_icons {
         rail_tip(ui, m);
@@ -229,6 +241,11 @@ fn page(ui: &mut Ui, m: &Model, v: &mut View, content: Rect, flow: bool, flow_bo
         let from = mix(pal.page, pal.accent, if pal.dark { 0.20 } else { 0.13 });
         crate::paint::gradient_down(ui.p, band, lk.radius.min(10.0) - 1.0, from, pal.page, 1.0);
     }
+    // UI-FULLFROST: over the whole window the content card is glass like the chrome; what the
+    // page draws on it opaquely becomes the second layer once it is laid (`glass::raise`).
+    if whole_glass(ui, m) {
+        ui.cx.frost(ui.p, content);
+    }
     let old = ui.clip(content);
     match m.page {
         Page::Programs => programs::draw(ui, m, v, content),
@@ -242,6 +259,11 @@ fn page(ui: &mut Ui, m: &Model, v: &mut View, content: Rect, flow: bool, flow_bo
     if flow {
         v.flow_tx.apply(ui.cx.anim(), ui.p, flow_body);
     }
+}
+
+/// UI-FULLFROST: the backdrop covers the whole window, and the window is frosted just now.
+fn whole_glass(ui: &Ui, m: &Model) -> bool {
+    m.prefs.glass.covers == crate::look::Covers::Window && ui.cx.frosted()
 }
 
 /// The content card: `content` and 12 px past the window's right and bottom edges, so only its
