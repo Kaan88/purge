@@ -420,3 +420,6 @@ fn sample_answer(call: &PipeCall) -> Result<Answer, ClientError> {
         _ => Err(ClientError::NotAvailable(NOT_LIVE.into())),
     }
 }
+
+#[cfg(test)]
+mod tests;

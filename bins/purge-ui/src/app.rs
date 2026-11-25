@@ -367,6 +367,8 @@ impl PurgeApp {
             self.model.page = page;
             self.close_dropdowns();
             self.view.page_scroll = scroll::SmoothScroll::new();
+            // UI-PAGES2: History's and Quarantine's lists scroll with it too.
+            self.view.left_scroll = scroll::SmoothScroll::new();
         }
     }
 
@@ -961,6 +963,11 @@ impl PurgeApp {
                     }
                 } else if self.model.page == Page::Programs && !self.model.programs.sel.is_empty() {
                     self.model.programs.sel.clear();
+                } else if self.model.page == Page::Quarantine
+                    && self.model.quarantine.flyout.take().is_some()
+                {
+                    // UI-PAGES2: Esc closes the "Delete now" choice, as it closed the flyout.
+                    self.focus.focus(id("VDeleteNow"));
                 }
                 return;
             }
@@ -1567,6 +1574,7 @@ impl PurgeApp {
                 {
                     h.page.select(&id);
                     h.dismissed.clear();
+                    self.view.page_scroll = scroll::SmoothScroll::new();
                 }
             }
             "Op" => {
@@ -1622,6 +1630,7 @@ impl PurgeApp {
                 if id.is_some() && id != q.selected {
                     q.selected = id;
                     q.flyout = None;
+                    self.view.page_scroll = scroll::SmoothScroll::new();
                     if q.page.items_for() != q.selected.as_ref() {
                         q.page.close_items();
                     }
