@@ -18,6 +18,10 @@ param(
     [ValidateSet('', 'broker', 'consent', 'uac')] [string] $Mode = '',
     [string] $Evidence = '',
     [string] $ExpectFile = '',
+    # -Mode consent: which consent dialog the run must have been of (package BROKER-CONSENT-UI). Every dialog that was
+    # observed, attacked, controlled and approved must be of that renderer, by m3sec.exe's "flavour" (the window class);
+    # a toolkit run in which the broker fell back to the TaskDialog proves nothing about the toolkit dialog and fails.
+    [ValidateSet('taskdialog', 'toolkit')] [string] $ConsentUi = 'taskdialog',
     [switch] $SelfTest,
     [Parameter(ValueFromRemainingArguments = $true)] $Rest
 )
@@ -110,6 +114,35 @@ function Test-Broker([string]$Ev, $X) {
 
 # ------------------------------------------------------------------------------------------------ consent
 
+# Every record of the run is of the renderer asked for. A record without a flavour (m3sec.exe from before the toolkit
+# dialog) counts as the TaskDialog, which is all that tool could find.
+function Test-ConsentFlavour($Doc, [string]$Want) {
+    $flav = { param($f) if ("$f") { "$f" } else { 'taskdialog' } }
+    $seen = @()
+    foreach ($d in Arr $Doc.dialogs) { if ($d.data -and $d.data.found) { $seen += [ordered]@{ what = $d.file; flavour = (& $flav $d.data.flavour) } } }
+    foreach ($a in Arr $Doc.attacks) {
+        $seen += [ordered]@{ what = "$($a.file) pre"; flavour = (& $flav $a.data.pre.flavour) }
+        $seen += [ordered]@{ what = "$($a.file) drive"; flavour = (& $flav $a.data.drive.flavour) }
+    }
+    foreach ($c in Arr $Doc.controls) { $seen += [ordered]@{ what = "$($c.file) drive"; flavour = (& $flav $c.data.drive.flavour) } }
+    foreach ($p in Arr $Doc.approves) { $seen += [ordered]@{ what = "$($p.file) press"; flavour = (& $flav $p.data.press.flavour) } }
+    $other = @($seen | Where-Object { $_.flavour -ne $Want })
+    Row "every dialog is the $Want dialog" ($seen.Count -gt 0 -and $other.Count -eq 0) $(if (-not $seen.Count) { 'no dialog record' } elseif ($other.Count) { "$($other.Count) of $($seen.Count) are not: $(@($other | Select-Object -First 4 | ForEach-Object { "$($_.what)=$($_.flavour)" }) -join '; ')" } else { "$($seen.Count) records" })
+    if ($Want -eq 'toolkit') {
+        $asked = "$($Doc.consent_ui)" -eq 'toolkit' -and "$($Doc.launched.args)" -match '--consent toolkit'
+        Row 'the broker was started with --consent toolkit' $asked "consent_ui=$($Doc.consent_ui) args=$($Doc.launched.args)"
+        # Found by its ids: the button, Cancel and the footer of every dialog, and on the plan dialog the box.
+        $noids = @()
+        foreach ($a in Arr $Doc.attacks) {
+            $ids = @(Arr $a.data.pre.uia_ids)
+            foreach ($need in 'ConsentApprove', 'ConsentCancel', 'ConsentFooter', 'ConsentList') { if ($ids -notcontains $need) { $noids += "$($a.file): $need" } }
+            if ($a.data.kind -eq 'plan.execute' -and $ids -notcontains 'ConsentVerify') { $noids += "$($a.file): ConsentVerify" }
+            if (-not ([int]$a.data.pre.lines -gt 0)) { $noids += "$($a.file): no ConsentLine_<n>" }
+        }
+        Row 'the toolkit dialog is read by its UI Automation ids (from high)' ($noids.Count -eq 0) $(if ($noids.Count) { "missing: $(@($noids | Select-Object -First 6) -join '; ')" } else { 'ConsentApprove, ConsentCancel, ConsentFooter, ConsentList, lines; ConsentVerify on the plan dialog' })
+    }
+}
+
 function Test-Consent([string]$Ev, $X) {
     $doc = Read-J (Join-Path $Ev 'guest\m3-consent.json')
     $sum = Read-J (Join-Path $Ev 'summary.json')
@@ -168,6 +201,7 @@ function Test-Consent([string]$Ev, $X) {
         }
     }
     Row "medium attempts (at least $($X.consent.min_medium_attempts))" ($total -ge [int]$X.consent.min_medium_attempts) "$total"
+    Test-ConsentFlavour $doc $script:ConsentUi
     $shots = @(if ($sum) { Get-Shots $Ev $sum })
     foreach ($p in $X.consent.shot_patterns.PSObject.Properties) {
         $have = @($shots | Where-Object { $_ -match "-$($p.Name)" }).Count
@@ -431,6 +465,38 @@ function Get-Defects {
     )
 }
 
+# Turns a passing consent document into one of a toolkit run (-ConsentUi toolkit): every record of that renderer, the
+# broker started with the argument, the dialog read by its ids.
+function Set-ToolkitEvidence($d) {
+    $d | Add-Member -NotePropertyName consent_ui -NotePropertyValue 'toolkit' -Force
+    $d | Add-Member -NotePropertyName launched -NotePropertyValue ([pscustomobject]@{ args = '--pipe 0123 --parent 1 --parent-ctime 2 --consent toolkit' }) -Force
+    foreach ($a in $d.attacks) {
+        $ids = @('ConsentInstruction', 'ConsentList', 'ConsentFooter', 'ConsentApprove', 'ConsentCancel', 'ConsentClose')
+        if ($a.data.kind -eq 'plan.execute') { $ids += 'ConsentVerify' }
+        $a.data.pre | Add-Member -NotePropertyName flavour -NotePropertyValue 'toolkit' -Force
+        $a.data.pre | Add-Member -NotePropertyName uia_ids -NotePropertyValue $ids -Force
+        $a.data.pre | Add-Member -NotePropertyName lines -NotePropertyValue 9 -Force
+        $a.data.drive | Add-Member -NotePropertyName flavour -NotePropertyValue 'toolkit' -Force
+    }
+    foreach ($c in $d.controls) { $c.data.drive | Add-Member -NotePropertyName flavour -NotePropertyValue 'toolkit' -Force }
+    foreach ($a in $d.approves) { $a.data | Add-Member -NotePropertyName press -NotePropertyValue ([pscustomobject]@{ flavour = 'toolkit' }) -Force }
+}
+
+# Single defects of a toolkit run; each must turn its passing evidence into a FAIL under -ConsentUi toolkit.
+function Get-ToolkitDefects {
+    @(
+        @{ name = 'the broker fell back to the TaskDialog for one dialog'; act = { param($d) $d.attacks[3].data.drive.flavour = 'taskdialog' } },
+        @{ name = 'a control drove a TaskDialog'; act = { param($d) $d.controls[2].data.drive.flavour = 'taskdialog' } },
+        @{ name = 'the approval was of a TaskDialog'; act = { param($d) $d.approves[0].data.press.flavour = 'taskdialog' } },
+        @{ name = 'an approval without a flavour'; act = { param($d) $d.approves[1].data.press = [pscustomobject]@{ found = $true } } },
+        @{ name = 'the broker was not started with --consent toolkit'; act = { param($d) $d.launched.args = '--pipe 0123 --parent 1 --parent-ctime 2' } },
+        @{ name = 'the button has no id'; act = { param($d) $d.attacks[0].data.pre.uia_ids = @('ConsentCancel', 'ConsentFooter', 'ConsentList') } },
+        @{ name = 'the plan dialog has no box id'; act = { param($d) foreach ($a in $d.attacks) { $a.data.pre.uia_ids = @($a.data.pre.uia_ids | Where-Object { $_ -ne 'ConsentVerify' }) } } },
+        @{ name = 'no line of the list was read'; act = { param($d) $d.attacks[1].data.pre.lines = 0 } },
+        @{ name = 'a medium attempt reached the toolkit dialog'; act = { param($d) $d.attacks[6].data.drive.attempts[0].reached = $true } }
+    )
+}
+
 function Invoke-SelfTest {
     $X = Get-Content -LiteralPath $ExpectFile -Raw | ConvertFrom-Json
     $root = Join-Path ([IO.Path]::GetTempPath()) ('m3-sec-score-selftest-' + [guid]::NewGuid().ToString('N'))
@@ -468,13 +534,29 @@ function Invoke-SelfTest {
             $r = Invoke-Score $d.mode (& $build $d.mode $d) $X -Quiet
             Check "$($d.mode) defect '$($d.name)' fails" (-not $r.pass)
         }
+        # The toolkit consent dialog (-ConsentUi toolkit): the same rows, and every record of that renderer.
+        $asked = $script:ConsentUi
+        try {
+            $toolkit = @{ act = { param($d) Set-ToolkitEvidence $d } }
+            Check 'consent toolkit evidence fails as a TaskDialog run' (-not (Invoke-Score 'consent' (& $build 'consent' $toolkit) $X -Quiet).pass)
+            $script:ConsentUi = 'toolkit'
+            $r = Invoke-Score 'consent' (& $build 'consent' $toolkit) $X -Quiet
+            Check 'consent toolkit synthetic pass passes' $r.pass
+            if (-not $r.pass) { foreach ($row in $r.rows) { if (-not $row.ok) { Write-Host "       $($row.row): $($row.detail)" } } }
+            Check 'consent TaskDialog evidence fails as a toolkit run' (-not (Invoke-Score 'consent' (& $build 'consent' $null) $X -Quiet).pass)
+            foreach ($d in Get-ToolkitDefects) {
+                $both = @{ act = [scriptblock]::Create('param($d) Set-ToolkitEvidence $d; & { ' + $d.act.ToString() + ' } $d') }
+                $r = Invoke-Score 'consent' (& $build 'consent' $both) $X -Quiet
+                Check "consent toolkit defect '$($d.name)' fails" (-not $r.pass)
+            }
+        } finally { $script:ConsentUi = $asked }
     } finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
     Write-Host "m3-sec-score self-test: $($script:checks - $script:fails)/$($script:checks) ok"
     if ($script:fails) { 1 } else { 0 }
 }
 
 if ($SelfTest) { exit (Invoke-SelfTest) }
-if (-not $Mode -or -not $Evidence) { Write-Host 'usage: m3-sec-score.ps1 -Mode broker|consent|uac -Evidence <dir>  |  --self-test'; exit 2 }
+if (-not $Mode -or -not $Evidence) { Write-Host 'usage: m3-sec-score.ps1 -Mode broker|consent|uac -Evidence <dir> [-ConsentUi taskdialog|toolkit]  |  --self-test'; exit 2 }
 $X = Get-Content -LiteralPath $ExpectFile -Raw | ConvertFrom-Json
 $res = Invoke-Score $Mode $Evidence $X
 if (Test-Path -LiteralPath $Evidence -PathType Container) {

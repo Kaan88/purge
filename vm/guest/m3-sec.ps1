@@ -5,7 +5,13 @@
   from vm\guest\m3sec.cs (roles: client, drive, observe, focus, focuswin, procinfo, arm, press, ui, inputdesk,
   fixture-uninstall).
 
-    & C:\cr\guest\m3-sec.ps1 -Phase <phase> [-Tag <t>] [-Method <m>] [-WaitSec <n>]
+    & C:\cr\guest\m3-sec.ps1 -Phase <phase> [-Tag <t>] [-Method <m>] [-WaitSec <n>] [-ConsentUi taskdialog|toolkit]
+
+  -ConsentUi toolkit (package BROKER-CONSENT-UI): consent-start starts the broker with "--consent toolkit", so its
+  consent dialog is the one drawn with Purge's own toolkit. Every other phase is the same: m3sec.exe tells the two
+  dialogs apart by the window class and writes "flavour" (taskdialog | toolkit) into what it observes and drives, and
+  the scorer (m3-sec-score.ps1 -ConsentUi toolkit) fails a run whose dialogs were not the toolkit's (the broker falls
+  back to the TaskDialog when its toolkit window cannot be shown).
 
   Every output is under C:\cr\out\m3-sec\ (log sec.log); result lines start with "M3S ".
 
@@ -40,7 +46,8 @@ param(
     [string] $Phase,
     [string] $Tag = '',
     [ValidateSet('', 'sendinput-key', 'sendinput-mouse', 'postmessage', 'uia')] [string] $Method = '',
-    [int] $WaitSec = 120
+    [int] $WaitSec = 120,
+    [ValidateSet('taskdialog', 'toolkit')] [string] $ConsentUi = 'taskdialog'
 )
 . C:\cr\guest\riglib.ps1
 $ErrorActionPreference = 'Continue'
@@ -404,7 +411,7 @@ function Invoke-Observe([int]$BrokerPid, [string]$Path, [int]$WaitMs = 10000) {
 
 function Format-Dialog($D) {
     if (-not $D -or -not $D.found) { return 'found=False' }
-    "found=True page=$($D.page)/$($D.pages) footer=$($D.footer_code) primary=$($D.has_primary)/$($D.primary_enabled) next=$($D.has_next) verify=$(if ($D.verify) { $D.verify.toggle } else { 'none' }) fg=$($D.foreground) broker_il=$($D.broker_il) attention=$($D.attention_total)"
+    "found=True flavour=$($D.flavour) page=$($D.page)/$($D.pages) footer=$($D.footer_code) primary=$($D.has_primary)/$($D.primary_enabled) next=$($D.has_next) verify=$(if ($D.verify) { $D.verify.toggle } else { 'none' }) fg=$($D.foreground) broker_il=$($D.broker_il) attention=$($D.attention_total)"
 }
 
 # The targets a medium attack aims at on the dialog as observed: the box first, then Next, the primary button, Cancel.
@@ -551,11 +558,13 @@ switch ($Phase) {
         $spec = [ordered]@{ broker = $Broker; launch = 'runas'; window = $true; connects = 1; connect_wait_ms = 20000; exit_wait_ms = 120000; go = $true
                             steps = @(@{ op = 'prepare'; program = $FixProgram }, @{ op = 'run'; quiet = $true; repeat = 8 }, @{ op = 'scan' },
                                       @{ op = 'plan_execute'; select = 'all'; repeat = 8; restore_point = 'off' }) }
+        # The broker's argument for the toolkit dialog, as Purge.exe passes it (--broker-consent toolkit).
+        if ($ConsentUi -eq 'toolkit') { $spec.args = '--pipe {pipe} --parent {pid} --parent-ctime {ctime} --consent toolkit' }
         $s = Start-Client 'consent' $spec
         Write-JsonFile $s (Join-Path $s.dir 'start.json')
         $l = $null
         if (Wait-File (Join-Path $s.dir 'launched.json') 60) { $l = Read-Json (Join-Path $s.dir 'launched.json') }
-        "M3S CONSENT-START client=$($s.client_pid) window_fg=$($s.window_foreground) launch_ok=$(if ($l) { $l.ok }) broker=$(if ($l) { $l.broker_pid })"
+        "M3S CONSENT-START client=$($s.client_pid) window_fg=$($s.window_foreground) launch_ok=$(if ($l) { $l.ok }) broker=$(if ($l) { $l.broker_pid }) consent_ui=$ConsentUi"
     }
     'consent-next' {
         Use-CurrentClient
@@ -653,7 +662,7 @@ switch ($Phase) {
         $client = Read-Json (Join-Path $CDir 'client.json')
         $col = { param($p) @(Get-ChildItem -LiteralPath $CDir -Filter $p -ErrorAction SilentlyContinue | Sort-Object Name | ForEach-Object { [ordered]@{ file = $_.Name; data = (Read-Json $_.FullName) } }) }
         $sum = [ordered]@{
-            schema = "purge.rig.m3sec.$Tag/1"; t = (NowIso); uac = (Get-UacValues); uac_silent = (Read-Json (Join-Path $Out 'uac-silent.json')); install = (Read-Json (Join-Path $Out 'install.json'))
+            schema = "purge.rig.m3sec.$Tag/1"; t = (NowIso); consent_ui = $ConsentUi; uac = (Get-UacValues); uac_silent = (Read-Json (Join-Path $Out 'uac-silent.json')); install = (Read-Json (Join-Path $Out 'install.json'))
             start = (Read-Json (Join-Path $CDir 'start.json')); launched = (Read-Json (Join-Path $CDir 'launched.json')); client = $client
             dialogs = (& $col 'dialog-*.json'); shown = (& $col 'consent-shown-*.json'); ready = (& $col 'ready-*.json'); results = (& $col 'consent-result-*.json')
             attacks = (& $col 'attack-*.json'); controls = (& $col 'control-[0-9]*.json'); approves = (& $col 'approve-*.json'); arms = (& $col 'arm-*.json')

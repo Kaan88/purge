@@ -88,7 +88,10 @@ param(
     [int] $Count = 6,
     [int] $NullWaitSec = 10,
     [string] $RunPrefix = '',
-    [string] $AmbientFile = ''
+    [string] $AmbientFile = '',
+    # m3-consent: which consent dialog the broker is started with (package BROKER-CONSENT-UI). toolkit: the broker gets
+    # "--consent toolkit" and the run is scored with m3-sec-score.ps1 -Mode consent -ConsentUi toolkit.
+    [ValidateSet('taskdialog', 'toolkit')] [string] $ConsentUi = 'taskdialog'
 )
 $ErrorActionPreference = 'Stop'
 
@@ -297,6 +300,7 @@ function New-M3SecPhaseText([string]$Phase, [string]$Tag = '', [string]$Method =
     $t = "& 'C:\cr\guest\m3-sec.ps1' -Phase '$Phase'"
     if ($Tag) { $t += " -Tag '$Tag'" }
     if ($Method) { $t += " -Method '$Method'" }
+    if ("$ConsentUi" -eq 'toolkit') { $t += " -ConsentUi 'toolkit'" }
     $t + " -WaitSec $WaitSec"
 }
 
@@ -432,7 +436,7 @@ function Complete-M3Sec([string]$Base, [hashtable]$Extra = @{}) {
         Remove-Item -LiteralPath $zip -Force
         Write-RigLog "  guest outputs in $g"
     } else { Write-RigLog "  !! copyfrom of the guest zip failed: $($c.out -join ' ')"; $script:M3Fail = $true }
-    $sum = [ordered]@{ schema = 'purge.rig.m3sec.summary/1'; mode = $M3.mode; vm = $M3Vm; snapshot = $Base; started = $script:M3Started
+    $sum = [ordered]@{ schema = 'purge.rig.m3sec.summary/1'; mode = $M3.mode; consent_ui = $ConsentUi; vm = $M3Vm; snapshot = $Base; started = $script:M3Started
                        ended = (Get-Date).ToString('o'); failed_step = $script:M3Fail; shots = $script:M3Shots; lines = $script:M3Lines }
     foreach ($k in $Extra.Keys) { $sum[$k] = $Extra[$k] }
     [IO.File]::WriteAllText((Join-Path $M3.evidence 'summary.json'), (ConvertTo-Json $sum -Depth 8), (New-Object System.Text.UTF8Encoding($false)))

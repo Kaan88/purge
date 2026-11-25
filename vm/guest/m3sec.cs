@@ -10,6 +10,12 @@
 //   drive <spec.json>       presses at the broker's consent dialog by one method (SendInput key or mouse,
 //                           PostMessage/SendMessage, UI Automation); run at medium (the attack) or high (the control).
 //   observe <pid> <out> [ms] high: reads the consent dialog of process <pid> (buttons, check box, texts, page, code).
+//
+// The consent dialog has two renderers (package BROKER-CONSENT-UI): the Win32 TaskDialog (window class #32770, the
+// broker's default) and Purge's own toolkit window (broker argument "--consent toolkit"; any other class, its parts
+// found by their UI Automation ids ConsentApprove, ConsentCancel, ConsentVerify, ConsentFooter, ConsentList and
+// ConsentLine_<n>). Every role here tells them apart by the window class ("flavour" in what it writes) and drives the
+// one it finds; the records have the same fields for both, so the scorer reads either.
 //   focus <pid> <out>       high: brings the dialog of <pid> to the foreground (so medium SendInput is a fair test).
 //   arm <spec.json>         high: the arming-delay test (a click in the first second does nothing; a later one works).
 //   press <spec.json>       high: ticks the box and presses a button by TDM messages (approval of a dialog).
@@ -44,6 +50,13 @@ static partial class M3Sec {
     // ------------------------------------------------------------------------------------------ Win32
     const int WM_USER = 0x400, WM_COMMAND = 0x111, WM_CLOSE = 0x10, BM_CLICK = 0xF5, BM_GETCHECK = 0xF0;
     const int TDM_CLICK_BUTTON = WM_USER + 102, TDM_CLICK_VERIFICATION = WM_USER + 113;
+    const int WM_KEYDOWN = 0x100, WM_KEYUP = 0x101, WM_SYSCOMMAND = 0x112, WM_MOUSEMOVE = 0x200, WM_LBUTTONDOWN = 0x201, WM_LBUTTONUP = 0x202;
+    const int SC_CLOSE = 0xF060, MK_LBUTTON = 1;
+    const ushort VK_END = 0x23;
+    // The toolkit dialog's UI Automation ids (bins\purge-broker\src\consent\toolkit\access.rs).
+    const string IdApprove = "ConsentApprove", IdCancel = "ConsentCancel", IdVerify = "ConsentVerify", IdFooter = "ConsentFooter",
+                 IdHint = "ConsentHint", IdList = "ConsentList", IdLine = "ConsentLine_";
+    const string TaskDialogClass = "#32770";
     const int ID_PRIMARY = 100, ID_CANCEL = 2, ID_NEXT = 9001, ID_BACK = 9002;
     const int INPUT_MOUSE = 0, INPUT_KEYBOARD = 1, KEYEVENTF_KEYUP = 2;
     const int MOUSEEVENTF_MOVE = 1, MOUSEEVENTF_LEFTDOWN = 2, MOUSEEVENTF_LEFTUP = 4, MOUSEEVENTF_ABSOLUTE = 0x8000;
@@ -55,6 +68,7 @@ static partial class M3Sec {
     const string DialogTitle = "Purge security prompt";
 
     [StructLayout(LayoutKind.Sequential)] struct RECT { public int Left, Top, Right, Bottom; }
+    [StructLayout(LayoutKind.Sequential)] struct POINT { public int X, Y; }
     [StructLayout(LayoutKind.Sequential)] struct MOUSEINPUT { public int dx, dy; public uint mouseData, dwFlags, time; public IntPtr extra; }
     [StructLayout(LayoutKind.Sequential)] struct KEYBDINPUT { public ushort wVk, wScan; public uint dwFlags, time; public IntPtr extra; }
     [StructLayout(LayoutKind.Explicit)] struct INPUT { [FieldOffset(0)] public int type; [FieldOffset(8)] public MOUSEINPUT mi; [FieldOffset(8)] public KEYBDINPUT ki; }
@@ -94,6 +108,8 @@ static partial class M3Sec {
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
     [DllImport("user32.dll")] static extern int GetDlgCtrlID(IntPtr h);
     [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out RECT r);
+    [DllImport("user32.dll")] static extern bool ScreenToClient(IntPtr h, ref POINT p);
+    [DllImport("user32.dll")] static extern uint MapVirtualKey(uint code, uint type);
     [DllImport("user32.dll")] static extern bool IsWindow(IntPtr h);
     [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
     [DllImport("user32.dll")] static extern bool IsWindowEnabled(IntPtr h);
@@ -216,18 +232,75 @@ static partial class M3Sec {
         return d;
     }
 
-    // The consent dialog of process <pid>: a visible top-level #32770 window titled "Purge security prompt".
+    // The consent dialog of process <pid>: a visible top-level window titled "Purge security prompt". The TaskDialog's
+    // class is #32770; the toolkit window's is the window crate's own. A TaskDialog is preferred when both are there
+    // (the broker shows one dialog at a time, so that is not expected).
     static IntPtr FindDialog(uint pid) {
-        IntPtr found = IntPtr.Zero;
+        IntPtr found = IntPtr.Zero, other = IntPtr.Zero;
         EnumWindows((h, l) => {
             uint p; GetWindowThreadProcessId(h, out p);
             if (p != pid || !IsWindowVisible(h)) return true;
             var cls = new StringBuilder(64); GetClassName(h, cls, 64);
             var txt = new StringBuilder(256); GetWindowText(h, txt, 256);
-            if (cls.ToString() == "#32770" && txt.ToString() == DialogTitle) { found = h; return false; }
+            if (txt.ToString() != DialogTitle) return true;
+            if (cls.ToString() == TaskDialogClass) { found = h; return false; }
+            if (other == IntPtr.Zero) other = h;
             return true;
         }, IntPtr.Zero);
-        return found;
+        return found != IntPtr.Zero ? found : other;
+    }
+    // Which renderer drew the dialog: "taskdialog" or "toolkit".
+    static string Flavour(IntPtr h) {
+        var cls = new StringBuilder(64); GetClassName(h, cls, 64);
+        return cls.ToString() == TaskDialogClass ? "taskdialog" : "toolkit";
+    }
+    static bool Toolkit(IntPtr h) { return h != IntPtr.Zero && Flavour(h) == "toolkit"; }
+    // A part of the toolkit dialog by its UI Automation id; null when it is not there or UI Automation gives nothing.
+    static AutomationElement ById(IntPtr hwnd, string id) {
+        try { return AutomationElement.FromHandle(hwnd).FindFirst(TreeScope.Descendants, new PropertyCondition(AutomationElement.AutomationIdProperty, id)); }
+        catch { return null; }
+    }
+    static int[] UiaRect(AutomationElement e) {
+        try { var r = e.Current.BoundingRectangle; return r.IsEmpty ? null : new[] { (int)r.Left, (int)r.Top, (int)r.Right, (int)r.Bottom }; }
+        catch { return null; }
+    }
+    static bool UiaEnabled(AutomationElement e) { try { return e != null && e.Current.IsEnabled; } catch { return false; } }
+    static string UiaToggle(AutomationElement e) {
+        object p;
+        try { return e != null && e.TryGetCurrentPattern(TogglePattern.Pattern, out p) ? ((TogglePattern)p).Current.ToggleState.ToString() : "unknown"; }
+        catch { return "unknown"; }
+    }
+    // A key press and release posted to a window, as a keyboard would send them.
+    static string PostKey(IntPtr h, ushort vk) {
+        long scan = MapVirtualKey(vk, 0);
+        bool d = PostMessage(h, WM_KEYDOWN, (IntPtr)vk, (IntPtr)(1 | (scan << 16)));
+        int e1 = Marshal.GetLastWin32Error();
+        bool u = PostMessage(h, WM_KEYUP, (IntPtr)vk, (IntPtr)(1 | (scan << 16) | 0xC0000000L));
+        return "PostMessage WM_KEYDOWN/WM_KEYUP vk 0x" + vk.ToString("x") + " returned " + d + "/" + u + " lasterror=" + e1 + "/" + Marshal.GetLastWin32Error();
+    }
+    static IntPtr ClientPoint(IntPtr h, int[] r) {
+        var pt = new POINT { X = (r[0] + r[2]) / 2, Y = (r[1] + r[3]) / 2 };
+        ScreenToClient(h, ref pt);
+        return (IntPtr)(((pt.Y & 0xFFFF) << 16) | (pt.X & 0xFFFF));
+    }
+    // A click posted to a window at the middle of a screen rectangle: move, button down, button up.
+    static string PostClick(IntPtr h, int[] r) {
+        IntPtr l = ClientPoint(h, r);
+        bool m = PostMessage(h, WM_MOUSEMOVE, IntPtr.Zero, l);
+        int e1 = Marshal.GetLastWin32Error();
+        bool d = PostMessage(h, WM_LBUTTONDOWN, (IntPtr)MK_LBUTTON, l);
+        int e2 = Marshal.GetLastWin32Error();
+        bool u = PostMessage(h, WM_LBUTTONUP, IntPtr.Zero, l);
+        return "PostMessage WM_MOUSEMOVE/WM_LBUTTONDOWN/WM_LBUTTONUP returned " + m + "/" + d + "/" + u + " lasterror=" + e1 + "/" + e2 + "/" + Marshal.GetLastWin32Error();
+    }
+    static string SendClick(IntPtr h, int[] r) {
+        IntPtr l = ClientPoint(h, r), res;
+        IntPtr m = SendMessageTimeout(h, WM_MOUSEMOVE, IntPtr.Zero, l, 0x2, 5000, out res);
+        int e1 = Marshal.GetLastWin32Error();
+        IntPtr d = SendMessageTimeout(h, WM_LBUTTONDOWN, (IntPtr)MK_LBUTTON, l, 0x2, 5000, out res);
+        int e2 = Marshal.GetLastWin32Error();
+        IntPtr u = SendMessageTimeout(h, WM_LBUTTONUP, IntPtr.Zero, l, 0x2, 5000, out res);
+        return "SendMessageTimeout WM_MOUSEMOVE/WM_LBUTTONDOWN/WM_LBUTTONUP returned " + m + "/" + d + "/" + u + " lasterror=" + e1 + "/" + e2 + "/" + Marshal.GetLastWin32Error();
     }
     static IntPtr WaitDialog(uint pid, int ms, int pollMs) {
         var end = DateTime.Now.AddMilliseconds(ms);
@@ -314,6 +387,8 @@ static partial class M3Sec {
         d["found"] = hwnd != IntPtr.Zero;
         if (hwnd == IntPtr.Zero) return d;
         d["window"] = WindowInfo(hwnd);
+        bool toolkit = Toolkit(hwnd);
+        d["flavour"] = Flavour(hwnd);
         d["hwnd"] = hwnd.ToInt64();
         d["broker_il"] = IntegrityOf(pid);
         d["foreground"] = GetForegroundWindow() == hwnd;
@@ -338,6 +413,8 @@ static partial class M3Sec {
         d["labels"] = labels;
         var texts = new List<object>();
         var elements = new List<object>();
+        var ids = new List<object>();
+        int lines = 0;
         object verify = null;
         try {
             var root = AutomationElement.FromHandle(hwnd);
@@ -346,7 +423,10 @@ static partial class M3Sec {
                 string name = e.Current.Name ?? "";
                 var r = e.Current.BoundingRectangle;
                 int[] rr = r.IsEmpty ? null : new[] { (int)r.Left, (int)r.Top, (int)r.Right, (int)r.Bottom };
-                var el = new Dictionary<string, object> { { "type", ct.ProgrammaticName }, { "name", name }, { "enabled", e.Current.IsEnabled }, { "rect", rr } };
+                string aid = e.Current.AutomationId ?? "";
+                var el = new Dictionary<string, object> { { "type", ct.ProgrammaticName }, { "name", name }, { "enabled", e.Current.IsEnabled }, { "rect", rr }, { "id", aid } };
+                if (aid.StartsWith(IdLine)) lines++;
+                else if (aid.Length > 0) ids.Add(aid);
                 if (ct == ControlType.CheckBox) {
                     object p; string state = "unknown";
                     if (e.TryGetCurrentPattern(TogglePattern.Pattern, out p)) state = ((TogglePattern)p).Current.ToggleState.ToString();
@@ -354,10 +434,21 @@ static partial class M3Sec {
                     verify = new Dictionary<string, object> { { "name", name }, { "toggle", state }, { "rect", rr }, { "enabled", e.Current.IsEnabled } };
                     if (rr != null) rects["verify"] = rr;
                 }
-                if (name.Length > 0 && (ct == ControlType.Text || ct == ControlType.Pane || ct == ControlType.Document)) texts.Add(name);
+                // The toolkit dialog's list holds its lines as list items; the TaskDialog's text is in Text elements.
+                if (name.Length > 0 && (ct == ControlType.Text || ct == ControlType.Pane || ct == ControlType.Document || (toolkit && ct == ControlType.ListItem))) texts.Add(name);
                 elements.Add(el);
             }
         } catch (Exception e) { d["uia_error"] = e.GetType().Name + ": " + e.Message; }
+        if (toolkit) {
+            // No child windows: the buttons are the elements with the dialog's own ids.
+            AutomationElement ap = ById(hwnd, IdApprove), ca = ById(hwnd, IdCancel), hint = ById(hwnd, IdHint);
+            d["has_primary"] = ap != null; d["primary_enabled"] = UiaEnabled(ap);
+            d["has_cancel"] = ca != null; d["has_next"] = false; d["has_back"] = false;
+            if (ap != null) { rects["primary"] = UiaRect(ap); labels["primary"] = ap.Current.Name; }
+            if (ca != null) { rects["cancel"] = UiaRect(ca); labels["cancel"] = ca.Current.Name; }
+            d["hint"] = hint != null ? hint.Current.Name : null;
+            d["uia_ids"] = ids; d["lines"] = lines;
+        }
         d["elements"] = elements;
         d["texts"] = texts;
         d["verify"] = verify;
@@ -501,6 +592,8 @@ static partial class M3Sec {
         Attempts = new List<object>();
         rec["attempts"] = Attempts;
         DriveHwnd = WaitDialog(pid, 15000, 100);
+        bool toolkit = Toolkit(DriveHwnd);
+        rec["flavour"] = DriveHwnd != IntPtr.Zero ? Flavour(DriveHwnd) : null;
         rec["dialog_found"] = DriveHwnd != IntPtr.Zero;
         rec["dialog_hwnd"] = DriveHwnd.ToInt64();
         rec["broker_il_seen_by_driver"] = IntegrityOf(pid);
@@ -522,6 +615,9 @@ static partial class M3Sec {
                         if (acc != 0) Attempt(target, "SendInput Alt+" + (char)acc + " (accelerator of '" + label + "')", () => Keys(VK_MENU, acc, acc, VK_MENU));
                         Attempt(target, "SendInput Tab, Tab, Space (move the focus, press the focused button)", () => Keys(VK_TAB, VK_TAB, VK_TAB, VK_TAB, VK_SPACE, VK_SPACE));
                         Attempt(target, "SendInput Enter (the default button)", () => Keys(VK_RETURN, VK_RETURN));
+                    } else if (target == "verify" && toolkit) {
+                        // Cancel has the keyboard when the toolkit dialog opens; Tab from it goes to the box.
+                        Attempt(target, "SendInput Tab, Space (to the box, tick it)", () => Keys(VK_TAB, VK_TAB, VK_SPACE, VK_SPACE));
                     } else if (target == "verify") {
                         Attempt(target, "SendInput Space (the focused control)", () => Keys(VK_SPACE, VK_SPACE));
                     } else if (target == "next") {
@@ -537,6 +633,27 @@ static partial class M3Sec {
                     break;
                 }
                 case "postmessage":
+                    if (toolkit) {
+                        // One window and no child controls: what a medium process could post is the input itself (the
+                        // pointer, keys) and the close requests.
+                        if (mode == "control") { Attempt(target, "PostMessage WM_CLOSE", () => Post(DriveHwnd, WM_CLOSE, 0, 0)); break; }
+                        // The box by keys first: Cancel has the keyboard when the dialog opens, and a click moves it.
+                        if (target == "verify") Attempt(target, "PostMessage keys Tab, Space", () => PostKey(DriveHwnd, VK_TAB) + "; " + PostKey(DriveHwnd, VK_SPACE));
+                        int[] tr = TargetRect(target, seen);
+                        if (tr != null) {
+                            Attempt(target, "PostMessage click on " + target, () => PostClick(DriveHwnd, tr));
+                            Attempt(target, "SendMessageTimeout click on " + target, () => SendClick(DriveHwnd, tr));
+                        } else Attempts.Add(new Dictionary<string, object> { { "target", target }, { "name", "PostMessage click" }, { "detail", "skipped: no rectangle for " + target }, { "reached", false }, { "skipped", true } });
+                        if (target == "primary") {
+                            Attempt(target, "PostMessage keys End, Tab, Tab, Space", () => PostKey(DriveHwnd, VK_END) + "; " + PostKey(DriveHwnd, VK_TAB) + "; " + PostKey(DriveHwnd, VK_TAB) + "; " + PostKey(DriveHwnd, VK_SPACE));
+                            Attempt(target, "PostMessage key Enter", () => PostKey(DriveHwnd, VK_RETURN));
+                        } else if (target == "cancel") {
+                            Attempt(target, "PostMessage key Esc", () => PostKey(DriveHwnd, VK_ESCAPE));
+                            Attempt(target, "PostMessage WM_SYSCOMMAND SC_CLOSE", () => Post(DriveHwnd, WM_SYSCOMMAND, SC_CLOSE, 0));
+                            Attempt(target, "PostMessage WM_CLOSE", () => Post(DriveHwnd, WM_CLOSE, 0, 0));
+                        }
+                        break;
+                    }
                     if (target == "verify") {
                         Attempt(target, "PostMessage TDM_CLICK_VERIFICATION(1)", () => Post(DriveHwnd, TDM_CLICK_VERIFICATION, 1, 0));
                         Attempt(target, "SendMessageTimeout TDM_CLICK_VERIFICATION(1)", () => SendTimeout(DriveHwnd, TDM_CLICK_VERIFICATION, 1));
@@ -564,7 +681,7 @@ static partial class M3Sec {
                     if (target == "verify") {
                         Attempt(target, "UIA TogglePattern.Toggle on the check box", () => {
                             var r2 = AutomationElement.FromHandle(DriveHwnd);
-                            var b = UiaFind(r2, ControlType.CheckBox, label);
+                            var b = toolkit ? ById(DriveHwnd, IdVerify) : UiaFind(r2, ControlType.CheckBox, label);
                             if (b == null) return "check box not found through UIA";
                             object p; if (!b.TryGetCurrentPattern(TogglePattern.Pattern, out p)) return "no TogglePattern";
                             ((TogglePattern)p).Toggle(); return "Toggle returned";
@@ -572,7 +689,7 @@ static partial class M3Sec {
                     } else {
                         Attempt(target, "UIA InvokePattern.Invoke on '" + label + "'", () => {
                             var r2 = AutomationElement.FromHandle(DriveHwnd);
-                            var b = UiaFind(r2, ControlType.Button, label);
+                            var b = toolkit ? ById(DriveHwnd, target == "primary" ? IdApprove : IdCancel) : UiaFind(r2, ControlType.Button, label);
                             if (b == null) return "button '" + label + "' not found through UIA";
                             object p; if (!b.TryGetCurrentPattern(InvokePattern.Pattern, out p)) return "no InvokePattern";
                             ((InvokePattern)p).Invoke(); return "Invoke returned";
@@ -610,6 +727,8 @@ static partial class M3Sec {
         var shown = Stopwatch.StartNew();
         rec["found_after_ms"] = sw.ElapsedMilliseconds;
         rec["foreground_at_found"] = GetForegroundWindow() == h;
+        rec["flavour"] = Flavour(h);
+        if (Toolkit(h)) { ArmToolkit(spec, rec, h, shown); WriteJson(outPath, rec); return 0; }
         if (B(spec, "renavigate", false)) {
             IntPtr back = Child(h, ID_BACK);
             rec["renavigated"] = back != IntPtr.Zero;
@@ -650,6 +769,69 @@ static partial class M3Sec {
         return 0;
     }
 
+    // The arming test on the toolkit dialog. It has no pages, so there is nothing to re-show; its list is sent to its
+    // end first (the button also waits for that), the box is ticked through UI Automation, and the button's state is
+    // read from its element. The clicks are real input, as for the TaskDialog.
+    static void ArmToolkit(Dictionary<string, object> spec, Dictionary<string, object> rec, IntPtr h, Stopwatch shown) {
+        rec["renavigated"] = false;
+        rec["focus"] = Focus(h);
+        int early = I(spec, "early_ms", 300), late = I(spec, "late_ms", 1800);
+        rec["end_key"] = PostKey(h, VK_END);
+        if (B(spec, "tick", false)) {
+            while (shown.ElapsedMilliseconds < 100) Thread.Sleep(5);
+            var box = ById(h, IdVerify);
+            object p;
+            if (box != null && box.TryGetCurrentPattern(TogglePattern.Pattern, out p)) { ((TogglePattern)p).Toggle(); rec["ticked_at_ms"] = shown.ElapsedMilliseconds; }
+        }
+        while (shown.ElapsedMilliseconds < early) Thread.Sleep(5);
+        var primary = ById(h, IdApprove);
+        rec["has_primary"] = primary != null;
+        if (primary == null) return;
+        int[] r = UiaRect(primary);
+        rec["primary_enabled_before_early"] = UiaEnabled(primary);
+        if (r == null) { rec["early_click"] = "skipped: the button has no rectangle"; return; }
+        rec["early_click"] = ClickRect(r);
+        rec["early_click_ms"] = shown.ElapsedMilliseconds;
+        Thread.Sleep(500);
+        rec["dialog_alive_after_early"] = IsWindow(h) && IsWindowVisible(h);
+        rec["primary_enabled_after_early"] = IsWindow(h) && IsWindowVisible(h) && UiaEnabled(ById(h, IdApprove));
+        while (shown.ElapsedMilliseconds < late) Thread.Sleep(20);
+        rec["primary_enabled_late"] = IsWindow(h) && IsWindowVisible(h) && UiaEnabled(ById(h, IdApprove));
+        rec["late_ms"] = shown.ElapsedMilliseconds;
+        if (B(spec, "click_late", true) && IsWindow(h) && IsWindowVisible(h)) {
+            Focus(h);
+            rec["late_click"] = ClickRect(r);
+            Thread.Sleep(1500);
+            rec["dialog_alive_after_late"] = IsWindow(h) && IsWindowVisible(h);
+        }
+    }
+
+    // The approval (or, with button 2, the cancelling) of the toolkit dialog from high, through UI Automation: the
+    // list to its end, the box ticked when there is one, the arming delay waited out, then Invoke.
+    static void PressToolkit(Dictionary<string, object> spec, Dictionary<string, object> rec, IntPtr h) {
+        var box = ById(h, IdVerify);
+        rec["has_verification"] = box != null;
+        rec["ticked"] = false;
+        rec["end_key"] = PostKey(h, VK_END);
+        if (B(spec, "tick", false) && box != null && UiaToggle(box) != "On") {
+            object p;
+            if (box.TryGetCurrentPattern(TogglePattern.Pattern, out p)) { ((TogglePattern)p).Toggle(); rec["ticked"] = true; }
+        }
+        Thread.Sleep(I(spec, "arm_wait_ms", 1600));
+        int id = I(spec, "button", ID_PRIMARY);
+        var b = ById(h, id == ID_CANCEL ? IdCancel : IdApprove);
+        rec["button_by"] = b != null ? "uia" : "none";
+        if (b != null) rec["button_text"] = b.Current.Name;
+        rec["button_enabled"] = UiaEnabled(b);
+        var hint = ById(h, IdHint);
+        rec["hint"] = hint != null ? hint.Current.Name : null;
+        object inv;
+        if (b != null && UiaEnabled(b) && b.TryGetCurrentPattern(InvokePattern.Pattern, out inv)) { ((InvokePattern)inv).Invoke(); rec["pressed"] = id; }
+        else rec["pressed"] = 0;
+        Thread.Sleep(1500);
+        rec["dialog_alive_after"] = IsWindow(h) && IsWindowVisible(h);
+    }
+
     // spec: {out, broker_pid, tick, button, wait_ms, arm_wait_ms}: the approval of a dialog by TDM messages from high.
     static int Press(string specPath) {
         var spec = ReadJson(specPath);
@@ -658,7 +840,9 @@ static partial class M3Sec {
         var rec = new Dictionary<string, object> { { "t", Now() }, { "press_il", MyIl() } };
         IntPtr h = WaitDialog(pid, I(spec, "wait_ms", 15000), 100);
         rec["found"] = h != IntPtr.Zero;
-        if (h != IntPtr.Zero) {
+        rec["flavour"] = h != IntPtr.Zero ? Flavour(h) : null;
+        if (Toolkit(h)) PressToolkit(spec, rec, h);
+        else if (h != IntPtr.Zero) {
             // TDM_CLICK_VERIFICATION on a page without a verification box crashed the broker inside comctl32
             // (0xc0000005, e2e-20261123-063603 app-events.json): tick only when the page shows a check box.
             bool hasBox = false;

@@ -1939,6 +1939,26 @@ powershell -NoProfile -File vm\truth\m3-sec-score.ps1 --self-test
   stays as it was). Then `consent-approve` (high, `TDM_CLICK_VERIFICATION` + `TDM_CLICK_BUTTON 100` after the arming
   delay): the uninstaller runs; the plan executes and the journal has the session. The host takes a screenshot after
   every step (`c<k>-<kind>-shown|attack-<m>|control-<m>|approved.png`). Output `guest\m3-consent.json`.
+- **`m3-consent -ConsentUi toolkit`** (package BROKER-CONSENT-UI, M3_DESIGN 8.3; prepared, **not yet run**). The same
+  mode against the consent dialog drawn with Purge's own toolkit: `rig-m3.ps1 -Mode m3-consent -ConsentUi toolkit`
+  passes `-ConsentUi toolkit` to every guest phase, `consent-start` starts the broker with `--consent toolkit` (the
+  client spec's `args`), and the run is scored with `m3-sec-score.ps1 -Mode consent -ConsentUi toolkit`. `m3sec.exe`
+  tells the dialogs apart by the window class (the TaskDialog is `#32770`, the toolkit window is not) and writes
+  `flavour` into every record. On the toolkit dialog there are no child windows and no TaskDialog messages, so:
+  `observe` reads it through UI Automation by its ids (`ConsentApprove`, `ConsentCancel`, `ConsentVerify`,
+  `ConsentFooter`, `ConsentHint`, `ConsentList`, `ConsentLine_<n>`; `uia_ids` and `lines` in the record) and takes the
+  rectangles of the box and the buttons from there; `sendinput-key` is Tab Space on the box (Cancel has the keyboard
+  when it opens), Tab Tab Space and Enter on the button, Esc; `sendinput-mouse` clicks the same rectangles;
+  `postmessage` posts and sends the input itself (`WM_MOUSEMOVE`, `WM_LBUTTONDOWN`, `WM_LBUTTONUP` at the target,
+  `WM_KEYDOWN`/`WM_KEYUP` for End, Tab, Space, Enter, Esc) and the close requests (`WM_SYSCOMMAND SC_CLOSE`,
+  `WM_CLOSE`); `uia` lists the tree and calls `InvokePattern` and `TogglePattern` on the elements with those ids. The
+  high control cancels by the same method (`postmessage`: `WM_CLOSE`). `consent-approve` (high) posts End (the button
+  waits for the end of the list to have been on screen), ticks the box by `TogglePattern`, waits out the arming delay
+  and calls `InvokePattern` on `ConsentApprove`. The scorer's extra rows: every observed, attacked, controlled and
+  approved dialog has `flavour = toolkit` (the broker shows the TaskDialog when its toolkit window cannot be shown,
+  and such a run proves nothing about the toolkit dialog), the broker's arguments held `--consent toolkit`, and every
+  attacked dialog was read from high by its ids (the box id on the plan dialog, at least one line). `m3-uac`'s paged
+  rows (`page-next`, `arm-current` with `renavigate`) do not apply to it: it has no pages.
 - **`m3-uac`** (G5, T8, 8.1; from `m3-uac-on`, fixture `lookalike45`). (1) The real UI from `C:\Program Files\PurgeUI`
   at medium; `m3sec ui` (UI Automation from high) selects "Purge Rig App", invokes Uninstall and Continue; the host
   answers the secure desktop with Alt+N (Esc only while `consent.exe` is still up); the agent reads the bar "You
@@ -1969,7 +1989,8 @@ powershell -NoProfile -File vm\truth\m3-sec-score.ps1 --self-test
   button enabled after the delay); every page seen, the code on every page equal to the plan's, the primary button
   only on the last page, at least 2 pages and 41 attention entries, the dialog in front; the execute result with a
   journal; the standard-user row; the named screenshots. `--self-test` builds a passing synthetic evidence directory
-  per mode from the expectations and checks it passes, that an empty or missing directory fails, and that 31 single
+  per mode from the expectations and checks it passes, that an empty or missing directory fails, that a toolkit run
+  passes only under `-ConsentUi toolkit` (and a TaskDialog run only without it, 9 toolkit defects fail), and that 31 single
   defects each fail.
 - **Not settled without a run**: whether the scan of the fixture yields the look-alike files as absorbed children
   with their own attention entries (the scorer fails the paging row otherwise); whether the first-elevation dialog and
