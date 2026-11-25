@@ -35,6 +35,30 @@ function Has($O, [string]$Name) { $null -ne $O -and $null -ne $O.PSObject.Proper
 function Arr($X) { @(@($X) | Where-Object { $null -ne $_ }) }
 
 $script:Rows = New-Object System.Collections.ArrayList
+# The planted-tree changes the broker can have made (m3-broker 2026-11-25): the diff lines of the case
+# minus those whose new last-write time is before the broker process was created. The caller's
+# ShellExecuteEx("runas") runs in the medium caller with the planted environment and writes the shell's
+# `Caches` databases there before the broker exists; a user's process writing a tree that user planted
+# crosses no boundary. The creation time is the broker's own `broker_start` timing event
+# (process_created_unix_ms). Without it, or for a removal, every line counts. Assumes the broker does
+# not set a planted object's time backwards, which no broker code path does.
+function Get-PlantedByBroker($r) {
+    $lines = @(Arr $r.planted_diff)
+    if ($r.planted_changed -and -not $lines.Count) { return @('(changed, no diff lines)') }
+    $created = $null
+    foreach ($e in Arr $r.events) {
+        try { $m = "$($e.message)" | ConvertFrom-Json -ErrorAction Stop } catch { continue }
+        if ($m.mark -eq 'broker_start' -and $m.process_created_unix_ms) { $created = [int64]$m.process_created_unix_ms; break }
+    }
+    if ($null -eq $created) { return $lines }
+    $createdTicks = $created * 10000 + 621355968000000000
+    $newByPath = @{}
+    foreach ($l in $lines) { if ($l -like '=> *') { $f = $l.Substring(3).Split('|'); $newByPath[$f[0]] = [int64]$f[2] } }
+    @($lines | Where-Object {
+        $f = $_.Substring(3).Split('|')
+        -not ($newByPath.ContainsKey($f[0]) -and $newByPath[$f[0]] -lt $createdTicks)
+    })
+}
 function Row([string]$Name, $Ok, [string]$Detail = '') {
     $v = ($Ok -eq $true)
     [void]$script:Rows.Add([ordered]@{ row = $Name; ok = $v; detail = $Detail })
@@ -101,7 +125,9 @@ function Test-Broker([string]$Ev, $X) {
             if (-not ($f -and $f.server_check -eq $c.server_check)) { $why += "server check $($f.server_check), expected $($c.server_check)" }
         }
         if ($c.planted_unchanged) {
-            if (-not $r.planted -or $r.planted_changed -ne $false) { $why += "planted tree changed or not compared: $((Arr $r.planted_diff | Select-Object -First 3) -join '; ')" }
+            $broker = @(Get-PlantedByBroker $r)
+            if (-not $r.planted -or $null -eq $r.planted_changed -or $broker.Count) { $why += "planted tree changed or not compared: $(($broker | Select-Object -First 3) -join '; ')" }
+            elseif ($r.planted_changed -and -not $script:QuietInfo) { Write-Host "INFO  $n`: $(@(Arr $r.planted_diff).Count) planted-tree lines written before the broker existed (the caller's shell, not the broker)" }
         }
         Row $n ($why.Count -eq 0) $(if ($why.Count) { $why -join '; ' } else { "exit $($r.exit_code)" })
     }
@@ -330,7 +356,7 @@ function New-BrokerPass($X) {
         [ordered]@{ id = $c.id; exit_code = $c.exit; broker_exited = $true; error = $null
                     events = @(if ([int]$c.exit -ne 0) { [ordered]@{ id = $c.exit; message = $msg } })
                     data_root_changed = $false; data_root_diff = @(); client = [ordered]@{ connects = @($conn) }
-                    planted = $(if ($c.planted_unchanged) { 'C:\PurgePlant' }); planted_changed = $(if ($c.planted_unchanged) { $false }) }
+                    planted = $(if ($c.planted_unchanged) { 'C:\PurgePlant' }); planted_changed = $(if ($c.planted_unchanged) { $false }); planted_diff = @() }
     }
     [ordered]@{ schema = 'purge.rig.m3sec.broker/1'; uac = [ordered]@{ ConsentPromptBehaviorAdmin = 0 }; uac_silent = [ordered]@{ ok = $true; before = [ordered]@{ ConsentPromptBehaviorAdmin = 5; PromptOnSecureDesktop = 1; EnableLUA = 1 }; after = [ordered]@{ ConsentPromptBehaviorAdmin = 0; PromptOnSecureDesktop = 1; EnableLUA = 1 } }; cases = @($cases) }
 }
@@ -400,6 +426,11 @@ function Get-Defects {
         @{ mode = 'broker'; name = 'refused case wrote the data root'; act = { param($d) ($d.cases | Where-Object { $_.id -eq 'kb-user-writable' }).data_root_changed = $true } },
         @{ mode = 'broker'; name = 'data root not compared'; act = { param($d) ($d.cases | Where-Object { $_.id -eq 'bad-args' }).data_root_changed = $null } },
         @{ mode = 'broker'; name = 'planted tree touched'; act = { param($d) ($d.cases | Where-Object { $_.id -eq 'env-planted' }).planted_changed = $true } },
+        @{ mode = 'broker'; name = 'planted tree written after the broker started'; act = { param($d) $c = $d.cases | Where-Object { $_.id -eq 'env-planted' }; $c.planted_changed = $true
+            $c.events = @([ordered]@{ id = 100; message = '{"mark":"broker_start","process_created_unix_ms":1795574407596}' })
+            $c.planted_diff = @('=> C:\PurgePlant\ProgramData\Microsoft\Windows\Caches\cversions.2.db|16384|' + (1795574407700 * 10000 + 621355968000000000) + '|32') } },
+        @{ mode = 'broker'; name = 'planted tree changed, broker start time unknown'; act = { param($d) $c = $d.cases | Where-Object { $_.id -eq 'env-planted' }; $c.planted_changed = $true
+            $c.planted_diff = @('=> C:\PurgePlant\x|1|' + (1795574407000 * 10000 + 621355968000000000) + '|32') } },
         @{ mode = 'broker'; name = 'two refusals of three'; act = { param($d) $c = $d.cases | Where-Object { $_.id -eq 'client-image' }; $c.events[0].message = 'purge-broker ended: (exit code 25); refused clients: [client image is not Purge.exe in the install directory; client image is not Purge.exe in the install directory]' } },
         @{ mode = 'broker'; name = 'squatter not detected'; act = { param($d) ($d.cases | Where-Object { $_.id -eq 'pipe-squat' }).client.connects[0].server_check = 'ok' } },
         @{ mode = 'broker'; name = 'uac not silent'; act = { param($d) $d.uac.ConsentPromptBehaviorAdmin = 5 } },
