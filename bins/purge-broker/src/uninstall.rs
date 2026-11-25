@@ -1025,6 +1025,31 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn fingerprint_names_match_the_uis_vector() {
+        // crates/purge-client checks its own name function against the same file (the UI asks only
+        // whether this name exists in `fp`), so the two cannot drift apart.
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../crates/purge-client/fixtures/fingerprint-names.json"
+        );
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).expect("vector")).expect("json");
+        let names = v["names"].as_array().expect("names");
+        assert!(!names.is_empty());
+        for n in names {
+            let program: ProgramId = n["program_id"]
+                .as_str()
+                .expect("id")
+                .parse()
+                .expect("program id");
+            assert_eq!(
+                fingerprint_name(&program),
+                n["file"].as_str().expect("file")
+            );
+        }
+    }
+
     fn session(ran: bool, uninstaller_ok: bool) -> Session {
         let program = ProgramId::machine(View::K64, "App_is1").expect("program id");
         let fingerprint: Fingerprint = serde_json::from_value(serde_json::json!({
