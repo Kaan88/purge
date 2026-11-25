@@ -46,6 +46,9 @@ def shade(u, v, arrow):
         return None
     t = max(0.0, min(1.0, (u + v) / 2 * 1.1 - 0.05))
     bg = tuple(TOP_LEFT[i] + (BOTTOM_RIGHT[i] - TOP_LEFT[i]) * t for i in range(3))
+    # The letter is drawn shifted right (and a hair down) of its own box: the stem's mass pulls
+    # it left, so its optical centre sits right of the geometric one.
+    u, v = u - 0.02, v - 0.01
     stem = sd_box(u, v, 0.32, 0.49, 0.085, 0.30, 0.065)
     # The bowl's round right side, and a block that carries its flat top and bottom edges into the
     # stem, so the top of the P is one piece (no dip where the bowl's curve meets the stem).
