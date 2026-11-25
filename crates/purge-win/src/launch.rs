@@ -5,10 +5,13 @@
 //!   `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, then resumed. The child inherits exactly three handles,
 //!   named in `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`: the read end of its stdin pipe, the write end of its
 //!   stdout pipe and `NUL` as its stderr. Our ends are never inheritable. The child's ends are made
-//!   inheritable only for the `CreateProcessW` call and closed right after it, so another process
-//!   started meanwhile by this one cannot keep them (which would keep the engine's stdout open after
-//!   it ends). Dropping the [`StdioJob`] closes the job, which ends the engine and everything it
-//!   started, also when the UI crashes.
+//!   inheritable only around the `CreateProcessW` call and closed right after it, so a process
+//!   started later cannot get them (one that did would keep the engine's stdout open after it ends).
+//!   During that window a `CreateProcessW` on another thread that inherits handles *without* a handle
+//!   list (as `std::process::Command` does) could still inherit them: two [`StdioJob::spawn`] calls
+//!   are serialised by a lock, and the UI starts no other process that inherits handles (the broker's
+//!   `ShellExecuteExW` inherits none). Dropping the [`StdioJob`] closes the job, which ends the engine
+//!   and everything it started, also when the UI crashes.
 //! - [`run_as`]: `ShellExecuteExW` with the verb `runas`, `SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC`,
 //!   no owner window (hwnd 0: DECISIONS 2026-11-23 "UAC prompt owner") and `SW_SHOWNORMAL` (the
 //!   broker's first window is its consent dialog, M3-R2 S7), on a thread of its own initialised as a
@@ -57,8 +60,8 @@ use crate::os::{Win32Error, wide};
 
 /// `GENERIC_WRITE`.
 const GENERIC_WRITE: u32 = 0x4000_0000;
-/// `STILL_ACTIVE`: what `GetExitCodeProcess` answers while the process runs.
-const STILL_ACTIVE: u32 = 259;
+/// Serialises the window in which [`StdioJob::spawn`] has inheritable handles (module comment).
+static SPAWN_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn own(h: HANDLE) -> Result<OwnedHandle, Win32Error> {
     if h.is_null() || h == INVALID_HANDLE_VALUE {
@@ -101,9 +104,11 @@ fn exit_code_of(process: HANDLE, timeout: Option<Duration>) -> Option<u32> {
     }
     let mut code = 0u32;
     // SAFETY: valid process handle and out-pointer.
-    if unsafe { GetExitCodeProcess(process, &mut code) } == 0 || code == STILL_ACTIVE {
+    if unsafe { GetExitCodeProcess(process, &mut code) } == 0 {
         return None;
     }
+    // The handle is signalled, so the process has ended: 259 (`STILL_ACTIVE`) is then the code it
+    // exited with, not "still running".
     Some(code)
 }
 
@@ -276,7 +281,11 @@ impl StdioJob {
         // SAFETY: plain data.
         let mut pi: PROCESS_INFORMATION = unsafe { mem::zeroed() };
 
-        // The child's three ends are inheritable for this call only (see the module comment).
+        // The child's three ends are inheritable for this call only (see the module comment); a
+        // panic elsewhere while the lock was held leaves nothing to repair.
+        let spawning = SPAWN_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         for h in [&in_read, &out_write, &nul] {
             set_inherit(h, true)?;
         }
@@ -293,13 +302,15 @@ impl StdioJob {
                 CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW,
                 ptr::null(),
                 directory.as_ref().map_or(ptr::null(), |d| d.as_ptr()),
-                &info.StartupInfo,
+                // The whole STARTUPINFOEXW, as EXTENDED_STARTUPINFO_PRESENT says.
+                ptr::addr_of!(info).cast(),
                 &mut pi,
             )
         };
         let error = Win32Error::last();
         // The child's ends belong to the child now (or to nobody); ours stay.
         drop((in_read, out_write, nul));
+        drop(spawning);
         drop(attributes);
         if created == 0 {
             return Err(error);
@@ -363,7 +374,8 @@ impl LaunchedProcess {
 /// `ShellExecuteExW("runas")` of `file` with `parameters` in `directory`, on a new STA thread, with no
 /// owner window. Blocks while Windows shows its prompt. The error is the shell's
 /// (`ERROR_CANCELLED`, 1223, when the user says No). `Ok` with no process handle is
-/// [`Win32Error::INVALID_DATA`].
+/// [`Win32Error::INVALID_DATA`]. A process whose id cannot be read is terminated (best effort) and
+/// the error is `GetProcessId`'s.
 pub fn run_as(
     file: &Path,
     parameters: &str,
@@ -374,7 +386,7 @@ pub fn run_as(
     let directory = wide(directory);
     let thread = std::thread::Builder::new()
         .name("purge-broker-launch".into())
-        .spawn(move || -> Result<(usize, u32), Win32Error> {
+        .spawn(move || -> Result<(usize, u32, Option<Win32Error>), Win32Error> {
             // SAFETY: plain call on this new thread; balanced by CoUninitialize below when it worked.
             let hr = unsafe {
                 CoInitializeEx(
@@ -402,7 +414,9 @@ pub fn run_as(
             } else {
                 // SAFETY: valid process handle the shell handed over.
                 let pid = unsafe { GetProcessId(info.hProcess) };
-                Ok((info.hProcess as usize, pid))
+                // Read at once: nothing else ran on this thread since the call.
+                let error = (pid == 0).then(Win32Error::last);
+                Ok((info.hProcess as usize, pid, error))
             };
             if hr >= 0 {
                 // SAFETY: balances the successful CoInitializeEx of this thread.
@@ -411,13 +425,19 @@ pub fn run_as(
             result
         })
         .map_err(|_| Win32Error::INVALID_PARAMETER)?;
-    let (raw, pid) = thread.join().map_err(|_| Win32Error::INVALID_DATA)??;
+    let (raw, pid, error) = thread.join().map_err(|_| Win32Error::INVALID_DATA)??;
     // SAFETY: the handle the shell returned, owned by nobody else.
     let handle = unsafe { OwnedHandle::from_raw_handle(raw as HANDLE) };
+    let process = LaunchedProcess { handle, pid };
     if pid == 0 {
-        return Err(Win32Error::INVALID_DATA);
+        // Without its pid the server check cannot pass: do not leave the broker running.
+        process.terminate();
+        return Err(match error {
+            Some(e) if e != Win32Error::INVALID_DATA && e.code() != 0 => e,
+            _ => Win32Error::INVALID_PARAMETER,
+        });
     }
-    Ok(LaunchedProcess { handle, pid })
+    Ok(process)
 }
 
 /// `AllowSetForegroundWindow(pid)`: lets that process bring its window to the front. A refusal is not
@@ -479,5 +499,51 @@ mod tests {
     fn the_exit_code_is_read() {
         let job = StdioJob::spawn(&cmd(), "/d /c exit 7").unwrap();
         assert_eq!(job.child.exit_code(Some(Duration::from_secs(10))), Some(7));
+    }
+
+    #[test]
+    fn an_exit_code_of_259_is_an_exit_code() {
+        let job = StdioJob::spawn(&cmd(), "/d /c exit 259").unwrap();
+        assert_eq!(
+            job.child.exit_code(Some(Duration::from_secs(10))),
+            Some(259)
+        );
+    }
+
+    #[test]
+    fn the_child_inherits_only_its_three_handles() {
+        // An inheritable pipe end held by this process while the child starts: a child that
+        // inherited it would keep the pipe open, and its reader would not see the end of the stream.
+        let sa = SECURITY_ATTRIBUTES {
+            nLength: mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+            lpSecurityDescriptor: ptr::null_mut(),
+            bInheritHandle: 1,
+        };
+        let (mut r, mut w): (HANDLE, HANDLE) = (ptr::null_mut(), ptr::null_mut());
+        // SAFETY: two out-pointers; `sa` is valid for the call.
+        assert_ne!(unsafe { CreatePipe(&mut r, &mut w, &sa, 0) }, 0);
+        let (read_end, write_end) = (own(r).unwrap(), own(w).unwrap());
+        // cmd waits for a line that never comes, so it lives on through the read below.
+        let job = StdioJob::spawn(&cmd(), "/d /q /c \"set /p x=\"").unwrap();
+        assert_eq!(job.child.exit_code(Some(Duration::from_millis(100))), None);
+        drop(write_end);
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 8];
+            let _ = tx.send(std::io::Read::read(&mut File::from(read_end), &mut buf));
+        });
+        let read = rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the child inherited the extra pipe end: no end of stream");
+        assert!(
+            matches!(&read, Ok(0))
+                || matches!(&read, Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe),
+            "{read:?}"
+        );
+        assert_eq!(
+            job.child.exit_code(Some(Duration::ZERO)),
+            None,
+            "the child is still running"
+        );
     }
 }
