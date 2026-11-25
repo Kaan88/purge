@@ -6,25 +6,24 @@
 //! **The Programs page is real (UI-WIRE).** [`Programs`] is `purge-ui-model`'s Programs model,
 //! fed by the engine (or the sample engine) through `link`.
 //!
-//! **The other pages are still the mockup's sample pages.** [`Pipeline`], [`Leftovers`],
+//! **History and Quarantine are still the mockup's sample pages.**
 //! [`History`] and [`Quarantine`] hold sample data that changes nothing: they are drawn only while
 //! the window shows sample data ([`Model::sample`]); with the real engine those pages say they are
 //! not available yet in this preview. Each page draws from one struct of its own, and the screens
 //! read only those structs' fields and methods. That is the seam for the rest of wave 2
 //! (UI-PAGES): each struct is fed from `purge-ui-model`'s view state and `purge-client`'s events,
-//! and the drawing in `screens` stays as it is. The Uninstall page's entry is
-//! [`Model::open_uninstall`]; the Leftovers page's is [`Model::leftovers_inbox`]. Their rules that
+//! and the drawing in `screens` stays as it is. The Uninstall and Leftovers pages are wired
+//! (UI-FLOW, [`crate::flow`]): their entry is [`Model::open_uninstall`]. Their rules that
 //! guard safety (Likely and Protected start unticked, nothing reaches the pipeline without the
 //! confirmation) are the ones the real models must keep; the tests below say so.
 
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
-use std::time::{Duration, Instant};
 
 use mdshared_ui::keys::Mods;
 use mdshared_ui::select::Selection;
 use purge_model::{InstallerKind, ProgramId};
-use purge_ui_model::pipeline::{StoredScanOutcome, UninstallTarget};
+use purge_ui_model::pipeline::UninstallTarget;
 use purge_ui_model::programs::page::ProgramsRequest;
 use purge_ui_model::programs::row::BAR_MAX;
 use purge_ui_model::programs::strings as program_strings;
@@ -210,8 +209,6 @@ pub struct Program {
     pub sub: String,
     /// Installed in the last three days: "new" after the name.
     pub new_tag: bool,
-    /// The installer family in a word: MSI, NSIS, Inno, Burn, Store app, Other.
-    pub kind: &'static str,
     /// The measured size in MB; 0 until measured.
     pub size_mb: f32,
     /// "312 MB"; empty until measured.
@@ -251,7 +248,6 @@ impl Program {
             publisher: r.publisher().to_string(),
             sub: r.sub_line().to_string(),
             new_tag: !r.new_tag().is_empty(),
-            kind: r.kind_chip(),
             size_mb: r.size_bytes().map_or(0.0, |b| b as f32 / 1_048_576.0),
             size: r.size_text().to_string(),
             bar: (r.bar_width / BAR_MAX) as f32,
@@ -613,703 +609,6 @@ impl Programs {
     }
 }
 
-// ---- the uninstall pipeline ------------------------------------------------------------------
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum StepState {
-    Waiting,
-    Running,
-    Done,
-    Skipped,
-}
-
-pub struct Step {
-    pub title: &'static str,
-    pub detail: &'static str,
-    /// What the step says when it is done.
-    pub done: &'static str,
-    pub takes: Duration,
-}
-
-pub const STEPS: [Step; 6] = [
-    Step {
-        title: "Create a restore point",
-        detail: "Windows System Restore, before anything changes.",
-        done: "Restore point made.",
-        takes: Duration::from_millis(1400),
-    },
-    Step {
-        title: "Check the program is closed",
-        detail: "Purge never closes a program for you.",
-        done: "Not running.",
-        takes: Duration::from_millis(900),
-    },
-    Step {
-        title: "Record what is installed",
-        detail: "Files, registry keys, services and tasks, before the uninstaller runs.",
-        done: "Recorded 1,284 files and 211 registry values.",
-        takes: Duration::from_millis(1600),
-    },
-    Step {
-        title: "Run the program's own uninstaller",
-        detail: "Its own command, as Windows would run it.",
-        done: "The uninstaller ended with code 0.",
-        takes: Duration::from_millis(2600),
-    },
-    Step {
-        title: "Check it is gone",
-        detail: "The uninstall entry and the program's folder.",
-        done: "The entry is gone.",
-        takes: Duration::from_millis(900),
-    },
-    Step {
-        title: "Look for leftovers",
-        detail: "Compares what is there now with what was recorded.",
-        done: "9 leftovers found.",
-        takes: Duration::from_millis(2000),
-    },
-];
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum RunPhase {
-    /// Shown, with a Start button: nothing has run.
-    Ready,
-    Running,
-    Finished,
-}
-
-/// One program going through the steps.
-pub struct Run {
-    pub program: usize,
-    pub phase: RunPhase,
-    /// The step that is running (or, when finished, `STEPS.len()`).
-    pub step: usize,
-    pub step_began: Option<Instant>,
-}
-
-pub struct Pipeline {
-    /// Programs waiting their turn, as indices into `Programs::all`.
-    pub queue: Vec<usize>,
-    pub run: Option<Run>,
-    /// The restore point for the cleanup step: 0 off, 1 high-risk changes only, 2 always.
-    pub restore_mode: usize,
-    /// The program in the confirmation is still running; "Check again" looks once more.
-    pub still_running: bool,
-    /// "Run quietly when the uninstaller can".
-    pub quiet: bool,
-    /// How many programs went through in this session.
-    pub finished: usize,
-}
-
-impl Pipeline {
-    fn new() -> Pipeline {
-        Pipeline {
-            queue: Vec::new(),
-            run: None,
-            restore_mode: 1,
-            still_running: false,
-            quiet: false,
-            finished: 0,
-        }
-    }
-
-    pub fn restore_point(&self) -> bool {
-        self.restore_mode != 0
-    }
-
-    /// Programs in the pipeline: the one running and those waiting.
-    pub fn pending(&self) -> usize {
-        self.queue.len()
-            + usize::from(
-                self.run
-                    .as_ref()
-                    .is_some_and(|r| r.phase != RunPhase::Finished),
-            )
-    }
-
-    pub fn enqueue(&mut self, programs: &[usize]) {
-        for p in programs {
-            let running = self.run.as_ref().is_some_and(|r| r.program == *p);
-            if !running && !self.queue.contains(p) {
-                self.queue.push(*p);
-            }
-        }
-    }
-
-    /// Takes the next program from the queue and starts its first step.
-    pub fn start_next(&mut self, now: Instant) -> bool {
-        if self
-            .run
-            .as_ref()
-            .is_some_and(|r| r.phase == RunPhase::Running)
-            || self.queue.is_empty()
-        {
-            return false;
-        }
-        let program = self.queue.remove(0);
-        let mut run = Run {
-            program,
-            phase: RunPhase::Running,
-            step: 0,
-            step_began: Some(now),
-        };
-        if !self.restore_point() {
-            run.step = 1;
-        }
-        self.run = Some(run);
-        true
-    }
-
-    pub fn state_of(&self, step: usize) -> StepState {
-        let Some(run) = &self.run else {
-            return StepState::Waiting;
-        };
-        if step == 0 && !self.restore_point() && run.phase != RunPhase::Ready {
-            return StepState::Skipped;
-        }
-        match run.phase {
-            RunPhase::Ready => StepState::Waiting,
-            RunPhase::Finished => StepState::Done,
-            RunPhase::Running if step < run.step => StepState::Done,
-            RunPhase::Running if step == run.step => StepState::Running,
-            RunPhase::Running => StepState::Waiting,
-        }
-    }
-
-    /// How far the running step is, 0 to 1.
-    pub fn step_fraction(&self, now: Instant) -> f32 {
-        let Some(run) = &self.run else { return 0.0 };
-        match (run.phase, run.step_began) {
-            (RunPhase::Running, Some(began)) => {
-                let takes = STEPS[run.step.min(STEPS.len() - 1)].takes.as_secs_f32();
-                (now.saturating_duration_since(began).as_secs_f32() / takes).clamp(0.0, 1.0)
-            }
-            (RunPhase::Finished, _) => 1.0,
-            _ => 0.0,
-        }
-    }
-
-    /// How far the whole run is, 0 to 1.
-    pub fn fraction(&self, now: Instant) -> f32 {
-        let Some(run) = &self.run else { return 0.0 };
-        match run.phase {
-            RunPhase::Ready => 0.0,
-            RunPhase::Finished => 1.0,
-            RunPhase::Running => (run.step as f32 + self.step_fraction(now)) / STEPS.len() as f32,
-        }
-    }
-
-    /// Moves the run on to `now`. Returns what happened and when to be called again.
-    pub fn tick(&mut self, now: Instant) -> (Ticked, Option<Instant>) {
-        let Some(run) = &mut self.run else {
-            return (Ticked::Nothing, None);
-        };
-        if run.phase != RunPhase::Running {
-            return (Ticked::Nothing, None);
-        }
-        let mut what = Ticked::Nothing;
-        loop {
-            let began = run.step_began.unwrap_or(now);
-            let ends = began + STEPS[run.step].takes;
-            if now < ends {
-                return (what, Some(ends));
-            }
-            run.step += 1;
-            what = Ticked::Stepped;
-            if run.step >= STEPS.len() {
-                run.phase = RunPhase::Finished;
-                run.step_began = None;
-                self.finished += 1;
-                return (Ticked::Finished(run.program), None);
-            }
-            run.step_began = Some(ends);
-        }
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Ticked {
-    Nothing,
-    Stepped,
-    Finished(usize),
-}
-
-// ---- leftovers -------------------------------------------------------------------------------
-
-/// How sure Purge is that an item belongs to the program and is safe to move.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Rating {
-    /// Certain. Ticked by default.
-    Safe,
-    /// Probably the program's. NEVER ticked by default: the user ticks it.
-    Likely,
-    /// Shared or the system's. Cannot be ticked at all.
-    Protected,
-}
-
-impl Rating {
-    pub fn title(self) -> &'static str {
-        match self {
-            Rating::Safe => "Safe",
-            Rating::Likely => "Likely",
-            Rating::Protected => "Protected",
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct Leftover {
-    pub path: String,
-    pub what: &'static str,
-    pub size_kb: u32,
-    pub rating: Rating,
-    pub ticked: bool,
-    pub evidence: String,
-    pub found_by: &'static str,
-    pub if_removed: &'static str,
-}
-
-pub struct Group {
-    pub title: &'static str,
-    pub open: bool,
-    pub items: Vec<Leftover>,
-}
-
-impl Group {
-    /// The group's box: ticked, not ticked, or `None` for some of them.
-    pub fn tick(&self) -> Option<bool> {
-        let can: Vec<&Leftover> = self
-            .items
-            .iter()
-            .filter(|i| i.rating != Rating::Protected)
-            .collect();
-        let on = can.iter().filter(|i| i.ticked).count();
-        if on == 0 {
-            Some(false)
-        } else if on == can.len() {
-            Some(true)
-        } else {
-            None
-        }
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum LeftoverPhase {
-    /// No uninstall has finished: nothing to review.
-    Empty,
-    /// The scan is running (the pipeline's last step).
-    Waiting,
-    Review,
-    /// The ticked items were moved to quarantine.
-    Moved,
-    /// The move was undone.
-    Undone,
-}
-
-pub struct Leftovers {
-    pub phase: LeftoverPhase,
-    /// The program they belong to, an index into `Programs::all`.
-    pub program: Option<usize>,
-    pub groups: Vec<Group>,
-    /// The item the evidence pane shows: group and item.
-    pub selected: Option<(usize, usize)>,
-    /// "Delete for good after 30 days" (off: kept until the user empties the quarantine).
-    pub delete_after: bool,
-    /// What the last move took: items and KB.
-    pub moved: (usize, u32),
-}
-
-fn left(
-    path: impl Into<String>,
-    what: &'static str,
-    size_kb: u32,
-    rating: Rating,
-    evidence: impl Into<String>,
-    found_by: &'static str,
-    if_removed: &'static str,
-) -> Leftover {
-    Leftover {
-        path: path.into(),
-        what,
-        size_kb,
-        rating,
-        // The one rule of the defaults: only what is certain starts ticked.
-        ticked: matches!(rating, Rating::Safe),
-        evidence: evidence.into(),
-        found_by,
-        if_removed,
-    }
-}
-
-/// The parts of a program's traces that name it. Everything else about what the (pretend)
-/// scan finds is the same for every program: the same groups, ratings and sizes, so the same
-/// rules hold whichever program ran.
-struct Traces {
-    folder: String,
-    cache: String,
-    profile: String,
-    profile_what: &'static str,
-    profile_evidence: &'static str,
-    profile_removed: &'static str,
-    updater: String,
-    settings_key: String,
-    vendor_key: String,
-    vendor_evidence: String,
-    shared_key: &'static str,
-    shared_what: &'static str,
-    shared_evidence: &'static str,
-    task: String,
-    shortcut: String,
-}
-
-/// `text` with only what a folder or key name can hold.
-fn name_part(text: &str, dots: bool) -> String {
-    let kept: String = text
-        .chars()
-        .filter(|c| {
-            c.is_alphanumeric() || matches!(c, ' ' | '-' | '+' | '_') || (dots && *c == '.')
-        })
-        .collect();
-    kept.trim().trim_end_matches('.').to_string()
-}
-
-impl Traces {
-    /// Firefox's are those of the reference the Leftovers page was drawn from.
-    fn firefox() -> Traces {
-        Traces {
-            folder: "C:\\Program Files\\Mozilla Firefox".to_string(),
-            cache: "C:\\Users\\kaan\\AppData\\Local\\Mozilla\\Firefox\\Profiles\\x1.default\\cache2".to_string(),
-            profile: "C:\\Users\\kaan\\AppData\\Roaming\\Mozilla\\Firefox\\Profiles\\x1.default".to_string(),
-            profile_what: "Profile: bookmarks, history, saved logins",
-            profile_evidence: "Inside the program's own data folder, but it holds what you made: bookmarks, history and saved logins.",
-            profile_removed: "Your bookmarks and saved logins go to quarantine with it. Tick it only if you do not want them.",
-            updater: "C:\\ProgramData\\Mozilla-1de4eec8".to_string(),
-            settings_key: "HKCU\\Software\\Mozilla\\Firefox".to_string(),
-            vendor_key: "HKLM\\SOFTWARE\\Mozilla".to_string(),
-            vendor_evidence: "The vendor's key. No other Mozilla program is installed now, but another could share it.".to_string(),
-            shared_key: "HKLM\\SOFTWARE\\Classes\\.html\\OpenWithProgids",
-            shared_what: "File association list (shared)",
-            shared_evidence: "A Windows key that every browser writes to. Purge removes the program's one value from it and never the key.",
-            task: "\\Mozilla\\Firefox Default Browser Agent 308046B0AF4A39CB".to_string(),
-            shortcut: "C:\\Users\\kaan\\Desktop\\Firefox.lnk".to_string(),
-        }
-    }
-
-    fn of(p: &Program) -> Traces {
-        if p.name.starts_with("Mozilla Firefox") {
-            return Traces::firefox();
-        }
-        // The name without its version or platform: "Audacity 3.7.1" is "Audacity".
-        let mut short = String::new();
-        for word in p.name.split_whitespace() {
-            let extra = word.starts_with(|c: char| c.is_ascii_digit() || c == '(');
-            if extra && !short.is_empty() {
-                break;
-            }
-            if !short.is_empty() {
-                short.push(' ');
-            }
-            short.push_str(word);
-        }
-        let mut short = name_part(&short, true);
-        if short.is_empty() {
-            short = "Program".to_string();
-        }
-        let vendor = name_part(&p.publisher, false);
-        let known = !vendor.is_empty() && !p.publisher.contains("not recorded");
-        // Where the program keeps its own: under its vendor's name, when that is known.
-        let base = if known {
-            format!("{vendor}\\{short}")
-        } else {
-            short.clone()
-        };
-        let folder = if p.location.get(1..3) == Some(":\\") {
-            p.location.clone()
-        } else {
-            format!("C:\\Program Files\\{short}")
-        };
-        Traces {
-            folder,
-            cache: format!("C:\\Users\\kaan\\AppData\\Local\\{base}\\Cache"),
-            profile: format!("C:\\Users\\kaan\\AppData\\Roaming\\{base}"),
-            profile_what: "Profile: settings and files you made",
-            profile_evidence: "Inside the program's own data folder, but it holds what you made: your settings and recent files.",
-            profile_removed: "Your settings go to quarantine with it. Tick it only if you do not want them.",
-            updater: format!(
-                "C:\\ProgramData\\{short}-{:08x}",
-                p.name
-                    .bytes()
-                    .fold(0u32, |h, b| h.wrapping_mul(31).wrapping_add(u32::from(b)))
-                    .wrapping_mul(2_654_435_761)
-            ),
-            settings_key: format!("HKCU\\Software\\{base}"),
-            vendor_key: format!("HKLM\\SOFTWARE\\{}", if known { &vendor } else { &short }),
-            vendor_evidence: if known {
-                format!(
-                    "The vendor's key. No other {vendor} program is installed now, but another could share it."
-                )
-            } else {
-                "The vendor's key. No publisher is recorded, so another program could share it."
-                    .to_string()
-            },
-            shared_key: "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\SharedDLLs",
-            shared_what: "Shared file counts (shared)",
-            shared_evidence: "A Windows key that every installer writes to. Purge removes the program's one value from it and never the key.",
-            task: format!("\\{base} Update Check"),
-            shortcut: format!("C:\\Users\\kaan\\Desktop\\{short}.lnk"),
-        }
-    }
-}
-
-fn found(program: &Program) -> Vec<Group> {
-    let t = Traces::of(program);
-    vec![
-        Group {
-            title: "Files and folders",
-            open: true,
-            items: vec![
-                left(
-                    t.folder,
-                    "Empty install folder",
-                    12,
-                    Rating::Safe,
-                    "Made by the installer on 6 Nov 2026 and named in its uninstall entry. Only an empty folder tree is left.",
-                    "Recorded before the uninstall; still there after.",
-                    "Nothing uses it. Moving it frees the folder name.",
-                ),
-                left(
-                    t.cache,
-                    "Cache",
-                    3_840,
-                    Rating::Safe,
-                    "Inside the program's own data folder; the files are cache entries the program rebuilds.",
-                    "The program's folder under Local AppData.",
-                    "Nothing is lost: a cache.",
-                ),
-                left(
-                    t.profile,
-                    t.profile_what,
-                    1_120,
-                    Rating::Likely,
-                    t.profile_evidence,
-                    "The program's folder under Roaming AppData.",
-                    t.profile_removed,
-                ),
-                left(
-                    t.updater,
-                    "Updater state",
-                    96,
-                    Rating::Safe,
-                    "Written only by the program's update service, which is gone.",
-                    "Folder named after the installer's product code.",
-                    "Nothing uses it.",
-                ),
-            ],
-        },
-        Group {
-            title: "Registry",
-            open: true,
-            items: vec![
-                left(
-                    t.settings_key,
-                    "Settings key",
-                    4,
-                    Rating::Safe,
-                    "Created by the program; every value under it is the program's.",
-                    "Recorded before the uninstall; still there after.",
-                    "Nothing uses it.",
-                ),
-                left(
-                    t.vendor_key,
-                    "Vendor key",
-                    2,
-                    Rating::Likely,
-                    t.vendor_evidence,
-                    "The publisher's name in the uninstall entry.",
-                    "Another program of the same vendor would lose shared settings.",
-                ),
-                left(
-                    t.shared_key,
-                    t.shared_what,
-                    1,
-                    Rating::Protected,
-                    t.shared_evidence,
-                    "Holds a value that names the program.",
-                    "Never moved: it belongs to Windows.",
-                ),
-            ],
-        },
-        Group {
-            title: "Services and scheduled tasks",
-            open: false,
-            items: vec![left(
-                t.task,
-                "Scheduled task",
-                3,
-                Rating::Safe,
-                "The task starts a file that no longer exists.",
-                "Its action points into the removed folder.",
-                "Nothing: it can no longer run.",
-            )],
-        },
-        Group {
-            title: "Shortcuts",
-            open: false,
-            items: vec![left(
-                t.shortcut,
-                "Desktop shortcut",
-                2,
-                Rating::Safe,
-                "Its target is the removed program file.",
-                "Shortcut whose target is gone.",
-                "Nothing: it opens nothing.",
-            )],
-        },
-    ]
-}
-
-impl Leftovers {
-    fn new() -> Leftovers {
-        Leftovers {
-            phase: LeftoverPhase::Empty,
-            program: None,
-            groups: Vec::new(),
-            selected: None,
-            delete_after: true,
-            moved: (0, 0),
-        }
-    }
-
-    /// The scan found its items for `program`: the review starts, with the defaults.
-    pub fn found_for(&mut self, at: usize, program: &Program) {
-        self.program = Some(at);
-        self.groups = found(program);
-        self.selected = Some((0, 0));
-        self.phase = LeftoverPhase::Review;
-    }
-
-    pub fn item(&self, at: (usize, usize)) -> Option<&Leftover> {
-        self.groups.get(at.0)?.items.get(at.1)
-    }
-
-    pub fn count(&self) -> usize {
-        self.groups.iter().map(|g| g.items.len()).sum()
-    }
-
-    pub fn count_of(&self, rating: Rating) -> usize {
-        self.groups
-            .iter()
-            .flat_map(|g| &g.items)
-            .filter(|i| i.rating == rating)
-            .count()
-    }
-
-    /// The ticked items: how many and how many KB.
-    pub fn ticked(&self) -> (usize, u32) {
-        let t = self
-            .groups
-            .iter()
-            .flat_map(|g| &g.items)
-            .filter(|i| i.ticked);
-        t.fold((0, 0), |(n, kb), i| (n + 1, kb + i.size_kb))
-    }
-
-    /// Ticks or unticks one item. A protected item never takes a tick.
-    pub fn toggle_item(&mut self, at: (usize, usize)) -> bool {
-        let Some(item) = self
-            .groups
-            .get_mut(at.0)
-            .and_then(|g| g.items.get_mut(at.1))
-        else {
-            return false;
-        };
-        if item.rating == Rating::Protected {
-            return false;
-        }
-        item.ticked = !item.ticked;
-        true
-    }
-
-    /// The group's box: when every Safe item is ticked, it unticks the whole group; otherwise
-    /// it ticks the Safe ones. It never ticks a Likely item: that is the user's own choice,
-    /// one item at a time.
-    pub fn toggle_group(&mut self, g: usize) {
-        let Some(group) = self.groups.get_mut(g) else {
-            return;
-        };
-        let safe_all = group
-            .items
-            .iter()
-            .filter(|i| i.rating == Rating::Safe)
-            .all(|i| i.ticked);
-        let any = group.items.iter().any(|i| i.ticked);
-        for i in &mut group.items {
-            match i.rating {
-                Rating::Safe => i.ticked = !(safe_all && any),
-                Rating::Likely if safe_all && any => i.ticked = false,
-                _ => {}
-            }
-        }
-    }
-
-    pub fn set_all_open(&mut self, open: bool) {
-        for g in &mut self.groups {
-            g.open = open;
-        }
-    }
-
-    pub fn all_open(&self) -> bool {
-        self.groups.iter().all(|g| g.open)
-    }
-
-    /// "Select the likely ones too" / back: the one place several Likely items are ticked at
-    /// once, and only because the user pressed the button that says so.
-    pub fn set_likely(&mut self, on: bool) {
-        for i in self.groups.iter_mut().flat_map(|g| &mut g.items) {
-            if i.rating == Rating::Likely {
-                i.ticked = on;
-            }
-        }
-    }
-
-    pub fn likely_ticked(&self) -> bool {
-        let mut likely = self
-            .groups
-            .iter()
-            .flat_map(|g| &g.items)
-            .filter(|i| i.rating == Rating::Likely)
-            .peekable();
-        likely.peek().is_some() && likely.all(|i| i.ticked)
-    }
-
-    /// Moves the ticked items to quarantine (in the mockup: remembers how many).
-    pub fn move_ticked(&mut self) -> bool {
-        let t = self.ticked();
-        if self.phase != LeftoverPhase::Review || t.0 == 0 {
-            return false;
-        }
-        self.moved = t;
-        self.phase = LeftoverPhase::Moved;
-        true
-    }
-
-    pub fn undo(&mut self) -> bool {
-        if self.phase != LeftoverPhase::Moved {
-            return false;
-        }
-        self.phase = LeftoverPhase::Undone;
-        true
-    }
-
-    pub fn done(&mut self) {
-        self.phase = LeftoverPhase::Empty;
-        self.program = None;
-        self.groups.clear();
-        self.selected = None;
-    }
-}
-
 pub fn kb_text(kb: u32) -> String {
     mdshared_app::fmt::size(u64::from(kb) * 1024)
 }
@@ -1602,18 +901,14 @@ pub struct Facts {
 // ---- the whole model -------------------------------------------------------------------------
 
 /// The confirmation before an uninstall: which programs it is for.
-pub struct Confirm {
-    pub programs: Vec<usize>,
-}
-
 pub struct Model {
     /// The look and the theme the user chose, as saved (`prefs`).
     pub prefs: Prefs,
     pub page: Page,
     pub programs: Programs,
-    pub confirm: Option<Confirm>,
-    pub pipeline: Pipeline,
-    pub leftovers: Leftovers,
+    /// The Uninstall and Leftovers pages (UI-FLOW), with the confirmation and the
+    /// first-elevation explanation.
+    pub flow: crate::flow::Flow,
     pub history: History,
     pub quarantine: Quarantine,
     pub settings: Settings,
@@ -1621,13 +916,6 @@ pub struct Model {
     /// wired yet show the mockup's sample pages, which change nothing. False with the real
     /// engine, where those pages say they are not available yet.
     pub sample: bool,
-    /// The seam of the Uninstall page (UI-PAGES): the programs an Uninstall click handed over,
-    /// visible rows first. The page's own model takes them from here when it is wired; until then
-    /// the page lists them and says that uninstalling is not available yet.
-    pub uninstall_inbox: Vec<UninstallTarget>,
-    /// The seam of the Leftovers page: the scan a removed program's check made, with the broker
-    /// session handed over to the Leftovers owner (`link::Owner::Leftovers`).
-    pub leftovers_inbox: Option<StoredScanOutcome>,
 }
 
 impl Model {
@@ -1636,9 +924,7 @@ impl Model {
             prefs,
             page: Page::Programs,
             programs,
-            confirm: None,
-            pipeline: Pipeline::new(),
-            leftovers: Leftovers::new(),
+            flow: crate::flow::Flow::new(),
             history: History::new(),
             quarantine: Quarantine::new(),
             settings: Settings {
@@ -1650,17 +936,17 @@ impl Model {
                 },
             },
             sample,
-            uninstall_inbox: Vec::new(),
-            leftovers_inbox: None,
         }
     }
+
+    // ---- the uninstall flow (UI-FLOW) ---------------------------------------------------------
 
     /// Uninstall (the toolbar, the details pane, Delete or Enter on the list): the programs go to
     /// the Uninstall page. False when nothing is picked and nothing was said.
     pub fn ask_uninstall(&mut self) -> bool {
         if self.sample {
-            // The sample pipeline: the model's Uninstall needs an engine that can change the PC,
-            // so the targets are taken here and go to the mockup's confirmation.
+            // The Programs model's Uninstall needs an engine that can change the PC; the sample
+            // broker (`sample_broker`) plays the administrator part, so the targets are taken here.
             let targets = self.programs.page.uninstall_targets();
             return self.open_uninstall(targets);
         }
@@ -1669,92 +955,56 @@ impl Model {
     }
 
     /// The Uninstall page's entry: `targets` from the Programs page (`ProgramsRequest::Uninstall`).
-    /// With sample data the mockup's confirmation opens for them; with the engine they wait in
-    /// [`Model::uninstall_inbox`] for the Uninstall page and that page opens.
+    /// The page starts the first (the broker's launch, its record, then the confirmation); a step
+    /// that runs keeps them out (the page says nothing then, as the WinUI page did).
     pub fn open_uninstall(&mut self, targets: Vec<UninstallTarget>) -> bool {
+        let targets: Vec<UninstallTarget> = targets
+            .into_iter()
+            .filter(|t| {
+                self.programs
+                    .index_of(&t.program_id)
+                    .is_none_or(|i| !self.programs.all[i].removed)
+            })
+            .collect();
         if targets.is_empty() {
             return false;
         }
-        if !self.sample {
-            self.uninstall_inbox = targets;
-            self.page = Page::Pipeline;
-            return true;
-        }
-        let programs: Vec<usize> = targets
-            .iter()
-            .filter_map(|t| self.programs.index_of(&t.program_id))
-            .filter(|i| !self.programs.all[*i].removed)
-            .collect();
-        if programs.is_empty() {
-            return false;
-        }
-        self.pipeline.still_running = programs
-            .iter()
-            .any(|p| self.programs.all[*p].name.contains("Firefox"));
-        self.confirm = Some(Confirm { programs });
-        true
-    }
-
-    /// "Uninstall" in the confirmation: the programs go to the pipeline and the first starts.
-    /// This is the only way into the pipeline.
-    pub fn confirm_uninstall(&mut self, now: Instant) -> bool {
-        let Some(confirm) = self.confirm.take() else {
-            return false;
-        };
-        self.pipeline.enqueue(&confirm.programs);
-        self.pipeline.start_next(now);
+        let env = self.flow_env();
+        let r = self.flow.page.begin(targets, env);
+        self.flow.take(r);
         self.page = Page::Pipeline;
         true
     }
 
-    pub fn cancel_confirm(&mut self) -> bool {
-        self.confirm.take().is_some()
-    }
-
-    /// Moves the sample pipeline on; a finished run takes its program off the list and hands its
-    /// leftovers to the review. Returns whether anything changed, and the next deadline.
-    pub fn tick(&mut self, now: Instant) -> (bool, Option<Instant>) {
-        let (what, next) = self.pipeline.tick(now);
-        match what {
-            Ticked::Nothing => (false, next),
-            Ticked::Stepped => {
-                let scanning = self
-                    .pipeline
-                    .run
-                    .as_ref()
-                    .is_some_and(|r| r.step == STEPS.len() - 1);
-                if scanning && self.leftovers.phase == LeftoverPhase::Empty {
-                    self.leftovers.phase = LeftoverPhase::Waiting;
-                    self.leftovers.program = self.pipeline.run.as_ref().map(|r| r.program);
-                }
-                (true, next)
-            }
-            Ticked::Finished(program) => {
-                self.programs.pretend_removed(program);
-                if let Some(p) = self.programs.all.get(program) {
-                    let p = p.clone();
-                    self.leftovers.found_for(program, &p);
-                }
-                (true, next)
-            }
+    /// What the Uninstall page needs to know of the rest of the window.
+    pub fn flow_env(&self) -> purge_ui_model::pipeline::PageEnv {
+        purge_ui_model::pipeline::PageEnv {
+            check_running: self.programs.page.check_running(),
+            leftovers_changing: self.flow.leftovers.is_changing(),
+            leftovers_on_screen: self.page == Page::Leftovers
+                || (self.page == Page::Pipeline && crate::ui::Look::of(self.prefs.design).flow),
         }
     }
+
+    // ---- the rail ------------------------------------------------------------------------------
 
     /// The numbers the rail shows beside each page: (text, is a badge).
     pub fn badge(&self, page: Page) -> Option<(String, bool)> {
         match page {
             Page::Programs => Some((self.programs.count(Tab::Apps).to_string(), false)),
-            Page::Pipeline if !self.sample => {
-                let n = self.uninstall_inbox.len();
-                (n > 0).then(|| (n.to_string(), true))
-            }
             Page::Pipeline => {
-                let n = self.pipeline.pending();
+                let q = self.flow.page.queue();
+                let n = if q.next().is_some() {
+                    q.count().saturating_sub(q.position())
+                } else {
+                    usize::from(self.flow.page.is_busy())
+                };
                 (n > 0).then(|| (n.to_string(), true))
             }
-            Page::Leftovers if self.sample => {
-                let n = self.leftovers.count();
-                (self.leftovers.phase == LeftoverPhase::Review && n > 0)
+            Page::Leftovers => {
+                let l = &self.flow.leftovers;
+                let n = l.selectable_count();
+                (l.phase() == purge_ui_model::leftovers::LeftoversPhase::Review && n > 0)
                     .then(|| (n.to_string(), true))
             }
             _ => None,
@@ -1812,113 +1062,6 @@ pub mod tests {
 
     fn sample_model() -> Model {
         Model::new(Prefs::default(), sample_programs(), true)
-    }
-
-    #[test]
-    fn likely_and_protected_start_unticked() {
-        let p = sample_programs();
-        let mut l = Leftovers::new();
-        l.found_for(0, &p.all[0]);
-        for i in l.groups.iter().flat_map(|g| &g.items) {
-            assert_eq!(i.ticked, i.rating == Rating::Safe, "{}", i.path);
-        }
-    }
-
-    #[test]
-    fn the_leftovers_name_the_program_that_ran() {
-        let p = sample_programs();
-        for (at, p) in p.all.iter().enumerate() {
-            let mut l = Leftovers::new();
-            l.found_for(at, p);
-            assert_eq!(l.count(), 9, "{}", p.name);
-            assert_eq!(l.ticked().0, 6, "{}", p.name);
-            // Only a Mozilla program leaves Mozilla's traces.
-            let mozilla = p.name.contains("Mozilla") || p.publisher.contains("Mozilla");
-            for i in l.groups.iter().flat_map(|g| &g.items) {
-                assert!(
-                    !i.path.contains("\\\\") && !i.path.ends_with('\\'),
-                    "{}",
-                    i.path
-                );
-                assert!(
-                    mozilla || !i.path.contains("Mozilla"),
-                    "{} for {}",
-                    i.path,
-                    p.name
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn a_group_box_never_ticks_likely_or_protected() {
-        let p = sample_programs();
-        let mut l = Leftovers::new();
-        l.found_for(0, &p.all[0]);
-        for g in 0..l.groups.len() {
-            l.toggle_group(g); // all Safe ticked -> unticks the group
-            assert!(l.groups[g].items.iter().all(|i| !i.ticked));
-            l.toggle_group(g); // ticks the Safe ones again
-            for i in &l.groups[g].items {
-                assert_eq!(i.ticked, i.rating == Rating::Safe, "{}", i.path);
-            }
-        }
-        assert!(!l.toggle_item((1, 2)), "a protected item takes no tick");
-        assert!(!l.groups[1].items[2].ticked);
-    }
-
-    #[test]
-    fn nothing_reaches_the_pipeline_without_the_confirmation() {
-        let mut m = sample_model();
-        assert!(!m.ask_uninstall(), "nothing selected, nothing asked");
-        m.programs.click(3, Mods::default());
-        assert!(m.pipeline.run.is_none() && m.pipeline.queue.is_empty());
-        assert!(m.ask_uninstall());
-        assert!(m.pipeline.run.is_none() && m.pipeline.queue.is_empty());
-        assert!(m.cancel_confirm());
-        assert!(m.pipeline.run.is_none() && m.pipeline.queue.is_empty());
-        assert!(m.ask_uninstall());
-        let now = Instant::now();
-        assert!(m.confirm_uninstall(now));
-        assert_eq!(m.page, Page::Pipeline);
-        assert!(m.pipeline.run.is_some());
-    }
-
-    #[test]
-    fn with_the_engine_uninstall_goes_to_the_uninstall_pages_inbox() {
-        let mut m = Model::new(Prefs::default(), sample_programs(), false);
-        m.programs.click(2, Mods::default());
-        let name = m.programs.all[m.programs.rows[2]].name.clone();
-        assert!(m.open_uninstall(m.programs.page.uninstall_targets()));
-        assert!(
-            m.confirm.is_none(),
-            "no sample confirmation with the engine"
-        );
-        assert_eq!(m.page, Page::Pipeline);
-        assert_eq!(m.uninstall_inbox.len(), 1);
-        assert_eq!(m.uninstall_inbox[0].program_name, name);
-        assert!(m.pipeline.run.is_none() && m.pipeline.queue.is_empty());
-    }
-
-    #[test]
-    fn the_pipeline_runs_to_the_review() {
-        let mut m = sample_model();
-        let before = m.programs.count(Tab::Apps);
-        m.programs.click(0, Mods::default());
-        m.ask_uninstall();
-        let t0 = Instant::now();
-        m.confirm_uninstall(t0);
-        let mut now = t0;
-        let mut guard = 0;
-        while let (_, Some(next)) = m.tick(now) {
-            now = next;
-            guard += 1;
-            assert!(guard < 50);
-        }
-        assert_eq!(m.leftovers.phase, LeftoverPhase::Review);
-        assert_eq!(m.programs.count(Tab::Apps), before - 1);
-        assert_eq!(m.programs.rows.len(), before - 1);
-        assert_eq!(m.leftovers.count(), 9);
     }
 
     #[test]

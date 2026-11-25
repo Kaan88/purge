@@ -7,7 +7,9 @@ use mdshared_ui::keys::KeyName;
 
 use crate::app::PurgeApp;
 use crate::look::{Choice, Design, Preset, ThemeChoice, Transition};
-use crate::model::{LeftoverPhase, OpState, Page, Rating, RunPhase, SortKey, Tab};
+use purge_ui_model::leftovers::LeftoversPhase;
+
+use crate::model::{OpState, Page, SortKey, Tab};
 use crate::script::{CTRL, NONE, SHIFT, Step};
 use crate::ui::{Id, Role, id};
 
@@ -408,14 +410,86 @@ pub fn steps() -> Vec<Step> {
             },
             settle: 500,
         },
+        // The first launch of the broker in a run is explained first (`ElevationPrompts.cs`); with
+        // sample data the broker is the made-up one, which answers from the protocol fixtures.
         Step {
-            name: "confirm-opens",
+            name: "explain-opens",
             act: |app, cx| {
                 app.click(cx, id("UninstallButton"));
             },
             check: |app| {
-                want(app.model.confirm.is_some(), "the confirmation is open")?;
-                want(app.model.pipeline.run.is_none(), "nothing runs yet")?;
+                want(
+                    app.model.flow.elevation.showing().is_some(),
+                    "the first-elevation explanation is open",
+                )?;
+                want(
+                    app.model.flow.confirm.is_none(),
+                    "no confirmation before it",
+                )?;
+                has(app, "DialogPrimaryButton")?;
+                has(app, "DialogCloseButton")?;
+                want(
+                    app.focus.focused() == Some(id("DialogPrimaryButton")),
+                    format!(
+                        "the keyboard starts on Continue, is on {:?}",
+                        app.focus.focused()
+                    ),
+                )?;
+                Ok("Continue / Not now, keyboard on Continue".to_string())
+            },
+            settle: 700,
+        },
+        Step {
+            name: "explain-not-now",
+            act: |app, cx| {
+                app.click(cx, id("DialogCloseButton"));
+            },
+            check: |app| {
+                want(!app.model.flow.dialog_open(), "Not now closed it")?;
+                want(!app.model.flow.page.is_busy(), "nothing runs")?;
+                want(app.model.page == Page::Pipeline, "on the Uninstall page")?;
+                let said = app
+                    .ctl(Id("InfoBarHost", 0))
+                    .map(|c| c.label.clone())
+                    .ok_or("no bar says what happened")?;
+                Ok(format!("bar: {said}"))
+            },
+            settle: 700,
+        },
+        page_step("explain-back-to-programs", |app, cx| {
+            app.press_key(cx, KeyName::Char('1'), CTRL);
+        }),
+        Step {
+            name: "explain-again",
+            act: |app, cx| {
+                app.click(cx, id("UninstallButton"));
+            },
+            check: |app| {
+                want(
+                    app.model.flow.elevation.showing().is_some(),
+                    "asked again: it was not answered with Continue",
+                )?;
+                Ok("open again".to_string())
+            },
+            settle: 700,
+        },
+        Step {
+            name: "confirm-opens",
+            act: |app, cx| {
+                app.click(cx, id("DialogPrimaryButton"));
+            },
+            check: |app| {
+                want(app.model.flow.elevation.explained, "Continue is remembered")?;
+                let c = app
+                    .model
+                    .flow
+                    .confirm
+                    .as_ref()
+                    .ok_or("the confirmation is not open")?;
+                want(
+                    c.dialog.check_again,
+                    "firefox.exe runs: Check again is offered",
+                )?;
                 for name in [
                     "ConfirmUninstallButton",
                     "ConfirmCheckAgainButton",
@@ -423,8 +497,14 @@ pub fn steps() -> Vec<Step> {
                     "QuietSwitch",
                     "RestorePointBox",
                     "DialogTitle",
+                    "CommandText",
+                    "SignerText",
+                    "RunningText",
                 ] {
                     has(app, name)?;
+                }
+                for k in 1..=5 {
+                    has_id(app, Id("ConfirmStep", k))?;
                 }
                 want(
                     app.focus.focused() == Some(id("ConfirmNotNowButton")),
@@ -433,9 +513,9 @@ pub fn steps() -> Vec<Step> {
                         app.focus.focused()
                     ),
                 )?;
-                Ok("keyboard on Not now; nothing in the pipeline".to_string())
+                Ok(format!("'{}', keyboard on Not now", c.dialog.title))
             },
-            settle: 700,
+            settle: 1800,
         },
         Step {
             name: "tab-stays-in-dialog",
@@ -453,77 +533,99 @@ pub fn steps() -> Vec<Step> {
             },
             settle: 300,
         },
+        // The WinUI bug: the dialog kept showing the quiet command with quiet mode off.
         Step {
-            name: "esc-closes-and-restores-focus",
-            act: |app, cx| app.press_key(cx, KeyName::Escape, NONE),
-            check: |app| {
-                want(app.model.confirm.is_none(), "closed")?;
-                want(
-                    app.model.pipeline.run.is_none() && app.model.pipeline.queue.is_empty(),
-                    "nothing went to the pipeline",
-                )?;
-                want(
-                    app.focus.focused() == Some(id("UninstallButton")),
-                    format!("focus went back to {:?}", app.focus.focused()),
-                )?;
-                Ok("focus is back on Uninstall".to_string())
-            },
-            settle: 500,
-        },
-        Step {
-            name: "cancel-button-closes",
+            name: "quiet-switch-changes-the-command",
             act: |app, cx| {
-                app.press_key(cx, KeyName::Enter, NONE);
-                app.note = format!("{}", app.model.confirm.is_some());
+                let before = app.ctl(id("CommandText")).map(|c| c.label.clone());
+                app.note = before.unwrap_or_default();
+                app.click(cx, id("QuietSwitch"));
             },
             check: |app| {
-                want(app.note == "true", "Enter on Uninstall opened it again")?;
-                Ok("open again".to_string())
+                let c = app.model.flow.confirm.as_ref().ok_or("closed")?;
+                let now = app
+                    .ctl(id("CommandText"))
+                    .map(|c| c.label.clone())
+                    .unwrap_or_default();
+                want(now == c.command(), "the command shown is the dialog's")?;
+                if c.dialog.quiet_enabled {
+                    want(now != app.note, format!("the command stayed {now}"))?;
+                }
+                Ok(format!("quiet {}: {now}", c.quiet_on))
             },
-            settle: 600,
+            settle: 400,
         },
         Step {
-            name: "not-now",
-            act: |app, cx| {
-                app.click(cx, id("ConfirmNotNowButton"));
-            },
-            check: |app| {
-                want(app.model.confirm.is_none(), "Not now closed it")?;
-                want(app.model.pipeline.run.is_none(), "nothing runs")?;
-                Ok("closed by Not now".to_string())
-            },
-            settle: 500,
-        },
-        Step {
-            name: "confirm-check-again",
-            act: |app, cx| {
-                app.click(cx, id("DUninstallButton"));
-            },
-            check: |app| {
-                want(app.model.confirm.is_some(), "opened from the details pane")?;
-                want(
-                    app.model.pipeline.still_running,
-                    "Firefox is said to be running",
-                )?;
-                Ok("still running is shown".to_string())
-            },
-            settle: 600,
-        },
-        Step {
-            name: "uninstall-starts-pipeline",
+            name: "check-again-rereads",
             act: |app, cx| {
                 app.click(cx, id("ConfirmCheckAgainButton"));
-                app.click(cx, id("QuietSwitch"));
+            },
+            check: |app| {
+                let c = app
+                    .model
+                    .flow
+                    .confirm
+                    .as_ref()
+                    .ok_or("it did not open again")?;
+                want(
+                    c.dialog.still_running.is_none(),
+                    "firefox.exe is closed now",
+                )?;
+                want(
+                    app.ctl(id("ConfirmCheckAgainButton")).is_none(),
+                    "no Check again",
+                )?;
+                Ok("read again: nothing running".to_string())
+            },
+            settle: 1800,
+        },
+        Step {
+            name: "esc-closes",
+            act: |app, cx| app.press_key(cx, KeyName::Escape, NONE),
+            check: |app| {
+                want(app.model.flow.confirm.is_none(), "closed")?;
+                want(!app.model.flow.page.is_busy(), "nothing runs")?;
+                want(
+                    app.model.programs.all.iter().all(|p| !p.removed),
+                    "nothing was uninstalled",
+                )?;
+                Ok("closed by Esc; nothing ran".to_string())
+            },
+            settle: 600,
+        },
+        page_step("confirm-back-to-programs", |app, cx| {
+            app.press_key(cx, KeyName::Char('1'), CTRL);
+        }),
+        Step {
+            name: "confirm-again",
+            act: |app, cx| {
+                app.click(cx, id("UninstallButton"));
+            },
+            check: |app| {
+                want(
+                    app.model.flow.elevation.showing().is_none(),
+                    "explained once: no explanation the second time",
+                )?;
+                want(app.model.flow.confirm.is_some(), "the confirmation is open")?;
+                Ok("straight to the confirmation".to_string())
+            },
+            settle: 1800,
+        },
+        Step {
+            name: "uninstall-runs",
+            act: |app, cx| {
                 app.click(cx, id("ConfirmUninstallButton"));
             },
             check: |app| {
-                want(app.model.page == Page::Pipeline, "on the pipeline page")?;
-                want(app.model.pipeline.quiet, "quiet mode was switched on")?;
-                let run = app.model.pipeline.run.as_ref().ok_or("no run")?;
-                want(run.phase == RunPhase::Running, "running")?;
-                has(app, "StepperHost")?;
-                has(app, "ProgramNameText")?;
-                Ok(format!("running, step {}", run.step + 1))
+                want(app.model.page == Page::Pipeline, "on the Uninstall page")?;
+                want(app.model.flow.page.is_busy(), "running")?;
+                for name in ["StepperHost", "ProgramNameText", "CommandText", "RouteText"] {
+                    has(app, name)?;
+                }
+                for k in 1..=5 {
+                    has_id(app, Id("Step", k))?;
+                }
+                Ok("running".to_string())
             },
             settle: 1200,
         },
@@ -531,29 +633,38 @@ pub fn steps() -> Vec<Step> {
             name: "pipeline-midway",
             act: nothing,
             check: |app| {
-                let run = app.model.pipeline.run.as_ref().ok_or("no run")?;
+                let c = app.model.flow.page.controller();
                 want(
-                    run.phase == RunPhase::Running && run.step >= 2,
-                    format!("steps advance on the timer: step {}", run.step + 1),
+                    c.state_of(purge_ui_model::pipeline::UninstallStep::Record)
+                        == purge_ui_model::pipeline::StepState::Done,
+                    "the record step is done",
                 )?;
-                Ok(format!("step {} of 6", run.step + 1))
+                let said = app
+                    .ctl(Id("Step", 2))
+                    .map(|c| c.label.clone())
+                    .unwrap_or_default();
+                Ok(said)
             },
-            settle: 4000,
+            settle: 3000,
         },
         Step {
-            name: "pipeline-finished",
+            name: "pipeline-reaches-review",
             act: nothing,
             check: |app| {
-                let run = app.model.pipeline.run.as_ref().ok_or("no run")?;
-                want(run.phase == RunPhase::Finished, "finished")?;
+                want(!app.model.flow.page.is_busy(), "the run ended")?;
                 want(
-                    app.model.leftovers.phase == LeftoverPhase::Review,
-                    "leftovers wait for review",
+                    app.model.flow.leftovers.phase() == LeftoversPhase::Review,
+                    format!(
+                        "leftovers wait for review, are {:?}",
+                        app.model.flow.leftovers.phase()
+                    ),
                 )?;
-                // The flow shows the review on this page; the other layout has a Next button.
+                let said: Vec<String> = (1..=5)
+                    .filter_map(|k| app.ctl(Id("Step", k)).map(|c| c.label.clone()))
+                    .collect();
                 want(
-                    app.ctl(id("NextButton")).is_some() || app.ctl(id("MoveButton")).is_some(),
-                    "a way on to the review",
+                    said.iter().any(|s| s.contains("exit code")),
+                    format!("a step says the exit code: {said:?}"),
                 )?;
                 let pr = &app.model.programs;
                 want(
@@ -563,26 +674,25 @@ pub fn steps() -> Vec<Step> {
                         && pr.rows.iter().all(|i| !pr.all[*i].removed),
                     "the program left the list",
                 )?;
-                Ok("finished; 9 leftovers to review".to_string())
+                Ok(format!(
+                    "{} leftovers to review",
+                    app.model.flow.leftovers.items().len()
+                ))
             },
-            settle: 5500,
+            settle: 8000,
         },
         Step {
             name: "leftovers-review",
             act: |app, cx| {
-                if app.ctl(id("NextButton")).is_some() {
-                    app.click(cx, id("NextButton"));
-                } else {
-                    app.press_key(cx, KeyName::Char('3'), CTRL);
-                }
+                app.press_key(cx, KeyName::Char('3'), CTRL);
             },
             check: |app| {
                 want(app.model.page == Page::Leftovers, "on the leftovers page")?;
-                let l = &app.model.leftovers;
-                for i in l.groups.iter().flat_map(|g| &g.items) {
+                let l = &app.model.flow.leftovers;
+                for i in l.items() {
                     want(
-                        i.ticked == (i.rating == Rating::Safe),
-                        format!("{} starts {}", i.path, i.ticked),
+                        i.checked == i.preselected,
+                        format!("{} starts {}", i.display_name, i.checked),
                     )?;
                 }
                 for name in [
@@ -592,157 +702,148 @@ pub fn steps() -> Vec<Step> {
                     "FooterCount",
                     "ExpandButton",
                     "WeakButton",
-                    "DTitle",
-                    "DEvidence",
+                    "VerdictText",
+                    "SafePill",
                 ] {
                     has(app, name)?;
                 }
-                // What the page shows must be what the model holds: no Likely box drawn ticked.
+                // What the page shows must be what the model holds.
                 for c in &app.ctls {
                     if c.id.0 == "ItemTick" {
-                        let at = crate::app::item_at(c.id.1);
-                        let item = l.item(at).ok_or("a box for no item")?;
+                        let item = l
+                            .items()
+                            .get(c.id.1 as usize - 1)
+                            .ok_or("a box for no item")?;
                         want(
-                            c.role == Role::Check(Some(item.ticked)),
-                            format!("{} is drawn {:?}", item.path, c.role),
-                        )?;
-                        want(
-                            c.disabled == (item.rating == Rating::Protected),
-                            "a protected box is disabled",
+                            c.role == Role::Check(Some(item.checked)),
+                            format!("{} is drawn {:?}", item.display_name, c.role),
                         )?;
                     }
                 }
                 Ok(format!(
-                    "{} ticked of {}; Likely and Protected unticked",
-                    l.ticked().0,
-                    l.count()
+                    "{} ticked of {}",
+                    l.selected_count(),
+                    l.selectable_count()
                 ))
             },
             settle: 900,
         },
         Step {
-            name: "leftovers-group-mixed",
+            name: "leftovers-tick-and-evidence",
             act: |app, cx| {
-                // Tick the one Likely item of the first group by hand, then untick a Safe one.
-                app.click(cx, Id("ItemTick", crate::app::item_no(0, 2)));
-                app.click(cx, Id("ItemTick", crate::app::item_no(0, 0)));
+                let l = &app.model.flow.leftovers;
+                let n = l
+                    .items()
+                    .iter()
+                    .position(|i| i.checked)
+                    .map_or(0, |i| i + 1);
+                app.note = n.to_string();
+                app.click(cx, Id("ItemTick", n as u32));
             },
             check: |app| {
-                let g = app
-                    .model
-                    .leftovers
-                    .groups
-                    .first()
-                    .ok_or("no leftovers to review")?;
-                want(g.items.len() >= 3, "the first group has its items")?;
+                let n: usize = app.note.parse().unwrap_or(0);
+                let l = &app.model.flow.leftovers;
+                let item = l
+                    .items()
+                    .get(n.wrapping_sub(1))
+                    .ok_or("no ticked item to start")?;
+                want(!item.checked, "the box unticked it")?;
                 want(
-                    g.items[2].ticked && !g.items[0].ticked,
-                    "the two boxes changed",
-                )?;
-                want(g.tick().is_none(), "the group's box is mixed")?;
-                let c = app.ctl(Id("GroupTick", 1)).ok_or("no group box")?;
-                want(
-                    c.role == Role::Check(None),
-                    format!("the group box is drawn {:?}", c.role),
-                )?;
-                want(
-                    app.model.leftovers.selected == Some((0, 0)),
-                    "the evidence pane follows the last item",
+                    l.selected() == Some(&item.candidate_id),
+                    "the evidence pane follows the box",
                 )?;
                 let shown = app
                     .ctl(id("DPath"))
                     .map(|c| c.label.clone())
                     .unwrap_or_default();
-                want(shown == g.items[0].path, format!("evidence shows {shown}"))?;
-                Ok("group box mixed; evidence follows the selection".to_string())
+                want(
+                    shown == item.display_name,
+                    format!("evidence shows {shown}"),
+                )?;
+                has(app, "DEvidence")?;
+                Ok(format!("unticked {}", item.display_name))
+            },
+            settle: 1400,
+        },
+        Step {
+            name: "leftovers-group-box",
+            act: |app, cx| {
+                app.click(cx, Id("GroupTick", 1));
+            },
+            check: |app| {
+                let l = &app.model.flow.leftovers;
+                let h = l.group_header(0, 0).ok_or("no first group")?;
+                let c = app.ctl(Id("GroupTick", 1)).ok_or("no group box")?;
+                want(
+                    c.role == Role::Check(h.checked),
+                    format!("the group box is drawn {:?}, is {:?}", c.role, h.checked),
+                )?;
+                Ok(format!("{}: {:?}", h.name, h.checked))
             },
             settle: 600,
         },
         Step {
             name: "leftovers-expanders",
             act: |app, cx| {
-                app.click(cx, Id("GroupTick", 1));
-                app.click(cx, Id("Group", 3));
-                app.click(cx, Id("Group", 2));
+                app.note = format!(
+                    "{:?}",
+                    app.model
+                        .flow
+                        .leftovers
+                        .groups()
+                        .first()
+                        .map(|g| g.expanded)
+                );
+                app.click(cx, Id("Group", 1));
             },
             check: |app| {
-                let l = &app.model.leftovers;
-                want(l.groups.len() >= 3, "no leftovers to review")?;
+                let g = app
+                    .model
+                    .flow
+                    .leftovers
+                    .groups()
+                    .first()
+                    .ok_or("no group")?;
                 want(
-                    l.groups[2].open && !l.groups[1].open,
-                    "one group opened, one closed",
+                    format!("{:?}", Some(!g.expanded)) == app.note,
+                    "the group opened or closed",
                 )?;
-                // From mixed, the group box ticks the Safe ones again. The Likely one stays as the
-                // user left it: ticked by hand in the step before, so the box is now fully ticked.
-                let g = &l.groups[0];
-                want(
-                    g.items
-                        .iter()
-                        .filter(|i| i.rating == Rating::Safe)
-                        .all(|i| i.ticked),
-                    "the group box ticked the Safe ones",
-                )?;
-                want(
-                    g.items[2].rating == Rating::Likely && g.items[2].ticked,
-                    "the hand-ticked Likely item is left alone",
-                )?;
-                want(
-                    g.items
-                        .iter()
-                        .all(|i| i.rating != Rating::Protected || !i.ticked),
-                    "nothing protected is ticked",
-                )?;
-                want(g.tick() == Some(true), "the group's box is ticked")?;
-                Ok("expanders toggled; the hand-ticked Likely item is kept".to_string())
+                Ok(format!("first group expanded: {}", g.expanded))
             },
-            settle: 700,
-        },
-        // The group box on its own: off, then on again. Coming back it ticks the Safe items and
-        // leaves the Likely one unticked, so the group is back at its defaults.
-        Step {
-            name: "leftovers-group-box-skips-likely",
-            act: |app, cx| {
-                app.click(cx, Id("GroupTick", 1));
-                app.note = format!("{:?}", app.model.leftovers.groups.first().map(|g| g.tick()));
-                app.click(cx, Id("GroupTick", 1));
-            },
-            check: |app| {
-                want(
-                    app.note == "Some(Some(false))",
-                    format!("the first click unticked the group: {}", app.note),
-                )?;
-                let l = &app.model.leftovers;
-                let g = l.groups.first().ok_or("no leftovers to review")?;
-                want(
-                    g.items
-                        .iter()
-                        .all(|i| i.ticked == (i.rating == Rating::Safe)),
-                    "the group box ticked the Safe ones only",
-                )?;
-                want(
-                    g.tick().is_none(),
-                    "with the Likely one unticked the box is mixed",
-                )?;
-                let c = app.ctl(Id("GroupTick", 1)).ok_or("no group box")?;
-                want(
-                    c.role == Role::Check(None),
-                    format!("the group box is drawn {:?}", c.role),
-                )?;
-                Ok(format!(
-                    "{} ticked of {}; the group box never ticks Likely",
-                    l.ticked().0,
-                    l.count()
-                ))
-            },
-            settle: 700,
+            settle: 600,
         },
         Step {
-            name: "leftovers-moved",
+            name: "leftovers-move-waits",
             act: |app, cx| {
+                app.click(cx, Id("Group", 1));
                 app.click(cx, id("MoveButton"));
             },
             check: |app| {
-                want(app.model.leftovers.phase == LeftoverPhase::Moved, "moved")?;
+                want(
+                    app.model.flow.leftovers.phase() == LeftoversPhase::Waiting,
+                    format!("waiting, is {:?}", app.model.flow.leftovers.phase()),
+                )?;
+                let t = app
+                    .ctl(id("WaitingTitleText"))
+                    .map(|c| c.label.clone())
+                    .unwrap_or_default();
+                want(
+                    t.starts_with("Confirm") && t.contains("Purge security prompt"),
+                    format!("the wait says {t}"),
+                )?;
+                has(app, "WaitingCodeText")?;
+                Ok(t)
+            },
+            settle: 1800,
+        },
+        Step {
+            name: "leftovers-moved",
+            act: nothing,
+            check: |app| {
+                want(
+                    app.model.flow.leftovers.phase() == LeftoversPhase::Result,
+                    format!("moved, is {:?}", app.model.flow.leftovers.phase()),
+                )?;
                 for name in [
                     "ResultTitleText",
                     "ResultDetailText",
@@ -751,9 +852,9 @@ pub fn steps() -> Vec<Step> {
                 ] {
                     has(app, name)?;
                 }
-                Ok(format!("{} items moved", app.model.leftovers.moved.0))
+                Ok(app.model.flow.leftovers.result_title_text().to_string())
             },
-            settle: 700,
+            settle: 3500,
         },
         Step {
             name: "leftovers-undone",
@@ -761,12 +862,15 @@ pub fn steps() -> Vec<Step> {
                 app.click(cx, id("UndoAllButton"));
             },
             check: |app| {
-                want(app.model.leftovers.phase == LeftoverPhase::Undone, "undone")?;
+                want(
+                    app.model.flow.leftovers.phase() == LeftoversPhase::Undone,
+                    format!("undone, is {:?}", app.model.flow.leftovers.phase()),
+                )?;
                 has(app, "UndoTitleText")?;
                 has(app, "UndoDetailText")?;
-                Ok("undo shown".to_string())
+                Ok(app.model.flow.leftovers.undo_title_text().to_string())
             },
-            settle: 700,
+            settle: 5000,
         },
         Step {
             name: "history",
@@ -982,7 +1086,6 @@ pub fn steps() -> Vec<Step> {
             settle: 700,
         },
         page_step("high-contrast-leftovers", |app, cx| {
-            app.model.leftovers.found_for(0, &app.model.programs.all[0]);
             app.press_key(cx, KeyName::Char('3'), CTRL);
         }),
         page_step("high-contrast-settings", |app, cx| {
@@ -994,7 +1097,6 @@ pub fn steps() -> Vec<Step> {
                 app.hc_forced = None;
                 app.set_theme(cx, ThemeChoice::Light);
                 app.event(cx, Event::Contrast(false));
-                app.model.leftovers.done();
                 app.press_key(cx, KeyName::Char('1'), CTRL);
             },
             check: |app| {
@@ -1037,7 +1139,7 @@ macro_rules! page {
     };
 }
 
-/// The flow of the standard look: the review of the leftovers inside the pipeline page.
+/// The flow of the standard look: the run and then the review of its leftovers on one page.
 fn flow_steps() -> Vec<Step> {
     vec![
         Step {
@@ -1058,20 +1160,16 @@ fn flow_steps() -> Vec<Step> {
                 app.click(cx, id("UninstallButton"));
             },
             check: |app| {
-                want(app.model.confirm.is_some(), "the confirmation opens")?;
+                want(app.model.flow.confirm.is_some(), "the confirmation opens")?;
+                let c = app.model.flow.page.controller();
                 want(
-                    app.model.pipeline.queue.is_empty()
-                        && !app
-                            .model
-                            .pipeline
-                            .run
-                            .as_ref()
-                            .is_some_and(|r| r.phase == RunPhase::Running),
+                    c.state_of(purge_ui_model::pipeline::UninstallStep::Run)
+                        == purge_ui_model::pipeline::StepState::Pending,
                     "nothing runs before it is confirmed",
                 )?;
                 Ok("open".to_string())
             },
-            settle: 700,
+            settle: 1800,
         },
         Step {
             name: "flow-runs",
@@ -1080,11 +1178,7 @@ fn flow_steps() -> Vec<Step> {
             },
             check: |app| {
                 want(app.model.page == Page::Pipeline, "on the pipeline page")?;
-                let run = app.model.pipeline.run.as_ref().ok_or("no run")?;
-                want(
-                    run.phase == RunPhase::Running && run.step >= 1,
-                    format!("steps advance: step {}", run.step + 1),
-                )?;
+                want(app.model.flow.page.is_busy(), "running")?;
                 for name in [
                     "StepperHost",
                     "StepCaption",
@@ -1098,9 +1192,9 @@ fn flow_steps() -> Vec<Step> {
                     app.ctl(id("MoveButton")).is_none(),
                     "no review while it runs",
                 )?;
-                Ok(format!("running, step {} of 6", run.step + 1))
+                Ok("running".to_string())
             },
-            settle: 2600,
+            settle: 1500,
         },
         Step {
             name: "flow-arrives-at-review",
@@ -1110,44 +1204,30 @@ fn flow_steps() -> Vec<Step> {
                     app.model.page == Page::Pipeline,
                     "still on the pipeline page",
                 )?;
+                let l = &app.model.flow.leftovers;
                 want(
-                    app.model.leftovers.phase == LeftoverPhase::Review,
-                    "the run finished and the review is there",
+                    l.phase() == LeftoversPhase::Review,
+                    format!("the review is there, is {:?}", l.phase()),
                 )?;
                 has(app, "MoveButton")?;
                 for c in &app.ctls {
                     if c.id.0 == "ItemTick" {
-                        let item = app
-                            .model
-                            .leftovers
-                            .item(crate::app::item_at(c.id.1))
-                            .ok_or("no item")?;
+                        let item = l.items().get(c.id.1 as usize - 1).ok_or("no item")?;
                         want(
-                            c.role == Role::Check(Some(item.ticked)),
+                            c.role == Role::Check(Some(item.checked)),
                             "boxes show the model",
-                        )?;
-                        want(
-                            item.ticked == (item.rating == Rating::Safe),
-                            "defaults hold in the flow",
                         )?;
                     }
                 }
-                let l = &app.model.leftovers;
-                let program = l
-                    .program
-                    .and_then(|p| app.model.programs.all.get(p))
-                    .ok_or("the review has no program")?;
-                let first = &l.groups[0].items[0].path;
-                // The sample leftovers are made from the program's name and folder.
-                let word = program.name.split_whitespace().next().unwrap_or_default();
+                let program = &app.model.flow.page.view(app.model.flow_env()).program_name;
                 want(
-                    first.contains(word),
-                    format!("the leftovers are {}'s, not {first}", program.name),
+                    l.program_name() == program,
+                    format!("the review is {}'s, not {}", program, l.program_name()),
                 )?;
                 Ok(format!(
                     "review in the flow, {} ticked of {}",
-                    l.ticked().0,
-                    l.count()
+                    l.selected_count(),
+                    l.selectable_count()
                 ))
             },
             settle: 9000,
@@ -1162,7 +1242,10 @@ fn flow_steps() -> Vec<Step> {
                     app.model.page == Page::Pipeline,
                     "the result stays in the flow",
                 )?;
-                want(app.model.leftovers.phase == LeftoverPhase::Moved, "moved")?;
+                want(
+                    app.model.flow.leftovers.phase() == LeftoversPhase::Result,
+                    format!("moved, is {:?}", app.model.flow.leftovers.phase()),
+                )?;
                 for name in [
                     "ResultTitleText",
                     "UndoAllButton",
@@ -1171,12 +1254,9 @@ fn flow_steps() -> Vec<Step> {
                 ] {
                     has(app, name)?;
                 }
-                Ok(format!(
-                    "{} items moved, shown in the flow",
-                    app.model.leftovers.moved.0
-                ))
+                Ok(app.model.flow.leftovers.result_title_text().to_string())
             },
-            settle: 900,
+            settle: 5000,
         },
         Step {
             name: "flow-done",
@@ -1188,7 +1268,7 @@ fn flow_steps() -> Vec<Step> {
                     app.model.page == Page::Programs,
                     "Done goes back to Programs",
                 )?;
-                want(app.model.pipeline.run.is_none(), "nothing runs")?;
+                want(!app.model.flow.page.is_busy(), "nothing runs")?;
                 Ok("back on Programs".to_string())
             },
             settle: 800,

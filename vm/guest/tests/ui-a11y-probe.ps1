@@ -1,5 +1,5 @@
 # Purge rig: the host-side probe of the Rust UI's UI Automation tree (docs\UI_RUST_PLAN.md "AutomationIds"). Starts
-# Purge.exe --sample (no engine, no broker), then makes every lookup the VM rig makes (vm\guest\m3-e2e-ui.ps1, which
+# Purge.exe --sample (no engine; its made-up broker answers from the protocol fixtures), then makes every lookup the VM rig makes (vm\guest\m3-e2e-ui.ps1, which
 # it dot-sources, so the probe runs the rig's own functions; m3-e2e.ps1, m3-clean.ps1, m3sec.cs) and walks the sample
 # flow: Programs, the confirmation, the pipeline, the leftovers review, Move, the result, Put back all.
 #
@@ -76,8 +76,16 @@ try {
     Check 'EmptyTitle: a Text on the leftovers page before a scan' ((Get-Type $et) -eq 'Text') (Describe $et)
     $null = Invoke-E2eElement (Find-E2eById $win 'NavPrograms'); Start-Sleep -Milliseconds 800
 
-    # ---- the confirmation (m3-e2e ui-uninstall, ui-await-confirm, ui-confirm)
+    # ---- the first-elevation explanation (m3-e2e ui-uninstall, m3sec start-uninstall): it comes before the
+    # confirmation, as in the WinUI app (the confirmation shows what the broker's prepare read).
     $null = Invoke-E2eElement (Find-E2eById $win 'UninstallButton')
+    $cont = (Wait-E2eElement { Find-E2eDialogButton $win 'Continue' } 10).el
+    Check 'ui-uninstall / ui-undo: the first-elevation explanation''s Continue (DialogPrimaryButton)' ("$($cont.Current.AutomationId)" -eq 'DialogPrimaryButton' -and (Test-Pattern $cont 'Invoke')) (Describe $cont)
+    $dlg = Find-E2eById $win 'ContentDialog'
+    Check 'the explanation is a dialog element (ContentDialog) with DialogCloseButton "Not now"' ($dlg -and (Get-E2eName (Find-E2eById $dlg 'DialogCloseButton')) -eq 'Not now') (Describe $dlg)
+    $null = Invoke-E2eElement $cont
+
+    # ---- the confirmation (m3-e2e ui-uninstall, ui-await-confirm, ui-confirm)
     $ok = (Wait-E2eElement { Find-E2eDialogButton $win 'Uninstall' } 10).el
     Check 'Find-E2eDialogButton Uninstall: ConfirmUninstallButton, a Button with Invoke' ("$($ok.Current.AutomationId)" -eq 'ConfirmUninstallButton' -and (Test-Pattern $ok 'Invoke')) (Describe $ok)
     $dlg = Find-E2eById $win 'ContentDialog'
@@ -97,12 +105,14 @@ try {
     $null = Invoke-E2eElement $nn
     $gone = (Wait-E2eElement { if (-not (Find-E2eById $win 'ContentDialog')) { $win } } 5).el
     Check 'Not now closes the dialog' ([bool]$gone)
-    $cont = Find-E2eDialogButton $win 'Continue'
-    Blocked 'ui-uninstall / ui-undo: the first-elevation explanation''s Continue (DialogPrimaryButton)' ([bool]$cont) 'UI-PAGES (first-elevation dialog, ids DialogPrimaryButton "Continue" / DialogCloseButton)'
-    Blocked 'ui-uninstall: the cancelled bar ("You cancelled the Windows prompt.")' $false 'UI-PAGES (cancelled bar; Test-E2eSaid matches it as the title or the message of one Text)'
+    $ib = (Wait-E2eElement { Find-E2eById $win 'InfoBarHost' } 5).el
+    Check 'InfoBarHost after Not now: one Text named "Title Message" (m3-clean reads its own name)' ((Get-Type $ib) -eq 'Text' -and (Get-E2eName $ib) -like 'Uninstall cancelled.*') (Describe $ib)
+    Blocked 'ui-uninstall: the cancelled bar ("You cancelled the Windows prompt.")' $false 'the VM rig (a real Windows prompt to cancel; the sample broker shows none)'
 
-    # ---- the pipeline (NavQueue, the stepper) and the scan (MoveButton = review)
-    $null = Invoke-E2eElement (Find-E2eById $win 'UninstallButton')
+    # ---- the pipeline (NavQueue, the stepper) and the scan (MoveButton = review). Uninstall opened the Uninstall
+    # page; its button is on Programs. Explained once: no explanation the second time.
+    $null = Invoke-E2eElement (Find-E2eById $win 'NavPrograms'); Start-Sleep -Milliseconds 800
+    $null = Invoke-E2eElement (Wait-Id $win 'UninstallButton' 5)
     $ok = (Wait-E2eElement { Find-E2eDialogButton $win 'Uninstall' } 10).el
     $how = Invoke-E2eElement $ok
     Check 'ui-confirm: Uninstall pressed by Invoke' ($how -eq 'Invoke')
@@ -111,14 +121,17 @@ try {
     $null = Invoke-E2eElement $nq; Start-Sleep -Seconds 1
     $qt = @(Get-E2eTexts $win)
     Check 'the pipeline page says its steps (Step_n texts)' ([bool](Find-E2eById $win 'Step_1') -and [bool](Find-E2eById $win 'StepperHost')) "$(@($qt | Where-Object { $_ -match '^\d\. ' }).Count) step texts"
-    Blocked 'ui-wait-scan: an exit code in a step detail ("exit code N")' (@($qt | Where-Object { $null -ne (Get-E2eExitCodeFromText $_) }).Count -gt 0) 'UI-PAGES (pipeline wired to the engine: step details with the exit code)'
+    $ec = (Wait-E2eElement { if (@(Get-E2eTexts $win | Where-Object { $null -ne (Get-E2eExitCodeFromText $_) }).Count -gt 0) { $win } } 20).el
+    Check 'ui-wait-scan: an exit code in a step detail ("exit code N")' ([bool]$ec) "$(@(Get-E2eTexts $win | Where-Object { $null -ne (Get-E2eExitCodeFromText $_) }) -join ' | ')"
     $mv = (Wait-E2eElement { Find-E2eById $win 'MoveButton' } $ScanWaitSec).el
     Check 'ui-wait-scan: MoveButton appears (review)' ([bool]$mv) (Describe $mv)
     $fc = Find-E2eById $win 'FooterCount'; $mt = Find-E2eById $win 'MoveText'
     Check 'ui-move: FooterCount and MoveText are texts with names' ((Get-Type $fc) -eq 'Text' -and (Get-E2eName $fc) -and (Get-Type $mt) -eq 'Text' -and (Get-E2eName $mt)) "footer='$(Get-E2eName $fc)' move='$(Get-E2eName $mt)'"
     Check 'ui-move: MoveButton enabled with Invoke' ($mv -and $mv.Current.IsEnabled -and (Test-Pattern $mv 'Invoke'))
+    # A plain run of one program has no bar on the review (the model shows one only for a held scan, a queued next
+    # program or a notice); the bar's shape is checked after Not now above.
     $ib = Find-E2eById $win 'InfoBarHost'
-    Check 'InfoBarHost on the review: one Text named "Title Message" (m3-clean reads its own name)' ((Get-Type $ib) -eq 'Text' -and (Get-E2eName $ib)) (Describe $ib)
+    Add-Result 'INFO' 'InfoBarHost on the review (none for a plain run of one program)' (Describe $ib)
     $null = Invoke-E2eElement (Find-E2eById $win 'NavQueue'); Start-Sleep -Milliseconds 800
     $nl = Find-E2eById $win 'NavLeftovers'; $null = Invoke-E2eElement $nl; Start-Sleep -Milliseconds 800
     Check 'ui-wait-scan: NavQueue then NavLeftovers comes back to the review' ([bool](Find-E2eById $win 'MoveButton'))
@@ -126,16 +139,17 @@ try {
     # ---- Move, the result, Put back all
     $null = Invoke-E2eElement (Find-E2eById $win 'MoveButton')
     $prompt = (Wait-E2eElement { if (@(Get-E2eTexts $win) | Where-Object { $_ -like 'Confirm*Purge security prompt*' }) { $win } } 3).el
-    Blocked 'ui-move: the waiting page ("Confirm ... Purge security prompt") with WaitingCodeText' ($prompt -and [bool](Find-E2eById $win 'WaitingCodeText')) 'UI-PAGES (broker consent wait page: WaitingTitleText/WaitingCodeText; today WaitingTitleText is the scan wait)'
+    Check 'ui-move: the waiting page ("Confirm ... Purge security prompt") with WaitingCodeText' ($prompt -and [bool](Find-E2eById $win 'WaitingCodeText')) "code='$(Get-E2eName (Find-E2eById $win 'WaitingCodeText'))'"
     $rt = (Wait-E2eElement { Find-E2eById $win 'ResultTitleText' } 15).el
     Check 'ui-wait-result: ResultTitleText and ResultDetailText are texts' ((Get-Type $rt) -eq 'Text' -and (Get-E2eName (Find-E2eById $win 'ResultDetailText'))) "title='$(Get-E2eName $rt)'"
     $ua = (Wait-E2eElement { Find-E2eById $win 'UndoAllButton' } 5 -Enabled).el
     Check 'ui-wait-result / ui-undo: UndoAllButton an enabled Button with Invoke' ((Get-Type $ua) -eq 'Button' -and (Test-Pattern $ua 'Invoke')) (Describe $ua)
-    Blocked 'ui-wait-result: the declined text ("Nothing was moved: the prompt was cancelled.")' $false 'UI-PAGES (broker consent declined)'
+    Blocked 'ui-wait-result: the declined text ("Nothing was moved: the prompt was cancelled.")' $false 'the VM rig (a real Purge security prompt to decline; the sample broker always confirms)'
     $null = Invoke-E2eElement $ua
+    $uw = (Wait-E2eElement { $w = Find-E2eById $win 'WaitingTitleText'; if ($w -and (Get-E2eName $w) -like 'Confirm putting it back*') { $w } } 8).el
+    Check 'ui-undo: the restore consent wait ("Confirm putting it back ...") in WaitingTitleText' ([bool]$uw) "title='$(Get-E2eName $uw)'"
     $ut = (Wait-E2eElement { Find-E2eById $win 'UndoTitleText' } 15).el
     Check 'ui-wait-undone: UndoTitleText and UndoDetailText are texts' ((Get-Type $ut) -eq 'Text' -and (Get-E2eName (Find-E2eById $win 'UndoDetailText'))) "title='$(Get-E2eName $ut)'"
-    Blocked 'ui-undo: the restore consent wait ("Confirm putting it back ...") and WaitingTitleText' $false 'UI-PAGES (broker restore consent)'
 } catch {
     Add-Result 'FAIL' 'probe' $_.Exception.Message
 } finally {
@@ -143,7 +157,7 @@ try {
 }
 
 # ---- m3sec.cs `ui` start-uninstall (m3-consent): built with the guest's csc line, run at this host's level against a
-# fresh window. Its Continue step is the first-elevation dialog, not there yet.
+# fresh window, through the first-elevation dialog's Continue.
 $fw = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319'
 $tmp = Join-Path ([IO.Path]::GetTempPath()) "purge-ui-a11y-probe-$PID"
 New-Item -ItemType Directory -Force $tmp | Out-Null
@@ -166,7 +180,7 @@ try {
             $pick = $st | Where-Object { $_.step -eq 'select row' } | Select-Object -First 1
             Check 'm3sec ui: the row is the one ListItem of the name, selected by SelectionItem' ($find -and $find.ok -and "$($find.type)" -eq 'ControlType.ListItem' -and "$($find.name)".StartsWith("$Program, ") -and "$($pick.how)" -like 'SelectionItem.Select*') "name='$($find.name)' how='$($pick.how)'"
             Check 'm3sec ui: UninstallButton found enabled and invoked' (@($st | Where-Object { $_.step -eq 'find Uninstall' -and $_.ok -and $_.enabled }).Count -eq 1 -and @($st | Where-Object { $_.step -eq 'invoke Uninstall' }).Count -eq 1)
-            Blocked 'm3sec ui: Continue (DialogPrimaryButton) invoked' (@($st | Where-Object { $_.step -eq 'invoke Continue' }).Count -eq 1) 'UI-PAGES (first-elevation dialog)'
+            Check 'm3sec ui: Continue (DialogPrimaryButton) invoked' (@($st | Where-Object { $_.step -eq 'invoke Continue' }).Count -eq 1)
         } finally { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
     }
 } catch {

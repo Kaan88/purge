@@ -16,7 +16,10 @@ use mdshared_ui::pane::draw_row_fill;
 use mdshared_ui::toggle::TOGGLE_W;
 
 use crate::look::{Choice, Design, Effect, Transition};
-use crate::model::{LeftoverPhase, Model, Page, RunPhase, STEPS};
+use purge_ui_model::leftovers::LeftoversPhase;
+use purge_ui_model::pipeline::page::ConfirmButton;
+
+use crate::model::{Model, Page};
 use crate::ui::{BOX, BUTTON_H, GEAR, Id, Role, SHIELD, Style, Ui, id};
 use crate::view::{DD_ALL, DD_RESTORE, View};
 
@@ -36,6 +39,7 @@ pub const NAV: [(Page, &str); 6] = [
     (Page::Settings, "NavSettings"),
 ];
 
+pub use pipeline::BAR_BUTTONS;
 pub use programs::TAB_IDS as TAB_NAMES;
 pub use settings::swatch_id;
 
@@ -148,10 +152,8 @@ pub fn draw(ui: &mut Ui, m: &Model, v: &mut View) {
     }
     let old = ui.clip(content);
     match m.page {
-        // With the engine, the pages wave 2 has not wired say so instead of showing sample data.
-        Page::Pipeline | Page::Leftovers | Page::History | Page::Quarantine if !m.sample => {
-            not_yet(ui, m, content)
-        }
+        // With the engine, the pages not wired yet say so instead of showing sample data.
+        Page::History | Page::Quarantine if !m.sample => not_yet(ui, m, content),
         Page::Programs => programs::draw(ui, m, v, content),
         Page::Pipeline => pipeline::draw(ui, m, v, content),
         Page::Leftovers => leftovers::draw(ui, m, v, content),
@@ -168,10 +170,12 @@ pub fn draw(ui: &mut Ui, m: &Model, v: &mut View) {
         rail_tip(ui, m);
     }
 
-    if m.confirm.is_some() {
+    if m.flow.confirm.is_some() {
         confirm(ui, m, v);
+    } else if let Some(owner) = m.flow.elevation.showing() {
+        elevation(ui, crate::flow::Elevation::read_only(owner));
     }
-    v.dialog_opened = m.confirm.is_some();
+    v.dialog_opened = m.flow.dialog_open();
 
     if let Some(palette) = &mut v.palette {
         ui.modal = true;
@@ -206,29 +210,7 @@ fn not_yet(ui: &mut Ui, m: &Model, content: Rect) {
     let w = content.w - 2.0 * lk.margin;
     let y = content.y + 38.0;
     ui.heading(left, y, m.page.title(), id("Summary"), NOT_YET, w);
-    let mut lines: Vec<String> = Vec::new();
-    match m.page {
-        Page::Pipeline if !m.uninstall_inbox.is_empty() => {
-            lines.push(format!(
-                "Handed over from Programs ({}), not uninstalled:",
-                m.uninstall_inbox.len()
-            ));
-            lines.extend(
-                m.uninstall_inbox
-                    .iter()
-                    .map(|t| format!("\u{2022} {}", t.program_name)),
-            );
-        }
-        Page::Leftovers => {
-            if let Some(scan) = &m.leftovers_inbox {
-                lines.push(format!(
-                    "A leftovers scan of {} is waiting; reviewing it is not available yet.",
-                    scan.program_name
-                ));
-            }
-        }
-        _ => {}
-    }
+    let lines: Vec<String> = Vec::new();
     let mut ty = y + 56.0;
     for (k, line) in lines.iter().enumerate() {
         ui.text(
@@ -272,9 +254,7 @@ fn nav_row(ui: &Ui, i: usize, page: Page) -> Rect {
 /// What a page holds just now, in a few words: the second line of the rail's hover card.
 fn page_status(m: &Model, page: Page) -> String {
     match page {
-        Page::Pipeline | Page::Leftovers | Page::History | Page::Quarantine if !m.sample => {
-            NOT_YET.trim_end_matches('.').to_string()
-        }
+        Page::History | Page::Quarantine if !m.sample => NOT_YET.trim_end_matches('.').to_string(),
         Page::Programs => {
             let pr = &m.programs;
             format!(
@@ -283,21 +263,24 @@ fn page_status(m: &Model, page: Page) -> String {
                 pr.sel.len()
             )
         }
-        Page::Pipeline => match &m.pipeline.run {
-            None => "Nothing is running".to_string(),
-            Some(r) if r.phase == RunPhase::Finished => "Finished".to_string(),
-            Some(r) => format!(
-                "Running \u{b7} step {} of {}",
-                r.step.min(STEPS.len() - 1) + 1,
-                STEPS.len()
-            ),
-        },
-        Page::Leftovers => match m.leftovers.phase {
-            LeftoverPhase::Empty => "No scan yet".to_string(),
-            LeftoverPhase::Waiting => "Scan running".to_string(),
-            LeftoverPhase::Review => format!("{} items to review", m.leftovers.count()),
-            LeftoverPhase::Moved => "Moved to quarantine".to_string(),
-            LeftoverPhase::Undone => "Put back".to_string(),
+        Page::Pipeline => {
+            let pv = m.flow.page.view(m.flow_env());
+            if pv.empty {
+                "Nothing is running".to_string()
+            } else {
+                pv.subtitle
+            }
+        }
+        Page::Leftovers => match m.flow.leftovers.phase() {
+            LeftoversPhase::Empty => "No scan yet".to_string(),
+            LeftoversPhase::Scanning => "Scan running".to_string(),
+            LeftoversPhase::Review => {
+                format!("{} items to review", m.flow.leftovers.items().len())
+            }
+            LeftoversPhase::Waiting => "Waiting for your confirmation".to_string(),
+            LeftoversPhase::Result => "Moved to quarantine".to_string(),
+            LeftoversPhase::Undone => "Put back".to_string(),
+            LeftoversPhase::Interrupted => "Interrupted".to_string(),
         },
         Page::History => format!(
             "{} cleanups \u{b7} {} can be undone",
@@ -423,11 +406,7 @@ fn chrome(ui: &mut Ui, m: &Model) {
         ui.p.text(Face::Semibold, 13.0, name_x, cy, "Purge", pal.text, 80.0);
 
     // Shown only while Purge runs elevated: here, while an uninstall runs.
-    let elevated = m
-        .pipeline
-        .run
-        .as_ref()
-        .is_some_and(|r| r.phase == RunPhase::Running);
+    let elevated = m.flow.page.is_busy();
     let mut title_end = w - 3.0 * WIN_BTN_W - 12.0;
     if elevated {
         title_end -= ui.p.measure(Face::Ui, 12.0, "Administrator") + 40.0;
@@ -473,7 +452,7 @@ fn chrome(ui: &mut Ui, m: &Model) {
                 snap.h -= mdshared_ui::window::EDGE;
             }
             ui.cx
-                .set_maximize_button(m.confirm.is_none().then_some(snap));
+                .set_maximize_button((!m.flow.dialog_open()).then_some(snap));
         }
     }
 
@@ -550,46 +529,78 @@ fn chrome(ui: &mut Ui, m: &Model) {
     }
 }
 
-/// The confirmation before an uninstall: the backdrop, the card, what will happen and the three
-/// buttons. Nothing reaches the pipeline except through its "Uninstall".
-fn confirm(ui: &mut Ui, m: &Model, v: &mut View) {
-    let Some(c) = &m.confirm else { return };
+/// A dialog's card rising into place over the backdrop: what `anim::pop` does, here by hand
+/// because the drawing needs the whole `Ui`. [`close_dialog`] ends it.
+struct Opened {
+    card: Rect,
+    footer: Rect,
+    under: mdshared_ui::anim::Snapshot,
+    origin: (i32, i32),
+    t: f32,
+}
+
+fn open_dialog(ui: &mut Ui, key: &'static str, cw: f32, ch: f32) -> Opened {
     let (w, h) = ui.size;
     let pal = ui.pal;
-    let first = &m.programs.all[c.programs[0]];
-    let many = c.programs.len() > 1;
-    let extra = if m.pipeline.still_running { 0.0 } else { -74.0 }
-        + if many {
-            22.0 * c.programs.len().min(4) as f32
-        } else {
-            0.0
-        };
-    let r = dialog_card(540.0 + DIALOG_PAD * 2.0, 622.0 + extra, w, h);
-
-    // The card rises into place and fades in as one thing (what `anim::pop` does; the drawing
-    // here needs the whole `Ui`, which a closure given the painter alone cannot have).
+    let card = dialog_card(cw + DIALOG_PAD * 2.0, ch, w, h);
     let t = ui
         .cx
         .anim()
-        .value_from("confirm", 0.0_f32, 1.0, fluent::ENTER_LARGE);
+        .value_from(key, 0.0_f32, 1.0, fluent::ENTER_LARGE);
     draw_backdrop_presence(ui.p, &pal, w, h, t);
-    let bounds = dialog_bounds(r);
+    let bounds = dialog_bounds(card);
     let dy = DIALOG_RISE * (1.0 - t);
     let covered = Rect::new(bounds.x, bounds.y, bounds.w, bounds.h + dy);
     let under = ui.p.snapshot(crate::ui::grow(covered, 1.0));
     let origin = ui.p.offset(0.0, dy);
     ui.modal = true;
+    let footer = draw_dialog_card(ui.p, &pal, card);
+    Opened {
+        card,
+        footer,
+        under,
+        origin,
+        t,
+    }
+}
 
-    let footer = draw_dialog_card(ui.p, &pal, r);
+fn close_dialog(ui: &mut Ui, o: Opened) {
+    ui.modal = false;
+    ui.p.restore_offset(o.origin);
+    if o.t < 1.0 {
+        ui.p.fade(&o.under, o.t);
+    }
+}
+
+/// The height the confirmation needs for what it shows.
+fn confirm_height(ui: &mut Ui, c: &crate::flow::Confirm, cw: f32) -> f32 {
+    let d = &c.dialog;
+    let mut h = DIALOG_PAD + 40.0 + 24.0 + d.steps.len() as f32 * 21.0 + 10.0 + 20.0 + 40.0 + 24.0;
+    if let Some(running) = &d.still_running {
+        let bar = InfoBar::new(Severity::Warning, "", running).closable(false);
+        h += bar.height(ui.p, cw) + 16.0;
+    }
+    h += 28.0 + ui.p.paragraph_height(Face::Ui, 12.0, cw, &d.quiet_line) + 14.0;
+    h += 22.0 + DROPDOWN_H + 14.0 + 34.0;
+    h + DIALOG_FOOTER
+}
+
+/// The confirmation before an uninstall (the model's [`ConfirmDialog`]): what will happen, the
+/// exact command for the quiet switch's position, the restore point and the three buttons.
+/// Nothing reaches the pipeline except through its "Uninstall".
+///
+/// [`ConfirmDialog`]: purge_ui_model::pipeline::page::ConfirmDialog
+fn confirm(ui: &mut Ui, m: &Model, v: &mut View) {
+    let Some(c) = &m.flow.confirm else { return };
+    let d = &c.dialog;
+    let pal = ui.pal;
+    let cw = 540.0;
+    let ch = confirm_height(ui, c, cw).min(ui.size.1 - 24.0);
+    let o = open_dialog(ui, "confirm", cw, ch);
+    let r = o.card;
     let x = r.x + DIALOG_PAD;
-    let cw = r.w - DIALOG_PAD * 2.0;
     let mut y = r.y + DIALOG_PAD;
-    let title = if many {
-        format!("Uninstall {} programs?", c.programs.len())
-    } else {
-        format!("Uninstall {}?", first.name)
-    };
-    let drawn = ui.p.elide(Face::Semibold, 20.0, &title, cw);
+    let drawn = ui.p.elide(Face::Semibold, 20.0, &d.title, cw);
     ui.text(
         id("DialogTitle"),
         Face::Semibold,
@@ -600,28 +611,8 @@ fn confirm(ui: &mut Ui, m: &Model, v: &mut View) {
         pal.text,
         cw,
     );
-    ui.say_whole(&title);
+    ui.say_whole(&d.title);
     y += 40.0;
-    if many {
-        for (i, p) in c.programs.iter().take(4).enumerate() {
-            let name = if i == 3 && c.programs.len() > 4 {
-                format!("and {} more", c.programs.len() - 3)
-            } else {
-                m.programs.all[*p].name.clone()
-            };
-            ui.p.icon(glyph::DELETE, 13.0, x + 8.0, y + 9.0, pal.muted);
-            ui.p.text(
-                Face::Ui,
-                13.0,
-                x + 24.0,
-                y + 9.0,
-                &name,
-                pal.text,
-                cw - 24.0,
-            );
-            y += 22.0;
-        }
-    }
     ui.p.text(
         Face::Semibold,
         13.0,
@@ -632,27 +623,20 @@ fn confirm(ui: &mut Ui, m: &Model, v: &mut View) {
         cw,
     );
     y += 24.0;
-    for (k, step) in [
-        "1. Record what the program registered",
-        "2. Run its uninstaller as administrator",
-        "3. Check that it is gone",
-        "4. Find its leftovers",
-        "5. Review the list before anything moves",
-    ]
-    .into_iter()
-    .enumerate()
-    {
+    for (k, step) in d.steps.iter().enumerate() {
         // Each line is read by its text: step 2 says the route (the rig reads it).
+        let s = ui.p.elide(Face::Ui, 13.0, step, cw - 8.0);
         ui.text(
             Id("ConfirmStep", k as u32 + 1),
             Face::Ui,
             13.0,
             x + 8.0,
             y + 9.0,
-            step,
+            &s,
             pal.text,
             cw,
         );
+        ui.say_whole(step);
         y += 21.0;
     }
     y += 10.0;
@@ -660,28 +644,21 @@ fn confirm(ui: &mut Ui, m: &Model, v: &mut View) {
     y += 20.0;
     let box_r = Rect::new(x, y, cw, 32.0);
     ui.p.frame(box_r, 5.0, pal.page, pal.line);
-    let command = if many {
-        format!(
-            "{} commands, one after another. First: {}",
-            c.programs.len(),
-            first.uninstall
-        )
-    } else {
-        first.uninstall.clone()
-    };
-    let command = ui.p.elide(Face::Mono, 12.0, &command, cw - 20.0);
+    let command = c.command();
+    let shown = ui.p.elide(Face::Mono, 12.0, command, cw - 20.0);
     ui.text(
         id("CommandText"),
         Face::Mono,
         12.0,
         x + 10.0,
         box_r.cy(),
-        &command,
+        &shown,
         pal.text,
         cw - 20.0,
     );
+    ui.say_whole(command);
     y += 40.0;
-    let signer = format!("Signed by {}", first.publisher);
+    let signer = ui.p.elide(Face::Ui, 12.0, &d.signer, cw);
     ui.text(
         id("SignerText"),
         Face::Ui,
@@ -692,14 +669,10 @@ fn confirm(ui: &mut Ui, m: &Model, v: &mut View) {
         pal.muted,
         cw,
     );
+    ui.say_whole(&d.signer);
     y += 24.0;
-    if m.pipeline.still_running {
-        let bar = InfoBar::new(
-            Severity::Warning,
-            "Still running: firefox.exe",
-            "Close it yourself; Purge never closes a program for you. Check again once it is closed.",
-        )
-        .closable(false);
+    if let Some(running) = &d.still_running {
+        let bar = InfoBar::new(Severity::Warning, "", running).closable(false);
         let bh = bar.height(ui.p, cw);
         let br = Rect::new(x, y, cw, bh);
         let look = Look {
@@ -707,30 +680,37 @@ fn confirm(ui: &mut Ui, m: &Model, v: &mut View) {
             ..Look::default()
         };
         draw_infobar_with(ui.p, &pal, br, &bar, look);
-        ui.reg(
-            id("RunningText"),
-            br,
-            Role::Text,
-            "Still running: firefox.exe",
-            false,
-        );
+        ui.reg(id("RunningText"), br, Role::Text, running, false);
         y += bh + 16.0;
     }
-    ui.p.text(Face::Ui, 13.0, x, y + 10.0, "Use quiet mode", pal.text, cw);
-    ui.switch(
+    ui.p.text(
+        Face::Ui,
+        13.0,
+        x,
+        y + 10.0,
+        d.quiet_label,
+        pal.text,
+        cw - TOGGLE_W - 12.0,
+    );
+    ui.switch_enabled(
         id("QuietSwitch"),
         x + cw - TOGGLE_W,
         y + 10.0,
-        m.pipeline.quiet,
-        "Use quiet mode",
+        c.quiet_on,
+        d.quiet_enabled,
+        d.quiet_label,
     );
     y += 28.0;
-    let quiet = if first.quiet {
-        format!("Quiet command: {} /S", first.uninstall)
-    } else {
-        "This uninstaller has no quiet mode: its own windows will show.".to_string()
-    };
-    y = ui.para(Face::Ui, 12.0, x, y, cw, &quiet, pal.muted) + 14.0;
+    let qh =
+        ui.p.paragraph(Face::Ui, 12.0, x, y, cw, &d.quiet_line, pal.muted);
+    ui.reg(
+        id("QuietLineText"),
+        Rect::new(x, y, cw, qh),
+        Role::Text,
+        &d.quiet_line,
+        false,
+    );
+    y += qh + 14.0;
     ui.p.text(
         Face::Ui,
         13.0,
@@ -749,8 +729,7 @@ fn confirm(ui: &mut Ui, m: &Model, v: &mut View) {
         "Restore point for the cleanup step",
     );
     y += DROPDOWN_H + 14.0;
-    let room = (footer.y - y - 4.0).max(0.0);
-    if room >= 30.0 {
+    if o.footer.y - y - 4.0 >= 30.0 {
         ui.para(
             Face::Ui,
             12.0,
@@ -771,7 +750,7 @@ fn confirm(ui: &mut Ui, m: &Model, v: &mut View) {
         None,
         true,
     )];
-    if m.pipeline.still_running {
+    if d.check_again {
         list.push((
             id("ConfirmCheckAgainButton"),
             "Check again",
@@ -787,12 +766,89 @@ fn confirm(ui: &mut Ui, m: &Model, v: &mut View) {
         None,
         true,
     ));
-    let by = footer.y + (DIALOG_FOOTER - BUTTON_H) / 2.0;
-    ui.buttons_right(footer.right() - DIALOG_PAD, by, &list);
+    let by = o.footer.y + (DIALOG_FOOTER - BUTTON_H) / 2.0;
+    ui.buttons_right(o.footer.right() - DIALOG_PAD, by, &list);
+    close_dialog(ui, o);
+}
 
-    ui.modal = false;
-    ui.p.restore_offset(origin);
-    if t < 1.0 {
-        ui.p.fade(&under, t);
+/// The button the confirmation's control `name` stands for.
+pub fn confirm_button(name: &str) -> Option<ConfirmButton> {
+    match name {
+        "ConfirmUninstallButton" => Some(ConfirmButton::Uninstall),
+        "ConfirmCheckAgainButton" => Some(ConfirmButton::CheckAgain),
+        "ConfirmNotNowButton" => Some(ConfirmButton::NotNow),
+        _ => None,
     }
+}
+
+pub const ELEVATION_TITLE: &str = "This needs administrator permission";
+const ELEVATION_TEXT: &str = "For this, Purge starts a helper called purge-broker.exe with administrator permission. Windows asks you first, and may show the publisher as unknown until Purge is signed.";
+const ELEVATION_CHANGES: &str = "Any program can show a prompt like that, so the Windows prompt is not your approval. Before anything is moved or removed, Purge shows its own review and waits for you.";
+const ELEVATION_READS: &str = "The helper only reads Purge's records of earlier cleanups; nothing is moved or removed. Anything that would change your PC later is asked for in Purge's own review first.";
+
+/// The explanation before the first Windows prompt of this run (`ElevationPrompts.cs`): every
+/// page that starts the broker comes through it, so its words name no page.
+fn elevation(ui: &mut Ui, read_only: bool) {
+    let pal = ui.pal;
+    let cw = 440.0;
+    let second = if read_only {
+        ELEVATION_READS
+    } else {
+        ELEVATION_CHANGES
+    };
+    let h1 = ui.p.paragraph_height(Face::Ui, 14.0, cw, ELEVATION_TEXT);
+    let h2 = ui.p.paragraph_height(Face::Ui, 14.0, cw, second);
+    let ch = DIALOG_PAD + 44.0 + h1 + 14.0 + h2 + DIALOG_PAD + DIALOG_FOOTER;
+    let o = open_dialog(ui, "elevation", cw, ch);
+    let x = o.card.x + DIALOG_PAD;
+    let mut y = o.card.y + DIALOG_PAD;
+    ui.text(
+        id("DialogTitle"),
+        Face::Semibold,
+        20.0,
+        x,
+        y + 10.0,
+        ELEVATION_TITLE,
+        pal.text,
+        cw,
+    );
+    y += 44.0;
+    let a =
+        ui.p.paragraph(Face::Ui, 14.0, x, y, cw, ELEVATION_TEXT, pal.text);
+    ui.reg(
+        id("DialogText"),
+        Rect::new(x, y, cw, a),
+        Role::Text,
+        ELEVATION_TEXT,
+        false,
+    );
+    y += a + 14.0;
+    let b = ui.p.paragraph(Face::Ui, 14.0, x, y, cw, second, pal.text);
+    ui.reg(
+        id("DialogDetailText"),
+        Rect::new(x, y, cw, b),
+        Role::Text,
+        second,
+        false,
+    );
+    // The WinUI ContentDialog's template parts: the rig presses these by id.
+    let list = [
+        (
+            id("DialogCloseButton"),
+            "Not now",
+            Style::Standard,
+            None,
+            true,
+        ),
+        (
+            id("DialogPrimaryButton"),
+            "Continue",
+            Style::Accent,
+            None,
+            true,
+        ),
+    ];
+    let by = o.footer.y + (DIALOG_FOOTER - BUTTON_H) / 2.0;
+    ui.buttons_right(o.footer.right() - DIALOG_PAD, by, &list);
+    close_dialog(ui, o);
 }

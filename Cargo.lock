@@ -2352,6 +2352,8 @@ dependencies = [
  "purge-model",
  "purge-rpc",
  "purge-ui-model",
+ "serde",
+ "serde_json",
  "windows-sys 0.61.2",
 ]
 

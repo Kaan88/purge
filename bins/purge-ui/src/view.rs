@@ -182,7 +182,7 @@ impl Dropdowns {
         set(&mut self.design, m.prefs.design.index());
         set(&mut self.transition, m.prefs.transition.index());
         set(&mut self.preset, m.prefs.preset.index());
-        set(&mut self.restore, m.pipeline.restore_mode);
+        set(&mut self.restore, m.flow_restore_index());
     }
 }
 
