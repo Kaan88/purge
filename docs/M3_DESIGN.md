@@ -505,7 +505,9 @@ review; (3) the VM mode `m3-consent` against it (`-ConsentUi toolkit`, RIG.md 14
 
 Code: `bins/purge-broker/src/consent/sheet.rs` (the view as one sheet) and `consent/toolkit/` (`state` the rules,
 `look` the colours, `draw` measuring and drawing, `access` UI Automation, `app` the window, `service` the threads and
-the fall back). Preview without a broker: `cargo run --release -p purge-broker --example consent_preview`.
+the fall back). Preview without a broker: `cargo run --release -p purge-broker --example consent_preview`
+(`--shots <dir>` every variant as PNG without a window; a sample's name the real window; `--service` the samples
+asked through the real `ToolkitConsent` with the broker's two threads, `--close-after` firing the closer).
 
 **What it says.** The same `ConsentView`. `sheet::sheet` regroups it and adds two headings and no other word: the
 summary lines, "⚠ Needs your attention (N)" and every attention entry, "The other items" and the other items with
@@ -575,7 +577,8 @@ Every line is in the tree whether in view or not (one out of view has no rectang
 list. Invoke and Toggle go through the same `press` as a click, with the same rules. The focus is the keyboard's
 place. Windows adds its own elements for the frame, as for any top-level window: a TitleBar, the system menu, and
 the buttons `Minimize`, `Maximize` and `Close` (its `Close` is the close request: Cancel). Checked at medium against
-the preview with the rig's own tool (`vm/guest/tests/consent-ui-probe.ps1`): the ids, the names, Toggle and Invoke.
+the preview with the rig's own tool (`vm/guest/tests/consent-ui-probe.ps1`): the ids, the names, Toggle and Invoke,
+and through the service the approval, the cancel and the closer.
 
 **Dependencies.** The toolkit brings 83 crates into the elevated binary (132 from outside the workspace in all, 49
 before). `xtask check-deps` rule 6 is new with this package: it lists every outside crate the broker links for the
@@ -603,8 +606,8 @@ shipped target, in two lists (what it had, what the toolkit dialog brings, group
   step 4, make `args::parse` refuse `toolkit` unless a build-time constant allows it.
 - Not seen on a real elevated broker: everything was developed with the preview harness at medium (no UAC prompt was
   approved on the development PC). The foreground behaviour after a real `runas`, the first dialog's start-up time
-  (font load, loop, window; the preview had its first dialog on screen 0.76 s after its process started, later ones
-  reuse the window) and the window on a second monitor of another scale are for the VM.
+  (font load, loop, window; the preview had its first dialog on screen between 0.1 and 0.8 s after its process
+  started, later ones reuse the window) and the window on a second monitor of another scale are for the VM.
 - winit registers every window it makes as an OLE drop target; the toolkit's host has no way to turn that off, and
   drops nothing into the application. UIPI does not let a medium process drag onto a high window.
 
