@@ -153,6 +153,58 @@ pub fn set_process_var(name: &str, value: Option<&str>) -> Result<(), crate::os:
     Ok(())
 }
 
+/// Replaces this process's whole environment block with `vars` in one call
+/// (`SetEnvironmentStringsW`): every earlier variable goes, a repeated or non-Unicode name included,
+/// and so do the hidden per-drive entries (`=C:`). Child processes created afterwards inherit the new
+/// block. A name that is empty or holds `=` or NUL, or a value that holds NUL, is refused before
+/// anything changes. Used by the broker at start (M3_DESIGN 3.4, T7).
+#[cfg(feature = "read")]
+pub fn replace_process_environment(
+    vars: &BTreeMap<String, String>,
+) -> Result<(), crate::os::Win32Error> {
+    use windows_sys::Win32::System::Environment::SetEnvironmentStringsW;
+
+    let mut block: Vec<u16> = Vec::new();
+    for (name, value) in vars {
+        if name.is_empty() || name.contains(['\0', '=']) || value.contains('\0') {
+            return Err(crate::os::Win32Error::INVALID_PARAMETER);
+        }
+        block.extend(name.encode_utf16());
+        block.push(u16::from(b'='));
+        block.extend(value.encode_utf16());
+        block.push(0);
+    }
+    // `SetEnvironmentStringsW` refuses an empty block (error 87).
+    if vars.is_empty() {
+        return Err(crate::os::Win32Error::INVALID_PARAMETER);
+    }
+    block.push(0);
+    // SAFETY: `block` is a sequence of NUL-terminated `name=value` strings ended by an extra NUL,
+    // and lives until the call returns; the system copies it.
+    let ok = unsafe { SetEnvironmentStringsW(block.as_ptr()) };
+    if ok == 0 {
+        return Err(crate::os::Win32Error::last());
+    }
+    Ok(())
+}
+
+/// The user name of this process's token (`GetUserNameW`).
+#[cfg(feature = "read")]
+pub fn current_user_name() -> Result<String, crate::os::Win32Error> {
+    use windows_sys::Win32::System::WindowsProgramming::GetUserNameW;
+
+    let mut buf = vec![0u16; 257];
+    let mut len = buf.len() as u32;
+    // SAFETY: `buf` has `len` writable units; on success `len` counts the terminating NUL.
+    let ok = unsafe { GetUserNameW(buf.as_mut_ptr(), &mut len) };
+    if ok == 0 {
+        return Err(crate::os::Win32Error::last());
+    }
+    Ok(String::from_utf16_lossy(
+        &buf[..(len as usize).saturating_sub(1)],
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -171,6 +223,11 @@ mod tests {
             assert!(set_process_var(bad, Some("x")).is_err(), "{bad:?}");
         }
         assert!(set_process_var(name, Some("x\0y")).is_err());
+    }
+
+    #[test]
+    fn current_user_name_is_not_empty() {
+        assert!(!current_user_name().unwrap().is_empty());
     }
 
     fn map() -> EnvMap {

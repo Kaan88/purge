@@ -40,23 +40,31 @@ $script:Rows = New-Object System.Collections.ArrayList
 # ShellExecuteEx("runas") runs in the medium caller with the planted environment and writes the shell's
 # `Caches` databases there before the broker exists; a user's process writing a tree that user planted
 # crosses no boundary. The creation time is the broker's own `broker_start` timing event
-# (process_created_unix_ms). Without it, or for a removal, every line counts. Assumes the broker does
-# not set a planted object's time backwards, which no broker code path does.
+# (process_created_unix_ms), taken only when the event's pid is the broker pid the launch recorded.
+# Excused are only objects that are NEW (no earlier listing line) under `<planted>\ProgramData\Microsoft`
+# (where the shell writes) and last written before that time; a changed or removed object anywhere, a
+# new one elsewhere, and everything when the time is unknown, count. Broker code can set recorded times
+# (restore, act_fs), but these cases never reach a restore, and the T7 adversary is the caller.
 function Get-PlantedByBroker($r) {
     $lines = @(Arr $r.planted_diff)
     if ($r.planted_changed -and -not $lines.Count) { return @('(changed, no diff lines)') }
+    $brokerPid = $r.client.launch.broker_pid
     $created = $null
     foreach ($e in Arr $r.events) {
         try { $m = "$($e.message)" | ConvertFrom-Json -ErrorAction Stop } catch { continue }
-        if ($m.mark -eq 'broker_start' -and $m.process_created_unix_ms) { $created = [int64]$m.process_created_unix_ms; break }
+        if ($m.mark -eq 'broker_start' -and $m.process_created_unix_ms -and $brokerPid -and "$($m.pid)" -eq "$brokerPid") { $created = [int64]$m.process_created_unix_ms; break }
     }
-    if ($null -eq $created) { return $lines }
+    if ($null -eq $created -or -not $r.planted) { return $lines }
     $createdTicks = $created * 10000 + 621355968000000000
-    $newByPath = @{}
-    foreach ($l in $lines) { if ($l -like '=> *') { $f = $l.Substring(3).Split('|'); $newByPath[$f[0]] = [int64]$f[2] } }
+    $shellRoot = (Join-Path $r.planted 'ProgramData\Microsoft').ToLowerInvariant()
+    $oldPaths = @{}
+    foreach ($l in $lines) { if ($l -like '<= *') { $oldPaths[$l.Substring(3).Split('|')[0].ToLowerInvariant()] = $true } }
     @($lines | Where-Object {
         $f = $_.Substring(3).Split('|')
-        -not ($newByPath.ContainsKey($f[0]) -and $newByPath[$f[0]] -lt $createdTicks)
+        $p = $f[0].ToLowerInvariant()
+        $excused = ($_ -like '=> *') -and -not $oldPaths.ContainsKey($p) -and
+                   ($p -eq $shellRoot -or $p.StartsWith($shellRoot + '\')) -and ([int64]$f[2] -lt $createdTicks)
+        -not $excused
     })
 }
 function Row([string]$Name, $Ok, [string]$Detail = '') {
@@ -427,8 +435,21 @@ function Get-Defects {
         @{ mode = 'broker'; name = 'data root not compared'; act = { param($d) ($d.cases | Where-Object { $_.id -eq 'bad-args' }).data_root_changed = $null } },
         @{ mode = 'broker'; name = 'planted tree touched'; act = { param($d) ($d.cases | Where-Object { $_.id -eq 'env-planted' }).planted_changed = $true } },
         @{ mode = 'broker'; name = 'planted tree written after the broker started'; act = { param($d) $c = $d.cases | Where-Object { $_.id -eq 'env-planted' }; $c.planted_changed = $true
-            $c.events = @([ordered]@{ id = 100; message = '{"mark":"broker_start","process_created_unix_ms":1795574407596}' })
+            $c.client | Add-Member -Force -NotePropertyName launch -NotePropertyValue ([pscustomobject]@{ broker_pid = 4672 })
+            $c.events = @([ordered]@{ id = 100; message = '{"mark":"broker_start","pid":4672,"process_created_unix_ms":1795574407596}' })
             $c.planted_diff = @('=> C:\PurgePlant\ProgramData\Microsoft\Windows\Caches\cversions.2.db|16384|' + (1795574407700 * 10000 + 621355968000000000) + '|32') } },
+        @{ mode = 'broker'; name = 'planted tree: pre-broker write outside ProgramData\Microsoft'; act = { param($d) $c = $d.cases | Where-Object { $_.id -eq 'env-planted' }; $c.planted_changed = $true
+            $c.client | Add-Member -Force -NotePropertyName launch -NotePropertyValue ([pscustomobject]@{ broker_pid = 4672 })
+            $c.events = @([ordered]@{ id = 100; message = '{"mark":"broker_start","pid":4672,"process_created_unix_ms":1795574407596}' })
+            $c.planted_diff = @('=> C:\PurgePlant\kb\x.json|1|' + (1795574407300 * 10000 + 621355968000000000) + '|32') } },
+        @{ mode = 'broker'; name = 'planted tree: pre-broker change to an existing object'; act = { param($d) $c = $d.cases | Where-Object { $_.id -eq 'env-planted' }; $c.planted_changed = $true
+            $c.client | Add-Member -Force -NotePropertyName launch -NotePropertyValue ([pscustomobject]@{ broker_pid = 4672 })
+            $c.events = @([ordered]@{ id = 100; message = '{"mark":"broker_start","pid":4672,"process_created_unix_ms":1795574407596}' })
+            $c.planted_diff = @('<= C:\PurgePlant\ProgramData\Microsoft\a.db|1|1|32', ('=> C:\PurgePlant\ProgramData\Microsoft\a.db|2|' + (1795574407300 * 10000 + 621355968000000000) + '|32')) } },
+        @{ mode = 'broker'; name = 'planted tree: start event of another pid'; act = { param($d) $c = $d.cases | Where-Object { $_.id -eq 'env-planted' }; $c.planted_changed = $true
+            $c.client | Add-Member -Force -NotePropertyName launch -NotePropertyValue ([pscustomobject]@{ broker_pid = 4672 })
+            $c.events = @([ordered]@{ id = 100; message = '{"mark":"broker_start","pid":999,"process_created_unix_ms":1795574409000}' })
+            $c.planted_diff = @('=> C:\PurgePlant\ProgramData\Microsoft\Windows\Caches\cversions.2.db|16384|' + (1795574407300 * 10000 + 621355968000000000) + '|32') } },
         @{ mode = 'broker'; name = 'planted tree changed, broker start time unknown'; act = { param($d) $c = $d.cases | Where-Object { $_.id -eq 'env-planted' }; $c.planted_changed = $true
             $c.planted_diff = @('=> C:\PurgePlant\x|1|' + (1795574407000 * 10000 + 621355968000000000) + '|32') } },
         @{ mode = 'broker'; name = 'two refusals of three'; act = { param($d) $c = $d.cases | Where-Object { $_.id -eq 'client-image' }; $c.events[0].message = 'purge-broker ended: (exit code 25); refused clients: [client image is not Purge.exe in the install directory; client image is not Purge.exe in the install directory]' } },

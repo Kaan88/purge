@@ -4,7 +4,7 @@
 //! | Order | Check | Failure |
 //! |---|---|---|
 //! | 0 | [`restrict_dll_search`] is the first call of `main`; a failure is [`StartFailure::InstallUntrusted`] | [`StartFailure::InstallUntrusted`] |
-//! | 0b | [`pin_machine_environment`], right after the working-directory restriction: the whole environment is replaced by the machine block (`purge_inventory::runner::uninstaller_environment`), `TEMP`/`TMP` in `<Windows>\SystemTemp` (T7) | [`StartFailure::InstallUntrusted`] |
+//! | 0b | [`pin_machine_environment`], right after the working-directory restriction: the caller's environment is dropped whole, then replaced by the machine block (`purge_inventory::runner::uninstaller_environment`, with `SystemRoot`/`windir`/`SystemDrive` from the running Windows and `USERNAME` from the token), `TEMP`/`TMP` in `<Windows>\SystemTemp` or else the Windows directory (either admin-only), and read back (T7) | [`StartFailure::InstallUntrusted`] |
 //! | 1 | The process token is elevated | [`StartFailure::NotElevated`] |
 //! | 2 | Own directory (of the running executable): plain drive path, no reparse point on it, on the system volume, every ancestor writable by administrators only (`purge_win::secure::trusted_install_dir`); the executable itself admin-only writable; `<own directory>\kb` passes the directory rule too | [`StartFailure::InstallUntrusted`] |
 //! | 3 | Data root `<ProgramData>\Purge`, `ProgramData` from the machine (`purge_win::known_folders::machine_program_data`), passes the same directory rule, `StorageRoots::check` passes on it, and `sessions\index.json`, if present, passes the `Index` rule (`StorageRoots::check_index_at_start`, nothing renamed aside) | [`StartFailure::StoreIntegrity`] |
@@ -282,66 +282,123 @@ pub fn restrict_working_directory() -> Result<(), StartFailure> {
 /// Replaces the broker's whole environment, before anything else reads it (M3_DESIGN 3.4, threat T7).
 /// An elevated process gets the caller's environment, including `HKCU\Environment`, so a caller could
 /// point `ProgramData`, `TEMP`, `LOCALAPPDATA` and the like at a tree it writes. Purge's own paths never
-/// read them (known folders and the registry); this covers Windows components loaded into the broker
-/// (m3-broker 2026-11-25: `env-planted` found the shell's `Caches` databases written into a planted
-/// `ProgramData`). Uninstallers are not affected: the runner gives each one this same block, rebuilt.
+/// read them (known folders and the registry); the pin is defence in depth for Windows components
+/// loaded into the broker. (m3-broker 2026-11-25 found the shell's `Caches` databases in a planted
+/// `ProgramData`, but those were written by the caller's `ShellExecuteEx`, before the broker existed.)
+/// Uninstallers are not affected: the runner gives each one this same block, rebuilt.
 ///
-/// The block is the uninstaller environment (`purge_inventory::runner::uninstaller_environment`: the
-/// machine block from the registry, `PATH` reduced to admin-only directories, the interactive user's
-/// profile variables), with `TEMP` / `TMP` moved to `<Windows>\SystemTemp` (admin-only) for the broker.
-/// Every other name is removed, each occurrence of it.
+/// Steps: the caller's block is dropped whole first (`replace_process_environment` with a placeholder, so
+/// a repeated or non-Unicode name goes too and nothing below can read a planted value); then the
+/// block is built: the uninstaller environment (`purge_inventory::runner::uninstaller_environment`:
+/// the machine block from the registry, `PATH` reduced to admin-only directories, the interactive
+/// user's profile variables from `ProfileList`), with `SystemRoot`, `windir` and `SystemDrive` from the
+/// running Windows, `USERNAME` from the token, and `TEMP` / `TMP` in `<Windows>\SystemTemp`, or the
+/// Windows directory itself where that folder is missing (Windows 10 before it, Server 2016/2019);
+/// either must be admin-only writable. Then it is set, and read back: the start fails unless the
+/// environment is exactly the block.
 pub fn pin_machine_environment() -> Result<(), StartFailure> {
-    use purge_win::env::set_process_var;
+    use purge_win::env::{current_user_name, replace_process_environment};
+    use std::collections::BTreeMap;
 
     let fail = |what: &str, e: String| {
         StartFailure::InstallUntrusted(format!(
             "the broker's environment could not be set ({what}): {e}"
         ))
     };
+    // Windows refuses an empty block, so the caller's goes for a one-name placeholder; the final
+    // block replaces it.
+    let placeholder = BTreeMap::from([("PURGE_BROKER_PIN".to_string(), "1".to_string())]);
+    replace_process_environment(&placeholder).map_err(|e| fail("clearing it", e.to_string()))?;
+
     let windows = purge_win::known_folders::system_windows_dir()
         .map_err(|e| fail("the Windows directory", e.to_string()))?;
+    let unicode = |p: &Path, what: &str| {
+        p.to_str()
+            .map(|s| s.trim_end_matches('\\').to_string())
+            .ok_or_else(|| fail(what, format!("{} is not Unicode", p.display())))
+    };
+    let admin_only =
+        |p: &Path| p.is_dir() && purge_win::sid::is_admin_only_writable(p).unwrap_or(false);
     let system_temp = windows.join("SystemTemp");
-    if !system_temp.is_dir() {
+    let temp = if admin_only(&system_temp) {
+        system_temp
+    } else if admin_only(&windows) {
+        windows.clone()
+    } else {
         return Err(fail(
             "TEMP",
-            format!("{} is not a directory", system_temp.display()),
+            format!(
+                "neither {} nor {} is an admin-only directory",
+                system_temp.display(),
+                windows.display()
+            ),
+        ));
+    };
+    let temp = unicode(&temp, "TEMP")?;
+    let windows = unicode(&windows, "the Windows directory")?;
+    let drive: String = windows.chars().take(2).collect();
+    if drive.len() != 2 || !drive.ends_with(':') {
+        return Err(fail(
+            "SystemDrive",
+            format!("{windows} has no drive letter"),
         ));
     }
-    let system_temp = system_temp
-        .to_str()
-        .ok_or_else(|| fail("TEMP", "the path is not Unicode".into()))?
-        .to_string();
+
     let live = purge_source::live::Live::new();
-    let mut block = purge_inventory::runner::uninstaller_environment(&live.system, &live.fs);
-    if block.is_empty() {
-        return Err(fail("the machine block", "it is empty".into()));
+    let built = purge_inventory::runner::uninstaller_environment(&live.system, &live.fs);
+    if !built.keys().any(|k| k.eq_ignore_ascii_case("USERPROFILE")) {
+        return Err(fail(
+            "the profile",
+            "the user's profile is not in ProfileList".into(),
+        ));
     }
-    block.retain(|name, _| !name.eq_ignore_ascii_case("TEMP") && !name.eq_ignore_ascii_case("TMP"));
-    block.insert("TEMP".into(), system_temp.clone());
-    block.insert("TMP".into(), system_temp);
-    let keep = |name: &str| block.keys().any(|k| k.eq_ignore_ascii_case(name));
-    // Remove every name not in the block, every occurrence of it (a crafted block can repeat a name).
-    let names: Vec<String> = std::env::vars_os()
-        .filter_map(|(k, _)| k.into_string().ok())
-        // Windows' hidden per-drive directories (`=C:`) are not variables a component looks up.
-        .filter(|k| !k.starts_with('='))
-        .collect();
-    for name in names.iter().filter(|n| !keep(n)) {
-        for _ in 0..16 {
-            if std::env::var_os(name).is_none() {
-                break;
-            }
-            set_process_var(name, None).map_err(|e| fail(name, e.to_string()))?;
-        }
+    // One entry per name, case-insensitively; the values set here replace the built ones.
+    let mut block: BTreeMap<String, String> = BTreeMap::new();
+    let put = |block: &mut BTreeMap<String, String>, name: &str, value: String| {
+        block.retain(|k, _| !k.eq_ignore_ascii_case(name));
+        block.insert(name.to_string(), value);
+    };
+    for (name, value) in built {
+        put(&mut block, &name, value);
     }
-    for (name, value) in &block {
-        for _ in 0..16 {
-            if std::env::var_os(name).is_none() {
-                break;
-            }
-            set_process_var(name, None).map_err(|e| fail(name, e.to_string()))?;
+    put(&mut block, "SystemRoot", windows.clone());
+    put(&mut block, "windir", windows);
+    put(&mut block, "SystemDrive", drive);
+    put(&mut block, "TEMP", temp.clone());
+    put(&mut block, "TMP", temp);
+    match current_user_name() {
+        Ok(name) => put(&mut block, "USERNAME", name),
+        Err(e) => return Err(fail("USERNAME", e.to_string())),
+    }
+    replace_process_environment(&block).map_err(|e| fail("setting it", e.to_string()))?;
+
+    // Read it back: exactly the block, each name once (the per-drive `=C:` entries aside).
+    let mut seen: Vec<(String, String)> = Vec::new();
+    for (k, v) in std::env::vars_os() {
+        let (Ok(k), Ok(v)) = (k.into_string(), v.into_string()) else {
+            return Err(fail("checking it", "a non-Unicode variable is set".into()));
+        };
+        if k.starts_with('=') {
+            continue;
         }
-        set_process_var(name, Some(value)).map_err(|e| fail(name, e.to_string()))?;
+        seen.push((k, v));
+    }
+    let same = seen.len() == block.len()
+        && seen.iter().all(|(k, v)| {
+            block
+                .iter()
+                .filter(|(bk, _)| bk.eq_ignore_ascii_case(k))
+                .count()
+                == 1
+                && block
+                    .iter()
+                    .any(|(bk, bv)| bk.eq_ignore_ascii_case(k) && bv == v)
+        });
+    if !same {
+        return Err(fail(
+            "checking it",
+            format!("{} variables set, {} expected", seen.len(), block.len()),
+        ));
     }
     Ok(())
 }
@@ -454,6 +511,11 @@ mod tests {
             "TEMP",
             "TMP",
             "LOCALAPPDATA",
+            "SystemRoot",
+            "windir",
+            "PATH",
+            "USERPROFILE",
+            "USERNAME",
             "PURGE_KB_DIR",
             "PURGE_PLANTED_X",
             "PURGE_START_PIN_CHILD",
@@ -485,6 +547,9 @@ mod tests {
             .env("LOCALAPPDATA", r"Q:\planted\Local")
             .env("PURGE_KB_DIR", r"Q:\planted\kb")
             .env("PURGE_PLANTED_X", "1")
+            .env("PATH", r"Q:\plantedin")
+            .env("USERPROFILE", r"Q:\planted\home")
+            .env("USERNAME", "planted")
             .output()
             .unwrap();
         let text = String::from_utf8_lossy(&out.stdout).into_owned();
@@ -510,14 +575,32 @@ mod tests {
         let windows = purge_win::known_folders::system_windows_dir().unwrap();
         let windows = windows.to_string_lossy().to_lowercase();
         assert_eq!(line("SystemDrive").to_lowercase(), windows[..2], "{text}");
+        // `SystemTemp` when this token can read its descriptor (elevated), else the Windows directory.
+        let windows_dir = windows.trim_end_matches('\\').to_string();
+        let system_temp = format!(r"{windows_dir}\systemtemp");
         for key in ["TEMP", "TMP"] {
-            assert_eq!(
-                line(key).to_lowercase(),
-                format!(r"{}\systemtemp", windows.trim_end_matches('\\')),
+            let value = line(key).to_lowercase();
+            assert!(
+                value == system_temp || value == windows_dir,
                 "{key}: {text}"
             );
         }
-        assert!(!line("LOCALAPPDATA").contains("planted"), "{text}");
+        for key in ["LOCALAPPDATA", "PATH", "USERPROFILE"] {
+            assert!(!line(key).contains("planted"), "{key}: {text}");
+            assert_ne!(line(key), "<unset>", "{key}: {text}");
+        }
+        for key in ["SystemRoot", "windir"] {
+            assert_eq!(
+                line(key).to_lowercase(),
+                windows.trim_end_matches('\\'),
+                "{key}: {text}"
+            );
+        }
+        assert_eq!(
+            line("USERNAME"),
+            purge_win::env::current_user_name().unwrap(),
+            "{text}"
+        );
         for key in ["PURGE_KB_DIR", "PURGE_PLANTED_X", "PURGE_START_PIN_CHILD"] {
             assert_eq!(line(key), "<unset>", "{key}: {text}");
         }
