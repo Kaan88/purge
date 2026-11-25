@@ -33,6 +33,7 @@ mod view;
 
 use app::{Options, PurgeApp};
 use look::{Choice, Design, Preset, ThemeChoice, Transition};
+use mdshared_app::backdrop::Backdrop;
 use model::Page;
 use prefs::Store;
 
@@ -42,6 +43,7 @@ const HELP: &str = "Purge: uninstalls programs and what they leave behind.
   --look <name>        standard or bold, for this run
   --colour <name>      windows, blue, teal, violet, amber, rose or graphite, for this run
   --transition <name>  none, fade, slide, slide-side, flow, slide-up, scale or depth, for this run
+  --backdrop <name>    off, mica or acrylic, for this run
   --page <key>         open on programs, queue, leftovers, history, vault or settings
   --sample             show the sample data without starting the engine
   --bench-stub         the launch bench's sample engine: 300 rows, no engine started
@@ -80,6 +82,7 @@ fn main() {
     let mut design: Option<Design> = None;
     let mut preset: Option<Preset> = None;
     let mut transition: Option<Transition> = None;
+    let mut backdrop: Option<Backdrop> = None;
     let mut page = Page::Programs;
     let mut seconds: Option<u64> = None;
     let mut script = false;
@@ -96,6 +99,7 @@ fn main() {
             "--look" | "--design" => design = Some(choice("--look", args.next())),
             "--colour" | "--color" => preset = Some(choice("--colour", args.next())),
             "--transition" => transition = Some(choice("--transition", args.next())),
+            "--backdrop" => backdrop = Some(choice("--backdrop", args.next())),
             "--page" => match args.next().as_deref().and_then(Page::parse_key) {
                 Some(p) => page = p,
                 None => {
@@ -163,6 +167,7 @@ fn main() {
     prefs.design = design.unwrap_or(prefs.design);
     prefs.preset = preset.unwrap_or(prefs.preset);
     prefs.transition = transition.unwrap_or(prefs.transition);
+    prefs.backdrop = backdrop.unwrap_or(prefs.backdrop);
 
     let config = Config::new("Purge")
         .size(1360.0, 860.0)

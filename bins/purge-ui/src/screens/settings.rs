@@ -1,5 +1,5 @@
-//! The Settings page: the mockup's cards of rows, with the look's four choices (design, colour,
-//! theme, page transition) and a live preview of them, and what the WinUI app's
+//! The Settings page: the mockup's cards of rows, with the look's five choices (design, colour,
+//! theme, page transition, window backdrop) and a live preview of them, and what the WinUI app's
 //! `Views/SettingsView.xaml` has: the rule of what Purge ticks for you, the quarantine's keeping
 //! times with "Open quarantine", About with the version, and the launch markers' expander in a
 //! development build.
@@ -8,6 +8,7 @@
 //! pretends: a row whose subject this version does not let the user change says so and stays as
 //! it is (DECISIONS 2026-11-24, "nothing on screen may pretend").
 
+use mdshared_app::backdrop::Backdrop;
 use mdshared_ui::dropdown::DROPDOWN_H;
 use mdshared_ui::expander;
 use mdshared_ui::gfx::{Face, Rect, Rgb, mix};
@@ -18,7 +19,7 @@ use mdshared_ui::toggle::TOGGLE_W;
 use crate::look::{Choice, Design, Preset};
 use crate::model::Model;
 use crate::ui::{BUTTON_H, Id, Role, Style, Ui, grow, id};
-use crate::view::{DD_DESIGN, DD_PRESET, DD_THEME, DD_TRANSITION, View};
+use crate::view::{DD_BACKDROP, DD_DESIGN, DD_PRESET, DD_THEME, DD_TRANSITION, View};
 
 const ROW_H: f32 = 66.0;
 const GAP: f32 = 18.0;
@@ -88,6 +89,11 @@ fn sections(m: &Model, animates: bool) -> Vec<(&'static str, Vec<Row>)> {
                     Control::Dropdown(DD_THEME),
                 ),
                 row("Page transition", motion, Control::Dropdown(DD_TRANSITION)),
+                row(
+                    Backdrop::TITLE,
+                    "Behind the title row and the rail, with either look. Windows 11; off under high contrast.",
+                    Control::Dropdown(DD_BACKDROP),
+                ),
             ],
         ),
         (
@@ -582,10 +588,11 @@ fn markers(m: &Model, v: &View) -> Vec<String> {
         out.push(format!("{name:<15} {ms:8.1}"));
     }
     out.push(format!(
-        "look            {} \u{b7} {} \u{b7} {}",
+        "look            {} \u{b7} {} \u{b7} {} \u{b7} {}",
         m.prefs.design.name(),
         m.prefs.preset.name(),
-        m.prefs.transition.name()
+        m.prefs.transition.name(),
+        m.prefs.backdrop.key()
     ));
     out
 }
@@ -625,6 +632,7 @@ fn setting(ui: &mut Ui, v: &View, r: Rect, row: &Row) {
                 DD_THEME => &v.dds.theme,
                 DD_DESIGN => &v.dds.design,
                 DD_PRESET => &v.dds.preset,
+                DD_BACKDROP => &v.dds.backdrop,
                 _ => &v.dds.transition,
             };
             ui.dropdown(*did, field, dd, row.title);

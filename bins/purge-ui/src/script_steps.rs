@@ -5,6 +5,8 @@ use std::collections::HashSet;
 use mdshared_ui::host::{App, Cx, Event};
 use mdshared_ui::keys::KeyName;
 
+use mdshared_app::backdrop::Backdrop;
+
 use crate::app::PurgeApp;
 use crate::look::{Choice, Design, Preset, ThemeChoice, Transition};
 use purge_ui_model::leftovers::LeftoversPhase;
@@ -80,8 +82,30 @@ fn page_step(name: &'static str, act: fn(&mut PurgeApp, &mut Cx<'_, ()>)) -> Ste
 pub fn steps() -> Vec<Step> {
     let mut s = vec![
         Step {
-            name: "programs",
+            name: "defaults",
             act: nothing,
+            check: |app| {
+                let p = app.model.prefs;
+                want(
+                    (p.design, p.preset, p.backdrop)
+                        == (Design::Bold, Preset::Violet, Backdrop::Acrylic),
+                    format!(
+                        "the walk opens on the defaults, not {:?} {:?} {:?}",
+                        p.design, p.preset, p.backdrop
+                    ),
+                )?;
+                on(app, Page::Programs, Design::Bold)
+            },
+            settle: 300,
+        },
+        Step {
+            name: "programs",
+            // The walk's first half is the standard look's, in the blue it was written in; the
+            // Bold steps come at the end and choose their own look.
+            act: |app, cx| {
+                app.set_design(cx, Design::Standard);
+                app.set_preset(cx, Preset::Blue);
+            },
             check: |app| {
                 for name in [
                     "NavPrograms",
@@ -1090,6 +1114,7 @@ pub fn steps() -> Vec<Step> {
                     "LookChoice",
                     "ColourChoice",
                     "TransitionChoice",
+                    "BackdropChoice",
                     "PreviewTransition",
                     "TransitionPreview",
                     "ConfirmEach",
@@ -1505,6 +1530,32 @@ fn appearance_steps() -> Vec<Step> {
             app.press_key(cx, KeyName::Char('6'), CTRL);
         }),
         Step {
+            name: "backdrop-by-keys",
+            act: |app, cx| {
+                // From Acrylic (the last) up to Mica.
+                app.focus.focus(id("BackdropChoice"));
+                app.press_key(cx, KeyName::Enter, NONE);
+                app.press_key(cx, KeyName::Up, NONE);
+                app.press_key(cx, KeyName::Enter, NONE);
+            },
+            check: |app| {
+                want(
+                    app.model.prefs.backdrop == Backdrop::Mica,
+                    format!("chose {:?}", app.model.prefs.backdrop),
+                )?;
+                let said = app
+                    .ctl(id("BackdropChoice"))
+                    .map(|c| c.label.clone())
+                    .unwrap_or_default();
+                want(
+                    said.contains("Window backdrop"),
+                    format!("the drop-down is named {said:?}"),
+                )?;
+                Ok("Mica".to_string())
+            },
+            settle: 600,
+        },
+        Step {
             name: "transition-by-keys",
             act: |app, cx| {
                 app.focus.focus(id("TransitionChoice"));
@@ -1703,6 +1754,25 @@ fn bold_steps() -> Vec<Step> {
         page_step("bold-dark-programs", |app, cx| {
             app.press_key(cx, KeyName::Char('1'), CTRL);
         }),
+        Step {
+            name: "bold-backdrop-acrylic",
+            act: |app, cx| app.set_backdrop(cx, Backdrop::Acrylic),
+            check: |app| {
+                on(app, Page::Programs, Design::Bold)?;
+                want(app.model.prefs.backdrop == Backdrop::Acrylic, "Acrylic")?;
+                Ok("Bold over Acrylic".to_string())
+            },
+            settle: 600,
+        },
+        Step {
+            name: "bold-backdrop-off",
+            act: |app, cx| app.set_backdrop(cx, Backdrop::Off),
+            check: |app| {
+                want(app.model.prefs.backdrop == Backdrop::Off, "Off")?;
+                Ok("Bold, flat".to_string())
+            },
+            settle: 600,
+        },
         Step {
             name: "bold-high-contrast",
             act: |app, cx| {

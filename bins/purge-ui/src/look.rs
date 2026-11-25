@@ -1,5 +1,5 @@
 //! The look the user chooses (docs/UI_RUST_PLAN.md, "What the user asked for"): the design, the
-//! page transition, the colour preset and the theme mode. Four independent choices, each kept in
+//! page transition, the colour preset, the theme mode and the backdrop. Five independent choices, each kept in
 //! the settings file by its `name`, and the palette they make together.
 //!
 //! - **Design.** `Standard` is the approved mockup's D1 (refined) and D2 (flow) in one: D1's
@@ -11,12 +11,15 @@
 //! - **Colour preset.** An accent and a faint tint of the surfaces, for light and for dark, usable
 //!   with either design; or the Windows accent on the toolkit's own surfaces.
 //! - **Theme mode.** System, light or dark.
+//! - **Backdrop.** What shows behind the title row and the rail: the flat colours, Mica or
+//!   Acrylic (the toolkit's `Backdrop`), with either design.
 //!
 //! High contrast is none of these: under a contrast theme the system's colours replace every
 //! preset (`app::PurgeApp::retheme`), and the backdrop is off.
 //!
 //! Deliberately not here: the drawing (`ui`, `screens`) and the motion itself (`transition`).
 
+use mdshared_app::backdrop::Backdrop;
 use mdshared_ui::anim::{Edge, PageEffect};
 use mdshared_ui::gfx::{Rgb, mix, rgb};
 use mdshared_ui::theme::Palette;
@@ -226,9 +229,9 @@ impl Choice for Preset {
     fn title(self) -> &'static str {
         match self {
             Preset::Windows => "Follow Windows accent",
-            Preset::Blue => "Blue (default)",
+            Preset::Blue => "Blue",
             Preset::Teal => "Teal",
-            Preset::Violet => "Violet",
+            Preset::Violet => "Violet (default)",
             Preset::Amber => "Amber",
             Preset::Rose => "Rose",
             Preset::Graphite => "Graphite",
@@ -295,6 +298,22 @@ impl Preset {
     }
 }
 
+// ---- backdrop ---------------------------------------------------------------------------------
+
+/// The toolkit's "Window backdrop" setting, as one of the look's choices: kept by its key
+/// (`off`, `mica`, `acrylic`), listed with the toolkit's labels.
+impl Choice for Backdrop {
+    const ALL: &'static [Backdrop] = &Backdrop::ALL;
+
+    fn name(self) -> &'static str {
+        self.key()
+    }
+
+    fn title(self) -> &'static str {
+        Backdrop::LABELS[Backdrop::index(self)]
+    }
+}
+
 // ---- theme mode --------------------------------------------------------------------------------
 
 /// Light, dark, or what Windows uses.
@@ -356,6 +375,7 @@ mod tests {
         round::<Transition>();
         round::<Preset>();
         round::<ThemeChoice>();
+        round::<Backdrop>();
     }
 
     #[test]

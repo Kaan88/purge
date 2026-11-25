@@ -1,7 +1,6 @@
-//! The window: title row, rail, the content card with the page in it, and what lies over the
+﻿//! The window: title row, rail, the content card with the page in it, and what lies over the
 //! page (the confirmation, a drop-down's menu, the command palette, a toast).
 
-use mdshared_app::backdrop::Backdrop;
 use mdshared_ui::anim::{Edge, PageEffect, fluent};
 use mdshared_ui::chrome::{WIN_BTN_W, WinButton, draw_win_button};
 use mdshared_ui::dropdown::{DROPDOWN_H, draw_dropdown_menu_animated};
@@ -77,14 +76,6 @@ pub const CAPTIONS: [(WinButton, &str, &str); 3] = [
     (WinButton::Max, "Maximize", "Maximize"),
     (WinButton::Close, "Close", "Close"),
 ];
-
-/// The backdrop a design asks for behind its chrome.
-pub fn backdrop_of(design: Design) -> Backdrop {
-    match design {
-        Design::Standard => Backdrop::Acrylic,
-        Design::Bold => Backdrop::Off,
-    }
-}
 
 /// The content card: everything right of the rail and under the title row.
 pub fn content_rect(ui: &Ui) -> Rect {
@@ -350,10 +341,19 @@ fn chrome(ui: &mut Ui, m: &Model) {
     let lk = ui.look;
     ui.p.fill(Rect::new(0.0, 0.0, w, h), pal.title);
     if lk.design == Design::Bold && !ui.hc {
-        // D3 has no backdrop: its rail is a quiet gradient of the accent instead.
+        // D3's rail is a quiet gradient of the accent. Over a backdrop (Mica, Acrylic) it is a
+        // tint of the glass instead: what differs from the flat colour stays over the desktop
+        // (`frost`), so the accent is laid on a little stronger and never fades out wholly, or
+        // a busy desktop behind the window would wash Bold's colour out of the rail.
         let rail = Rect::new(0.0, 0.0, lk.rail_w, h);
-        let from = mix(pal.title, pal.accent, 0.22);
-        ui.p.gradient(rail, 0.0, from, pal.title, Along::Y, 1.0);
+        let (top, bottom) = if ui.cx.frosted() {
+            (0.30, 0.08)
+        } else {
+            (0.22, 0.0)
+        };
+        let from = mix(pal.title, pal.accent, top);
+        let to = mix(pal.title, pal.accent, bottom);
+        ui.p.gradient(rail, 0.0, from, to, Along::Y, 1.0);
     }
     let title = Rect::new(0.0, 0.0, w, lk.title_h);
     let rail = Rect::new(0.0, lk.title_h, lk.rail_w, h - lk.title_h);
