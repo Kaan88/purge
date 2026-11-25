@@ -8,31 +8,38 @@
 //!
 //! **One answer, and only from a dialog that was up.** A request puts one job at the desk and waits.
 //! The window takes the job, says when it is on screen, and says how it ended; an answer is taken only
-//! from the job that is at the desk, only once it was on screen, and only once. Everything else is
-//! Cancel or the TaskDialog:
+//! from the job that is at the desk and only once, and an approval only once the dialog was on
+//! screen. Everything else is Cancel or the TaskDialog:
 //!
 //! | What happens | The request gets |
 //! |---|---|
-//! | The loop or the window cannot be made, the window does not come up within [`SHOW_WAIT`], or the window's thread died before the dialog was on screen | the TaskDialog, for this dialog and (when the thread died) every later one |
+//! | The loop or the window cannot be made, the fonts or the first measuring panic, the window does not come up within [`SHOW_WAIT`], or the window's thread died before the dialog was on screen | the TaskDialog, for this dialog and (when the thread died) every later one |
 //! | The parent is gone or the pipe broke ([`Closer`]), before or while the dialog is up | [`Outcome::Declined`] at once; the window is told to take the dialog down |
-//! | The window's thread died while the dialog was up | [`Outcome::Declined`] |
+//! | The window was cancelled before its dialog was on screen (Esc, Enter on Cancel, Alt+F4: a key reaches a window before its first frame does) | [`Outcome::Declined`], and no word that a dialog was shown |
+//! | The window's thread died while the dialog was up | [`Outcome::Declined`]; the window is hidden and its thread stops |
 //! | The user answered | that answer |
 //!
 //! The request never waits on the window to learn that the broker is ending: the closer wakes the
 //! request itself. Nor does it wait on a window that died: that is a flag of its own, set without the
-//! lock (a panic may come while the window's thread holds it) and looked at four times a second by
-//! every wait.
+//! lock and looked at four times a second by every wait.
+//!
+//! **A panic on the window's thread stops that thread where it is** ([`UiThread::run`]): it does not
+//! unwind. So that thread must never panic while it holds the lock of [`Core`], or every request
+//! would wait for the lock for ever. It holds it only inside the [`Desk`] calls below, which call
+//! nothing of the toolkit and do nothing that can fail.
 
 use std::cell::Cell;
 use std::io;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use mdshared_ui::gfx::Gfx;
 use mdshared_ui::host::{self, Config, Proxy};
 use mdshared_ui::platform;
+use purge_rpc::methods::ConsentRenderer;
 use purge_win::taskdialog::{Outcome, Page};
+use purge_win::topwindow;
 
 use super::super::sheet::Sheet;
 use super::app::{ConsentApp, Desk, Msg, opening_size, work_height};
@@ -71,7 +78,11 @@ enum Phase {
     Taken,
     /// On screen.
     Shown,
-    /// Answered.
+    /// Cancelled in the window before it was on screen (review S2): Esc, Enter on Cancel or
+    /// Alt+F4 reach a window before its first frame does. The request is declined, and is not
+    /// told that a dialog was shown.
+    Unseen,
+    /// Answered, having been on screen.
     Done(Outcome),
     /// No longer wanted: the request has gone on without it.
     Dropped,
@@ -95,6 +106,8 @@ pub(super) struct Core {
     changed: Condvar,
     /// The window's thread is gone. Set without the lock.
     dead: AtomicBool,
+    /// The window's handle, 0 until there is one: what a panic on its thread hides (review S4).
+    hwnd: AtomicIsize,
 }
 
 impl Core {
@@ -107,6 +120,7 @@ impl Core {
             }),
             changed: Condvar::new(),
             dead: AtomicBool::new(false),
+            hwnd: AtomicIsize::new(0),
         }
     }
 
@@ -137,7 +151,7 @@ impl Core {
         let Some(job) = state.job.as_mut().filter(|j| j.id == id) else {
             return;
         };
-        if matches!(job.phase, Phase::Done(_) | Phase::Dropped) {
+        if matches!(job.phase, Phase::Done(_) | Phase::Unseen | Phase::Dropped) {
             return;
         }
         job.phase = Phase::Dropped;
@@ -253,7 +267,7 @@ impl Core {
                 Some(Instant::now() + SHOW_WAIT),
                 |state| match Core::phase_of(state, id) {
                     Phase::Shown | Phase::Done(_) => Some(Up::Shown),
-                    Phase::Dropped => Some(Up::Closed),
+                    Phase::Unseen | Phase::Dropped => Some(Up::Closed),
                     Phase::Posted | Phase::Taken => self.is_dead().then_some(Up::Failed),
                 },
             )
@@ -323,22 +337,29 @@ impl Desk for Arc<Core> {
         self.changed.notify_all();
     }
 
-    /// The only place an answer enters: for the job at the desk, once, only while it is on
-    /// screen, and never from a window that was declared dead.
+    /// The only place an answer enters: for the job at the desk, once, and never from a window
+    /// that was declared dead. An approval is taken only while the dialog is on screen. A cancel
+    /// is taken from the moment the window has the dialog (review S2): the window acts on a
+    /// cancel whenever it comes, so the request must hear of it, or it would wait out
+    /// [`SHOW_WAIT`] for a dialog that is gone and then ask again with the TaskDialog.
     fn answered(&self, id: u64, outcome: Outcome) {
         if self.is_dead() {
             return;
         }
         let mut state = self.lock();
-        if let Some(job) = state
-            .job
-            .as_mut()
-            .filter(|j| j.id == id && j.phase == Phase::Shown)
-        {
-            job.phase = Phase::Done(outcome);
+        if let Some(job) = state.job.as_mut().filter(|j| j.id == id) {
+            match (job.phase, outcome) {
+                (Phase::Shown, outcome) => job.phase = Phase::Done(outcome),
+                (Phase::Taken, Outcome::Declined) => job.phase = Phase::Unseen,
+                _ => {}
+            }
         }
         drop(state);
         self.changed.notify_all();
+    }
+
+    fn window(&self, hwnd: isize) {
+        self.hwnd.store(hwnd, Ordering::SeqCst);
     }
 }
 
@@ -380,24 +401,47 @@ impl Consent for ToolkitConsent {
         pages: &[Page],
         primary: i32,
         closer: &Closer,
-        shown: &(dyn Fn() + Sync),
+        shown: &(dyn Fn(ConsentRenderer) + Sync),
     ) -> io::Result<Outcome> {
         self.fallback.ask(pages, primary, closer, shown)
     }
 
+    /// The toolkit window says it is the toolkit's; the TaskDialog that asks when the window
+    /// could not show the dialog says it is the TaskDialog (review S10).
     fn ask_sheet(
         &self,
         sheet: &Sheet,
         pages: &[Page],
         primary: i32,
         closer: &Closer,
-        shown: &(dyn Fn() + Sync),
+        shown: &(dyn Fn(ConsentRenderer) + Sync),
     ) -> io::Result<Outcome> {
-        match self.core.ask(sheet, closer, shown) {
+        // What the window's fonts cannot draw is written as an escape, and fonts that cannot draw
+        // the dialog's own words draw no dialog (review B1).
+        let Some(sheet) = sheet.drawable(&fonts_have) else {
+            return self.fallback.ask(pages, primary, closer, shown);
+        };
+        match self
+            .core
+            .ask(&sheet, closer, &|| shown(ConsentRenderer::Toolkit))
+        {
             Ok(outcome) => Ok(outcome),
             Err(()) => self.fallback.ask(pages, primary, closer, shown),
         }
     }
+}
+
+/// Whether the fonts the window draws with have a glyph for `c`.
+///
+/// Review B1, the half that is the toolkit's: at the pinned revision the window finds its fonts by
+/// family name in the system's collection, which holds the fonts any process of the user installed
+/// for that user, and falls back by name too; it cannot be asked what it would draw a character
+/// with. So this says yes to every character and [`Sheet::drawable`] changes nothing yet. When the
+/// toolkit can load a fixed list of font files with the system's collection off (the request is in
+/// docs/M3_DESIGN.md 8.3), this becomes that collection's answer and is the only line that changes
+/// here.
+fn fonts_have(_c: char) -> bool {
+    true
 }
 
 impl UiThread {
@@ -413,35 +457,56 @@ impl UiThread {
             _ => Some(state.job.as_ref().map(|j| j.sheet.clone())),
         });
         IS_UI.with(|f| f.set(true));
-        // A panic on this thread, wherever the loop is in its work, ends the toolkit dialog at
-        // once: the request waiting on it is answered Cancel (or asks with the TaskDialog when
-        // nothing was on screen yet), and no later request waits on a window that is gone.
+        // A panic on this thread, wherever it is in its work (measuring the first dialog, making
+        // the loop, or inside it), ends the toolkit dialog at once: the request waiting on it is
+        // answered Cancel (or asks with the TaskDialog when nothing was on screen yet), and no
+        // later request waits on a window that is gone. Then the window is hidden, so that the
+        // words of a dialog that is over do not stay on screen beside the TaskDialog that asks
+        // next (review S4), and the thread stops for good where it is: it does not go back into
+        // a loop that would spin on a window nobody answers for, and it does not unwind out of
+        // `main`, which would end the broker in the middle of a request (review S3).
         let hooked = core.clone();
         let before = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
-            if IS_UI.with(Cell::get) {
-                hooked.died();
+            if !IS_UI.with(Cell::get) {
+                return before(info);
             }
+            hooked.died();
             before(info);
-        }));
-        let size = {
-            let scale = platform::system_scale();
-            let mut gfx = Gfx::new();
-            match first.flatten() {
-                Some(sheet) => opening_size(&mut gfx, &sheet, scale, work_height(scale)),
-                None => (WIDTH, MIN_HEIGHT),
+            let hwnd = hooked.hwnd.swap(0, Ordering::SeqCst);
+            if hwnd != 0 {
+                topwindow::hide(hwnd);
             }
-        };
-        let look = Look::system(platform::system_high_contrast());
-        let config = Config::new(super::super::text::TITLE)
-            .size(size.0, size.1)
-            .min_size(WIDTH, MIN_HEIGHT)
-            .app_id("Purge")
-            .dark(look.pal.dark);
-        let app = ConsentApp::new(core.clone(), None);
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = host::run(config, app);
+            loop {
+                std::thread::park();
+            }
         }));
+        // Everything from here on is inside the catch (review S3): the fonts are read and text
+        // is shaped before the loop is made, and a panic there is this window's failure like any
+        // other. The hook above stops the thread before the catch sees anything; the catch is
+        // for a panic hook that somebody replaced.
+        let run = std::panic::AssertUnwindSafe(|| {
+            let size = {
+                let scale = platform::system_scale();
+                let mut gfx = Gfx::new();
+                match first.flatten() {
+                    Some(sheet) => opening_size(&mut gfx, &sheet, scale, work_height(scale)),
+                    None => (WIDTH, MIN_HEIGHT),
+                }
+            };
+            let look = Look::system(platform::system_high_contrast());
+            let config = Config::new(super::super::text::TITLE)
+                .size(size.0, size.1)
+                .min_size(WIDTH, MIN_HEIGHT)
+                .app_id("Purge")
+                .dark(look.pal.dark);
+            let app = ConsentApp::new(core.clone(), None);
+            let _ = host::run(config, app);
+        });
+        let _ = std::panic::catch_unwind(run);
+        // The loop ended without a panic (it could not be made, or the window could not): there
+        // is no window any more.
+        core.hwnd.store(0, Ordering::SeqCst);
         core.died();
     }
 }
@@ -493,8 +558,9 @@ pub fn rehearse(
                 }
                 let name = &trial.name;
                 let answer =
-                    consent.ask_sheet(&trial.sheet, &trial.pages, trial.primary, &closer, &|| {
-                        report(&format!("shown: {name}"))
+                    consent.ask_sheet(&trial.sheet, &trial.pages, trial.primary, &closer, &|ui| {
+                        // The preview's probe reads the first two words; the renderer follows.
+                        report(&format!("shown: {name} ({ui:?})"))
                     });
                 report(&match answer {
                     Ok(outcome) => format!("outcome: {name}: {outcome:?}"),
@@ -590,6 +656,51 @@ mod tests {
         assert!(Desk::take(&core, Some(id)).is_none());
         core.answered(id, Outcome::Approved);
         assert!(core.lock().job.is_none());
+    }
+
+    /// Review S2: the window acts on a cancel whenever it comes, so the request hears of it.
+    #[test]
+    fn a_cancel_before_the_dialog_is_on_screen_declines_and_says_nothing_was_shown() {
+        let core = Arc::new(Core::new());
+        let closer = Arc::new(Closer::new());
+        let (request, shown) = ask(&core, &closer);
+        let id = take(&core);
+        // An approval is still nobody's before the dialog is on screen; a cancel is taken.
+        core.answered(id, Outcome::Approved);
+        assert_eq!(Core::phase_of(&core.lock(), id), Phase::Taken);
+        core.answered(id, Outcome::Declined);
+        assert_eq!(request.join().unwrap(), Ok(Outcome::Declined));
+        assert_eq!(shown.load(Ordering::SeqCst), 0, "no dialog was shown");
+        // What the window says of it afterwards is nobody's.
+        core.shown(id);
+        core.answered(id, Outcome::Approved);
+        assert!(core.lock().job.is_none());
+
+        // Once cancelled so, nothing turns it into a shown or an approved dialog, even before
+        // the request has looked.
+        let core = Arc::new(Core::new());
+        let id = core.post(Arc::new(sheet())).unwrap();
+        assert_eq!(Desk::take(&core, Some(id)).map(|t| t.0), Some(id));
+        core.answered(id, Outcome::Declined);
+        core.shown(id);
+        core.answered(id, Outcome::Approved);
+        assert_eq!(Core::phase_of(&core.lock(), id), Phase::Unseen);
+
+        // A job the window has not taken is not the window's to cancel.
+        let core = Arc::new(Core::new());
+        let id = core.post(Arc::new(sheet())).unwrap();
+        core.answered(id, Outcome::Declined);
+        assert_eq!(Core::phase_of(&core.lock(), id), Phase::Posted);
+    }
+
+    /// Review S4: the handle a panic on the window's thread hides.
+    #[test]
+    fn the_window_gives_its_handle_and_a_dead_loop_takes_it_back() {
+        let core = Arc::new(Core::new());
+        assert_eq!(core.hwnd.load(Ordering::SeqCst), 0);
+        core.window(0x51);
+        assert_eq!(core.hwnd.swap(0, Ordering::SeqCst), 0x51);
+        assert_eq!(core.hwnd.load(Ordering::SeqCst), 0, "hidden once");
     }
 
     #[test]

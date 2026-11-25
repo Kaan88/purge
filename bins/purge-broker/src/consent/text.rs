@@ -381,9 +381,129 @@ impl Stamp {
     }
 }
 
+/// What a sheet says when [`drawable`] wrote a character as an escape.
+pub const NO_GLYPH_NOTE: &str =
+    "Characters this window has no font for are shown as \\u{...}; they are part of the name.";
+
+/// The characters the dialog's own words and every escape are made of: printable ASCII and the
+/// three marks. [`drawable`] never rewrites them; [`fixed_words_drawable`] is the check that it
+/// need not.
+fn fixed(c: char) -> bool {
+    (' '..='~').contains(&c) || [MARK, BULLET, SEP].iter().any(|m| m.contains(c))
+}
+
+/// Whether a renderer can draw the dialog's own words and every escape: it has a glyph for each
+/// printable ASCII character and for the three marks. A renderer that cannot must not draw the
+/// dialog at all (the broker asks with the TaskDialog): an escape it cannot draw says nothing.
+pub fn fixed_words_drawable(has_glyph: &dyn Fn(char) -> bool) -> bool {
+    ('!'..='~')
+        .chain([MARK, BULLET, SEP].iter().flat_map(|m| m.chars()))
+        .filter(|c| *c != ' ')
+        .all(has_glyph)
+}
+
+/// `text`, which is ready for the dialog, for a renderer that draws with a fixed set of fonts
+/// (review B1 of BROKER-CONSENT-UI): every character the set has no glyph for is written as
+/// `\u{hex}`, as [`shown`] writes a hidden one. Nothing is then drawn as an empty box, as nothing,
+/// or with a font that was found by a name anybody can register. `has_glyph` is the renderer's
+/// answer for one character; it is not asked about the characters of [`fixed`].
+///
+/// It is the renderer's pass and not [`shown`]'s: the TaskDialog draws the same view with the
+/// system's own fallback and shows these characters as they are.
+pub fn drawable<'a>(text: &'a str, has_glyph: &dyn Fn(char) -> bool) -> std::borrow::Cow<'a, str> {
+    let keeps = |c: char| fixed(c) || has_glyph(c);
+    if text.chars().all(keeps) {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let mut out = String::with_capacity(text.len() + 16);
+    for c in text.chars() {
+        if keeps(c) {
+            out.push(c);
+        } else {
+            out.push_str(&escape(c));
+        }
+    }
+    std::borrow::Cow::Owned(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A renderer with the Latin fonts only: Basic Latin, Latin-1, Latin Extended-A and the marks.
+    fn latin_only(c: char) -> bool {
+        (c as u32) < 0x180 || [MARK, BULLET, SEP].iter().any(|m| m.contains(c))
+    }
+
+    #[test]
+    fn what_the_fonts_cannot_draw_is_written_as_an_escape() {
+        // Nothing to do: the same text, not a copy.
+        for plain in [
+            r"C:\Program Files\Mozilla Firefox",
+            "Caf\u{e9} M\u{fc}nchen",
+            "\u{26a0} Needs your attention (3)",
+            "\u{2022} HKLM\\SOFTWARE\\Vendor \u{b7} 12 values",
+            r"Mozill\u{430}",
+            "",
+        ] {
+            let got = drawable(plain, &latin_only);
+            assert!(matches!(got, std::borrow::Cow::Borrowed(_)), "{plain}");
+            assert_eq!(got, plain);
+        }
+        // A name in a script the fonts do not have: each character, in order, and nothing else.
+        assert_eq!(
+            drawable("C:\\\u{65e5}\u{672c}\\app \u{1f600}.exe", &latin_only),
+            r"C:\\u{65e5}\u{672c}\app \u{1f600}.exe"
+        );
+        assert_eq!(
+            drawable(
+                "\u{42f}\u{43d}\u{434}\u{435}\u{43a}\u{441} Browser",
+                &latin_only
+            ),
+            r"\u{42f}\u{43d}\u{434}\u{435}\u{43a}\u{441} Browser"
+        );
+        // A font that claims nothing still leaves the dialog's own characters alone: they are
+        // what `fixed_words_drawable` answers for.
+        let nothing = |_: char| false;
+        assert_eq!(
+            drawable("\u{26a0} a\u{e9}b \u{b7} \"x\"", &nothing),
+            "\u{26a0} a\\u{e9}b \u{b7} \"x\""
+        );
+        // An escape is made of characters that are never rewritten: a second pass changes nothing.
+        let once = drawable("\u{65e5}\u{e9}", &nothing).into_owned();
+        assert_eq!(drawable(&once, &nothing), once);
+    }
+
+    #[test]
+    fn a_renderer_without_the_dialogs_own_characters_is_refused() {
+        assert!(fixed_words_drawable(&latin_only));
+        assert!(fixed_words_drawable(&|_| true));
+        assert!(!fixed_words_drawable(&|_| false));
+        // One missing is enough: a letter, a digit, a brace of the escape, each mark.
+        for missing in [
+            'a', 'Z', '7', '\\', '{', '}', '\u{26a0}', '\u{2022}', '\u{b7}',
+        ] {
+            assert!(
+                !fixed_words_drawable(&|c| c != missing && latin_only(c)),
+                "{missing:?}"
+            );
+        }
+        // The plain space needs no glyph.
+        assert!(fixed_words_drawable(&|c| c != ' ' && latin_only(c)));
+        // The dialog's fixed words are of those characters alone.
+        let (one, many) = (left_out(1), left_out(12));
+        for words in [
+            TITLE,
+            MARK,
+            BULLET,
+            SEP,
+            NO_GLYPH_NOTE,
+            one.as_str(),
+            many.as_str(),
+        ] {
+            assert!(words.chars().all(fixed), "{words}");
+        }
+    }
 
     #[test]
     fn plain_names_and_paths_are_unchanged() {

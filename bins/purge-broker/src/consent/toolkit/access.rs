@@ -7,7 +7,7 @@
 //! | `ConsentInstruction` | Text | the main instruction | |
 //! | `ConsentList` | List | "Details" | |
 //! | `ConsentLine_<n>` | ListItem | line `n` of the list (0 is the first): a summary line, a heading, an attention entry, another item | |
-//! | `ConsentVerify` | CheckBox | the verification text | Toggle |
+//! | `ConsentVerify` | CheckBox | the verification text | Toggle, once the end of the list has been on screen |
 //! | `ConsentFooter` | Text | the footer, which holds "Code XXXX-XXXX" | |
 //! | `ConsentHint` | Text | why the button is disabled, while it says so | |
 //! | `ConsentApprove` | Button | the label of the button that approves | Invoke, while enabled |
@@ -17,7 +17,8 @@
 //! Every line of the list is in the tree, in view or not, so a reader reads the whole list and a
 //! client finds any entry by its id; a line out of view has no rectangle. The box and the buttons
 //! take Invoke and Toggle like a click, through the same [`Prompt::press`], with the same rules: a
-//! disabled button is told as disabled and has no Invoke. The keyboard's place is the tree's focus.
+//! disabled button or box is told as disabled and has no Invoke or Toggle. The keyboard's place is
+//! the tree's focus.
 //!
 //! Windows adds its own elements for the window's frame beside these, as for any top-level window
 //! (seen with the preview): a TitleBar, the system menu (`SystemMenuBar`) and the buttons `Minimize`,
@@ -116,7 +117,9 @@ pub fn build(
     );
     children.push(list);
     if let (Some(text), Some(r)) = (&sheet.verification, lay.verify_hit()) {
-        let node = a11y::check_box(text, VERIFY, r, Some(prompt.ticked()), false);
+        // Told as disabled, with no Toggle, until the end of the list has been on screen.
+        let off = !prompt.verify_enabled();
+        let node = a11y::check_box(text, VERIFY, r, Some(prompt.ticked()), off);
         put(tree, &mut children, VERIFY, node);
     }
     put(
@@ -212,7 +215,7 @@ mod tests {
         let t0 = Instant::now();
         prompt.opened(t0);
         if lay.end_in_view() {
-            prompt.saw_end();
+            prompt.saw_end(t0);
         }
         let now = t0 + ARM_DELAY;
         setup(&mut prompt, now);
@@ -245,7 +248,22 @@ mod tests {
         assert_eq!(verify.role(), Role::CheckBox);
         assert_eq!(verify.toggled(), Some(Toggled::False));
         assert_eq!(verify.label(), sh.verification.as_deref());
-        assert!(verify.supports_action(Action::Click));
+        // The box takes a press only once the end of the list has been on screen (review S6);
+        // whether this sample's list fits the window is not this test's business.
+        assert_eq!(
+            verify.supports_action(Action::Click),
+            prompt.verify_enabled()
+        );
+        assert_eq!(verify.is_disabled(), !prompt.verify_enabled());
+        let (seen, _) = built(
+            "quarantine",
+            |p, now| {
+                p.saw_end(now);
+            },
+            0.0,
+        );
+        let verify = seen.node(VERIFY).unwrap();
+        assert!(verify.supports_action(Action::Click) && !verify.is_disabled());
         let cancel = b.node(CANCEL_ID).unwrap();
         assert_eq!(
             (cancel.role(), cancel.label()),
@@ -298,5 +316,15 @@ mod tests {
         // The end has not been on screen: the button is disabled and the hint says why.
         assert!(b.node(APPROVE).unwrap().is_disabled());
         assert_eq!(b.node(HINT).unwrap().value(), Some(SCROLL_HINT));
+        // Nor can the box be ticked before it: told as disabled, and no Toggle.
+        let verify = b.node(VERIFY).unwrap();
+        assert!(verify.is_disabled());
+        assert!(!verify.supports_action(Action::Click));
+        assert_eq!(verify.toggled(), Some(Toggled::False));
+        // At the end it can.
+        let (b, _) = built("quarantine-long", |_, _| {}, f32::MAX);
+        let verify = b.node(VERIFY).unwrap();
+        assert!(!verify.is_disabled());
+        assert!(verify.supports_action(Action::Click));
     }
 }

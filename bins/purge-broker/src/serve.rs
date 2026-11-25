@@ -48,8 +48,8 @@ use purge_model::ProgramId;
 use purge_rpc::error::{ErrorData, ErrorObject, INVALID_REQUEST, IdKind};
 use purge_rpc::frame::{FrameError, FrameReader, FrameWriter, RequestId, Response};
 use purge_rpc::methods::{
-    BaselineChanged, ConfirmCode, ConsentShown, LeftoversScanParams, PipeCall, ServerNotification,
-    ShutdownResult,
+    BaselineChanged, ConfirmCode, ConsentRenderer, ConsentShown, LeftoversScanParams, PipeCall,
+    ServerNotification, ShutdownResult,
 };
 use purge_rpc::sets::{CapSet, OUT_LIMIT, PIPE_IN_LIMIT, Transport};
 use purge_rpc::table::{Method, Routed, route, write_notification, write_response};
@@ -86,13 +86,15 @@ pub trait Consent: Send + Sync + 'static {
     /// the answer. Arms `closer` with the way to close the window as soon as it is open
     /// ([`Closer::arm`]) and disarms it when it ends; the dialog closes as Cancel when the closer
     /// fires. `shown` is called once, when the window is up and can be answered (`consent.shown`),
-    /// never when it could not be shown. An error means it could not be shown, and counts as Cancel.
+    /// never when it could not be shown, and is told which dialog that window is: the one that
+    /// drew it says so, so a toolkit dialog that fell back to the TaskDialog is not taken for the
+    /// toolkit's (review S10). An error means it could not be shown, and counts as Cancel.
     fn ask(
         &self,
         pages: &[Page],
         primary: i32,
         closer: &Closer,
-        shown: &(dyn Fn() + Sync),
+        shown: &(dyn Fn(ConsentRenderer) + Sync),
     ) -> io::Result<Outcome>;
 
     /// [`Consent::ask`] for a caller that also has the dialog as a [`Sheet`]: the same dialog in
@@ -104,7 +106,7 @@ pub trait Consent: Send + Sync + 'static {
         pages: &[Page],
         primary: i32,
         closer: &Closer,
-        shown: &(dyn Fn() + Sync),
+        shown: &(dyn Fn(ConsentRenderer) + Sync),
     ) -> io::Result<Outcome> {
         let _ = sheet;
         self.ask(pages, primary, closer, shown)
@@ -462,12 +464,13 @@ impl<H: Handler> Ctx<'_, H> {
             return Outcome::Declined;
         }
         let was_shown = AtomicBool::new(false);
-        let shown = || {
+        let shown = |ui: ConsentRenderer| {
             self.mark(TimingName::ConsentShown);
             was_shown.store(true, Ordering::SeqCst);
             let _ = self.notify(&ServerNotification::ConsentShown(ConsentShown {
                 request: self.request,
                 code,
+                ui,
             }));
         };
         let consent = &self.shared.consent;

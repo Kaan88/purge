@@ -109,7 +109,7 @@ fn render(gfx: &mut Gfx, sh: &Arc<Sheet>, look: &Look, scale: f32, shot: Shot, o
         lay = Layout::new(&m, (WIDTH, h), f32::MAX);
     }
     if lay.end_in_view() {
-        prompt.saw_end();
+        prompt.saw_end(t0);
     }
     if shot.ticked {
         prompt.press(Ctl::Verify, now);

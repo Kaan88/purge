@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use purge_engine::pipeline::Settings;
 use purge_model::BaselineTrust;
 use purge_rpc::error::{ErrorData, ErrorObject};
-use purge_rpc::methods::PipeCall;
+use purge_rpc::methods::{ConsentRenderer, PipeCall};
 use purge_rpc::{BaselineBuild, BaselineStatus, EngineHello};
 use purge_win::pipe::ExpectedPeer;
 use purge_win::taskdialog::{Outcome, Page};
@@ -436,7 +436,7 @@ impl Consent for Arc<ScriptedConsent> {
         pages: &[Page],
         primary: i32,
         closer: &Closer,
-        shown: &(dyn Fn() + Sync),
+        shown: &(dyn Fn(ConsentRenderer) + Sync),
     ) -> io::Result<Outcome> {
         {
             let mut g = self.state.lock().unwrap();
@@ -449,7 +449,7 @@ impl Consent for Arc<ScriptedConsent> {
             self.cv.notify_all();
         }
         if self.announce.load(Ordering::SeqCst) {
-            shown();
+            shown(ConsentRenderer::TaskDialog);
         }
         let this = self.clone();
         closer.arm(move || {
@@ -476,7 +476,7 @@ impl Consent for Arc<ScriptedConsent> {
         pages: &[Page],
         primary: i32,
         closer: &Closer,
-        shown: &(dyn Fn() + Sync),
+        shown: &(dyn Fn(ConsentRenderer) + Sync),
     ) -> io::Result<Outcome> {
         self.state.lock().unwrap().coming = Some(sheet.clone());
         self.ask(pages, primary, closer, shown)

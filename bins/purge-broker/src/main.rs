@@ -12,8 +12,9 @@
 //! standard handles are closed; the timing lines start going to the event log (`purge_broker::timing`,
 //! the `broker_start` mark was taken right after the DLL-search and working-directory restriction);
 //! the local-baseline build starts on its own thread; and the serving loop runs until it ends. The
-//! timing lines are flushed for at most `FLUSH_WAIT` before the process ends. With `--consent toolkit`
-//! the serving loop runs on a second thread and this one is the consent window's
+//! timing lines are flushed for at most `FLUSH_WAIT` before the process ends. With `--consent toolkit`,
+//! which only a build with the cargo feature `toolkit-consent` takes (`purge_broker::args`; no release
+//! build has it), the serving loop runs on a second thread and this one is the consent window's
 //! (`serve_beside_the_window`); otherwise everything is as it was. The handler is [`purge_broker::broker::BrokerHandler`]: the flow over the live
 //! machine (M3-BROKER-FLOW), `plan.execute` (M3-EXEC), history, undo and recovery (M3-UNDO) and the purge
 //! of expired quarantine (M3-PURGE).
@@ -24,6 +25,7 @@ use std::sync::Arc;
 use purge_broker::args::ConsentUi;
 use purge_broker::baseline::{BuildHandle, LiveHost};
 use purge_broker::broker::BrokerHandler;
+#[cfg(feature = "toolkit-consent")]
 use purge_broker::consent::toolkit::ToolkitConsent;
 use purge_broker::exec_live::LiveExec;
 use purge_broker::lifetime::{SystemClock, codes};
@@ -130,6 +132,7 @@ fn main() -> ExitCode {
     };
     match args.consent {
         ConsentUi::TaskDialog => serve(parts, Arc::new(TaskDialogConsent)),
+        #[cfg(feature = "toolkit-consent")]
         ConsentUi::Toolkit => serve_beside_the_window(parts),
     }
 }
@@ -145,16 +148,38 @@ struct Parts {
     timings: Arc<Timings>,
 }
 
+/// The exit code of a process whose first thread panicked: what the broker ends with when its
+/// serving thread does, on whichever thread that is.
+#[cfg(feature = "toolkit-consent")]
+const PANIC_EXIT: i32 = 101;
+
+/// Ends the process when it is dropped: held by the serving thread of `serve_beside_the_window`.
+#[cfg(feature = "toolkit-consent")]
+struct EndsTheProcess;
+
+#[cfg(feature = "toolkit-consent")]
+impl Drop for EndsTheProcess {
+    fn drop(&mut self) {
+        std::process::exit(PANIC_EXIT);
+    }
+}
+
 /// `--consent toolkit`: the toolkit's window loop must run on the thread the process started on
 /// (`consent::toolkit::service`), so the pipe is served from a second thread and this one becomes the
 /// window's. It makes no window until a dialog is asked for. If the second thread cannot be started,
 /// the pipe is served here with the TaskDialog, as without the argument.
+#[cfg(feature = "toolkit-consent")]
 fn serve_beside_the_window(parts: Parts) -> ! {
     type Job = Box<dyn FnOnce() + Send>;
     let (hand, taken) = std::sync::mpsc::channel::<Job>();
     let spawned = std::thread::Builder::new()
         .name("purge-broker-serve".into())
         .spawn(move || {
+            // However this thread ends, the process ends with it (review S7). `serve` ends the
+            // process itself; what is left is a panic that unwinds out of it, or no job to take.
+            // Served on the first thread, either would end the process; here the first thread is
+            // the window's and would stay, elevated, with nobody to serve.
+            let _ends = EndsTheProcess;
             if let Ok(job) = taken.recv() {
                 job();
             }
@@ -168,7 +193,8 @@ fn serve_beside_the_window(parts: Parts) -> ! {
         window.run();
     }
     // The window's loop ended or never began (the dialogs are TaskDialogs from here on), or the
-    // serving thread is gone. The serving thread ends the process; this one has nothing left to do.
+    // serving thread is gone, and the process with it (`EndsTheProcess`). The serving thread ends
+    // the process; this one has nothing left to do.
     loop {
         std::thread::park();
     }

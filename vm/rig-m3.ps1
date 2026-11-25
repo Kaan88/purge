@@ -460,6 +460,11 @@ function Invoke-M3SecDialogMatrix([int]$K, [string]$Kind, [int]$FirstWaitSec) {
         $null = Invoke-M3SecPhase 'consent-attack' "$K" $m -WaitSec 300
         Save-M3SecShot ('c{0:D2}-{1}-attack-{2}' -f $K, $Kind, $m)
     }
+    if ("$ConsentUi" -eq 'toolkit') {
+        # What must not even be accepted by the toolkit dialog's process (review S1), on the same dialog.
+        $null = Invoke-M3SecPhase 'consent-probe' "$K" -WaitSec 300
+        Save-M3SecShot ('c{0:D2}-{1}-probe' -f $K, $Kind)
+    }
     foreach ($m in $M3SecMethods) {
         if ($m -ne $M3SecMethods[0]) {
             $null = Invoke-M3SecPhase 'consent-next' "$K" -WaitSec 300
@@ -467,6 +472,17 @@ function Invoke-M3SecDialogMatrix([int]$K, [string]$Kind, [int]$FirstWaitSec) {
         }
         $null = Invoke-M3SecPhase 'consent-control' "$K" $m -WaitSec 120
         Save-M3SecShot ('c{0:D2}-{1}-control-{2}' -f $K, $Kind, $m)
+        $K++
+    }
+    if ("$ConsentUi" -eq 'toolkit') {
+        # The toolkit dialog's own rules by real input from high, each on a fresh dialog that ends as declined (review
+        # B3): a click before the button is armed and a press held across the arming moment; Enter as it opens. With
+        # the four controls and the approval these are seven of the eight asks the client makes of a kind.
+        $null = Invoke-M3SecPhase 'consent-arm' "$K" -WaitSec 300
+        Save-M3SecShot ('c{0:D2}-{1}-rule-arm' -f $K, $Kind)
+        $K++
+        $null = Invoke-M3SecPhase 'consent-enter' "$K" -WaitSec 300
+        Save-M3SecShot ('c{0:D2}-{1}-rule-enter' -f $K, $Kind)
         $K++
     }
     $null = Invoke-M3SecPhase 'consent-next' "$K" -WaitSec 300
@@ -478,6 +494,13 @@ function Invoke-M3SecDialogMatrix([int]$K, [string]$Kind, [int]$FirstWaitSec) {
 
 function Invoke-M3SecConsent {
     $base = Start-M3Sec 'lookalike3'
+    if ("$ConsentUi" -eq 'toolkit') {
+        # The client lost while a dialog is up (review B3): a client of its own first, while nothing is uninstalled yet.
+        $null = Invoke-M3SecPhase 'kill-start' -WaitSec 120
+        Save-M3SecShot 'k00-client'
+        $null = Invoke-M3SecPhase 'kill-run' -WaitSec 900
+        Save-M3SecShot 'k01-after-kill'
+    }
     $null = Invoke-M3SecPhase 'consent-start' -WaitSec 120
     Save-M3SecShot 'c00-client'
     $k = Invoke-M3SecDialogMatrix 1 'uninstall' 900
