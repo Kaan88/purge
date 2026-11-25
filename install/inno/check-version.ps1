@@ -1,7 +1,12 @@
 # The one version of Purge is [workspace.package] version in the root Cargo.toml. This script reads it,
 # checks that Cargo.lock agrees (a --locked release build fails otherwise), and checks every exe it is
-# given: the ProductVersion string must be the version and the fixed FILEVERSION its X.Y.Z (plus .0).
+# given: the ProductVersion string must be the version and the fixed FILEVERSION its four-number form.
 # Hub (Kaan88/mdhub, docs/COMPLIANCE.md section 5) reads the installed Purge.exe's FILEVERSION.
+#
+# The four-number form (the same rule as file_version_parts in bins\versioninfo.rs): X.Y.Z -> X.Y.Z.0;
+# a pre-release X.Y.Z-alpha.N -> X.Y.Z.N, X.Y.Z-beta.N -> X.Y.Z.(1000+N), X.Y.Z-rc.N -> X.Y.Z.(2000+N),
+# N 1..999 without a leading zero (the versions the release workflow publishes as GitHub pre-releases);
+# any other suffix -> X.Y.Z.0 (built and checked, never published).
 # Exit 0 and the version on stdout when everything agrees; exit 1 with the differences otherwise.
 # Windows PowerShell 5.1 and PowerShell 7.
 #
@@ -10,12 +15,15 @@
 #   check-version.ps1 -Setup Purge-Setup-<v>.exe         and the setup's ProductVersion (Inno's
 #                                                        VersionInfoProductVersion = AppVersion)
 #   check-version.ps1 -Expect 1.2.3                      and the version a tag asks for
+#   check-version.ps1 -FileVersion                       print the four-number FILEVERSION instead
+#                                                        of the version (0.2.0-alpha.1 -> 0.2.0.1)
 
 [CmdletBinding()]
 param(
     [string[]]$Exe = @(),
     [string]$Setup = '',
-    [string]$Expect = ''
+    [string]$Expect = '',
+    [switch]$FileVersion
 )
 
 $ErrorActionPreference = 'Stop'
@@ -34,6 +42,13 @@ if ($version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$') {
     [Console]::Error.WriteLine("check-version: Cargo.toml version '$version' is not X.Y.Z[-pre]"); exit 1
 }
 $numeric = ($version -split '[-+]')[0]
+$fourth = 0
+$pre = [regex]::Match($version, '^[0-9]+\.[0-9]+\.[0-9]+-(alpha|beta|rc)\.([1-9][0-9]{0,2})$')
+if ($pre.Success) {
+    $offset = @{ alpha = 0; beta = 1000; rc = 2000 }[$pre.Groups[1].Value]
+    $fourth = $offset + [int]$pre.Groups[2].Value
+}
+$fileVersionText = "$numeric.$fourth"
 
 if ($Expect -ne '' -and $Expect -ne $version) {
     $problems.Add("the release asks for $Expect but Cargo.toml says $version")
@@ -56,7 +71,7 @@ foreach ($path in $Exe) {
     $fixed = '{0}.{1}.{2}.{3}' -f $info.FileMajorPart, $info.FileMinorPart, $info.FileBuildPart, $info.FilePrivatePart
     $product = if ($info.ProductVersion) { $info.ProductVersion.Trim() } else { '' }
     if ($product -ne $version) { $problems.Add("$path ProductVersion is '$product', not $version") }
-    if ($fixed -ne "$numeric.0") { $problems.Add("$path FILEVERSION is $fixed, not $numeric.0") }
+    if ($fixed -ne $fileVersionText) { $problems.Add("$path FILEVERSION is $fixed, not $fileVersionText") }
 }
 
 if ($Setup -ne '') {
@@ -73,5 +88,5 @@ if ($problems.Count -gt 0) {
     foreach ($p in $problems) { [Console]::Error.WriteLine("check-version: $p") }
     exit 1
 }
-$version
+if ($FileVersion) { $fileVersionText } else { $version }
 exit 0

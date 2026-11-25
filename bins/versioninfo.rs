@@ -1,9 +1,15 @@
-// A VERSIONINFO resource for a release binary, shared by `bins/purge-engine/build.rs` and
-// `bins/purge-broker/build.rs` (`include!`, so no build-dependency crate). Hub (`Kaan88/mdhub`,
-// docs/COMPLIANCE.md section 5) reads an installed app's version from the fixed FILEVERSION of its
-// exe, and Windows' Details tab shows the strings. Both carry the package version, which is the
+// A VERSIONINFO resource for a release binary, shared by `bins/purge-engine/build.rs`,
+// `bins/purge-broker/build.rs` and `bins/purge-ui/build.rs` (`include!`, so no build-dependency
+// crate). Hub (`Kaan88/mdhub`, docs/COMPLIANCE.md section 5) reads an installed app's version from
+// the fixed FILEVERSION of its exe (Purge.exe), and Windows' Details tab shows the strings. All carry
+// the package version, which is the
 // workspace version in the root Cargo.toml: the one version of Purge (install\inno\check-version.ps1
 // checks every shipped exe against it).
+//
+// The fixed FILEVERSION has four numbers, so a pre-release maps to the fourth (`file_version_parts`,
+// the same rule as `install\inno\check-version.ps1 -FileVersion`): X.Y.Z -> X.Y.Z.0,
+// X.Y.Z-alpha.N -> X.Y.Z.N, X.Y.Z-beta.N -> X.Y.Z.(1000+N), X.Y.Z-rc.N -> X.Y.Z.(2000+N), N 1..=999;
+// any other suffix -> X.Y.Z.0. The strings (FileVersion, ProductVersion) carry the full version.
 //
 // Compiled with the Windows SDK's rc.exe. Without rc.exe the build still succeeds and prints a
 // warning; the exe then has no version resource, which `check-version.ps1` refuses for a release.
@@ -25,24 +31,13 @@ fn embed_version_resource(file_name: &str, description: &str) {
         return;
     };
     let version = std::env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "0.0.0".into());
-    let numeric: Vec<u32> = version
-        .split(['-', '+'])
-        .next()
-        .unwrap_or("0.0.0")
-        .split('.')
-        .map(|p| p.parse().unwrap_or(0))
-        .collect();
-    let (a, b, c) = (
-        numeric.first().copied().unwrap_or(0),
-        numeric.get(1).copied().unwrap_or(0),
-        numeric.get(2).copied().unwrap_or(0),
-    );
+    let [a, b, c, d] = file_version_parts(&version);
     let stem = file_name.trim_end_matches(".exe");
     let script = out.join(format!("{stem}.rc"));
     let res = out.join(format!("{stem}.res"));
     // FILEOS VOS_NT_WINDOWS32, FILETYPE VFT_APP; language 0409 (en-US), code page 1200 (Unicode).
     let text = format!(
-        "1 VERSIONINFO\n FILEVERSION {a},{b},{c},0\n PRODUCTVERSION {a},{b},{c},0\n FILEOS 0x40004\n FILETYPE 1\n\
+        "1 VERSIONINFO\n FILEVERSION {a},{b},{c},{d}\n PRODUCTVERSION {a},{b},{c},{d}\n FILEOS 0x40004\n FILETYPE 1\n\
          BEGIN\n BLOCK \"StringFileInfo\"\n BEGIN\n BLOCK \"040904B0\"\n BEGIN\n\
          VALUE \"CompanyName\", \"Purge\\0\"\n VALUE \"FileDescription\", \"{description}\\0\"\n\
          VALUE \"FileVersion\", \"{version}\\0\"\n VALUE \"InternalName\", \"{stem}\\0\"\n\
@@ -71,6 +66,37 @@ fn embed_version_resource(file_name: &str, description: &str) {
     } else {
         println!("cargo:warning=the resource compiler failed; {file_name} has no version resource");
     }
+}
+
+/// The four numbers of the fixed FILEVERSION for a Cargo version (the rule at the top of this file).
+fn file_version_parts(version: &str) -> [u32; 4] {
+    let (core, pre) = match version.split('+').next().unwrap_or("").split_once('-') {
+        Some((core, pre)) => (core, Some(pre)),
+        None => (version.split('+').next().unwrap_or(""), None),
+    };
+    let mut n = core.split('.').map(|p| p.parse().unwrap_or(0));
+    let (a, b, c) = (
+        n.next().unwrap_or(0),
+        n.next().unwrap_or(0),
+        n.next().unwrap_or(0),
+    );
+    let d = pre
+        .and_then(|pre| pre.split_once('.'))
+        .and_then(|(stage, num)| {
+            let offset = match stage {
+                "alpha" => 0,
+                "beta" => 1000,
+                "rc" => 2000,
+                _ => return None,
+            };
+            let ok = !num.is_empty()
+                && num.len() <= 3
+                && !num.starts_with('0')
+                && num.bytes().all(|b| b.is_ascii_digit());
+            ok.then(|| offset + num.parse::<u32>().unwrap_or(0))
+        })
+        .unwrap_or(0);
+    [a, b, c, d]
 }
 
 /// rc.exe on PATH (a Developer prompt), else the newest x64 one of the Windows 10/11 SDK.
