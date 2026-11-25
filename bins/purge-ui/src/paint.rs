@@ -98,15 +98,34 @@ fn fill_dev(p: &mut Painter, (x0, y0, x1, y1): (i32, i32, i32, i32), c: Rgb) {
     let rows = &mut p.bmp.pixels[y0 as usize * stride..y1 as usize * stride];
     let per = h.div_ceil(threads);
     let x0 = x0 as usize * 4;
+    let fill = |band: &mut [u8]| {
+        for line in band.chunks_exact_mut(stride) {
+            for d in line[x0..x0 + w * 4].chunks_exact_mut(4) {
+                d.copy_from_slice(&px);
+            }
+        }
+    };
+    // Each band sits in a slot its thread takes; a thread the OS will not make leaves its band
+    // in the slot, and this thread fills it (a refused thread must not panic the window).
+    let slots: Vec<std::sync::Mutex<Option<&mut [u8]>>> = rows
+        .chunks_mut(per * stride)
+        .map(|b| std::sync::Mutex::new(Some(b)))
+        .collect();
+    let take = |slot: &std::sync::Mutex<Option<&mut [u8]>>| {
+        let band = slot.lock().map(|mut g| g.take()).unwrap_or(None);
+        if let Some(band) = band {
+            fill(band);
+        }
+    };
     std::thread::scope(|s| {
-        for band in rows.chunks_mut(per * stride) {
-            s.spawn(move || {
-                for line in band.chunks_exact_mut(stride) {
-                    for d in line[x0..x0 + w * 4].chunks_exact_mut(4) {
-                        d.copy_from_slice(&px);
-                    }
-                }
-            });
+        for slot in &slots {
+            let take = &take;
+            if std::thread::Builder::new()
+                .spawn_scoped(s, move || take(slot))
+                .is_err()
+            {
+                take(slot);
+            }
         }
     });
 }

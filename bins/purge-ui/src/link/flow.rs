@@ -556,6 +556,10 @@ impl Link {
             }
             LeftoversCall::Relaunch => {
                 l.set_broker_live(false);
+                // The model asks only when its link is unusable (ended, closing or refused) and
+                // nothing of its own is in flight: let the old session go, so the launch starts a
+                // new broker instead of answering "started" with the closing one (Fable S1).
+                self.broker.close(Owner::Leftovers);
                 return self.launch_for(model, Owner::Leftovers, false);
             }
             LeftoversCall::OpenHistory => {
