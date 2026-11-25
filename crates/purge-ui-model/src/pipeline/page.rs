@@ -277,11 +277,14 @@ impl ConfirmDialog {
         }
     }
 
-    /// The command line for the quiet switch's position.
+    /// The command line for the quiet switch's position: the quiet command when on, the
+    /// interactive one when off (the WinUI dialog showed the quiet one in both positions).
     pub fn command_for(&self, quiet_on: bool) -> &str {
-        match &self.confirmation.quiet_command {
-            Some(q) if quiet_on && !q.is_empty() => q,
-            _ => &self.confirmation.command,
+        let c = &self.confirmation;
+        match &c.quiet_command {
+            Some(q) if quiet_on && c.quiet_available && !q.is_empty() => q,
+            _ if !c.interactive_command.is_empty() => &c.interactive_command,
+            _ => &c.command,
         }
     }
 

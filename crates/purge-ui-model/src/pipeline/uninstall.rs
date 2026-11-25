@@ -148,6 +148,10 @@ pub struct UninstallConfirmation {
     pub steps: Vec<String>,
     /// The command for the current quiet choice.
     pub command: String,
+    /// The interactive command (the one that runs with quiet off). The WinUI dialog kept only the
+    /// selected one, so switching quiet off in the dialog still showed the quiet command; the
+    /// dialog shows this one then ([`super::page::ConfirmDialog::command_for`]).
+    pub interactive_command: String,
     /// The quiet command, when there is one.
     pub quiet_command: Option<String>,
     /// The uninstaller's signer.
@@ -1056,6 +1060,7 @@ impl UninstallController {
             target,
             steps: strings::confirm_steps(medium),
             command: self.selected_command().unwrap_or_default().to_owned(),
+            interactive_command: self.command().unwrap_or_default().to_owned(),
             quiet_command: self.quiet_command.clone(),
             signer: self.signer.clone(),
             quiet_available: self.quiet_available,
