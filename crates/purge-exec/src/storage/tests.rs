@@ -977,25 +977,44 @@ fn planted_index_objects_are_refused_and_renamed_aside() {
 }
 
 #[test]
-fn check_inspects_the_index_and_refuses_one_others_can_write() {
-    let (_s, roots) = fixture("checkindex");
+fn the_start_check_refuses_an_index_others_can_write_every_time_and_renames_nothing() {
+    let (s, roots) = fixture("checkindex");
     let index = roots.index_path();
-    roots.check().unwrap();
-    // A missing index passes the pre-flight (the installer's `{}` may not exist yet).
+    roots.check_index_at_start().unwrap();
+    // A missing index passes (the installer's `{}` may not exist yet).
     std::fs::remove_file(&index).unwrap();
-    roots.check().unwrap();
-    // A file written by an ordinary tool (inherited, unprotected DACL) stops the pre-flight.
+    roots.check_index_at_start().unwrap();
+    // A file written by an ordinary tool (inherited, unprotected DACL) stops the start ...
     std::fs::write(&index, b"{}").unwrap();
-    assert!(
-        matches!(
-            roots.check(),
-            Err(StorageError::Integrity {
-                failure: IntegrityFailure::UnprotectedDacl,
-                ..
-            })
-        ),
-        "an unprotected index passed check()"
-    );
+    let listing = |dir: &Path| {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    };
+    let before = listing(index.parent().unwrap());
+    for _ in 0..2 {
+        let err = roots.check_index_at_start().unwrap_err();
+        assert!(
+            matches!(
+                err,
+                StorageError::Integrity {
+                    failure: IntegrityFailure::UnprotectedDacl,
+                    renamed_to: None,
+                    ..
+                }
+            ),
+            "{err}"
+        );
+        // ... renames nothing aside, so the next start is refused the same way.
+        assert_eq!(listing(index.parent().unwrap()), before);
+        assert_eq!(std::fs::read(&index).unwrap(), b"{}");
+    }
+    // The general pre-flight does not look at the index (undo, recovery and history tolerate it).
+    roots.check().unwrap();
+    let _ = s;
 }
 
 #[test]

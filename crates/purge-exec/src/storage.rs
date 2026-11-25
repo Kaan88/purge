@@ -1131,25 +1131,46 @@ impl StorageRoots {
     }
 
     /// Checks the data root, `sessions`, `Quarantine` and `fp` (creating the last three when missing,
-    /// as the installer would), and `sessions\index.json` when it exists (inspected on a handle: the
-    /// `Index` rule, not read or parsed). A pre-flight for callers; every other method checks on its
-    /// own. The broker runs it before its pipe exists (M3_DESIGN 3.4), so an index others can write
-    /// stops the start (m3-broker `index-user-writable`), not only the first read.
+    /// as the installer would). A pre-flight for callers; every other method checks on its own.
     pub fn check(&self) -> Result<(), StorageError> {
+        self.layout()?;
+        self.fp_dir().map(|_| ())
+    }
+
+    /// The broker's start check of `sessions\index.json` (M3_DESIGN 3.4; m3-broker
+    /// `index-user-writable`): when the index exists it is opened inspect-only and checked on that
+    /// handle with the `Index` rule, and a failure is returned **without renaming anything**, so a
+    /// refused start writes nothing under the data root and every later start is refused the same
+    /// way. Only reading or writing the index applies the store's rename-aside policy. A missing
+    /// index passes (the installer's `{}` may not exist yet). Call after [`Self::check`].
+    pub fn check_index_at_start(&self) -> Result<(), StorageError> {
         let layout = self.layout()?;
+        let path = layout.sessions.path.join(INDEX_FILE);
         let inspect_only = at::Open {
             access: at::READ_CONTROL | at::FILE_READ_ATTRIBUTES,
             share: at::SHARE_ALL,
             create: None,
             kind: at::Kind::File,
         };
-        self.open_file_at(
-            &layout.sessions,
-            INDEX_FILE,
+        let handle = match at::open_at(&layout.sessions.handle, INDEX_FILE, inspect_only) {
+            Ok(h) => h,
+            Err(FsError::NotFound) => return Ok(()),
+            Err(e) => return Err(io("open", &path, e)),
+        };
+        match self.check_handle(
+            &path,
             ObjectKind::Index,
-            inspect_only,
-        )?;
-        self.fp_dir().map(|_| ())
+            Some(layout.sessions.as_parent()),
+            &handle,
+        )? {
+            Ok(_) => Ok(()),
+            Err((failure, _)) => Err(StorageError::Integrity {
+                path,
+                failure,
+                renamed_to: None,
+                rename_error: None,
+            }),
+        }
     }
 
     /// Creates a new session: a fresh id (UTC now + 64 random bits) and its directory under

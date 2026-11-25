@@ -127,7 +127,8 @@ The broker keeps a handle to the parent process from step 4 on. The pid cannot b
 | `SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32)` is the first call in `main` | (no failure path) |
 | The process token is elevated | exit, code `not_elevated` |
 | Own directory: on the system volume, no reparse point on the path, every ancestor writable by administrators only | exit, code `install_untrusted` |
-| Data root = known folder ProgramData + `\Purge` (never the environment); `StorageRoots::installed().check()` passes | exit, code `store_integrity` |
+| The environment is replaced by the machine block (the uninstallers' clean environment: registry machine values, `PATH` reduced to admin-only directories, the user's profile variables), `TEMP`/`TMP` = `<Windows>\SystemTemp`; added 2026-11-25 after m3-broker `env-planted` | exit, code `install_untrusted` |
+| Data root = known folder ProgramData + `\Purge` (never the environment); `StorageRoots::installed().check()` passes, and `sessions\index.json`, when present, passes the `Index` rule without being renamed aside (added 2026-11-25, m3-broker `index-user-writable`) | exit, code `store_integrity` |
 | KB and baselines = `<own directory>\kb`. `PURGE_KB_DIR` is not read. | (none) |
 | Standard handles are closed; `ShellExecuteExW` inherits no others | (none) |
 

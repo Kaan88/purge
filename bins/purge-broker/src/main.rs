@@ -6,7 +6,9 @@
 
 //! `purge-broker` entry point (M3 design 3.3, 3.4, package M3-BROKER-CORE).
 //!
-//! Order: the DLL search is restricted to System32; the start checks run (elevation first, then the
+//! Order: the DLL search is restricted to System32; the working directory is set to the own
+//! directory; the environment is replaced by the machine block (`start::pin_machine_environment`, T7);
+//! the start checks run (elevation first, then the
 //! directories); the command line is read; the parent process is opened and its creation time
 //! compared; the pipe is created (first instance only: a name that exists ends the broker); the
 //! standard handles are closed; the timing lines start going to the event log (`purge_broker::timing`,

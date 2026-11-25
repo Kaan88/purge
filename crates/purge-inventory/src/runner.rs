@@ -414,7 +414,9 @@ fn routing(
 /// the loader does not find earlier, must not resolve into a folder a standard user can write. A
 /// user-writable, missing, relative, empty or unreadable entry is dropped (review M3-R2, third Fable
 /// review). Only the environment is filtered; the command text stays the one shown (B1).
-fn uninstaller_environment(
+///
+/// The broker also replaces its own environment with this block at start (`pin_machine_environment`).
+pub fn uninstaller_environment(
     sys: &dyn SystemSource,
     fs: &dyn FileSystemSource,
 ) -> BTreeMap<String, String> {

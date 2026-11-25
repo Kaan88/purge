@@ -132,6 +132,10 @@ pub fn expand(s: &str) -> Result<String, crate::os::Win32Error> {
 pub fn set_process_var(name: &str, value: Option<&str>) -> Result<(), crate::os::Win32Error> {
     use windows_sys::Win32::System::Environment::SetEnvironmentVariableW;
 
+    // An interior NUL would silently truncate the name or value, and `=` cannot be part of a name.
+    if name.is_empty() || name.contains(['\0', '=']) || value.is_some_and(|v| v.contains('\0')) {
+        return Err(crate::os::Win32Error::INVALID_PARAMETER);
+    }
     let name_w = crate::os::wide(name);
     let value_w = value.map(crate::os::wide);
     let value_ptr = value_w.as_ref().map_or(std::ptr::null(), |v| v.as_ptr());
@@ -162,6 +166,11 @@ mod tests {
         assert!(std::env::var(name).is_err());
         // Removing it again is fine.
         set_process_var(name, None).unwrap();
+        // A NUL or `=` in a name, or a NUL in a value, is refused, not truncated.
+        for bad in ["", "A=B", "A\0B"] {
+            assert!(set_process_var(bad, Some("x")).is_err(), "{bad:?}");
+        }
+        assert!(set_process_var(name, Some("x\0y")).is_err());
     }
 
     fn map() -> EnvMap {
