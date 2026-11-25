@@ -335,6 +335,14 @@ impl Ui<'_, '_, '_> {
         w
     }
 
+    /// Gives the control declared last the whole of `text` as its name, for text drawn elided:
+    /// a reader says the whole name, and a test matches it exactly. The drawing is unchanged.
+    pub fn say_whole(&mut self, text: &str) {
+        if let Some(c) = self.ctls.last_mut() {
+            c.label = text.to_string();
+        }
+    }
+
     /// A paragraph; returns the y under it.
     #[allow(clippy::too_many_arguments)] // a place, a width and a style
     pub fn para(

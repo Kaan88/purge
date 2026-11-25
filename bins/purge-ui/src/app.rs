@@ -301,7 +301,7 @@ impl PurgeApp {
         let open = self.focus.scope() == Some(SCOPE);
         if want && !open {
             if self.model.confirm.is_some() {
-                self.focus.push_scope_on(SCOPE, id("CloseButton"));
+                self.focus.push_scope_on(SCOPE, id("ConfirmNotNowButton"));
             } else {
                 self.focus.push_scope(SCOPE);
             }
@@ -374,15 +374,15 @@ impl PurgeApp {
             "Commands.Expander" => self.view.commands_open = !self.view.commands_open,
 
             // The confirmation.
-            "PrimaryButton" => {
+            "ConfirmUninstallButton" => {
                 self.close_dropdowns();
                 self.model.confirm_uninstall(now);
             }
-            "SecondaryButton" => {
+            "ConfirmCheckAgainButton" => {
                 self.model.pipeline.still_running = false;
                 self.toast(cx, "Checked again: firefox.exe is no longer running.");
             }
-            "CloseButton" => {
+            "ConfirmNotNowButton" => {
                 self.close_dropdowns();
                 self.model.cancel_confirm();
             }

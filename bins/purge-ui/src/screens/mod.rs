@@ -522,17 +522,18 @@ fn confirm(ui: &mut Ui, m: &Model, v: &mut View) {
     } else {
         format!("Uninstall {}?", first.name)
     };
-    let title = ui.p.elide(Face::Semibold, 20.0, &title, cw);
+    let drawn = ui.p.elide(Face::Semibold, 20.0, &title, cw);
     ui.text(
         id("DialogTitle"),
         Face::Semibold,
         20.0,
         x,
         y + 10.0,
-        &title,
+        &drawn,
         pal.text,
         cw,
     );
+    ui.say_whole(&title);
     y += 40.0;
     if many {
         for (i, p) in c.programs.iter().take(4).enumerate() {
@@ -564,14 +565,27 @@ fn confirm(ui: &mut Ui, m: &Model, v: &mut View) {
         cw,
     );
     y += 24.0;
-    for step in [
+    for (k, step) in [
         "1. Record what the program registered",
         "2. Run its uninstaller as administrator",
         "3. Check that it is gone",
         "4. Find its leftovers",
         "5. Review the list before anything moves",
-    ] {
-        ui.p.text(Face::Ui, 13.0, x + 8.0, y + 9.0, step, pal.text, cw);
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        // Each line is read by its text: step 2 says the route (the rig reads it).
+        ui.text(
+            Id("ConfirmStep", k as u32 + 1),
+            Face::Ui,
+            13.0,
+            x + 8.0,
+            y + 9.0,
+            step,
+            pal.text,
+            cw,
+        );
         y += 21.0;
     }
     y += 10.0;
@@ -681,17 +695,31 @@ fn confirm(ui: &mut Ui, m: &Model, v: &mut View) {
         );
     }
 
-    let mut list = vec![(id("CloseButton"), "Not now", Style::Standard, None, true)];
+    // Ids of their own, not the WinUI template parts: the rig presses these by id and name, so
+    // a "Not now" or "Uninstall" elsewhere in the window can never be taken for them.
+    let mut list = vec![(
+        id("ConfirmNotNowButton"),
+        "Not now",
+        Style::Standard,
+        None,
+        true,
+    )];
     if m.pipeline.still_running {
         list.push((
-            id("SecondaryButton"),
+            id("ConfirmCheckAgainButton"),
             "Check again",
             Style::Standard,
             None,
             true,
         ));
     }
-    list.push((id("PrimaryButton"), "Uninstall", Style::Accent, None, true));
+    list.push((
+        id("ConfirmUninstallButton"),
+        "Uninstall",
+        Style::Accent,
+        None,
+        true,
+    ));
     let by = footer.y + (DIALOG_FOOTER - BUTTON_H) / 2.0;
     ui.buttons_right(footer.right() - DIALOG_PAD, by, &list);
 

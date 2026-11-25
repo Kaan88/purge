@@ -397,9 +397,9 @@ pub fn steps() -> Vec<Step> {
                 want(app.model.confirm.is_some(), "the confirmation is open")?;
                 want(app.model.pipeline.run.is_none(), "nothing runs yet")?;
                 for name in [
-                    "PrimaryButton",
-                    "SecondaryButton",
-                    "CloseButton",
+                    "ConfirmUninstallButton",
+                    "ConfirmCheckAgainButton",
+                    "ConfirmNotNowButton",
                     "QuietSwitch",
                     "RestorePointBox",
                     "DialogTitle",
@@ -407,7 +407,7 @@ pub fn steps() -> Vec<Step> {
                     has(app, name)?;
                 }
                 want(
-                    app.focus.focused() == Some(id("CloseButton")),
+                    app.focus.focused() == Some(id("ConfirmNotNowButton")),
                     format!(
                         "the keyboard starts on Not now, is on {:?}",
                         app.focus.focused()
@@ -465,7 +465,7 @@ pub fn steps() -> Vec<Step> {
         Step {
             name: "not-now",
             act: |app, cx| {
-                app.click(cx, id("CloseButton"));
+                app.click(cx, id("ConfirmNotNowButton"));
             },
             check: |app| {
                 want(app.model.confirm.is_none(), "Not now closed it")?;
@@ -492,9 +492,9 @@ pub fn steps() -> Vec<Step> {
         Step {
             name: "uninstall-starts-pipeline",
             act: |app, cx| {
-                app.click(cx, id("SecondaryButton"));
+                app.click(cx, id("ConfirmCheckAgainButton"));
                 app.click(cx, id("QuietSwitch"));
-                app.click(cx, id("PrimaryButton"));
+                app.click(cx, id("ConfirmUninstallButton"));
             },
             check: |app| {
                 want(app.model.page == Page::Pipeline, "on the pipeline page")?;
@@ -1052,7 +1052,7 @@ fn flow_steps() -> Vec<Step> {
         Step {
             name: "flow-runs",
             act: |app, cx| {
-                app.click(cx, id("PrimaryButton"));
+                app.click(cx, id("ConfirmUninstallButton"));
             },
             check: |app| {
                 want(app.model.page == Page::Pipeline, "on the pipeline page")?;

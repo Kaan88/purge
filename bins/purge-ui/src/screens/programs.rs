@@ -556,6 +556,7 @@ fn program_details(ui: &mut Ui, m: &Model, v: &mut View, r: Rect) {
         pal.text,
         w - 56.0,
     );
+    ui.say_whole(&g.name);
     let sub = if g.version.is_empty() {
         format!("{} \u{b7} {}", g.publisher, g.kind)
     } else {
