@@ -117,6 +117,8 @@ pub struct PurgeApp {
     pub ctls: Vec<Ctl>,
     pub hover: Option<Id>,
     pub pressed: Option<Id>,
+    /// The control the open overlay's focus scope started on (which dialog it was opened for).
+    scope_start: Option<Id>,
     pub pal: Palette,
     pub hc: bool,
     link_ink: Option<Rgb>,
@@ -182,6 +184,7 @@ impl PurgeApp {
             ctls: Vec::new(),
             hover: None,
             pressed: None,
+            scope_start: None,
             pal: mdshared_ui::theme::LIGHT,
             hc: false,
             link_ink: None,
@@ -364,18 +367,33 @@ impl PurgeApp {
     fn sync_scope(&mut self) {
         let want = self.overlay();
         let open = self.focus.scope() == Some(SCOPE);
+        // The dialog shown (the palette draws over a dialog, so it goes first).
+        let start = if self.view.palette.is_some() {
+            None
+        } else if self.model.flow.confirm.is_some() {
+            Some(id("ConfirmNotNowButton"))
+        } else if self.model.flow.elevation.showing().is_some() {
+            Some(id("DialogPrimaryButton"))
+        } else if self.model.flow.takeover.is_some() {
+            Some(id("TakeoverNotNowButton"))
+        } else {
+            None
+        };
+        // One dialog directly after another: the keyboard starts over on the new one, never on
+        // a control of the one before.
+        if want && open && start != self.scope_start {
+            self.focus.pop_scope();
+        }
+        let open = self.focus.scope() == Some(SCOPE);
         if want && !open {
-            if self.model.flow.confirm.is_some() {
-                self.focus.push_scope_on(SCOPE, id("ConfirmNotNowButton"));
-            } else if self.model.flow.elevation.showing().is_some() {
-                self.focus.push_scope_on(SCOPE, id("DialogPrimaryButton"));
-            } else if self.model.flow.takeover.is_some() {
-                self.focus.push_scope_on(SCOPE, id("TakeoverNotNowButton"));
-            } else {
-                self.focus.push_scope(SCOPE);
+            match start {
+                Some(on) => self.focus.push_scope_on(SCOPE, on),
+                None => self.focus.push_scope(SCOPE),
             }
+            self.scope_start = start;
         } else if !want && open {
             self.focus.pop_scope();
+            self.scope_start = None;
         }
     }
 
@@ -472,6 +490,8 @@ impl PurgeApp {
             "ConfirmUninstallButton" if self.ctl(id).is_none_or(|c| c.disabled) => {}
             "ConfirmUninstallButton" | "ConfirmCheckAgainButton" | "ConfirmNotNowButton" => {
                 self.close_dropdowns();
+                // A confirmation that follows at once waits its own ARM_DELAY.
+                self.view.confirm_at = None;
                 if let Some(button) = screens::confirm_button(id.0) {
                     self.model.flow_confirm(button);
                 }
@@ -479,8 +499,12 @@ impl PurgeApp {
             "QuietSwitch" => self.model.flow_quiet(),
             "DialogPrimaryButton" => self.model.flow_elevation(true),
             "DialogCloseButton" => self.model.flow_elevation(false),
-            "TakeoverEndButton" => self.model.flow_takeover(true),
-            "TakeoverNotNowButton" => self.model.flow_takeover(false),
+            // "End it" waits ARM_DELAY too, with the same guard as the Uninstall.
+            "TakeoverEndButton" if self.ctl(id).is_none_or(|c| c.disabled) => {}
+            "TakeoverEndButton" | "TakeoverNotNowButton" => {
+                self.view.takeover_at = None;
+                self.model.flow_takeover(id.0 == "TakeoverEndButton");
+            }
 
             // The Uninstall page.
             "NextButton" => self.model.flow_next(),
@@ -1766,6 +1790,9 @@ impl App for PurgeApp {
 
     fn message(&mut self, cx: &mut Cx<'_, ()>, _: ()) {
         self.pump(cx);
+        // A dialog the link's answer opened or closed takes the keyboard now, not at the next
+        // input event.
+        self.sync_scope();
         self.timers(cx);
     }
 

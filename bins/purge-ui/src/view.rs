@@ -241,6 +241,8 @@ pub struct View {
     /// The confirmation: when it was first drawn (its Uninstall waits `screens::ARM_DELAY`
     /// from then), and its body's scroll, area and height, while it is open.
     pub confirm_at: Option<Instant>,
+    /// The takeover question: when it was first drawn (its "End it" waits `screens::ARM_DELAY`).
+    pub takeover_at: Option<Instant>,
     pub confirm_scroll: SmoothScroll,
     pub confirm_area: Rect,
     pub confirm_content: f32,
@@ -284,6 +286,7 @@ impl View {
             palette: None,
             dialog_opened: false,
             confirm_at: None,
+            takeover_at: None,
             confirm_scroll: SmoothScroll::new(),
             confirm_area: Rect::default(),
             confirm_content: 0.0,
