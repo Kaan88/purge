@@ -80,6 +80,9 @@ impl Default for Pace {
     }
 }
 
+/// Why the sample's session ended, when Purge closed it.
+const CLOSED: &str = "The sample administrator part was closed.";
+
 struct State {
     live: bool,
     cancelled: HashSet<CallId>,
@@ -361,7 +364,7 @@ impl Broker for SampleBroker {
     }
 
     fn closed_reason(&self) -> Option<String> {
-        (!self.is_live()).then(|| "The sample administrator part was closed.".to_owned())
+        (!self.is_live()).then(|| CLOSED.to_owned())
     }
 
     fn allow_foreground(&self) {}
@@ -375,10 +378,36 @@ impl Broker for SampleBroker {
         let sink = self.sink.clone();
         let state = self.state.clone();
         let pace = self.pace;
-        let gone = move |state: &Arc<Mutex<State>>| {
+        // A cancelled call was answered by `cancel`; a closed session answers its calls in
+        // flight as the real link does when it ends (sent: Purge cannot tell what was done).
+        let gone = move |state: &Arc<Mutex<State>>, sink: &Sink| {
             let s = state.lock().unwrap_or_else(|e| e.into_inner());
-            !s.live || s.cancelled.contains(&call)
+            if s.cancelled.contains(&call) {
+                return true;
+            }
+            if !s.live {
+                sink.send(ClientEvent::Reply {
+                    call,
+                    result: Err(ClientError::Link {
+                        reason: CLOSED.into(),
+                        not_sent: false,
+                    }),
+                });
+                return true;
+            }
+            false
         };
+        if !self.is_live() {
+            // Never sent: answered at once, as the real client answers a call on a closed link.
+            self.sink.send(ClientEvent::Reply {
+                call,
+                result: Err(ClientError::Link {
+                    reason: CLOSED.into(),
+                    not_sent: true,
+                }),
+            });
+            return call;
+        }
         std::thread::spawn(move || {
             if consent {
                 if let Ok(shown) =
@@ -392,7 +421,7 @@ impl Broker for SampleBroker {
                 std::thread::sleep(pace.prompt);
             }
             for (k, phase) in phases.iter().enumerate() {
-                if gone(&state) {
+                if gone(&state, &sink) {
                     return;
                 }
                 if let Ok(progress) = serde_json::from_value(json!({
@@ -405,7 +434,7 @@ impl Broker for SampleBroker {
             if phases.is_empty() {
                 std::thread::sleep(pace.step / 4);
             }
-            if gone(&state) {
+            if gone(&state, &sink) {
                 return;
             }
             let ok = answer.is_ok();
@@ -437,7 +466,7 @@ impl Broker for SampleBroker {
         if was {
             self.sink.send(ClientEvent::BrokerClosed {
                 session: self.session,
-                reason: "The sample administrator part was closed.".into(),
+                reason: CLOSED.into(),
             });
         }
     }
@@ -556,5 +585,45 @@ mod tests {
         assert_eq!(replies, 1, "a cancelled call is answered once");
         b.close();
         assert!(!b.is_live());
+    }
+
+    #[test]
+    fn closing_answers_the_calls_in_flight_and_refuses_new_ones() {
+        let (b, rx) = broker();
+        let call = b.request(PipeCall::UndoRun(
+            serde_json::from_value(json!({"session": "20251115T101502Z-9f3a6c1d2b7e4a50"}))
+                .expect("undo params"),
+        ));
+        b.close();
+        let answer = loop {
+            match rx.recv_timeout(Duration::from_secs(5)).expect("an answer") {
+                ClientEvent::Reply { call: c, result } if c == call => break result,
+                _ => {}
+            }
+        };
+        assert!(
+            matches!(
+                answer,
+                Err(ClientError::Link {
+                    not_sent: false,
+                    ..
+                })
+            ),
+            "{answer:?}"
+        );
+        let late = b.request(PipeCall::UndoRun(
+            serde_json::from_value(json!({"session": "20251115T101502Z-9f3a6c1d2b7e4a50"}))
+                .expect("undo params"),
+        ));
+        let answer = loop {
+            match rx.recv_timeout(Duration::from_secs(5)).expect("an answer") {
+                ClientEvent::Reply { call: c, result } if c == late => break result,
+                _ => {}
+            }
+        };
+        assert!(
+            matches!(answer, Err(ClientError::Link { not_sent: true, .. })),
+            "{answer:?}"
+        );
     }
 }
