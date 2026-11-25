@@ -169,18 +169,20 @@ pub fn draw(ui: &mut Ui, m: &Model, v: &mut View) {
     if m.flow.confirm.is_some() {
         confirm(ui, m, v);
     } else {
-        v.confirm_at = None;
         v.confirm_scroll = mdshared_ui::scroll::SmoothScroll::new();
         v.confirm_area = Rect::default();
         if m.flow.elevation.showing().is_some() {
             elevation(ui, m.flow.elevation.showing_read_only());
         } else if let Some(t) = &m.flow.takeover {
-            takeover(ui, v, t);
+            takeover(ui, t);
         }
     }
-    if m.flow.takeover.is_none() || m.flow.confirm.is_some() || m.flow.elevation.showing().is_some()
+    // A takeover question another dialog covers is not shown: it waits its ARM_DELAY again when
+    // it shows once more.
+    if let Some(t) = &m.flow.takeover
+        && (m.flow.confirm.is_some() || m.flow.elevation.showing().is_some())
     {
-        v.takeover_at = None;
+        t.opened.reset();
     }
     v.dialog_opened = m.flow.dialog_open();
 
@@ -685,8 +687,8 @@ fn confirm(ui: &mut Ui, m: &Model, v: &mut View) {
     let z = confirm_sizes(ui, c, cw);
     let ch = full.min(ui.size.1 - 24.0);
     let now = ui.cx.now();
-    let opened = *v.confirm_at.get_or_insert(now);
-    let armed = now.saturating_duration_since(opened) >= ARM_DELAY;
+    let opened = c.opened.drawn(now);
+    let armed = c.opened.armed(now);
     if !armed {
         ui.cx.anim().wake_at(opened + ARM_DELAY);
     }
@@ -995,11 +997,11 @@ pub fn takeover_title(t: &crate::flow::Takeover) -> String {
 /// ([`crate::flow::Takeover`]). "Not now" is where the keyboard starts. "End it" sits where the
 /// explanation's "Continue" was, so it waits [`ARM_DELAY`] after the question appears, as the
 /// confirmation's Uninstall does: a double-click meant for the dialog before ends nothing.
-fn takeover(ui: &mut Ui, v: &mut View, t: &crate::flow::Takeover) {
+fn takeover(ui: &mut Ui, t: &crate::flow::Takeover) {
     let pal = ui.pal;
     let now = ui.cx.now();
-    let opened = *v.takeover_at.get_or_insert(now);
-    let armed = now.saturating_duration_since(opened) >= ARM_DELAY;
+    let opened = t.opened.drawn(now);
+    let armed = t.opened.armed(now);
     if !armed {
         ui.cx.anim().wake_at(opened + ARM_DELAY);
     }

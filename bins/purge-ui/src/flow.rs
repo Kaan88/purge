@@ -6,7 +6,9 @@
 //! ([`Flow::out`], [`Flow::lout`]), and what is open over the page. The actions the screens'
 //! controls stand for are the `Model::flow_*` methods at the end, so `app` only maps an id to one.
 
+use std::cell::Cell;
 use std::collections::VecDeque;
+use std::time::Instant;
 
 use purge_rpc::methods::{ItemKind, RestorePoint};
 use purge_ui_model::leftovers::{
@@ -18,6 +20,34 @@ use purge_ui_model::registry_label::RegistryLabel;
 
 use crate::link::Owner;
 use crate::model::{Model, Page};
+use crate::screens::ARM_DELAY;
+
+/// When a dialog was first drawn, kept with the dialog itself (review N5): a dialog made anew (a
+/// confirmation that replaces the one open) starts unopened, and one never drawn is never armed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Opened(Cell<Option<Instant>>);
+
+impl Opened {
+    /// The dialog is drawn at `now`: the time it was first drawn.
+    pub fn drawn(&self, now: Instant) -> Instant {
+        let at = self.0.get().unwrap_or(now);
+        self.0.set(Some(at));
+        at
+    }
+
+    /// The dialog is not shown (another covers it): it waits its delay again when it is.
+    pub fn reset(&self) {
+        self.0.set(None);
+    }
+
+    /// Whether [`ARM_DELAY`] has passed at `now` since the dialog was first drawn; never for a
+    /// dialog not drawn yet.
+    pub fn armed(&self, now: Instant) -> bool {
+        self.0
+            .get()
+            .is_some_and(|at| now.saturating_duration_since(at) >= ARM_DELAY)
+    }
+}
 
 /// The confirm dialog while it is open: the model's content and its controls' positions.
 #[derive(Debug, Clone)]
@@ -25,6 +55,8 @@ pub struct Confirm {
     pub dialog: ConfirmDialog,
     pub quiet_on: bool,
     pub restore_point: RestorePoint,
+    /// When it was first drawn: its Uninstall waits [`ARM_DELAY`] after that.
+    pub opened: Opened,
 }
 
 impl Confirm {
@@ -34,6 +66,7 @@ impl Confirm {
             quiet_on: dialog.quiet_on,
             restore_point: dialog.restore_point,
             dialog,
+            opened: Opened::default(),
         }
     }
 
@@ -109,6 +142,8 @@ pub struct Takeover {
     pub holder: Owner,
     /// What the holder would lose, in a sentence.
     pub what: String,
+    /// When it was first drawn: its "End it" waits [`ARM_DELAY`] after that.
+    pub opened: Opened,
 }
 
 /// The two pages of the flow and what lies over them.
@@ -435,6 +470,25 @@ mod tests {
         let mut e = Elevation::default();
         e.ask(Owner::History, false);
         assert!(!e.showing_read_only(), "History's restore or rollback");
+    }
+
+    /// Review N5: the delay runs from the dialog's own first drawing, by the clock: one never
+    /// drawn is never armed, and a covered one waits again.
+    #[test]
+    fn a_dialog_is_armed_only_its_delay_after_it_was_first_drawn() {
+        let t0 = Instant::now();
+        let opened = Opened::default();
+        assert!(!opened.armed(t0 + ARM_DELAY * 10), "never drawn");
+        assert_eq!(opened.drawn(t0), t0);
+        assert_eq!(opened.drawn(t0 + ARM_DELAY), t0, "the first drawing counts");
+        assert!(!opened.armed(t0 + ARM_DELAY / 2));
+        assert!(opened.armed(t0 + ARM_DELAY));
+        opened.reset();
+        assert!(!opened.armed(t0 + ARM_DELAY * 2));
+        let t1 = t0 + ARM_DELAY * 2;
+        opened.drawn(t1);
+        assert!(!opened.armed(t1 + ARM_DELAY / 2));
+        assert!(opened.armed(t1 + ARM_DELAY));
     }
 
     #[test]

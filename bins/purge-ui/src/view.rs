@@ -245,11 +245,8 @@ pub struct View {
     pub palette: Option<CommandPalette>,
     /// When the dialog over the page opened, to let it rise into place.
     pub dialog_opened: bool,
-    /// The confirmation: when it was first drawn (its Uninstall waits `screens::ARM_DELAY`
-    /// from then), and its body's scroll, area and height, while it is open.
-    pub confirm_at: Option<Instant>,
-    /// The takeover question: when it was first drawn (its "End it" waits `screens::ARM_DELAY`).
-    pub takeover_at: Option<Instant>,
+    /// The confirmation's body: its scroll, area and height, while it is open. (When it was
+    /// first drawn is the dialog's own, `flow::Confirm::opened`.)
     pub confirm_scroll: SmoothScroll,
     pub confirm_area: Rect,
     pub confirm_content: f32,
@@ -295,8 +292,6 @@ impl View {
             toast: None,
             palette: None,
             dialog_opened: false,
-            confirm_at: None,
-            takeover_at: None,
             confirm_scroll: SmoothScroll::new(),
             confirm_area: Rect::default(),
             confirm_content: 0.0,

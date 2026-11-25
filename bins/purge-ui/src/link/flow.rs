@@ -223,6 +223,7 @@ impl Link {
                         asking: owner,
                         holder: other,
                         what,
+                        opened: Default::default(),
                     });
                     return;
                 }

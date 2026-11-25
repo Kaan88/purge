@@ -511,11 +511,19 @@ impl PurgeApp {
             // The Uninstall waits a moment after the dialog appears (`screens::ARM_DELAY`), for
             // the keyboard and the reader too: a click or key meant for what was there lands
             // nowhere.
-            "ConfirmUninstallButton" if self.ctl(id).is_none_or(|c| c.disabled) => {}
+            // The delay is the clock's since the dialog was first drawn (`flow::Opened`), never
+            // the last frame's control: a confirmation not drawn yet, or one that replaced the one
+            // drawn, cannot be confirmed (review N5).
+            "ConfirmUninstallButton"
+                if self.ctl(id).is_none_or(|c| c.disabled)
+                    || !self
+                        .model
+                        .flow
+                        .confirm
+                        .as_ref()
+                        .is_some_and(|c| c.opened.armed(cx.now())) => {}
             "ConfirmUninstallButton" | "ConfirmCheckAgainButton" | "ConfirmNotNowButton" => {
                 self.close_dropdowns();
-                // A confirmation that follows at once waits its own ARM_DELAY.
-                self.view.confirm_at = None;
                 if let Some(button) = screens::confirm_button(id.0) {
                     self.model.flow_confirm(button);
                 }
@@ -524,9 +532,15 @@ impl PurgeApp {
             "DialogPrimaryButton" => self.model.flow_elevation(true),
             "DialogCloseButton" => self.model.flow_elevation(false),
             // "End it" waits ARM_DELAY too, with the same guard as the Uninstall.
-            "TakeoverEndButton" if self.ctl(id).is_none_or(|c| c.disabled) => {}
+            "TakeoverEndButton"
+                if self.ctl(id).is_none_or(|c| c.disabled)
+                    || !self
+                        .model
+                        .flow
+                        .takeover
+                        .as_ref()
+                        .is_some_and(|t| t.opened.armed(cx.now())) => {}
             "TakeoverEndButton" | "TakeoverNotNowButton" => {
-                self.view.takeover_at = None;
                 self.model.flow_takeover(id.0 == "TakeoverEndButton");
             }
 
