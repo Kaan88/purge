@@ -66,8 +66,8 @@ purge-rpc = { path = "crates/purge-rpc" }
 
 # The shared Rust UI toolkit (markdown-shared-rs), pinned to main f45a71c. The approved mockup used
 # main 294d330 (feat/anim merged, DECISIONS 2026-11-25); f45a71c is the later shared main.
-mdshared-ui = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "f45a71c", features = ["host", "a11y"] }
-mdshared-app = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "f45a71c" }
+mdshared-ui = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "48eedb8", features = ["host", "a11y"] }
+mdshared-app = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "48eedb8" }
 
 [workspace.lints.rust]
 missing_docs = "warn"
