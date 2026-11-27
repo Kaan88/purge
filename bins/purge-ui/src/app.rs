@@ -2127,6 +2127,12 @@ impl App for PurgeApp {
                             d.cancel();
                         }
                     }
+                    // The palette's scroll bar or text selection in hand too. It has no cancel of
+                    // its own at this toolkit pin: a release on no row and no message chooses
+                    // nothing and only lets go.
+                    if let Some(p) = &mut self.view.palette {
+                        p.release(f32::NEG_INFINITY, f32::NEG_INFINITY);
+                    }
                 }
                 cx.request_redraw_all();
             }
