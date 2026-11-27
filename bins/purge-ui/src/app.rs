@@ -884,6 +884,18 @@ impl PurgeApp {
             }
             return;
         }
+        // A single press in the search field: the selection follows the pointer until the
+        // release (or the window losing the focus, which drops `pressed`).
+        if self.pressed == Some(SEARCH) && self.view.search_drag {
+            let v = &mut self.view;
+            let before = v.search.caret();
+            v.search.drag(x - v.search_area.x, &v.search_stops);
+            if v.search.caret() != before {
+                cx.request_redraw_all();
+            }
+            cx.set_cursor(Cursor::Text);
+            return;
+        }
         if let Some(open) = self.view.dds.open()
             && let Some(d) = self.view.dds.get(open)
             && d.pointer(x, y)
@@ -988,6 +1000,7 @@ impl PurgeApp {
                     self.view.search.press(x - area.x, &stops, cx.mods().shift);
                 }
                 self.view.search_stops = stops;
+                self.view.search_drag = clicks < 2;
             }
             _ => {}
         }

@@ -216,6 +216,9 @@ pub struct View {
     pub search_stops: Vec<f32>,
     /// The search field's text area, as last drawn.
     pub search_area: Rect,
+    /// The press in the search field was a single click: while the button stays down, the
+    /// pointer's moves extend the selection (a double or triple click keeps what it selected).
+    pub search_drag: bool,
     pub blink: Option<Duration>,
     pub table: Table,
     pub list: ListView,
@@ -278,6 +281,7 @@ impl View {
             search: TextField::new(),
             search_stops: Vec::new(),
             search_area: Rect::default(),
+            search_drag: false,
             blink: None,
             table,
             list: ListView::new(),
