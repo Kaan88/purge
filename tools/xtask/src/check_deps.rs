@@ -402,11 +402,11 @@ const TOOLKIT_FEATURES: [&str; 2] = ["a11y", "host"];
 /// The toolkit's repository: where every `mdshared-*` crate comes from.
 const TOOLKIT_REPO: &str = "https://github.com/Kaan88/markdown-shared-rs";
 /// The revision the workspace's manifest names for it (`rev = "…"`).
-const TOOLKIT_REV: &str = "294d330";
+const TOOLKIT_REV: &str = "d789e8e";
 /// The commit that revision is locked to in `Cargo.lock`, in full: the toolkit code the elevated
 /// dialog is built from. A pin bump changes the two constants and is reviewed as what it is, a
 /// change of what runs elevated (review S9: any revision passed before).
-const TOOLKIT_COMMIT: &str = "294d330a9f6f10d4429e5d534b7c159e3de62ce0";
+const TOOLKIT_COMMIT: &str = "d789e8ec21f4e0235e91eeb86d693662b6193ab6";
 
 /// The one directory of the broker's sources that may name the crates [`BROKER_FEATURE`] brings
 /// (rule 6), with its trailing `/`.
@@ -2453,12 +2453,12 @@ mod tests {
         );
         assert_eq!(
             parse_line(
-                "mdshared-ui v0.1.0 (https://github.com/Kaan88/markdown-shared-rs?rev=294d330#294d330a) a11y,host"
+                "mdshared-ui v0.1.0 (https://github.com/Kaan88/markdown-shared-rs?rev=d789e8e#d789e8ec) a11y,host"
             ),
             Some(TreeLine {
                 name: "mdshared-ui",
                 version: "0.1.0",
-                source: "(https://github.com/Kaan88/markdown-shared-rs?rev=294d330#294d330a)",
+                source: "(https://github.com/Kaan88/markdown-shared-rs?rev=d789e8e#d789e8ec)",
                 features: vec!["a11y", "host"]
             })
         );
@@ -2810,8 +2810,8 @@ mod tests {
                 "(https://github.com/Kaan88/markdown-shared-rs?rev=f45a71c#f45a71c0)",
             ),
             (
-                " (https://github.com/Kaan88/markdown-shared-rs?branch=main#294d330a)",
-                "(https://github.com/Kaan88/markdown-shared-rs?branch=main#294d330a)",
+                " (https://github.com/Kaan88/markdown-shared-rs?branch=main#d789e8ec)",
+                "(https://github.com/Kaan88/markdown-shared-rs?branch=main#d789e8ec)",
             ),
         ] {
             assert_eq!(
@@ -2874,7 +2874,7 @@ mod tests {
         assert_eq!(lock_violations(&clean), Vec::<String>::new());
         assert_eq!(lock_violations(""), Vec::<String>::new());
         // Another commit behind the same short revision, and a toolkit crate from a path.
-        let other = pinned.replace(TOOLKIT_COMMIT, "294d330affffffffffffffffffffffffffffffff");
+        let other = pinned.replace(TOOLKIT_COMMIT, "d789e8ecffffffffffffffffffffffffffffffff");
         let bad = format!(
             "{}{}",
             package("mdshared-ui", &other),
@@ -2885,7 +2885,7 @@ mod tests {
             [
                 format!(
                     "Cargo.lock has mdshared-ui from git+{TOOLKIT_REPO}?rev={TOOLKIT_REV}\
-                     #294d330affffffffffffffffffffffffffffffff; the toolkit is locked to \
+                     #d789e8ecffffffffffffffffffffffffffffffff; the toolkit is locked to \
                      git+{TOOLKIT_REPO}?rev={TOOLKIT_REV}#{TOOLKIT_COMMIT}"
                 ),
                 format!(
