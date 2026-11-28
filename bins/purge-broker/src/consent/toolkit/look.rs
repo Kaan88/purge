@@ -58,6 +58,12 @@ pub fn violet(dark: bool) -> Palette {
 
 /// Whether a contrast theme's colours can be used: the text reads on the window, the highlight text
 /// on the highlight, and the disabled text is at least seen on the window.
+///
+/// The other system colours are not checked because the toolkit's contrast palette does not draw
+/// with them (review N4, at the pinned toolkit): `button_text` and `hot_light` have no field in
+/// [`Palette`], and `button_face` is the title row's fill only when the window text reads on it at
+/// 4.5:1 (the window otherwise). A test pins both, so that a toolkit that starts drawing with them
+/// fails it before the dialog does.
 pub fn readable(c: &SystemColors) -> bool {
     contrast(c.window_text, c.window) >= 4.5
         && contrast(c.highlight_text, c.highlight) >= 4.5
@@ -179,6 +185,39 @@ mod tests {
         for pal in [own, own_dark] {
             assert!(contrast(pal.text, pal.popup) >= 7.0);
             assert!(contrast(pal.on_accent, pal.accent) >= 4.5);
+        }
+    }
+
+    /// Review N4: `readable` leaves out the button and link colours because the palette does not
+    /// draw with them. Pinned here: a theme whose button text or link colour vanishes gives the
+    /// same palette, and a button face the text does not read on is not the title row's fill.
+    #[test]
+    fn the_contrast_palette_draws_with_no_colour_readable_does_not_check() {
+        let night = theme(0x000000, 0xFFFFFF, 0xD6B4FD, 0x2B2B2B);
+        let pal = contrast_palette(Some(&night), true);
+        for c in [
+            SystemColors {
+                button_text: night.button_face,
+                ..night
+            },
+            SystemColors {
+                hot_light: night.window,
+                ..night
+            },
+        ] {
+            assert!(readable(&c));
+            assert_eq!(contrast_palette(Some(&c), true), pal);
+        }
+        // A button face the window text does not read on.
+        let grey = SystemColors {
+            button_face: rgb(0xF0F0F0),
+            ..night
+        };
+        assert!(readable(&grey));
+        let pal = contrast_palette(Some(&grey), true);
+        for (what, ground) in [("title", pal.title), ("bar", pal.bar), ("popup", pal.popup)] {
+            let r = contrast(pal.text, ground);
+            assert!(r >= 4.5, "text on {what} is {r:.2}");
         }
     }
 }
