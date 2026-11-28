@@ -2,6 +2,7 @@
 
 use std::collections::HashSet;
 
+use mdshared_ui::a11y::{self, accesskit};
 use mdshared_ui::host::{App, Button, Cx, Event};
 use mdshared_ui::keys::KeyName;
 
@@ -578,6 +579,40 @@ pub fn steps() -> Vec<Step> {
             settle: 300,
         },
         Step {
+            name: "search-menu-closes-on-an-action",
+            act: |app, cx| {
+                // Review S2: the edit menu open (Shift+F10), then a UIA or Narrator invoke of a
+                // rail item. No pointer or key event reaches the field: the page change alone
+                // closes the menu, and it is not painted over the page coming in.
+                app.press_key(cx, KeyName::F(10), SHIFT);
+                app.note = app.view.search_input.menu_open().to_string();
+                app.event(
+                    cx,
+                    Event::Action(accesskit::ActionRequest {
+                        action: accesskit::Action::Click,
+                        target_tree: accesskit::TreeId::ROOT,
+                        target_node: a11y::id("NavHistory"),
+                        data: None,
+                    }),
+                );
+                // At once, not after the settle (its wake-ups would close it anyway).
+                let after = app.view.search_input.menu_open();
+                app.note = format!("{} {after}", app.note);
+            },
+            check: |app| {
+                let (before, after) = app.note.split_once(' ').unwrap_or_default();
+                want(before == "true", "Shift+F10 opened no edit menu")?;
+                want(after == "false", "the action left the menu open")?;
+                want(
+                    app.model.page == Page::History,
+                    format!("the invoke went to {:?}", app.model.page),
+                )?;
+                want(!app.view.search_input.menu_open(), "the menu is still open")?;
+                Ok("the page change by an action closed the menu".to_string())
+            },
+            settle: 700,
+        },
+        Step {
             name: "search-long-query",
             act: |app, cx| retype_search(app, cx, LONG_QUERY),
             check: |app| {
@@ -706,6 +741,52 @@ pub fn steps() -> Vec<Step> {
             },
             settle: 400,
         },
+        Step {
+            name: "list-thumb-held-across-ctrl-2",
+            act: |app, cx| {
+                // Review S2: the list's scroll thumb in hand, Ctrl+2 goes to the Uninstall
+                // page. The thumb lets go with the page: a move after it scrolls nothing.
+                let Some((_, thumb)) = app.view.list.bar else {
+                    app.note = "no bar".to_string();
+                    return;
+                };
+                press_at(app, cx, thumb.cx(), thumb.cy(), Button::Left);
+                let l = &app.view.list;
+                app.note = format!("{} {}", l.drag.is_some(), l.scroll.target());
+                app.press_key(cx, KeyName::Char('2'), CTRL);
+                app.event(
+                    cx,
+                    Event::PointerMove {
+                        x: thumb.cx(),
+                        y: thumb.cy() + 200.0,
+                    },
+                );
+                release_at(app, cx, thumb.cx(), thumb.cy() + 200.0);
+            },
+            check: |app| {
+                let l = &app.view.list;
+                let (held, before) = app.note.split_once(' ').unwrap_or_default();
+                want(
+                    held == "true",
+                    format!("the thumb was not held: {}", app.note),
+                )?;
+                want(
+                    app.model.page == Page::Pipeline,
+                    format!("Ctrl+2 went to {:?}", app.model.page),
+                )?;
+                want(l.drag.is_none(), "the thumb is still held")?;
+                let after = l.scroll.target().to_string();
+                want(
+                    after == before,
+                    format!("the move scrolled from {before} to {after}"),
+                )?;
+                Ok("the thumb let go with the page".to_string())
+            },
+            settle: 700,
+        },
+        page_step("programs-again", |app, cx| {
+            app.press_key(cx, KeyName::Char('1'), CTRL)
+        }),
         Step {
             name: "filter-tabs",
             act: |app, cx| {

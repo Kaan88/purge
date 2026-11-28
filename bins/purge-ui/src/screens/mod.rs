@@ -77,6 +77,17 @@ pub const CAPTIONS: [(WinButton, &str, &str); 3] = [
     (WinButton::Close, "Close", "Close"),
 ];
 
+/// Whether the search field takes the pointer and the keys now: drawn on the Programs page,
+/// with nothing open over it (no dialog, no palette, no drop-down's menu). Its edit menu is
+/// drawn only then, and its drag and menu end when it stops being so.
+pub fn search_live(m: &Model, v: &View) -> bool {
+    m.page == Page::Programs
+        && v.search_field.is_some()
+        && !m.flow.dialog_open()
+        && v.palette.is_none()
+        && v.dds.open().is_none()
+}
+
 /// The content card: everything right of the rail and under the title row.
 pub fn content_rect(ui: &Ui) -> Rect {
     let (w, h) = ui.size;
@@ -215,12 +226,16 @@ pub fn draw(ui: &mut Ui, m: &Model, v: &mut View) {
             draw_dropdown_menu_animated(ui.p, &pal, ui.cx.anim(), (dd, "menu"), d, window);
         }
     }
-    // The search field's edit menu (right click, Shift+F10), over everything too.
-    v.search_input.draw_menu(ui.p, &pal, window);
-
     if let Some(toast) = &v.toast {
         let t = ui.cx.anim().toggle("toast", true, fluent::ENTER);
         Bubble::toast(ui.p, &toast.text, content).draw_presence(ui.p, &pal, t);
+    }
+
+    // The search field's edit menu (right click, Shift+F10), last, over everything (AGENTS
+    // rule 2, review N5), and only while the field is live: a menu left open as the page or an
+    // overlay changed is not painted over them (review S2) and is closed by the app.
+    if search_live(m, v) {
+        v.search_input.draw_menu(ui.p, &pal, window);
     }
 }
 

@@ -41,8 +41,8 @@ use crate::screens::{self, NAV, nav_id};
 use crate::script::Script;
 use crate::ui::{Ctl, Id, Key, Look, Role, SCOPE, Ui, id};
 use crate::view::{
-    DD_ALL, DD_BACKDROP, DD_DESIGN, DD_PRESET, DD_RESTORE, DD_SORT, DD_THEME, DD_TRANSITION, Toast,
-    View,
+    DD_ALL, DD_BACKDROP, DD_DESIGN, DD_PRESET, DD_RESTORE, DD_SORT, DD_THEME, DD_TRANSITION,
+    EDIT_LABELS, Toast, View,
 };
 use crate::winplace::Placer;
 // UI-FULLFROST.
@@ -496,10 +496,17 @@ impl PurgeApp {
     /// Whether the search field takes the pointer and the keys now: drawn on the Programs page,
     /// with nothing open over it.
     fn search_live(&self) -> bool {
-        self.model.page == Page::Programs
-            && self.view.search_field.is_some()
-            && !self.overlay()
-            && self.view.dds.open().is_none()
+        screens::search_live(&self.model, &self.view)
+    }
+
+    /// Ends the search field's drag and closes its menu when it is no longer live: a page or
+    /// an overlay changed with no input event of its own (an accessibility action, the link's
+    /// answer), which `search_event` would only see at the next event (review S2).
+    fn search_settle(&mut self, cx: &mut Cx<'_, ()>) {
+        if !self.search_live() && self.view.search_input.cancel() {
+            self.view.page_dirty = true;
+            cx.request_redraw_all();
+        }
     }
 
     /// Gives one event to the search field's input (`textfield::FieldInput`): every pointer
@@ -563,6 +570,9 @@ impl PurgeApp {
         if self.model.page != page {
             self.model.page = page;
             self.close_dropdowns();
+            // Nothing held on the page left goes on over the next one: the list's scroll
+            // thumb held through Ctrl+2, the search field's drag or its menu (review S2).
+            self.let_go();
             self.view.page_scroll = scroll::SmoothScroll::new();
             // UI-PAGES2: History's and Quarantine's lists scroll with it too.
             self.view.left_scroll = scroll::SmoothScroll::new();
@@ -817,6 +827,8 @@ impl PurgeApp {
     pub fn open_palette(&mut self) {
         self.close_dropdowns();
         let mut p = CommandPalette::new();
+        // AGENTS rule 4: the query box's edit menu speaks the app's words.
+        p.set_edit_labels(EDIT_LABELS);
         p.set_placeholder("Type a command or a page");
         p.set_groups(vec![
             (0, "Go to".to_string()),
@@ -2110,6 +2122,8 @@ impl App for PurgeApp {
 
     fn message(&mut self, cx: &mut Cx<'_, ()>, _: ()) {
         self.pump(cx);
+        // The link's answer may have opened a dialog or moved the flow off the page.
+        self.search_settle(cx);
         // The bench's window waits for the icon load to end before it closes.
         if self.bench_close(cx, Instant::now()) {
             return;
@@ -2121,7 +2135,12 @@ impl App for PurgeApp {
     }
 
     fn timer_fired(&mut self, cx: &mut Cx<'_, ()>, name: &str) {
-        // The search field's input: a drag's edge scroll, its edit menu's delay.
+        // The search field's input: a drag's edge scroll, its edit menu's delay. A field that
+        // is covered or gone scrolls nothing: its drag ends instead (review N1).
+        if !self.search_live() {
+            self.search_settle(cx);
+            return;
+        }
         if let Some(area) = self.view.search_field {
             let v = &mut self.view;
             let gfx = v.hit_gfx.get_or_insert_with(Gfx::new);
@@ -2232,6 +2251,9 @@ impl App for PurgeApp {
             _ => {}
         }
         self.pump(cx);
+        // An action (UIA, Narrator) or the link's answer may have changed the page or opened
+        // something over it, with no event the field saw.
+        self.search_settle(cx);
         self.sync_scope();
         if let Some(place) = &mut self.place {
             place.watch(cx, cx.now());
