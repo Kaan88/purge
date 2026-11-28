@@ -1930,6 +1930,31 @@ function Invoke-M2Script([string]$Script, [string]$Arguments = '', [int]$Timeout
     [IO.File]::WriteAllText((Join-Path $ev 'summary.json'), '{}')
     $to = Move-M3EvidenceAside $ev
     Check 'm3-sec: an evidence dir with files is moved aside' ($to -and -not (Test-Path -LiteralPath $ev) -and (Test-Path -LiteralPath (Join-Path $to 'summary.json')))
+    # The payload's UI (New-M3SecPayload): the Rust Purge.exe alone, given as the file or as a cargo release folder
+    # (never its engine, broker or build files); the WinUI publish folder (Purge.pri beside Purge.exe) whole.
+    $pw = Join-Path $Work 'm3-payload'
+    $rel = Join-Path $pw 'release'; $pub = Join-Path $pw 'ui-publish'
+    New-Item -ItemType Directory -Force $rel, (Join-Path $pub 'de-DE') | Out-Null
+    foreach ($n in 'purge-engine.exe', 'purge-broker.exe', 'Purge.exe', 'Purge.pdb', 'xtask.exe') { [IO.File]::WriteAllText((Join-Path $rel $n), $n) }
+    foreach ($n in 'Purge.exe', 'Purge.pri', 'Microsoft.WindowsAppRuntime.dll', 'de-DE\Purge.resources.dll') { [IO.File]::WriteAllText((Join-Path $pub $n), "winui $n") }
+    function Get-HostTemp { $pw }
+    function Write-RigLog([string]$Message) { }
+    $M3.engine = Join-Path $rel 'purge-engine.exe'; $M3.broker = Join-Path $rel 'purge-broker.exe'
+    $uiOf = {
+        param($Ui)
+        $M3.ui = $Ui
+        $z = New-M3SecPayload
+        $x = Join-Path $pw ("x-" + [guid]::NewGuid().ToString('N').Substring(0, 6))
+        Expand-Archive -LiteralPath $z -DestinationPath $x
+        Remove-Item -LiteralPath $z -Force
+        @(Get-ChildItem -LiteralPath (Join-Path $x 'ui') -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName.Substring((Join-Path $x 'ui').Length + 1) } | Sort-Object)
+    }
+    $a = & $uiOf (Join-Path $rel 'Purge.exe'); $b = & $uiOf $rel; $c = & $uiOf $pub
+    Check 'm3 payload: the Rust UI is ui\Purge.exe alone, as a file or from a cargo release folder' (($a -join ',') -ceq 'Purge.exe' -and ($b -join ',') -ceq 'Purge.exe' -and
+        [IO.File]::ReadAllText((Join-Path $rel 'Purge.exe')) -eq 'Purge.exe')
+    Check 'm3 payload: the WinUI publish folder (Purge.pri beside Purge.exe) goes whole' (($c -join ',') -ceq (@('de-DE\Purge.resources.dll', 'Microsoft.WindowsAppRuntime.dll', 'Purge.exe', 'Purge.pri') -join ',') -and
+        (Test-M3WinUiPublish (Join-Path $pub 'Purge.exe')) -and -not (Test-M3WinUiPublish (Join-Path $rel 'Purge.exe')))
+    $M3.engine = ''; $M3.broker = ''; $M3.ui = ''
     # The guest script knows every case of the list (each id has its own switch branch or pattern).
     $guestText = [IO.File]::ReadAllText((Join-Path $Guest 'm3-sec.ps1'))
     $unknown = @($ids | Where-Object { $guestText -notmatch ("'" + [regex]::Escape($_) + "'") })
