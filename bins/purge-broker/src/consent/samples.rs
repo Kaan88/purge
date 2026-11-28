@@ -237,7 +237,9 @@ fn long(n: usize) -> BoundPlan {
 }
 
 /// Names that try to mislead: a right-to-left override, a line break, a look-alike and a name
-/// longer than the cut.
+/// longer than the cut. And one that does not: a folder named wholly in another script, which the
+/// view shows as it is and a renderer with a fixed set of fonts may have no glyphs for (review B1;
+/// `Sheet::drawable`). It is the only text of any sample outside ASCII that reaches a sheet.
 fn hostile() -> BoundPlan {
     plan(vec![
         file("h1", "C:\\Users\\kaan\\Documents\\invoice\u{202E}fdp.exe"),
@@ -246,6 +248,10 @@ fn hostile() -> BoundPlan {
         file(
             "h4",
             &format!(r"C:\Program Files\Vendor\{}", "long-name-".repeat(30)),
+        ),
+        file(
+            "h5",
+            "C:\\Users\\kaan\\Documents\\\u{65e5}\u{672c}\u{8a9e}\u{306e}\u{30e1}\u{30e2}",
         ),
     ])
 }

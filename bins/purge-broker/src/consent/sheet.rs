@@ -1,4 +1,4 @@
-//! A [`ConsentView`] as one scrolling sheet: what the toolkit dialog ([`super::toolkit`]) draws, as
+//! A [`ConsentView`] as one scrolling sheet: what the toolkit dialog (`super::toolkit`) draws, as
 //! [`super::dialog::pages`] is what the TaskDialog draws. Pure, and nothing but a regrouping: every
 //! line of the view is in the sheet once, in the view's order, and the sheet adds two headings and
 //! no other word. Names and paths went through [`super::text`] when the view was built; nothing here
@@ -9,7 +9,7 @@
 //! heading, then the other items under theirs. The button that approves, the box and the footer are
 //! not in the list; they stay in view below it.
 
-use super::text::{MARK, TITLE};
+use super::text::{MARK, NO_GLYPH_NOTE, TITLE, drawable, fixed_words_drawable};
 use super::view::{ConsentView, Icon};
 
 /// The heading over the other items (the TaskDialog's "Show details" part).
@@ -104,7 +104,65 @@ pub fn sheet(view: &ConsentView) -> Sheet {
     }
 }
 
+impl Block {
+    /// The same kind of line with other words.
+    fn with_text(&self, text: String) -> Block {
+        match self {
+            Block::Summary(_) => Block::Summary(text),
+            Block::AttentionHeading(_) => Block::AttentionHeading(text),
+            Block::Attention(_) => Block::Attention(text),
+            Block::OthersHeading(_) => Block::OthersHeading(text),
+            Block::Other(_) => Block::Other(text),
+            Block::More(_) => Block::More(text),
+        }
+    }
+}
+
 impl Sheet {
+    /// This sheet for a renderer that draws with a fixed set of fonts (review B1 of
+    /// BROKER-CONSENT-UI): every character the set has no glyph for is written as `\u{hex}`
+    /// ([`super::text::drawable`]), in every line, the button and the box included, and when one
+    /// was, [`NO_GLYPH_NOTE`] ends the summary. The lines, their order and their kinds are the
+    /// sheet's own. `has_glyph` is the renderer's answer for one character.
+    ///
+    /// `None` when the set cannot draw the dialog's own words or an escape
+    /// ([`super::text::fixed_words_drawable`]): that renderer must not draw the dialog.
+    pub fn drawable(&self, has_glyph: &dyn Fn(char) -> bool) -> Option<Sheet> {
+        if !fixed_words_drawable(has_glyph) {
+            return None;
+        }
+        let mut rewrote = false;
+        let mut pass = |text: &str| {
+            let out = drawable(text, has_glyph);
+            rewrote |= matches!(out, std::borrow::Cow::Owned(_));
+            out.into_owned()
+        };
+        let mut sheet = Sheet {
+            title: pass(&self.title),
+            icon: self.icon,
+            instruction: pass(&self.instruction),
+            blocks: self
+                .blocks
+                .iter()
+                .map(|b| b.with_text(pass(b.text())))
+                .collect(),
+            verification: self.verification.as_deref().map(&mut pass),
+            approve: pass(&self.approve),
+            footer: pass(&self.footer),
+        };
+        if rewrote {
+            let after_summary = sheet
+                .blocks
+                .iter()
+                .take_while(|b| matches!(b, Block::Summary(_)))
+                .count();
+            sheet
+                .blocks
+                .insert(after_summary, Block::Summary(NO_GLYPH_NOTE.to_owned()));
+        }
+        Some(sheet)
+    }
+
     /// Every line the sheet puts in front of the user, in reading order.
     pub fn lines(&self) -> Vec<&str> {
         let mut out: Vec<&str> = vec![&self.title, &self.instruction];
@@ -163,6 +221,72 @@ mod tests {
             assert_eq!(sh.icon, v.icon, "{}", s.name);
             assert!(sh.footer.contains(&v.code.to_string()), "{}", s.name);
         }
+    }
+
+    /// Review B1: for fonts that have every character the sheet is itself; for fonts that lack
+    /// some, each such character is an escape in place, the lines keep their number, order and
+    /// kinds, one note is added, and the code in the footer is untouched.
+    #[test]
+    fn the_sheet_for_fixed_fonts_escapes_what_they_lack_and_nothing_else() {
+        let ascii_and_marks = |c: char| c.is_ascii() || "\u{26a0}\u{2022}\u{b7}".contains(c);
+        let mut rewritten = 0;
+        for s in samples::all() {
+            let sh = sheet(&s.view);
+            assert_eq!(sh.drawable(&|_| true).as_ref(), Some(&sh), "{}", s.name);
+            assert_eq!(sh.drawable(&|_| false), None, "{}", s.name);
+            let got = sh.drawable(&ascii_and_marks).unwrap();
+            for line in got.lines() {
+                assert!(line.chars().all(ascii_and_marks), "{}: {line}", s.name);
+            }
+            assert_eq!(got.footer, sh.footer, "{}", s.name);
+            assert!(got.footer.contains(&s.view.code.to_string()), "{}", s.name);
+            assert_eq!((got.title.as_str(), got.icon), (TITLE, sh.icon));
+            if got == sh {
+                continue;
+            }
+            rewritten += 1;
+            let note = Block::Summary(NO_GLYPH_NOTE.to_owned());
+            assert_eq!(
+                got.blocks.iter().filter(|b| **b == note).count(),
+                1,
+                "{}",
+                s.name
+            );
+            let at = got.blocks.iter().position(|b| *b == note).unwrap();
+            assert!(
+                got.blocks[..at]
+                    .iter()
+                    .all(|b| matches!(b, Block::Summary(_))),
+                "{}",
+                s.name
+            );
+            assert!(
+                !matches!(got.blocks.get(at + 1), Some(Block::Summary(_))),
+                "{}",
+                s.name
+            );
+            let mut rest = got.blocks.clone();
+            rest.remove(at);
+            assert_eq!(rest.len(), sh.blocks.len(), "{}", s.name);
+            for (new, old) in rest.iter().zip(&sh.blocks) {
+                assert_eq!(
+                    std::mem::discriminant(new),
+                    std::mem::discriminant(old),
+                    "{}",
+                    s.name
+                );
+                assert_eq!(
+                    new.text(),
+                    drawable(old.text(), &ascii_and_marks),
+                    "{}",
+                    s.name
+                );
+            }
+        }
+        assert!(
+            rewritten > 0,
+            "a sample has a name outside ASCII, or this tests nothing"
+        );
     }
 
     /// Both renderers say the same: every entry the TaskDialog's pages name is in the sheet, and
