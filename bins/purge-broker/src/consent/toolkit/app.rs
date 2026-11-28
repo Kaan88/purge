@@ -338,6 +338,15 @@ impl<D: Desk> ConsentApp<D> {
         self.did(cx, did);
     }
 
+    /// The press held, if any, is gone without a release.
+    fn let_go(&mut self) {
+        self.pressed = None;
+        self.grip = None;
+        if let Some(open) = self.open.as_mut() {
+            open.prompt.let_go();
+        }
+    }
+
     fn action(&mut self, cx: &mut Cx<'_, Msg>, request: Request) {
         let now = cx.now();
         let Some(open) = self.open.as_mut() else {
@@ -408,7 +417,15 @@ impl<D: Desk> App for ConsentApp<D> {
                 let did = open.prompt.key(&name, press.mods, press.repeat, now);
                 self.did(cx, did);
             }
-            Event::Focus(_) => cx.request_redraw_all(),
+            // Every held press can be lost (AGENTS.md rule 3): winit on Windows sends no release
+            // when the window loses the mouse in the middle of a press, so the host says so
+            // after `Focus(false)`. The press, the thumb's grip and the pressed look all go; no
+            // click comes of a release that follows, wherever it is.
+            Event::PressLost { .. } | Event::Focus(false) => {
+                self.let_go();
+                cx.request_redraw_all();
+            }
+            Event::Focus(true) => cx.request_redraw_all(),
             Event::Scale(_) | Event::Resize { .. } => {
                 if let Some(open) = self.open.as_mut() {
                     open.metrics = None;

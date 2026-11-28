@@ -297,6 +297,14 @@ impl Prompt {
         }
     }
 
+    /// The press held since [`Prompt::pointer_on`] is gone without a release: the window lost the
+    /// keyboard or the mouse in the middle of it (the host's `PressLost`, or `Focus(false)`). No
+    /// click comes of it, whatever release follows, wherever (AGENTS.md rule 3). Returns whether a
+    /// press was held.
+    pub fn let_go(&mut self) -> bool {
+        self.held.take().is_some()
+    }
+
     /// The pointer was used somewhere else in the window: no click comes of a press held before.
     pub fn pointer_used(&mut self) -> Did {
         self.held = None;
@@ -689,6 +697,26 @@ mod tests {
             p.pointer_up(Some(Ctl::Close), now),
             Did::Answered(Outcome::Declined)
         );
+    }
+
+    /// A press lost with the keyboard (Alt+Tab, another window taking the mouse) is no click: the
+    /// release that comes after it, on the same control, presses nothing.
+    #[test]
+    fn a_press_lost_with_the_window_presses_nothing_after() {
+        for ctl in [Ctl::Approve, Ctl::Verify, Ctl::Cancel, Ctl::Close] {
+            let (mut p, now) = ready(true);
+            if ctl == Ctl::Approve {
+                p.press(Ctl::Verify, now);
+            }
+            p.pointer_on(ctl, now);
+            assert!(p.let_go(), "{ctl:?} was held");
+            assert!(!p.let_go(), "{ctl:?} let go once");
+            assert_eq!(p.pointer_up(Some(ctl), now), Did::Nothing, "{ctl:?}");
+            assert_eq!(p.answer(), None);
+        }
+        // Nothing held: nothing to let go of.
+        let (mut p, _) = ready(false);
+        assert!(!p.let_go());
     }
 
     #[test]
