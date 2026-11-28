@@ -56,8 +56,9 @@ const HELP: &str = "Purge: uninstalls programs and what they leave behind.
   --page <key>         open on programs, queue, leftovers, history, vault or settings
   --sample             show the sample data without starting the engine
   --broker-consent <n> who draws the administrator part's security prompt, for this run:
-                       taskdialog (the default) or toolkit (Purge's own look; the prompt
-                       says and approves the same)
+                       taskdialog (the default) or toolkit (Purge's own look; for
+                       development builds only: a released administrator part has no
+                       toolkit prompt and refuses it)
   --bench-stub         the launch bench's sample engine: 300 rows, no engine started
   --bench-exit         close once the launch markers are written (PURGE_BENCH_OUT)
   --bench-until <m>    the marker the bench waits for: presented, names_visible (the
