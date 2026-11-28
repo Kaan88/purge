@@ -257,3 +257,13 @@ what would reverse it. Decisions the user made themselves are marked (user).
 
 - Local commits on `m1a` are made as needed; nothing is pushed or merged without asking.
 - No sudo; root commands are handed to the user.
+
+## v1.0 scope change (2026-11-28)
+
+| Date | Decision | Why | Reverse if |
+|---|---|---|---|
+| 2026-11-28 | (user) v1.0 = M4 + M5 + M6 and their UI. All remaining tests (broker-fix VM gate, Rust-UI beta gate, M3 modes, M1b reruns, M4 corpus gate, M5/M6 evals, Narrator) move to after 1.0, except one VM run of the UI once everything is implemented. The broker-fix run was stopped; `fix/broker-start-checks` (1f7a028, with the rig maintenance pause) stays unmerged | The user wants a feature-complete app to use and test by hand; the VM gates kept taking days | The user asks for a gate before 1.0 |
+| 2026-11-28 | (user) Releases are 0.2.0-beta.N, frequent. The toolkit consent dialog stays behind `toolkit-consent`; the TaskDialog stays the default | The user's choice | — |
+| 2026-11-28 | (user) Rust builds run on the laptop through `tools/laptop/lt.sh`; the app runs on the PC | Keeps the PC free | The laptop runs out of disk or is unavailable |
+| 2026-11-28 | Coordinator: M4_PLAN open questions taken as recommended: M4 scanners and packs stay unticked until their VM gate (after 1.0); recording needs the broker (admin store only); no new delete operations in M4; standard-user accounts, "Always start as administrator", the Store tab, "Modify" and History export deferred | Preselecting on fixture tests alone is the one way a wrong item could enter a default plan; the rest keeps M4 bounded | The user asks for any of them |
+| 2026-11-28 | Coordinator: M5_PLAN questions taken as recommended: ETW runs on a thread inside the broker with `windows-sys` (no ferrisetw, no `purge-trace.exe`); watched items are capped at Tier B and never ticked in 1.0; watching is on by default with a Settings switch | ferrisetw is stale (windows 0.57) and would add about a dozen crates to the elevated binary; Traced evidence is unvalidated until the eval | The recall eval passes after 1.0 |
