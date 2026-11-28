@@ -9,7 +9,9 @@
 //! heading, then the other items under theirs. The button that approves, the box and the footer are
 //! not in the list; they stay in view below it.
 
-use super::text::{MARK, NO_GLYPH_NOTE, TITLE, drawable, fixed_words_drawable};
+use std::ops::Range;
+
+use super::text::{MARK, NO_GLYPH_NOTE, TITLE, drawable_line, fixed_words_drawable};
 use super::view::{ConsentView, Icon};
 
 /// The heading over the other items (the TaskDialog's "Show details" part).
@@ -128,12 +130,25 @@ impl Sheet {
     /// `None` when the set cannot draw the dialog's own words or an escape
     /// ([`super::text::fixed_words_drawable`]): that renderer must not draw the dialog.
     pub fn drawable(&self, has_glyph: &dyn Fn(char) -> bool) -> Option<Sheet> {
+        self.drawable_lines(has_glyph, &|_| Vec::new())
+    }
+
+    /// [`Sheet::drawable`] for a renderer that also says which parts of a whole line its layout
+    /// would draw with a missing glyph (TK-1, rule 2): `undrawn` is asked about every line, and what
+    /// it names is written out too ([`super::text::drawable_line`]). Then it is asked again about
+    /// every line of the result, the note included, and the answer is `None` unless it names
+    /// nothing: the renderer is never handed a line it says it cannot draw.
+    pub fn drawable_lines(
+        &self,
+        has_glyph: &dyn Fn(char) -> bool,
+        undrawn: &dyn Fn(&str) -> Vec<Range<usize>>,
+    ) -> Option<Sheet> {
         if !fixed_words_drawable(has_glyph) {
             return None;
         }
         let mut rewrote = false;
         let mut pass = |text: &str| {
-            let out = drawable(text, has_glyph);
+            let out = drawable_line(text, has_glyph, &undrawn(text));
             rewrote |= matches!(out, std::borrow::Cow::Owned(_));
             out.into_owned()
         };
@@ -160,6 +175,9 @@ impl Sheet {
                 .blocks
                 .insert(after_summary, Block::Summary(NO_GLYPH_NOTE.to_owned()));
         }
+        if sheet.lines().iter().any(|line| !undrawn(line).is_empty()) {
+            return None;
+        }
         Some(sheet)
     }
 
@@ -178,7 +196,44 @@ impl Sheet {
 mod tests {
     use super::super::dialog::{PRIMARY, pages};
     use super::super::samples;
+    use super::super::text::drawable;
     use super::*;
+
+    /// TK-1, rule 2: what the renderer's layout says it cannot draw is written out, the note is
+    /// added, and a renderer that still says so of the result gets no sheet.
+    #[test]
+    fn the_sheet_for_a_layout_escapes_what_it_would_not_draw() {
+        let all = |_: char| true;
+        let mut sh = sheet(&samples::all()[0].view);
+        sh.blocks
+            .push(Block::Other("C:\\Mozill\u{430}\u{20dd}".to_owned()));
+        // The layout draws the Cyrillic a with its enclosing circle as a missing glyph.
+        let pair = |line: &str| -> Vec<Range<usize>> {
+            line.find("\u{430}\u{20dd}")
+                .map(|at| at..at + 5)
+                .into_iter()
+                .collect()
+        };
+        let got = sh.drawable_lines(&all, &pair).unwrap();
+        assert_eq!(
+            got.blocks.last(),
+            Some(&Block::Other(r"C:\Mozill\u{430}\u{20dd}".to_owned()))
+        );
+        assert_eq!(
+            got.blocks
+                .iter()
+                .filter(|b| **b == Block::Summary(NO_GLYPH_NOTE.to_owned()))
+                .count(),
+            1
+        );
+        // Nothing named: the sheet itself.
+        assert_eq!(sh.drawable_lines(&all, &|_| Vec::new()), Some(sh.clone()));
+        // A layout that cannot draw even the escapes: no sheet.
+        assert_eq!(
+            sh.drawable_lines(&all, &|l| std::iter::once(0..l.len()).collect()),
+            None
+        );
+    }
 
     /// The view's own lines, in the order the sheet must keep.
     fn view_lines(v: &ConsentView) -> Vec<&str> {

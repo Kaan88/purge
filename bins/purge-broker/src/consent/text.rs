@@ -438,13 +438,30 @@ pub fn fixed_words_drawable(has_glyph: &dyn Fn(char) -> bool) -> bool {
 /// its backslash as `\u{5c}` where the text enters the view, so every `\u{` this pass sees is an
 /// escape, and this pass leaves escapes alone.
 pub fn drawable<'a>(text: &'a str, has_glyph: &dyn Fn(char) -> bool) -> std::borrow::Cow<'a, str> {
-    let keeps = |c: char| fixed(c) || has_glyph(c);
-    if text.chars().all(keeps) {
+    drawable_line(text, has_glyph, &[])
+}
+
+/// [`drawable`] for a renderer that can also say which parts of a whole line it would not draw:
+/// `undrawn` is the byte ranges of `text` its layout draws with a missing glyph (TK-1: a letter and
+/// a combining mark that no single font has together are such a range, although each has a glyph
+/// alone). A character that is not one of [`fixed`] is written as `\u{hex}` when `has_glyph` says
+/// no to it alone, or when it is inside one of the ranges; the characters of [`fixed`] are never
+/// rewritten, wherever they are. A range is a whole cluster, so the marks that went with an escaped
+/// letter are escaped with it, and what is left of the cluster is characters of [`fixed`], which
+/// the renderer draws alone.
+pub fn drawable_line<'a>(
+    text: &'a str,
+    has_glyph: &dyn Fn(char) -> bool,
+    undrawn: &[std::ops::Range<usize>],
+) -> std::borrow::Cow<'a, str> {
+    let keeps =
+        |i: usize, c: char| fixed(c) || (has_glyph(c) && !undrawn.iter().any(|r| r.contains(&i)));
+    if text.char_indices().all(|(i, c)| keeps(i, c)) {
         return std::borrow::Cow::Borrowed(text);
     }
     let mut out = String::with_capacity(text.len() + 16);
-    for c in text.chars() {
-        if keeps(c) {
+    for (i, c) in text.char_indices() {
+        if keeps(i, c) {
             out.push(c);
         } else {
             out.push_str(&escape(c));
@@ -499,6 +516,34 @@ mod tests {
         // An escape is made of characters that are never rewritten: a second pass changes nothing.
         let once = drawable("\u{65e5}\u{e9}", &nothing).into_owned();
         assert_eq!(drawable(&once, &nothing), once);
+    }
+
+    /// TK-1, rule 2: what the renderer's layout of the whole line would not draw is written out by
+    /// whole clusters, though each character has a glyph alone; the fixed characters stay.
+    #[test]
+    fn what_the_layout_of_a_line_cannot_draw_is_written_as_an_escape() {
+        // One range of a line, as the renderer's layout names it.
+        let one = |r: std::ops::Range<usize>| vec![r];
+        let all = |_: char| true;
+        // A Cyrillic a and U+20DD (bytes 6..11), which no single font has together.
+        let line = "Mozill\u{430}\u{20dd}.exe";
+        assert_eq!(
+            drawable_line(line, &all, &one(6..11)),
+            r"Mozill\u{430}\u{20dd}.exe"
+        );
+        // A range that holds a fixed character: it is drawn alone, so it stays.
+        assert_eq!(drawable_line("e\u{20dd}x", &all, &one(0..4)), r"e\u{20dd}x");
+        // No range and every glyph: the same text, not a copy.
+        let got = drawable_line(line, &all, &[]);
+        assert!(matches!(got, std::borrow::Cow::Borrowed(_)));
+        // Both rules at once: one character alone, two by their cluster.
+        assert_eq!(
+            drawable_line("\u{65e5}\u{430}\u{301}", &|c| c != '\u{65e5}', &one(3..7)),
+            r"\u{65e5}\u{430}\u{301}"
+        );
+        // A second pass over the escaped text changes nothing.
+        let once = drawable_line(line, &all, &one(6..11)).into_owned();
+        assert_eq!(drawable_line(&once, &all, &[]), once);
     }
 
     /// Review N5: a literal `\u{` from outside cannot pass for one of Purge's escapes, in either
