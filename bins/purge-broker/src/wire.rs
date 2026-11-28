@@ -5,6 +5,7 @@
 use std::io;
 use std::time::Duration;
 
+use purge_rpc::methods::ConsentRenderer;
 use purge_win::pipe::{ExpectedPeer, PeerMismatch, PipeError, PipeOptions, PipeServer};
 use purge_win::process::ProcessHandle;
 use purge_win::taskdialog::{Dialog, Outcome, Page};
@@ -104,13 +105,13 @@ impl Consent for TaskDialogConsent {
         pages: &[Page],
         primary: i32,
         closer: &Closer,
-        shown: &(dyn Fn() + Sync),
+        shown: &(dyn Fn(ConsentRenderer) + Sync),
     ) -> io::Result<Outcome> {
         let dialog = Dialog::open(pages, primary)?;
         let handle = dialog.close_handle();
         closer.arm(move || handle.close());
         if dialog.wait_created(CREATE_WAIT) {
-            shown();
+            shown(ConsentRenderer::TaskDialog);
         }
         let outcome = dialog.wait();
         closer.disarm();

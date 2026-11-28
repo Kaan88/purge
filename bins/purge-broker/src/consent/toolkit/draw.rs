@@ -8,8 +8,10 @@
 //!
 //! Every word drawn is the sheet's, but two hints beside a disabled button ([`SCROLL_HINT`],
 //! [`TICK_HINT`]). Text is wrapped, never cut: a line that does not fit its column breaks inside a
-//! word (a path has no spaces), and the only elided text is the title row's and the button's label,
-//! which the view keeps short.
+//! word (a path has no spaces), and the only elided text is the title row's, which is the same
+//! fixed words on every dialog. The label of the button that approves is drawn whole, as the
+//! TaskDialog shows it: the view builds it of fixed words and a count, never of a name, and the
+//! tests here hold the longest it can build to the room the button has.
 
 use std::ops::Range;
 use std::time::Instant;
@@ -511,7 +513,12 @@ pub fn draw(
     // The verification box.
     if let (Some(row), Some(tick), Some(text)) = (lay.verify, lay.tick(), &sheet.verification) {
         p.fill(Rect::new(0.0, row.y, w, px), pal.popup_line);
-        let mut state = Tick::new(prompt.ticked());
+        // Off until the end of the list has been on screen (review S6).
+        let mut state = if prompt.verify_enabled() {
+            Tick::new(prompt.ticked())
+        } else {
+            Tick::disabled(prompt.ticked())
+        };
         if ring(Ctl::Verify) {
             state = state.with_focus();
             draw_ring(p, pal, tick, 4.0);
@@ -564,9 +571,10 @@ pub fn draw(
             room,
         );
     }
-    let label = p.elide(Face::Semibold, 13.0, &sheet.approve, lay.approve.w - 16.0);
+    // Whole, never elided: what the button does is not cut short.
+    let label = sheet.approve.as_str();
     if !prompt.approve_enabled(frame.now) {
-        draw_dialog_button_disabled(p, pal, lay.approve, &label, true);
+        draw_dialog_button_disabled(p, pal, lay.approve, label, true);
     } else if sheet.icon == Icon::Warning && !look.contrast {
         let (fill, ink) = look.danger();
         let (hovered, pressed) = (hot(Ctl::Approve), down(Ctl::Approve) && hot(Ctl::Approve));
@@ -578,13 +586,13 @@ pub fn draw(
             fill
         };
         p.rbox(lay.approve, 5.0, fill);
-        p.text_center(Face::Semibold, 13.0, lay.approve, &label, ink);
+        p.text_center(Face::Semibold, 13.0, lay.approve, label, ink);
     } else {
         draw_dialog_button(
             p,
             pal,
             lay.approve,
-            &label,
+            label,
             true,
             hot(Ctl::Approve),
             down(Ctl::Approve),
@@ -768,8 +776,16 @@ mod tests {
                 prompt.opened(t0);
                 let lay = Layout::new(&m, (WIDTH, h), 0.0);
                 if lay.end_in_view() {
-                    prompt.saw_end();
+                    prompt.saw_end(t0);
                 }
+                // The label of the button is drawn whole: it has the room it asks for.
+                assert_eq!(
+                    m.approve_w,
+                    dialog_button_w(&mut Painter::new(&mut scratch, &mut gfx, 1.0), &sh.approve),
+                    "{}: {:?} fits its button",
+                    s.name,
+                    sh.approve
+                );
                 assert_eq!(
                     lay.end_in_view(),
                     m.full_height() <= MAX_HEIGHT + 1.0,
@@ -816,10 +832,32 @@ mod tests {
         assert_eq!(hint(&p, t0), None, "the first second needs no words");
         let now = t0 + ARM_DELAY;
         assert_eq!(hint(&p, now), Some(SCROLL_HINT));
-        p.saw_end();
+        p.saw_end(now);
         assert_eq!(hint(&p, now), Some(TICK_HINT));
         p.press(Ctl::Verify, now);
+        // Ticked: the button is still off for the delay of the end, which needs no words.
         assert_eq!(hint(&p, now), None);
-        assert!(p.approve_enabled(now));
+        assert!(!p.approve_enabled(now));
+        assert!(p.approve_enabled(now + ARM_DELAY));
+        assert_eq!(hint(&p, now + ARM_DELAY), None);
+    }
+
+    /// The label of the button that approves is never elided, so the longest one the view can
+    /// build must fit: fixed words and a count of at most ten digits (`view`'s `items`). This one
+    /// is longer than any of them.
+    #[test]
+    fn the_longest_label_fits_the_button() {
+        let mut gfx = Gfx::new();
+        let all = samples::all();
+        let mut sh = sheet(&all[0].view);
+        sh.approve = "Delete 4,294,967,295 registry backups now, for good".to_owned();
+        for scale in [1.0, 1.25, 1.5, 2.0, 3.0] {
+            let mut scratch = mdshared_text::Bitmap::new(1, 1);
+            let mut p = Painter::new(&mut scratch, &mut gfx, scale);
+            let m = measure(&mut p, &sh, WIDTH, scale);
+            assert_eq!(m.approve_w, dialog_button_w(&mut p, &sh.approve), "{scale}");
+            let lay = Layout::new(&m, (WIDTH, MIN_HEIGHT), 0.0);
+            assert!(lay.approve.x >= PAD, "{scale}");
+        }
     }
 }

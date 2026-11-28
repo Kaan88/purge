@@ -994,6 +994,7 @@ mod api_tests {
                 v(ConsentShown {
                     request: RequestId(10),
                     code: ConfirmCode::of(&hash()),
+                    ui: ConsentRenderer::TaskDialog,
                 }),
             );
             put("notification.exec.progress", v(progress(10, "move", None)));
@@ -1055,6 +1056,37 @@ mod api_tests {
             let stem = name.strip_suffix(".json").unwrap_or(&name);
             assert!(stems.contains(stem), "fixture {name} has no type");
         }
+    }
+
+    /// `consent.shown` names the dialog only when it is the toolkit's: the TaskDialog's line is
+    /// what it was before the member existed, and a line without it reads as the TaskDialog.
+    #[test]
+    fn consent_shown_names_the_toolkit_dialog_and_leaves_the_taskdialog_out() {
+        let shown = |ui| ConsentShown {
+            request: RequestId(10),
+            code: ConfirmCode::of(&hash()),
+            ui,
+        };
+        let plain = serde_json::to_value(shown(ConsentRenderer::TaskDialog)).unwrap();
+        assert_eq!(plain.get("ui"), None, "{plain}");
+        assert_eq!(plain.as_object().unwrap().len(), 2, "{plain}");
+        let back: ConsentShown = serde_json::from_value(plain).unwrap();
+        assert_eq!(back.ui, ConsentRenderer::TaskDialog);
+
+        let toolkit = serde_json::to_value(shown(ConsentRenderer::Toolkit)).unwrap();
+        assert_eq!(toolkit["ui"], "toolkit", "{toolkit}");
+        let back: ConsentShown = serde_json::from_value(toolkit).unwrap();
+        assert_eq!(back.ui, ConsentRenderer::Toolkit);
+
+        // The names are the values of the broker's `--consent` argument, and nothing else is one.
+        let named = |ui: &str| {
+            serde_json::from_value::<ConsentShown>(json!({
+                "request": 1, "code": "A1B2-C3D4", "ui": ui
+            }))
+        };
+        assert_eq!(named("taskdialog").unwrap().ui, ConsentRenderer::TaskDialog);
+        assert!(named("Toolkit").is_err());
+        assert!(named("").is_err());
     }
 
     #[test]
@@ -1703,6 +1735,7 @@ mod api_tests {
                     let refused = notify.notify(&ServerNotification::ConsentShown(ConsentShown {
                         request: id,
                         code: ConfirmCode::of(&hash()),
+                        ui: ConsentRenderer::TaskDialog,
                     }));
                     assert!(matches!(
                         refused,

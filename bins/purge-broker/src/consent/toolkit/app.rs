@@ -24,12 +24,13 @@ use purge_win::taskdialog::Outcome;
 use purge_win::topwindow;
 use winit::dpi::LogicalSize;
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+use winit::window::WindowButtons;
 
 use super::super::sheet::Sheet;
 use super::access;
 use super::draw::{Frame, Hit, LINE, Layout, MAX_HEIGHT, Metrics, WIDTH, draw, measure};
 use super::look::Look;
-use super::state::{ARM_DELAY, Did, Prompt, Scroll};
+use super::state::{Did, Prompt, Scroll};
 
 /// What reaches the window from other threads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,6 +55,11 @@ pub trait Desk: 'static {
     fn shown(&self, id: u64);
     /// Dialog `id` was answered.
     fn answered(&self, id: u64, outcome: Outcome);
+    /// The window exists and `hwnd` is its handle, for as long as the loop runs. Nothing by
+    /// default.
+    fn window(&self, hwnd: isize) {
+        let _ = hwnd;
+    }
     /// A frame of dialog `id` was drawn into `p`; `open_for_ms` since it was first on screen. For
     /// the preview's pictures; nothing by default.
     fn frame(&self, id: u64, p: &mut Painter, open_for_ms: u128) {
@@ -68,6 +74,9 @@ struct Open {
     metrics: Option<Metrics>,
     layout: Option<Layout>,
     scroll: f32,
+    /// A frame of it was drawn for the window while the window was on screen. The host presents a
+    /// frame when the drawing returns, so the frame after this one finds the dialog on screen.
+    drawn: bool,
     /// The desk was told it is up.
     told: bool,
 }
@@ -165,6 +174,7 @@ impl<D: Desk> ConsentApp<D> {
             metrics: None,
             layout: None,
             scroll: 0.0,
+            drawn: false,
             told: false,
         });
         self.hover = None;
@@ -174,7 +184,18 @@ impl<D: Desk> ConsentApp<D> {
         if !first {
             cx.window().set_visible(true);
         }
+        Self::restore(cx);
         cx.request_redraw_all();
+    }
+
+    /// Brings the window back from the taskbar if it is there (review S8). The host draws nothing
+    /// in a minimized window, so a dialog put in one would never count as shown, and one taken
+    /// down in one would keep its words (the taskbar shows them) and never be hidden. The window
+    /// has no minimize box ([`App::start`]); this is for whatever minimizes it all the same.
+    fn restore(cx: &mut Cx<'_, Msg>) {
+        if cx.window().is_minimized() == Some(true) {
+            cx.window().set_minimized(false);
+        }
     }
 
     /// The dialog ended: the desk is told, and the window is painted blank and then hidden.
@@ -191,6 +212,8 @@ impl<D: Desk> ConsentApp<D> {
         self.pressed = None;
         self.grip = None;
         self.hide = false;
+        // The blank frame must be drawn for the window to be hidden: see `restore`.
+        Self::restore(cx);
         cx.request_redraw_all();
     }
 
@@ -340,7 +363,13 @@ impl<D: Desk> App for ConsentApp<D> {
 
     fn start(&mut self, cx: &mut Cx<'_, Msg>) {
         self.desk.started(cx.proxy());
+        if let Some(hwnd) = Self::hwnd(cx) {
+            self.desk.window(hwnd);
+        }
         cx.window().set_resizable(false);
+        // The close box only: a dialog is not put away on the taskbar, where it could not be
+        // drawn (review S8), and it has one size.
+        cx.window().set_enabled_buttons(WindowButtons::CLOSE);
         self.retheme(cx);
         self.show(cx, None, true);
     }
@@ -441,22 +470,31 @@ impl<D: Desk> App for ConsentApp<D> {
         };
         let lay = Layout::new(m, size, open.scroll);
         open.scroll = lay.scroll;
-        if visible {
-            if open.prompt.opened(now) {
-                // On screen for the first time: the delay of the button runs from here.
-                cx.wake_at(now + ARM_DELAY);
-            }
-            if lay.end_in_view() {
-                open.prompt.saw_end();
-            }
-            if let Some(at) = open.prompt.opened_at()
-                && !open.prompt.armed(now)
-            {
-                cx.wake_at(at + ARM_DELAY);
-            }
-        } else {
+        let mut raise = false;
+        if !visible {
             // The host draws the first frame before it shows the window: come back once it has.
             cx.wake_at(now);
+        } else if open.prompt.opened_at().is_none() {
+            if open.drawn {
+                // On screen: a frame of this dialog was drawn for the visible window and
+                // presented, and `now` was read after that. The delay of the button runs from
+                // here, not from a frame that was still to be measured, drawn and presented
+                // (review S5).
+                open.prompt.opened(now);
+            } else {
+                // This frame is the first the window on screen gets: it is presented when this
+                // call returns. Come back then.
+                open.drawn = true;
+                raise = true;
+                cx.wake_at(now);
+            }
+        }
+        if lay.end_in_view() {
+            // Counts only once the dialog is on screen; starts the delay of the end.
+            open.prompt.saw_end(now);
+        }
+        if let Some(at) = open.prompt.arms_at(now) {
+            cx.wake_at(at);
         }
         open.prompt.tick(now);
         let frame = Frame {
@@ -471,11 +509,12 @@ impl<D: Desk> App for ConsentApp<D> {
                 .frame(open.id, p, now.saturating_duration_since(at).as_millis());
         }
         open.layout = Some(lay);
-        if visible && !open.told {
+        if raise && let Some(hwnd) = Self::hwnd(cx) {
+            topwindow::raise(hwnd);
+        }
+        // Up, and answerable, once it is on screen by the same measure as the delay.
+        if open.prompt.opened_at().is_some() && !open.told {
             open.told = true;
-            if let Some(hwnd) = Self::hwnd(cx) {
-                topwindow::raise(hwnd);
-            }
             self.desk.shown(open.id);
         }
         cx.accessibility_changed();

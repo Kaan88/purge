@@ -12,8 +12,8 @@ use windows_sys::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    FLASHW_ALL, FLASHW_TIMERNOFG, FLASHWINFO, FlashWindowEx, GetCursorPos, GetWindowRect,
-    SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SetForegroundWindow, SetWindowPos,
+    FLASHW_ALL, FLASHW_TIMERNOFG, FLASHWINFO, FlashWindowEx, GetCursorPos, GetWindowRect, SW_HIDE,
+    SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SetForegroundWindow, SetWindowPos, ShowWindow,
 };
 
 /// A work area or a window, device px: `(left, top, right, bottom)`.
@@ -100,6 +100,16 @@ pub fn raise(hwnd: isize) -> bool {
     false
 }
 
+/// Hides window `hwnd` at once. Call it on the thread that owns the window. For a window whose
+/// thread is about to stop for good (a panic on it): what it shows is nobody's any more, and it
+/// will not paint or answer again. A stale handle just fails.
+pub fn hide(hwnd: isize) {
+    // SAFETY: plain window call; a stale handle just fails.
+    unsafe {
+        ShowWindow(hwnd as HWND, SW_HIDE);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -119,5 +129,6 @@ mod tests {
     fn a_window_that_is_not_there_is_neither_moved_nor_raised() {
         assert!(!center_on(0, (0, 0, 800, 600)));
         assert!(!raise(0));
+        hide(0);
     }
 }

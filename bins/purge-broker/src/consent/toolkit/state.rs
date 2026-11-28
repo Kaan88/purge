@@ -9,8 +9,12 @@
 //!   open they cancel. Esc cancels wherever the keyboard is.
 //! - The button that approves is pressed only when it is enabled, and it is enabled only when all of
 //!   these hold at the moment of the press, by the clock: the dialog has been on screen for
-//!   [`ARM_DELAY`]; the verification box, when there is one, is ticked; and the end of the list has
-//!   been on screen (the TaskDialog has the button on its last page only).
+//!   [`ARM_DELAY`]; the end of the list has been on screen for [`ARM_DELAY`] (the TaskDialog has the
+//!   button on its last page only, and starts the delay again when that page shows); and the
+//!   verification box, when there is one, is ticked.
+//! - The verification box is ticked only once the end of the list has been on screen: the
+//!   TaskDialog clears it when the last page shows, so that it cannot be ticked before anything was
+//!   read (review S6).
 //! - A press before the dialog is on screen does nothing, whatever it is on, except that a cancel is
 //!   always taken.
 //! - A key the system repeats because it is held never presses a button.
@@ -26,8 +30,9 @@ use purge_win::taskdialog::Outcome;
 
 use super::super::sheet::Sheet;
 
-/// How long the button that approves stays disabled after the dialog is first on screen: the
-/// TaskDialog's delay (review M3-R1 S6), so that a click aimed at another window cannot land on it.
+/// How long the button that approves stays disabled after the dialog is first on screen, and after
+/// the end of its list is: the TaskDialog's delay (review M3-R1 S6), so that a click aimed at
+/// another window, or at the list that was just scrolled, cannot land on it.
 pub const ARM_DELAY: Duration = Duration::from_secs(1);
 
 /// The controls of the dialog.
@@ -75,7 +80,8 @@ pub struct Prompt {
     sheet: Arc<Sheet>,
     opened: Option<Instant>,
     ticked: bool,
-    seen_end: bool,
+    /// When the end of the list was first on screen.
+    seen_end: Option<Instant>,
     focus: Ctl,
     ring: bool,
     /// The control a held press of the pointer began on, when a click may come of it.
@@ -90,7 +96,7 @@ impl Prompt {
             sheet,
             opened: None,
             ticked: false,
-            seen_end: false,
+            seen_end: None,
             focus: Ctl::Cancel,
             ring: true,
             held: None,
@@ -118,24 +124,37 @@ impl Prompt {
         self.opened
     }
 
-    /// The end of the list was on screen. Counts only once the dialog itself is. Returns whether
-    /// this was news.
-    pub fn saw_end(&mut self) -> bool {
-        if self.opened.is_none() || self.seen_end {
+    /// The end of the list is on screen at `now`. Counts only once the dialog itself is. The first
+    /// call starts the delay of the end; later ones change nothing. Returns whether this was the
+    /// first.
+    pub fn saw_end(&mut self, now: Instant) -> bool {
+        let Some(opened) = self.opened else {
+            return false;
+        };
+        if self.seen_end.is_some() {
             return false;
         }
-        self.seen_end = true;
+        // Never before the dialog: a clock read earlier than the one that opened it changes nothing.
+        self.seen_end = Some(now.max(opened));
         true
     }
 
     /// Whether the end of the list has been on screen.
     pub fn seen_end(&self) -> bool {
-        self.seen_end
+        self.seen_end.is_some()
     }
 
     /// Whether the box is ticked.
     pub fn ticked(&self) -> bool {
         self.ticked
+    }
+
+    /// Whether the box can be ticked: there is one, and the end of the list has been on screen.
+    pub fn verify_enabled(&self) -> bool {
+        self.answer.is_none()
+            && self.sheet.verification.is_some()
+            && self.opened.is_some()
+            && self.seen_end.is_some()
     }
 
     /// Whether [`ARM_DELAY`] has passed at `now` since the dialog was first on screen.
@@ -144,11 +163,24 @@ impl Prompt {
             .is_some_and(|at| now.saturating_duration_since(at) >= ARM_DELAY)
     }
 
+    /// Whether [`ARM_DELAY`] has passed at `now` since the end of the list was first on screen.
+    pub fn end_armed(&self, now: Instant) -> bool {
+        self.seen_end
+            .is_some_and(|at| now.saturating_duration_since(at) >= ARM_DELAY)
+    }
+
+    /// When a delay that still runs at `now` is over: the dialog's, or the end's once it was on
+    /// screen. `None` when none runs. For the window, which draws again then.
+    pub fn arms_at(&self, now: Instant) -> Option<Instant> {
+        let at = self.seen_end.or(self.opened)? + ARM_DELAY;
+        (at > now).then_some(at)
+    }
+
     /// Whether the button that approves can be pressed at `now`.
     pub fn approve_enabled(&self, now: Instant) -> bool {
         self.answer.is_none()
             && self.armed(now)
-            && self.seen_end
+            && self.end_armed(now)
             && (self.sheet.verification.is_none() || self.ticked)
     }
 
@@ -171,7 +203,7 @@ impl Prompt {
     /// The controls Tab visits at `now`, in order.
     fn stops(&self, now: Instant) -> Vec<Ctl> {
         let mut out = Vec::with_capacity(3);
-        if self.sheet.verification.is_some() {
+        if self.verify_enabled() {
             out.push(Ctl::Verify);
         }
         if self.approve_enabled(now) {
@@ -181,9 +213,19 @@ impl Prompt {
         out
     }
 
-    /// Keeps the keyboard off a button that cannot be pressed: back to Cancel.
+    /// Whether `ctl` cannot be pressed at `now`: the button that approves while it is disabled, the
+    /// box while it is.
+    fn dead(&self, ctl: Ctl, now: Instant) -> bool {
+        match ctl {
+            Ctl::Approve => !self.approve_enabled(now),
+            Ctl::Verify => !self.verify_enabled(),
+            Ctl::Cancel | Ctl::Close => false,
+        }
+    }
+
+    /// Keeps the keyboard off a control that cannot be pressed: back to Cancel.
     fn settle(&mut self, now: Instant) {
-        if self.focus == Ctl::Approve && !self.approve_enabled(now) {
+        if self.dead(self.focus, now) {
             self.focus = Ctl::Cancel;
         }
     }
@@ -212,7 +254,8 @@ impl Prompt {
             // Nothing else is taken before the dialog is on screen.
             _ if self.opened.is_none() => Did::Nothing,
             Ctl::Verify => {
-                if self.sheet.verification.is_none() {
+                // No box, or its text's list not read to the end yet (review S6).
+                if !self.verify_enabled() {
                     return Did::Nothing;
                 }
                 self.ticked = !self.ticked;
@@ -229,15 +272,16 @@ impl Prompt {
     }
 
     /// The pointer went down on `ctl`: a click may come of it ([`Prompt::pointer_up`]), except on
-    /// the button that approves while it is disabled. The keyboard moves there (never to a disabled
-    /// button, never to the close box) and its place is no longer shown.
+    /// a control that is disabled at that moment (the button that approves, the box). The keyboard
+    /// moves there (never to a disabled control, never to the close box) and its place is no longer
+    /// shown.
     pub fn pointer_on(&mut self, ctl: Ctl, now: Instant) -> Did {
         self.ring = false;
-        let dead = ctl == Ctl::Approve && !self.approve_enabled(now);
+        let dead = self.dead(ctl, now);
         self.held = (!dead).then_some(ctl);
         self.focus = match ctl {
             Ctl::Close => self.focus,
-            Ctl::Approve if dead => self.focus,
+            _ if dead => self.focus,
             other => other,
         };
         self.settle(now);
@@ -356,7 +400,7 @@ mod tests {
         let t0 = Instant::now();
         let mut p = Prompt::new(sheet(verification));
         assert!(p.opened(t0));
-        assert!(p.saw_end());
+        assert!(p.saw_end(t0));
         (p, t0 + ARM_DELAY)
     }
 
@@ -377,9 +421,11 @@ mod tests {
         let t0 = Instant::now();
         let mut p = Prompt::new(sheet(false));
         // Not opened: no time is late enough, and the end cannot have been seen.
-        assert!(!p.saw_end());
+        assert!(!p.saw_end(t0));
         let late = t0 + ARM_DELAY * 100;
-        assert!(!p.armed(late) && !p.approve_enabled(late));
+        assert!(!p.armed(late) && !p.end_armed(late) && !p.approve_enabled(late));
+        assert_eq!(p.arms_at(t0), None);
+        assert!(!p.seen_end() && !p.verify_enabled());
         assert_eq!(p.press(Ctl::Approve, late), Did::Nothing);
         assert_eq!(p.press(Ctl::Verify, late), Did::Nothing);
         assert_eq!(p.answer(), None);
@@ -392,8 +438,10 @@ mod tests {
         let t0 = Instant::now();
         let mut p = Prompt::new(sheet(false));
         p.opened(t0);
-        p.saw_end();
+        p.saw_end(t0);
         let early = t0 + ARM_DELAY - Duration::from_millis(1);
+        assert_eq!(p.arms_at(early), Some(t0 + ARM_DELAY));
+        assert_eq!(p.arms_at(t0 + ARM_DELAY), None);
         assert!(!p.approve_enabled(early));
         assert_eq!(p.press(Ctl::Approve, early), Did::Nothing);
         assert_eq!(p.answer(), None);
@@ -427,7 +475,7 @@ mod tests {
         let t0 = Instant::now();
         let mut p = Prompt::new(sheet(true));
         p.opened(t0);
-        p.saw_end();
+        p.saw_end(t0);
         let early = t0 + Duration::from_millis(100);
         assert_eq!(p.press(Ctl::Verify, early), Did::Changed);
         assert!(p.ticked() && !p.approve_enabled(early));
@@ -442,10 +490,74 @@ mod tests {
         p.opened(t0);
         let now = t0 + ARM_DELAY * 3;
         assert!(p.armed(now) && !p.approve_enabled(now));
+        assert_eq!(p.arms_at(now), None, "nothing runs until the end is seen");
         assert_eq!(p.press(Ctl::Approve, now), Did::Nothing);
-        assert!(p.saw_end());
-        assert!(!p.saw_end(), "told once");
-        assert_eq!(p.press(Ctl::Approve, now), Did::Answered(Outcome::Approved));
+        assert!(p.saw_end(now));
+        assert!(!p.saw_end(now + ARM_DELAY), "told once");
+        // The end coming into view starts the delay again (review S6): End and a click at once
+        // press nothing, however long the dialog has been up.
+        assert!(p.seen_end() && !p.end_armed(now) && !p.approve_enabled(now));
+        assert_eq!(p.press(Ctl::Approve, now), Did::Nothing);
+        p.pointer_on(Ctl::Approve, now);
+        assert_eq!(p.pointer_up(Some(Ctl::Approve), now), Did::Nothing);
+        let early = now + ARM_DELAY - Duration::from_millis(1);
+        assert_eq!(p.arms_at(early), Some(now + ARM_DELAY));
+        assert_eq!(p.press(Ctl::Approve, early), Did::Nothing);
+        // A press that began in the delay is no click after it either.
+        p.pointer_on(Ctl::Approve, early);
+        let then = now + ARM_DELAY;
+        assert_eq!(p.pointer_up(Some(Ctl::Approve), then), Did::Nothing);
+        assert_eq!(p.answer(), None);
+        assert!(p.end_armed(then) && p.approve_enabled(then));
+        assert_eq!(p.arms_at(then), None);
+        assert_eq!(
+            p.press(Ctl::Approve, then),
+            Did::Answered(Outcome::Approved)
+        );
+    }
+
+    #[test]
+    fn the_end_is_never_seen_before_the_dialog() {
+        let t0 = Instant::now();
+        let mut p = Prompt::new(sheet(false));
+        let opened = t0 + ARM_DELAY;
+        p.opened(opened);
+        // A clock read before the one that opened the dialog counts from the opening.
+        assert!(p.saw_end(t0));
+        assert!(!p.approve_enabled(opened + ARM_DELAY - Duration::from_millis(1)));
+        assert!(p.approve_enabled(opened + ARM_DELAY));
+    }
+
+    #[test]
+    fn the_box_cannot_be_ticked_before_the_end_of_the_list_was_on_screen() {
+        let t0 = Instant::now();
+        let mut p = Prompt::new(sheet(true));
+        p.opened(t0);
+        let now = t0 + ARM_DELAY * 3;
+        assert!(!p.verify_enabled());
+        // Not by UI Automation or a key, not by a click, and the keyboard does not go there.
+        assert_eq!(p.press(Ctl::Verify, now), Did::Nothing);
+        p.pointer_on(Ctl::Verify, now);
+        assert_eq!(p.focus(), Ctl::Cancel);
+        assert_eq!(p.pointer_up(Some(Ctl::Verify), now), Did::Nothing);
+        assert_eq!(p.focus_on(Ctl::Verify, now), Did::Nothing);
+        assert_eq!(key(&mut p, KeyName::Tab, now), Did::Changed);
+        assert_eq!(p.focus(), Ctl::Cancel, "Cancel is the only stop");
+        assert!(!p.ticked());
+        // A press held on the box from before the end was seen ticks nothing after it.
+        p.pointer_on(Ctl::Verify, now);
+        assert!(p.saw_end(now));
+        assert!(p.verify_enabled());
+        assert_eq!(p.pointer_up(Some(Ctl::Verify), now), Did::Nothing);
+        assert!(!p.ticked());
+        // Now it ticks, and the button still waits out the delay of the end.
+        assert_eq!(p.press(Ctl::Verify, now), Did::Changed);
+        assert!(p.ticked() && !p.approve_enabled(now));
+        assert_eq!(p.press(Ctl::Approve, now), Did::Nothing);
+        assert_eq!(
+            p.press(Ctl::Approve, now + ARM_DELAY),
+            Did::Answered(Outcome::Approved)
+        );
     }
 
     #[test]
@@ -482,7 +594,7 @@ mod tests {
         let t0 = Instant::now();
         let mut p = Prompt::new(sheet(false));
         p.opened(t0);
-        p.saw_end();
+        p.saw_end(t0);
         let now = t0 + ARM_DELAY;
         key(&mut p, KeyName::Tab, now);
         assert_eq!(p.focus(), Ctl::Approve);
@@ -543,7 +655,7 @@ mod tests {
         let t0 = Instant::now();
         let mut p = Prompt::new(sheet(false));
         p.opened(t0);
-        p.saw_end();
+        p.saw_end(t0);
         p.pointer_on(Ctl::Approve, t0 + Duration::from_millis(900));
         let late = t0 + ARM_DELAY * 3;
         assert!(p.approve_enabled(late));
