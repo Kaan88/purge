@@ -33,10 +33,33 @@ pub enum ConsentUi {
 pub const TOOLKIT_NAME: &str = "toolkit";
 
 /// Why a build without the feature `toolkit-consent` refuses `--consent toolkit`.
+///
+/// **It is also the staging marker** (review S-A): its text is in a broker binary exactly when the
+/// binary was built without the feature. It is compiled only then (this `cfg`, and the one arm of
+/// [`parse`] that uses it), so no build with the feature can hold it; and it is reached at run time
+/// from the process's own arguments, so no optimizer or linker can leave it out of a build without
+/// the feature. `install\install.ps1`, `install\inno\build-installer.ps1` and the release workflow
+/// refuse a `purge-broker.exe` that does not hold [`STAGING_MARKER`] (and one that holds a path of
+/// the toolkit's sources), so a rig build with the feature cannot be installed or shipped as the
+/// release broker by being in the same place. `tests/staging_marker.rs` checks the built binary
+/// both ways.
+#[cfg(not(feature = "toolkit-consent"))]
 pub const TOOLKIT_REFUSED: &str = "--consent toolkit is refused: this purge-broker was built without \
                                    the toolkit consent dialog (cargo feature toolkit-consent, which \
                                    no release build has); start it without --consent, or with \
                                    --consent taskdialog";
+
+/// The part of [`TOOLKIT_REFUSED`] the staging checks look for in a `purge-broker.exe` (ASCII, in
+/// the binary's read-only data as it is written here). Defined in every build so that the tests of
+/// both can name it; only a build without the feature uses it at run time, through
+/// `TOOLKIT_REFUSED`. Repeated, as a literal, in `install\install.ps1` (`$script:BrokerReleaseMarker`)
+/// and `.github\workflows\release.yml`; `tests/staging_marker.rs` keeps them equal.
+pub const STAGING_MARKER: &str = "this purge-broker was built without the toolkit consent dialog";
+
+/// What only a build with the feature holds: the paths of the toolkit's sources, which its panic
+/// locations put into the binary. The staging checks refuse a broker that holds one, as a second
+/// check beside [`STAGING_MARKER`]. Repeated in `install\install.ps1` (`$script:BrokerToolkitMarkers`).
+pub const TOOLKIT_MARKERS: [&str; 2] = ["mdshared-ui\\src", "mdshared-ui/src"];
 
 impl ConsentUi {
     /// What a broker started without `--consent` uses: the TaskDialog, until the toolkit dialog has
@@ -132,6 +155,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
             Some(consent) => consent,
             // Named rightly, and not in this build: said in so many words, never read as the
             // TaskDialog and never as a spelling mistake.
+            #[cfg(not(feature = "toolkit-consent"))]
             None if value == TOOLKIT_NAME => return Err(TOOLKIT_REFUSED.to_owned()),
             None => return Err("--consent is not taskdialog or toolkit".to_owned()),
         },
@@ -270,6 +294,8 @@ mod tests {
             assert_eq!(parse(&args(&list)), Err(TOOLKIT_REFUSED.to_owned()));
         }
         assert!(TOOLKIT_REFUSED.contains("toolkit-consent"));
+        // The staging marker is the refusal's own words (review S-A).
+        assert!(TOOLKIT_REFUSED.contains(STAGING_MARKER));
         assert!(!USAGE.contains("toolkit"));
         // Another wrong value is still the plain refusal.
         let mut list = BASE.to_vec();
