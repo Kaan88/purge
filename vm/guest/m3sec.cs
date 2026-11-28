@@ -66,7 +66,16 @@ static partial class M3Sec {
     // adapter's address in. RigProp is a property of the rig's own that means nothing to anybody.
     const string WinitTargetClass = "Winit Thread Event Target", ContrastClass = "mdshared-contrast";
     const string AccessKitProp = "AccessKitAdapter", RigProp = "PurgeRigProbe";
-    static readonly string[] WinitMessages = { "Winit::WakeupMsg", "Winit::DestroyMsg", "Winit::ExecMsg" };
+    // Every message winit registers, at the version in Cargo.lock (winit 0.30.13, src\platform_impl\windows\
+    // event_loop.rs: the LazyMessageId statics; review S-C): its wake-up, its window destruction, the closure call,
+    // the maximized-state message of its windows, and the taskbar's own "TaskbarCreated", which winit (and the
+    // toolkit's tray, not in the broker) registers to hear the taskbar come back. The scorer has the same list
+    // (m3-sec-expect.json consent.toolkit.winit_messages) and derives the probes it wants from it.
+    static readonly string[] WinitMessages = { "Winit::WakeupMsg", "Winit::DestroyMsg", "Winit::ExecMsg", "Winit::SetRetainMaximized", "TaskbarCreated" };
+    // The props probed, and the windows each message is posted and sent to (names as the records give them).
+    static readonly string[] ProbeProps = { "PurgeRigProbe", "AccessKitAdapter" };
+    static readonly string[] ProbeWindows = { "dialog", "event-target", "contrast" };
+    const int ERROR_ACCESS_DENIED = 5;
     const int WM_NULL = 0, WM_GETOBJECT = 0x3D, UiaRootObjectId = -25;
     const int ID_PRIMARY = 100, ID_CANCEL = 2, ID_NEXT = 9001, ID_BACK = 9002;
     const int INPUT_MOUSE = 0, INPUT_KEYBOARD = 1, KEYEVENTF_KEYUP = 2;
@@ -332,6 +341,8 @@ static partial class M3Sec {
     static bool ToEnd(IntPtr h, Dictionary<string, object> rec) {
         rec["layout"] = WaitLayout(h, 5000);
         bool end = WaitEnd(h, 0);
+        // Whether the list fits (review S-D: the arming rules are wanted on a list that does not).
+        rec["end_at_start"] = end;
         rec["end_key"] = end ? "not needed: the end of the list is on screen" : null;
         for (int i = 0; i < 3 && !end && IsWindow(h); i++) {
             rec["end_key"] = PostKey(h, VK_END);
@@ -658,13 +669,20 @@ static partial class M3Sec {
     // One attempt of the kind that must not even be accepted (review S1): <act> sets ProbeOk when its call succeeded.
     // It reached the dialog's process when the call succeeded, or the dialog or the broker is gone after it, or the
     // request was answered.
+    // <act> also sets ProbeErr to the Win32 last error read right after its call (review S-B): a refusal by UIPI is
+    // ERROR_ACCESS_DENIED, and the scorer wants that for every probe, so that a call that failed for another reason (a
+    // bad handle, a window that is gone, a message the system does not route) is not counted as UIPI's.
     static bool ProbeOk;
+    static int ProbeErr;
     static void Probe(uint pid, string target, string name, Func<string> act) {
         var a = new Dictionary<string, object> { { "target", target }, { "name", name }, { "t", Now() } };
         a["foreground_is_dialog"] = GetForegroundWindow() == DriveHwnd;
         ProbeOk = false;
+        ProbeErr = -1;
         try { a["detail"] = act(); } catch (Exception e) { a["detail"] = "exception " + e.GetType().Name + ": " + e.Message; }
         a["call_succeeded"] = ProbeOk;
+        a["lasterror"] = ProbeErr;
+        a["access_denied"] = !ProbeOk && ProbeErr == ERROR_ACCESS_DENIED;
         Thread.Sleep(400);
         a["dialog_alive"] = IsWindow(DriveHwnd) && IsWindowVisible(DriveHwnd);
         a["broker_alive"] = Alive(pid);
@@ -691,8 +709,14 @@ static partial class M3Sec {
         uint p; uint thread = GetWindowThreadProcessId(h, out p);
         IntPtr target = WindowOfClass(pid, WinitTargetClass), contrast = WindowOfClass(pid, ContrastClass);
         rec["windows"] = new Dictionary<string, object> { { "dialog", h.ToInt64() }, { "event_target", target.ToInt64() }, { "contrast", contrast.ToInt64() }, { "thread", (long)thread } };
-        var names = new[] { "dialog", "event-target", "contrast" };
+        // The control's WM_NULL to each of the three windows fails for one that is gone; the guest runs the control
+        // again after the medium probes (control_after), so it also shows that all three are still there and still
+        // take a message from high (review S-B).
+        var names = ProbeWindows;
         var wins = new[] { h, target, contrast };
+        rec["winit_messages"] = WinitMessages;
+        rec["probe_windows"] = ProbeWindows;
+        rec["probe_props"] = ProbeProps;
         if (mode == "control") {
             var checks = new List<object>();
             Action<string, bool, string> check = (n, ok, detail) => checks.Add(new Dictionary<string, object> { { "name", n }, { "ok", ok }, { "detail", detail } });
@@ -719,44 +743,64 @@ static partial class M3Sec {
         }
         // Whether a medium process can read the address at all (reading is not what UIPI stops); recorded, not judged.
         rec["adapter_property_readable"] = GetProp(h, AccessKitProp) != IntPtr.Zero;
-        foreach (string prop in new[] { RigProp, AccessKitProp }) {
+        foreach (string prop in ProbeProps) {
             string pr = prop;
             Probe(pid, "dialog", "SetProp " + pr, () => {
                 ProbeOk = SetProp(h, pr, (IntPtr)1);
-                return "SetProp returned " + ProbeOk + " lasterror=" + Marshal.GetLastWin32Error();
+                ProbeErr = Marshal.GetLastWin32Error();
+                return "SetProp returned " + ProbeOk + " lasterror=" + ProbeErr;
             });
             Probe(pid, "dialog", "RemoveProp " + pr, () => {
                 ProbeOk = RemoveProp(h, pr) != IntPtr.Zero;
-                return "RemoveProp returned " + (ProbeOk ? "a handle" : "0") + " lasterror=" + Marshal.GetLastWin32Error();
+                ProbeErr = Marshal.GetLastWin32Error();
+                return "RemoveProp returned " + (ProbeOk ? "a handle" : "0") + " lasterror=" + ProbeErr;
             });
         }
         Probe(pid, "dialog", "SendMessageTimeout WM_GETOBJECT (UiaRootObjectId)", () => {
             IntPtr res; IntPtr sent = SendMessageTimeout(h, WM_GETOBJECT, IntPtr.Zero, (IntPtr)UiaRootObjectId, 0x2, 5000, out res);
+            ProbeErr = Marshal.GetLastWin32Error();
             ProbeOk = sent != IntPtr.Zero;
-            return "SendMessageTimeout returned " + sent + " result " + (res != IntPtr.Zero ? "nonzero" : "0") + " lasterror=" + Marshal.GetLastWin32Error();
+            return "SendMessageTimeout returned " + sent + " result " + (res != IntPtr.Zero ? "nonzero" : "0") + " lasterror=" + ProbeErr;
         });
+        // Every registered id winit has (review S-C), whatever it does with it: one that the rig thinks harmless is
+        // still a message the toolkit's loop takes from whoever got it past UIPI.
+        var ids = new Dictionary<string, object>();
         foreach (string message in WinitMessages) {
             string mn = message;
             int msg = (int)RegisterWindowMessage(mn);
-            if (msg == 0) { Skipped("thread", "PostThreadMessage " + mn, "RegisterWindowMessage failed, lasterror=" + Marshal.GetLastWin32Error()); continue; }
+            ids[mn] = (long)msg;
+            if (msg == 0) { Skipped("thread", "PostThreadMessage " + mn + " to the dialog's thread", "RegisterWindowMessage failed, lasterror=" + Marshal.GetLastWin32Error()); continue; }
             Probe(pid, "thread", "PostThreadMessage " + mn + " to the dialog's thread", () => {
                 ProbeOk = PostThreadMessage(thread, msg, IntPtr.Zero, IntPtr.Zero);
-                return "PostThreadMessage(0x" + msg.ToString("x") + ") returned " + ProbeOk + " lasterror=" + Marshal.GetLastWin32Error();
+                ProbeErr = Marshal.GetLastWin32Error();
+                return "PostThreadMessage(0x" + msg.ToString("x") + ") returned " + ProbeOk + " lasterror=" + ProbeErr;
             });
             for (int i = 0; i < wins.Length; i++) {
                 IntPtr w = wins[i]; string wn = names[i];
-                if (w == IntPtr.Zero) { Skipped(wn, "PostMessage " + mn + " to the " + wn + " window", "no such window"); continue; }
+                if (w == IntPtr.Zero) {
+                    Skipped(wn, "PostMessage " + mn + " to the " + wn + " window", "no such window");
+                    Skipped(wn, "SendMessageTimeout " + mn + " to the " + wn + " window", "no such window");
+                    continue;
+                }
                 Probe(pid, wn, "PostMessage " + mn + " to the " + wn + " window", () => {
                     ProbeOk = PostMessage(w, msg, IntPtr.Zero, IntPtr.Zero);
-                    return "PostMessage(0x" + msg.ToString("x") + ") returned " + ProbeOk + " lasterror=" + Marshal.GetLastWin32Error();
+                    ProbeErr = Marshal.GetLastWin32Error();
+                    return "PostMessage(0x" + msg.ToString("x") + ") returned " + ProbeOk + " lasterror=" + ProbeErr;
                 });
                 Probe(pid, wn, "SendMessageTimeout " + mn + " to the " + wn + " window", () => {
                     IntPtr res; IntPtr sent = SendMessageTimeout(w, msg, IntPtr.Zero, IntPtr.Zero, 0x2, 5000, out res);
+                    ProbeErr = Marshal.GetLastWin32Error();
                     ProbeOk = sent != IntPtr.Zero;
-                    return "SendMessageTimeout(0x" + msg.ToString("x") + ") returned " + sent + " lasterror=" + Marshal.GetLastWin32Error();
+                    return "SendMessageTimeout(0x" + msg.ToString("x") + ") returned " + sent + " lasterror=" + ProbeErr;
                 });
             }
         }
+        rec["message_ids"] = ids;
+        // The three targets are still windows after it all (review S-B): a probe that destroyed one (DestroyMsg,
+        // WM_CLOSE by another route) would have reached the process even if every call said it failed.
+        rec["alive_after"] = new Dictionary<string, object> {
+            { "dialog", h != IntPtr.Zero && IsWindow(h) }, { "event-target", target != IntPtr.Zero && IsWindow(target) },
+            { "contrast", contrast != IntPtr.Zero && IsWindow(contrast) } };
     }
 
     static string Post(IntPtr h, int msg, long w, long l) {
@@ -1030,6 +1074,8 @@ static partial class M3Sec {
             rec["answered_after_enter"] = answered();
             return;
         }
+        if (B(spec, "unseen", false) || B(spec, "tab_space", false)) { ArmUnseen(spec, rec, h, shown, answered, up); return; }
+        if (B(spec, "tab_early", false)) { ArmTabEarly(spec, rec, h, answered, up); return; }
         rec["focus"] = Focus(h);
         int early = I(spec, "early_ms", 250), late = I(spec, "late_ms", 1800);
         bool end = ToEnd(h, rec);
@@ -1098,6 +1144,112 @@ static partial class M3Sec {
             Thread.Sleep(1200);
             rec["dialog_alive_after_cancel"] = up();
         }
+    }
+
+    // The keyboard's place as UI Automation tells it: the AutomationId of the focused element (the toolkit dialog's
+    // controls have theirs: ConsentCancel, ConsentVerify, ConsentApprove), null when there is none. <h>, the dialog,
+    // is recorded beside it by the caller's foreground check.
+    static string FocusedId(IntPtr h) {
+        try {
+            var f = AutomationElement.FocusedElement;
+            return f == null ? null : f.Current.AutomationId;
+        } catch { return null; }
+    }
+
+    // Review S-D, on a dialog whose list does not fit and was not scrolled, up for more than the dialog's own second
+    // (spec unseen_ms, default 1300 ms after the tool found it; the end not seen, so the button and the box are still
+    // disabled). unseen: a real click on the button, then a real click on the box: neither does anything (the dialog
+    // stays, nothing is answered, the box stays unticked, the button disabled), then Esc. tab_space: Tab, then Space:
+    // while the box is disabled Cancel is the only stop of Tab, so Space cancels.
+    static void ArmUnseen(Dictionary<string, object> spec, Dictionary<string, object> rec, IntPtr h, Stopwatch shown, Func<bool> answered, Func<bool> up) {
+        rec["rule"] = B(spec, "unseen", false) ? "unseen" : "tab-space";
+        rec["focus"] = Focus(h);
+        rec["layout"] = WaitLayout(h, 5000);
+        int[] v = LinesInView(h);
+        rec["end_at_start"] = EndInView(v);
+        rec["lines_in_view"] = v;
+        int wait = I(spec, "unseen_ms", 1300);
+        while (shown.ElapsedMilliseconds < wait) Thread.Sleep(10);
+        rec["unseen_ms"] = shown.ElapsedMilliseconds;
+        rec["end_in_view_before"] = EndInView(LinesInView(h));
+        var primary = ById(h, IdApprove); var box = ById(h, IdVerify);
+        rec["primary_enabled_before"] = UiaEnabled(primary);
+        rec["verify_enabled_before"] = UiaEnabled(box);
+        if (B(spec, "unseen", false)) {
+            int[] pr = UiaRect(primary), br = box == null ? null : UiaRect(box);
+            rec["has_primary"] = pr != null; rec["has_verify"] = br != null;
+            if (pr != null) {
+                rec["primary_click"] = ClickRect(pr);
+                rec["primary_click_ms"] = shown.ElapsedMilliseconds;
+                Thread.Sleep(500);
+                rec["dialog_alive_after_primary"] = up();
+                rec["answered_after_primary"] = answered();
+            }
+            if (br != null && up()) {
+                rec["verify_click"] = ClickRect(br);
+                rec["verify_click_ms"] = shown.ElapsedMilliseconds;
+                Thread.Sleep(500);
+                rec["dialog_alive_after_verify"] = up();
+                rec["answered_after_verify"] = answered();
+                rec["verify_after"] = UiaToggle(ById(h, IdVerify));
+            }
+            rec["primary_enabled_after"] = up() && UiaEnabled(ById(h, IdApprove));
+            rec["end_in_view_after"] = up() && EndInView(LinesInView(h));
+            if (up()) {
+                rec["cancel_focus"] = Focus(h);
+                rec["cancel"] = Keys(VK_ESCAPE, VK_ESCAPE);
+                Thread.Sleep(1200);
+                rec["dialog_alive_after_cancel"] = up();
+            }
+            return;
+        }
+        rec["foreground_at_keys"] = GetForegroundWindow() == h;
+        rec["tab"] = Keys(VK_TAB, VK_TAB);
+        Thread.Sleep(150);
+        rec["focus_after_tab"] = FocusedId(h);
+        rec["space"] = Keys(VK_SPACE, VK_SPACE);
+        rec["space_ms"] = shown.ElapsedMilliseconds;
+        Thread.Sleep(1500);
+        rec["dialog_alive_after_space"] = up();
+        rec["answered_after_space"] = answered();
+    }
+
+    // Review S-D, the keyboard's own way to the button early: on a list that does not fit, the end is brought on
+    // screen (End, posted), then at once, by real input, Tab (to the box, which the end enabled), Space (ticks it) and
+    // Tab again, all inside the second the button waits after the end. The second Tab must not reach the button: the
+    // keyboard is then on Cancel, and Enter cancels. Should the keyboard be on the button all the same, Esc is sent in
+    // place of Enter (nothing is approved by the test) and the record says so; the scorer fails it.
+    static void ArmTabEarly(Dictionary<string, object> spec, Dictionary<string, object> rec, IntPtr h, Func<bool> answered, Func<bool> up) {
+        rec["rule"] = "tab-early";
+        rec["focus"] = Focus(h);
+        bool end = ToEnd(h, rec);
+        var since = Stopwatch.StartNew();
+        if (!end) return;
+        rec["foreground_at_keys"] = GetForegroundWindow() == h;
+        rec["tab1"] = Keys(VK_TAB, VK_TAB);
+        Thread.Sleep(60);
+        rec["focus_after_tab1"] = FocusedId(h);
+        rec["space"] = Keys(VK_SPACE, VK_SPACE);
+        Thread.Sleep(60);
+        rec["verify_after_space"] = UiaToggle(ById(h, IdVerify));
+        rec["tab2"] = Keys(VK_TAB, VK_TAB);
+        rec["tab2_ms"] = since.ElapsedMilliseconds;
+        Thread.Sleep(60);
+        string at = FocusedId(h);
+        rec["focus_after_tab2"] = at;
+        rec["primary_enabled_at_tab2"] = up() && UiaEnabled(ById(h, IdApprove));
+        rec["focus_read_ms"] = since.ElapsedMilliseconds;
+        if (at == IdApprove) {
+            rec["enter_withheld"] = true;
+            rec["cancel"] = Keys(VK_ESCAPE, VK_ESCAPE);
+        } else {
+            rec["enter_withheld"] = false;
+            rec["enter"] = Keys(VK_RETURN, VK_RETURN);
+            rec["enter_ms"] = since.ElapsedMilliseconds;
+        }
+        Thread.Sleep(1500);
+        rec["dialog_alive_after_enter"] = up();
+        rec["answered_after_enter"] = answered();
     }
 
     // spec: {out, broker_pid, kill_pid, wait_ms, gone_wait_ms, exit_wait_ms}. Waits for the dialog of <broker_pid>,

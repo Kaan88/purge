@@ -24,14 +24,14 @@
 #
 #   powershell -NoProfile -File vm\guest\tests\consent-ui-probe.ps1 [-Preview <consent_preview.exe>] [-Work <dir>] [-GapMs <n>] [-WithInput]
 param(
-    [string]$Preview = 'E:\purge-target\consent\release\examples\consent_preview.exe',
+    [string]$Preview = 'E:\purge-target\consent\toolkit\release\examples\consent_preview.exe',
     [string]$Work = '',
     [int]$GapMs = 8000,
     [switch]$WithInput
 )
 $ErrorActionPreference = 'Stop'
 $Guest = Split-Path -Parent $PSScriptRoot
-if (-not (Test-Path -LiteralPath $Preview)) { Write-Host "no preview at $Preview (cargo build --release -p purge-broker --example consent_preview)"; exit 2 }
+if (-not (Test-Path -LiteralPath $Preview)) { Write-Host "no preview at $Preview (cargo build --release -p purge-broker --features toolkit-consent --example consent_preview --target-dir <its own dir>: a toolkit build never goes to the release target dir, review S-A)"; exit 2 }
 if (-not $Work) { $Work = Join-Path ([IO.Path]::GetTempPath()) ('consent-ui-probe-' + [guid]::NewGuid().ToString('N')) }
 New-Item -ItemType Directory -Force $Work | Out-Null
 

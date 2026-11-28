@@ -171,6 +171,29 @@ function Test-ConsentCode($Doc, $X, $Kinds) {
     }
 }
 
+# The names of the probes a toolkit run must make from medium, in m3sec.cs's words, derived from the lists of the
+# expectations (review S-C: every message winit registers, never a count written by hand): SetProp and RemoveProp of
+# each property, WM_GETOBJECT, and for each message one to the dialog's thread and a post and a send to each window.
+function Get-ToolkitProbeNames($Lim) {
+    $names = New-Object System.Collections.Generic.List[string]
+    foreach ($p in Arr $Lim.probe_props) { $names.Add("SetProp $p"); $names.Add("RemoveProp $p") }
+    $names.Add('SendMessageTimeout WM_GETOBJECT (UiaRootObjectId)')
+    foreach ($m in Arr $Lim.winit_messages) {
+        $names.Add("PostThreadMessage $m to the dialog's thread")
+        foreach ($w in Arr $Lim.probe_windows) { $names.Add("PostMessage $m to the $w window"); $names.Add("SendMessageTimeout $m to the $w window") }
+    }
+    $names.ToArray()
+}
+
+# What one internals control from high (m3sec drive internals control) says is wrong; empty when it passed.
+function Get-ControlFaults($C, [string]$When) {
+    if (-not $C) { return @("no control $When") }
+    $w = @()
+    if ($C.driver_il -ne 'high') { $w += "control $When at $($C.driver_il)" }
+    if ($C.control_ok -ne $true) { $w += "from high $When the plain calls did not all work (no test): $(@(Arr $C.checks | Where-Object { $_.ok -ne $true } | ForEach-Object { $_.name }) -join '; ')" }
+    $w
+}
+
 # What only a toolkit run has (review B3 and S1): the calls that must not even be accepted from medium, the dialog's
 # own rules by real input from high, and the client lost while a dialog is up.
 function Test-ConsentToolkit($Doc, $X) {
@@ -191,18 +214,31 @@ function Test-ConsentToolkit($Doc, $X) {
         if (-not $p) { Row $n $false 'no probe record' }
         else {
             $why = @()
-            if ($p.control.driver_il -ne 'high') { $why += "control at $($p.control.driver_il)" }
-            if ($p.control.control_ok -ne $true) { $why += "from high the plain calls did not all work (no test): $(@(Arr $p.control.checks | Where-Object { $_.ok -ne $true } | ForEach-Object { $_.name }) -join '; ')" }
+            # The control from high before the medium probes and again after them (review S-B).
+            $why += @(Get-ControlFaults $p.control 'before')
+            $why += @(Get-ControlFaults $p.control_after 'after')
             if ($p.drive.driver_il -ne 'medium') { $why += "driver at $($p.drive.driver_il)" }
             if ("$($p.drive.flavour)" -ne 'toolkit') { $why += "the dialog was the $($p.drive.flavour) one" }
+            # The tool probed the messages the expectations list, and every probe they ask for, once (review S-C).
+            $wantNames = @(Get-ToolkitProbeNames $lim)
+            if ((@(Arr $p.drive.winit_messages) -join '|') -ne (@(Arr $lim.winit_messages) -join '|')) { $why += "the tool probed the messages '$(@(Arr $p.drive.winit_messages) -join ', ')', expected '$(@(Arr $lim.winit_messages) -join ', ')'" }
             $tries = @(Arr $p.drive.attempts | Where-Object { -not $_.skipped })
             $skipped = @(Arr $p.drive.attempts | Where-Object { $_.skipped })
-            if ($tries.Count -lt [int]$lim.min_probe_attempts) { $why += "$($tries.Count) attempts, expected at least $($lim.min_probe_attempts)" }
+            if ($tries.Count -ne $wantNames.Count) { $why += "$($tries.Count) attempts, expected $($wantNames.Count) ($(@(Arr $lim.probe_props).Count) properties x 2, WM_GETOBJECT, $(@(Arr $lim.winit_messages).Count) messages x (the thread + $(@(Arr $lim.probe_windows).Count) windows x 2))" }
+            $made = @($tries | ForEach-Object { "$($_.name)" })
+            $missing = @($wantNames | Where-Object { $made -notcontains $_ })
+            if ($missing.Count) { $why += "not probed: $(@($missing | Select-Object -First 3) -join '; ')$(if ($missing.Count -gt 3) { " and $($missing.Count - 3) more" })" }
             if ($skipped.Count) { $why += "skipped: $(@($skipped | Select-Object -First 3 | ForEach-Object { $_.name }) -join '; ')" }
             $reached = @($tries | Where-Object { $_.reached -ne $false })
             if ($reached.Count) { $why += "accepted: $(@($reached | Select-Object -First 4 | ForEach-Object { $_.name }) -join '; ')" }
+            # Refused by UIPI, not failed for another reason: the call failed and its last error is ERROR_ACCESS_DENIED.
+            $notDenied = @($tries | Where-Object { $_.call_succeeded -ne $false -or -not (Has $_ 'lasterror') -or "$($_.lasterror)" -ne "$($lim.probe_lasterror)" })
+            if ($notDenied.Count) { $why += "not refused with $($lim.probe_lasterror): $(@($notDenied | Select-Object -First 3 | ForEach-Object { "$($_.name) (lasterror $(if (Has $_ 'lasterror') { $_.lasterror } else { 'not recorded' }))" }) -join '; ')" }
+            # The three targets are still windows after the probes.
+            $gone = @(Arr $lim.probe_windows | Where-Object { -not ($p.drive.alive_after -and (Has $p.drive.alive_after $_) -and $p.drive.alive_after.$_ -eq $true) })
+            if ($gone.Count) { $why += "not a window after the probes: $($gone -join ', ')" }
             if (-not (Has $p 'effect_count') -or [int]$p.effect_count -ne 0) { $why += "effects: $(@($p.effects.PSObject.Properties | Where-Object { $_.Value -ne $false } | ForEach-Object { $_.Name }) -join ', ')" }
-            Row $n ($why.Count -eq 0) $(if ($why.Count) { $why -join '; ' } else { "$($tries.Count) calls, 0 accepted, 0 effects" })
+            Row $n ($why.Count -eq 0) $(if ($why.Count) { $why -join '; ' } else { "$($tries.Count) calls, each refused with $($lim.probe_lasterror), 0 accepted, 0 effects; the windows alive and the control passing after" })
         }
 
         $a = @(Arr $Doc.rule_arms | ForEach-Object { $_.data } | Where-Object { $_.kind -eq $kind }) | Select-Object -First 1
@@ -213,6 +249,8 @@ function Test-ConsentToolkit($Doc, $X) {
             $why = @(& $tool $t)
             if (-not $why.Count) {
                 if ($t.end_in_view -ne $true) { $why += 'the end of the list never came on screen' }
+                # Review S-D: on a long kind the list must not fit, so that the end had to be scrolled to.
+                if ((Arr $lim.long_kinds) -contains $kind -and $t.end_at_start -ne $false) { $why += 'the list fitted (end_at_start), so the end did not have to be scrolled to (no test of a long list)' }
                 if (-not ((Has $t 'early_click_ms') -and [int]$t.early_click_ms -lt [int]$lim.early_click_max_ms)) { $why += "early click at '$($t.early_click_ms)' ms" }
                 if ($t.primary_enabled_after_early -ne $false) { $why += 'the button was enabled at the early click' }
                 if ($t.dialog_alive_after_early -ne $true -or $t.answered_after_early -ne $false) { $why += 'a click before the arming delay answered the dialog' }
@@ -242,6 +280,71 @@ function Test-ConsentToolkit($Doc, $X) {
             }
             $why += @(& $nothing $e $kind $true)
             Row $n ($why.Count -eq 0) $(if ($why.Count) { $why -join '; ' } else { "Enter at $($t.enter_ms) ms: consent_declined" })
+        }
+
+        # Review S-D: the rules of a list that does not fit, on the long kinds only.
+        if ((Arr $lim.long_kinds) -notcontains $kind) { continue }
+        $unseenFaults = { param($t) $w = @()
+            if ($t.end_at_start -ne $false) { $w += 'the list fitted (no test)' }
+            if (-not ((Has $t 'unseen_ms') -and [int]$t.unseen_ms -ge [int]$lim.unseen_min_ms)) { $w += "up only '$($t.unseen_ms)' ms (no test of the dialog's own second having passed)" }
+            if ($t.end_in_view_before -ne $false) { $w += 'the end was on screen before the input (no test)' }
+            $w }
+        $u = @(Arr $Doc.rule_unseens | ForEach-Object { $_.data } | Where-Object { $_.kind -eq $kind }) | Select-Object -First 1
+        $n = "high $kind rule: up over a second, the end not seen: a real click on the button and on the box do nothing"
+        if (-not $u) { Row $n $false 'no record' }
+        else {
+            $t = $u.arm
+            $why = @(& $tool $t)
+            if (-not $why.Count) {
+                $why += @(& $unseenFaults $t)
+                if ($t.primary_enabled_before -ne $false) { $why += 'the button was enabled before the end was seen' }
+                if ($t.verify_enabled_before -ne $false) { $why += 'the box was enabled before the end was seen' }
+                if ($t.has_primary -ne $true -or $t.has_verify -ne $true) { $why += "no rectangle to click (button $($t.has_primary), box $($t.has_verify)): no test" }
+                if ($t.dialog_alive_after_primary -ne $true -or $t.answered_after_primary -ne $false) { $why += 'the click on the button answered the dialog' }
+                if ($t.dialog_alive_after_verify -ne $true -or $t.answered_after_verify -ne $false) { $why += 'the click on the box answered the dialog' }
+                if ("$($t.verify_after)" -ne 'Off') { $why += "the click ticked the box ($($t.verify_after))" }
+                if ($t.primary_enabled_after -ne $false) { $why += 'the button was enabled after the clicks' }
+            }
+            $why += @(& $nothing $u $kind $false)
+            Row $n ($why.Count -eq 0) $(if ($why.Count) { $why -join '; ' } else { "clicks at $($t.primary_click_ms) and $($t.verify_click_ms) ms: nothing; then Esc: consent_declined" })
+        }
+
+        $s = @(Arr $Doc.rule_tabspaces | ForEach-Object { $_.data } | Where-Object { $_.kind -eq $kind }) | Select-Object -First 1
+        $n = "high $kind rule: Tab then Space, the end not seen, cancels"
+        if (-not $s) { Row $n $false 'no record' }
+        else {
+            $t = $s.arm
+            $why = @(& $tool $t)
+            if (-not $why.Count) {
+                $why += @(& $unseenFaults $t)
+                if ($t.foreground_at_keys -ne $true) { $why += 'the dialog was not in front (no test)' }
+                if ("$($t.focus_after_tab)" -ne 'ConsentCancel') { $why += "Tab put the keyboard on '$($t.focus_after_tab)', not Cancel" }
+                if ($t.dialog_alive_after_space -ne $false) { $why += 'the dialog was still up after Space' }
+            }
+            $why += @(& $nothing $s $kind $false)
+            Row $n ($why.Count -eq 0) $(if ($why.Count) { $why -join '; ' } else { "Tab: Cancel; Space at $($t.space_ms) ms: consent_declined" })
+        }
+
+        $b = @(Arr $Doc.rule_tabearlies | ForEach-Object { $_.data } | Where-Object { $_.kind -eq $kind }) | Select-Object -First 1
+        $n = "high $kind rule: Tab does not reach the button inside the second after the end"
+        if (-not $b) { Row $n $false 'no record' }
+        else {
+            $t = $b.arm
+            $why = @(& $tool $t)
+            if (-not $why.Count) {
+                if ($t.end_at_start -ne $false) { $why += 'the list fitted (no test)' }
+                if ($t.end_in_view -ne $true) { $why += 'the end of the list never came on screen' }
+                if ($t.foreground_at_keys -ne $true) { $why += 'the dialog was not in front (no test)' }
+                if ("$($t.focus_after_tab1)" -ne 'ConsentVerify') { $why += "the first Tab put the keyboard on '$($t.focus_after_tab1)', not the box (no test)" }
+                if ("$($t.verify_after_space)" -ne 'On') { $why += "Space did not tick the box ($($t.verify_after_space)): no test" }
+                if (-not ((Has $t 'tab2_ms') -and [int]$t.tab2_ms -lt [int]$lim.tab_early_max_ms)) { $why += "the second Tab at '$($t.tab2_ms)' ms (no test)" }
+                if ("$($t.focus_after_tab2)" -eq 'ConsentApprove' -or $t.enter_withheld -ne $false) { $why += 'the second Tab reached the button before it was armed' }
+                elseif ("$($t.focus_after_tab2)" -ne 'ConsentCancel') { $why += "the second Tab put the keyboard on '$($t.focus_after_tab2)', not Cancel" }
+                if ($t.primary_enabled_at_tab2 -ne $false) { $why += 'the button was enabled at the second Tab' }
+                if ($t.dialog_alive_after_enter -ne $false) { $why += 'the dialog was still up after Enter' }
+            }
+            $why += @(& $nothing $b $kind $false)
+            Row $n ($why.Count -eq 0) $(if ($why.Count) { $why -join '; ' } else { "Tab: the box, Space: ticked, Tab at $($t.tab2_ms) ms: Cancel; Enter: consent_declined" })
         }
     }
 
@@ -533,7 +636,7 @@ function New-ConsentPass($X, [string]$Dir) {
         $names += "c$k-$kind-shown", "c$k-$kind-approved"
         $k++
         # What only a toolkit run photographs (more files than a TaskDialog run needs do no harm).
-        $names += "c$k-$kind-probe", "c$k-$kind-rule-arm", "c$k-$kind-rule-enter"
+        $names += "c$k-$kind-probe", "c$k-$kind-rule-arm", "c$k-$kind-rule-enter", "c$k-$kind-rule-unseen", "c$k-$kind-rule-tabspace", "c$k-$kind-rule-tabearly"
     }
     $names += 'k00-client', 'k01-after-kill'
     $shots = New-Shots $Dir $names
@@ -636,13 +739,16 @@ function Set-ToolkitEvidence($d) {
     foreach ($s in $d.shown) { $s.data.params | Add-Member -NotePropertyName ui -NotePropertyValue 'toolkit' -Force }
     foreach ($g in $d.dialogs) { $g.data | Add-Member -NotePropertyName flavour -NotePropertyValue 'toolkit' -Force }
     $said = [ordered]@{ params = [ordered]@{ code = 'C0DE-0099'; ui = 'toolkit' } }
-    $probes = @(); $arms = @(); $enters = @()
+    $probes = @(); $arms = @(); $enters = @(); $unseens = @(); $tabspaces = @(); $tabearlies = @()
     $k = 90
     foreach ($kind in @($d.approves | ForEach-Object { $_.data.kind })) {
-        $tries = @(1..26 | ForEach-Object { [ordered]@{ target = 'dialog'; name = "probe $_"; call_succeeded = $false; dialog_alive = $true; broker_alive = $true; answered = $false; reached = $false } })
+        $lim = $X.consent.toolkit
+        $tries = @(Get-ToolkitProbeNames $lim | ForEach-Object { [ordered]@{ target = 'dialog'; name = $_; call_succeeded = $false; lasterror = 5; access_denied = $true; dialog_alive = $true; broker_alive = $true; answered = $false; reached = $false } })
+        $alive = [ordered]@{}; foreach ($w in Arr $lim.probe_windows) { $alive[$w] = $true }
+        $ctl = [ordered]@{ driver_il = 'high'; flavour = 'toolkit'; control_ok = $true; checks = @([ordered]@{ name = 'PostMessage WM_NULL to the dialog window'; ok = $true }) }
         $probes += [ordered]@{ file = "probe-$k.json"; data = [ordered]@{ k = $k; kind = $kind; method = 'internals'
-                               control = [ordered]@{ driver_il = 'high'; flavour = 'toolkit'; control_ok = $true; checks = @([ordered]@{ name = 'PostMessage WM_NULL to the dialog window'; ok = $true }) }
-                               drive = [ordered]@{ driver_il = 'medium'; flavour = 'toolkit'; attempts = $tries }
+                               control = $ctl; control_after = $ctl
+                               drive = [ordered]@{ driver_il = 'medium'; flavour = 'toolkit'; winit_messages = @(Arr $lim.winit_messages); attempts = $tries; alive_after = $alive }
                                effects = [ordered]@{ dialog_gone = $false; hint_changed = $false; scroll_changed = $false; code_changed = $false; broker_gone = $false }; effect_count = 0 } }
         $none = [ordered]@{ kind = $kind; shown = $said; result_kind = 'consent_declined'; declined = $true; cancelled_by_rig = $false; journal_changed = $false; uninstaller_ran = $false }
         $arm = [ordered]@{ k = $k; rule = 'arm'; arm = [ordered]@{ found = $true; flavour = 'toolkit'; end_in_view = $true; early_click_ms = 252; primary_enabled_after_early = $false; dialog_alive_after_early = $true; answered_after_early = $false
@@ -650,16 +756,37 @@ function Set-ToolkitEvidence($d) {
                            primary_enabled_late = $true; late_ms = 1810; dialog_alive_after_cancel = $false } }
         $enter = [ordered]@{ k = $k; rule = 'enter'; arm = [ordered]@{ found = $true; flavour = 'toolkit'; foreground_at_enter = $true; enter_ms = 140; dialog_alive_after_enter = $false; answered_after_enter = $true } }
         foreach ($key in $none.Keys) { $arm[$key] = $none[$key]; $enter[$key] = $none[$key] }
+        $long = (Arr $lim.long_kinds) -contains $kind
+        $arm.arm['end_at_start'] = -not $long
         $arms += [ordered]@{ file = "rule-arm-$k.json"; data = $arm }
         $enters += [ordered]@{ file = "rule-enter-$k.json"; data = $enter }
+        if ($long) {
+            # Review S-D: the three rules of a list that does not fit.
+            $base = [ordered]@{ found = $true; flavour = 'toolkit'; end_at_start = $false; unseen_ms = 1302; end_in_view_before = $false }
+            $u = [ordered]@{ k = $k; rule = 'unseen'; arm = [ordered]@{} }
+            foreach ($key in $base.Keys) { $u.arm[$key] = $base[$key] }
+            foreach ($pair in @(@('primary_enabled_before', $false), @('verify_enabled_before', $false), @('has_primary', $true), @('has_verify', $true), @('primary_click_ms', 1310),
+                                @('dialog_alive_after_primary', $true), @('answered_after_primary', $false), @('verify_click_ms', 1820), @('dialog_alive_after_verify', $true),
+                                @('answered_after_verify', $false), @('verify_after', 'Off'), @('primary_enabled_after', $false), @('dialog_alive_after_cancel', $false))) { $u.arm[$pair[0]] = $pair[1] }
+            $s = [ordered]@{ k = $k; rule = 'tabspace'; arm = [ordered]@{} }
+            foreach ($key in $base.Keys) { $s.arm[$key] = $base[$key] }
+            foreach ($pair in @(@('foreground_at_keys', $true), @('focus_after_tab', 'ConsentCancel'), @('space_ms', 1460), @('dialog_alive_after_space', $false), @('answered_after_space', $true))) { $s.arm[$pair[0]] = $pair[1] }
+            $e2 = [ordered]@{ k = $k; rule = 'tabearly'; arm = [ordered]@{ found = $true; flavour = 'toolkit'; end_at_start = $false; end_in_view = $true; foreground_at_keys = $true
+                                                                  focus_after_tab1 = 'ConsentVerify'; verify_after_space = 'On'; tab2_ms = 190; focus_after_tab2 = 'ConsentCancel'
+                                                                  primary_enabled_at_tab2 = $false; enter_withheld = $false; enter_ms = 260; dialog_alive_after_enter = $false; answered_after_enter = $true } }
+            foreach ($key in $none.Keys) { $u[$key] = $none[$key]; $s[$key] = $none[$key]; $e2[$key] = $none[$key] }
+            $unseens += [ordered]@{ file = "rule-unseen-$k.json"; data = $u }
+            $tabspaces += [ordered]@{ file = "rule-tabspace-$k.json"; data = $s }
+            $tabearlies += [ordered]@{ file = "rule-tabearly-$k.json"; data = $e2 }
+        }
         $k++
     }
     $kill = [ordered]@{ consent_ui = 'toolkit'; kind = 'uninstall.run'; shown = $said
                         orphan = [ordered]@{ found = $true; flavour = 'toolkit'; broker_il = 'high'; dialog_up_before = $true; killed = $true; dialog_gone = $true; dialog_gone_ms = 180; broker_exited = $true; broker_exit_ms = 420; exit_code = 0 }
                         answered = $false; journal_changed = $false; uninstaller_ran = $false; fixture_arp_present = $true; broker_running = $false }
     # Through JSON, as the rest of the document was: the scorer and the defects see the shapes a guest file has.
-    $more = (ConvertTo-Json ([ordered]@{ probes = $probes; rule_arms = $arms; rule_enters = $enters; kill = $kill }) -Depth 30) | ConvertFrom-Json
-    foreach ($name in 'probes', 'rule_arms', 'rule_enters', 'kill') { $d | Add-Member -NotePropertyName $name -NotePropertyValue $more.$name -Force }
+    $more = (ConvertTo-Json ([ordered]@{ probes = $probes; rule_arms = $arms; rule_enters = $enters; rule_unseens = $unseens; rule_tabspaces = $tabspaces; rule_tabearlies = $tabearlies; kill = $kill }) -Depth 30) | ConvertFrom-Json
+    foreach ($name in 'probes', 'rule_arms', 'rule_enters', 'rule_unseens', 'rule_tabspaces', 'rule_tabearlies', 'kill') { $d | Add-Member -NotePropertyName $name -NotePropertyValue $more.$name -Force }
 }
 
 # Single defects of a toolkit run; each must turn its passing evidence into a FAIL under -ConsentUi toolkit.
@@ -680,6 +807,19 @@ function Get-ToolkitDefects {
         @{ name = 'the plain calls from high did not work'; act = { param($d) $d.probes[1].data.control.control_ok = $false; $d.probes[1].data.control.checks[0].ok = $false } },
         @{ name = 'a probe was skipped'; act = { param($d) $d.probes[0].data.drive.attempts[3] | Add-Member -NotePropertyName skipped -NotePropertyValue $true } },
         @{ name = 'too few probes'; act = { param($d) $d.probes[1].data.drive.attempts = @($d.probes[1].data.drive.attempts | Select-Object -First 12) } },
+        # Review S-B: a refusal that is not UIPI's, the windows after, the control after.
+        @{ name = 'a probe failed with another error than access denied'; act = { param($d) $d.probes[0].data.drive.attempts[9].lasterror = 1400; $d.probes[0].data.drive.attempts[9].access_denied = $false } },
+        @{ name = 'a probe without its last error'; act = { param($d) $d.probes[1].data.drive.attempts[2].PSObject.Properties.Remove('lasterror') } },
+        @{ name = 'a probe whose call succeeded but was not counted as reached'; act = { param($d) $d.probes[0].data.drive.attempts[4].call_succeeded = $true } },
+        @{ name = 'the contrast window was gone after the probes'; act = { param($d) $d.probes[0].data.drive.alive_after.contrast = $false } },
+        @{ name = 'no record of the windows after the probes'; act = { param($d) $d.probes[1].data.drive.PSObject.Properties.Remove('alive_after') } },
+        @{ name = 'no control after the probes'; act = { param($d) $d.probes[0].data.control_after = $null } },
+        @{ name = 'the plain calls from high did not work after the probes'; act = { param($d) $d.probes[1].data.control_after = [pscustomobject]@{ driver_il = 'high'; control_ok = $false; checks = @([pscustomobject]@{ name = 'PostMessage WM_NULL to the event-target window'; ok = $false }) } } },
+        # Review S-C: every registered message, the count derived from the list.
+        @{ name = 'TaskbarCreated was not probed'; act = { param($d) $d.probes[0].data.drive.attempts = @($d.probes[0].data.drive.attempts | Where-Object { $_.name -notmatch 'TaskbarCreated' }) } },
+        @{ name = 'the tool probed only three of winit''s messages'; act = { param($d) $d.probes[1].data.drive.winit_messages = @('Winit::WakeupMsg', 'Winit::DestroyMsg', 'Winit::ExecMsg') } },
+        @{ name = 'one probe made twice in place of another'; act = { param($d) $a = $d.probes[0].data.drive.attempts; $a[$a.Count - 1].name = $a[0].name } },
+        @{ name = 'a probe more than the list asks for'; act = { param($d) $a = @($d.probes[1].data.drive.attempts); $d.probes[1].data.drive.attempts = $a + @($a[0]) } },
         @{ name = 'the probes ran from high'; act = { param($d) $d.probes[0].data.drive.driver_il = 'high' } },
         @{ name = 'the probes ended the broker'; act = { param($d) $d.probes[0].data.effects.broker_gone = $true; $d.probes[0].data.effect_count = 1 } },
         @{ name = 'the probes were of a TaskDialog'; act = { param($d) $d.probes[1].data.drive.flavour = 'taskdialog' } },
@@ -704,6 +844,28 @@ function Get-ToolkitDefects {
         @{ name = 'Enter came late'; act = { param($d) $d.rule_enters[1].data.arm.enter_ms = 2400 } },
         @{ name = 'the broker said TaskDialog for the Enter dialog'; act = { param($d) $d.rule_enters[0].data.shown.params.PSObject.Properties.Remove('ui') } },
         @{ name = 'the broker did not say toolkit for the arming dialog'; act = { param($d) $d.rule_arms[0].data.shown = $null } },
+        # Review S-D: the long list and the rules made on it.
+        @{ name = 'the plan dialog''s arming test was on a list that fitted'; act = { param($d) ($d.rule_arms | Where-Object { $_.data.kind -eq 'plan.execute' }).data.arm.end_at_start = $true } },
+        @{ name = 'no unseen record'; act = { param($d) $d.rule_unseens = @() } },
+        @{ name = 'the unseen test came inside the first second'; act = { param($d) $d.rule_unseens[0].data.arm.unseen_ms = 700 } },
+        @{ name = 'the unseen test was on a list that fitted'; act = { param($d) $d.rule_unseens[0].data.arm.end_at_start = $true } },
+        @{ name = 'a click on the disabled button answered'; act = { param($d) $d.rule_unseens[0].data.arm.dialog_alive_after_primary = $false; $d.rule_unseens[0].data.arm.answered_after_primary = $true } },
+        @{ name = 'a click on the disabled box ticked it'; act = { param($d) $d.rule_unseens[0].data.arm.verify_after = 'On' } },
+        @{ name = 'the button was enabled with the end not seen'; act = { param($d) $d.rule_unseens[0].data.arm.primary_enabled_before = $true } },
+        @{ name = 'the box had no rectangle to click'; act = { param($d) $d.rule_unseens[0].data.arm.has_verify = $false } },
+        @{ name = 'the unseen test approved'; act = { param($d) $d.rule_unseens[0].data.result_kind = 'result'; $d.rule_unseens[0].data.declined = $false; $d.rule_unseens[0].data.journal_changed = $true } },
+        @{ name = 'no Tab-Space record'; act = { param($d) $d.rule_tabspaces = @() } },
+        @{ name = 'Tab went to the box with the end not seen'; act = { param($d) $d.rule_tabspaces[0].data.arm.focus_after_tab = 'ConsentVerify' } },
+        @{ name = 'Tab-Space left the dialog up'; act = { param($d) $d.rule_tabspaces[0].data.arm.dialog_alive_after_space = $true; $d.rule_tabspaces[0].data.cancelled_by_rig = $true } },
+        @{ name = 'Tab-Space went to another window'; act = { param($d) $d.rule_tabspaces[0].data.arm.foreground_at_keys = $false } },
+        @{ name = 'no early-Tab record'; act = { param($d) $d.rule_tabearlies = @() } },
+        @{ name = 'the second Tab reached the button early'; act = { param($d) $d.rule_tabearlies[0].data.arm.focus_after_tab2 = 'ConsentApprove'; $d.rule_tabearlies[0].data.arm.enter_withheld = $true } },
+        @{ name = 'the second Tab came after the second'; act = { param($d) $d.rule_tabearlies[0].data.arm.tab2_ms = 1300 } },
+        @{ name = 'Space did not tick the box before the second Tab'; act = { param($d) $d.rule_tabearlies[0].data.arm.verify_after_space = 'Off' } },
+        @{ name = 'the early-Tab test was on a list that fitted'; act = { param($d) $d.rule_tabearlies[0].data.arm.end_at_start = $true } },
+        @{ name = 'the button was enabled at the second Tab'; act = { param($d) $d.rule_tabearlies[0].data.arm.primary_enabled_at_tab2 = $true } },
+        @{ name = 'Enter after the early Tab approved'; act = { param($d) $d.rule_tabearlies[0].data.result_kind = 'result'; $d.rule_tabearlies[0].data.declined = $false } },
+        @{ name = 'no screenshot of the unseen test'; shots_act = { param($s) @($s | Where-Object { $_.name -notmatch 'rule-unseen' }) }; act = { param($d) } },
         @{ name = 'no record of the lost client'; act = { param($d) $d.kill = $null } },
         @{ name = 'the dialog stayed after the client was lost'; act = { param($d) $d.kill.orphan.dialog_gone = $false; $d.kill.orphan.dialog_gone_ms = -1 } },
         @{ name = 'the dialog went too late'; act = { param($d) $d.kill.orphan.dialog_gone_ms = 9000 } },

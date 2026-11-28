@@ -1982,15 +1982,22 @@ powershell -NoProfile -File vm\truth\m3-sec-score.ps1 --self-test
   - *End* (S10). End is posted only once the dialog is laid out (its button and a line of its list have a place),
     not at all when the list fits, and again when the end did not come on screen; the box is ticked only after.
   - *`consent-probe -Tag k`* (S1), on the dialog the medium attacks were just made on; record `probe-<k>.json`,
-    screenshot `c<k>-<kind>-probe`. `m3sec drive` with method `internals`: from medium, winit's three registered
-    messages (`Winit::WakeupMsg`, `Winit::DestroyMsg`, `Winit::ExecMsg`) posted and sent to the dialog, to winit's
-    "Winit Thread Event Target" window and to the toolkit's contrast-watching window (`mdshared-contrast`) and
-    posted to the dialog's thread; `SetProp` and `RemoveProp` of `AccessKitAdapter` and of a property of the rig's
-    own (`PurgeRigProbe`, which shows that the window refuses and not the name); `WM_GETOBJECT` sent directly. Each
-    must fail outright, at least 26 attempts, none skipped, the broker alive after them. First the control from
-    high makes the same calls with `WM_NULL` and `PurgeRigProbe` and `WM_GETOBJECT` as UI Automation sends it, and
-    they must all work, so that a failure from medium is UIPI. The control never sends winit's messages or touches
-    AccessKit's property: from high they would be taken.
+    screenshot `c<k>-<kind>-probe`. `m3sec drive` with method `internals`: from medium, every message winit
+    registers at the version in `Cargo.lock` (winit 0.30.13, `src\platform_impl\windows\event_loop.rs`:
+    `Winit::WakeupMsg`, `Winit::DestroyMsg`, `Winit::ExecMsg`, `Winit::SetRetainMaximized` and the taskbar's
+    `TaskbarCreated`; review S-C) posted and sent to the dialog, to winit's "Winit Thread Event Target" window and
+    to the toolkit's contrast-watching window (`mdshared-contrast`) and posted to the dialog's thread; `SetProp` and
+    `RemoveProp` of `AccessKitAdapter` and of a property of the rig's own (`PurgeRigProbe`, which shows that the
+    window refuses and not the name); `WM_GETOBJECT` sent directly. Each must fail outright with the Win32 last
+    error 5 (`ERROR_ACCESS_DENIED`, recorded per attempt as `lasterror`; review S-B: a call that failed for another
+    reason is not UIPI's refusal), none skipped, the broker alive after them, and the three targets still windows
+    (`alive_after`, `IsWindow`). The scorer derives the probes it wants, by name and count (40 at these lists),
+    from `consent.toolkit.winit_messages`, `probe_windows` and `probe_props` of `m3-sec-expect.json`; a pin of winit
+    that registers another message changes that list and `WinitMessages` in `m3sec.cs` together. First the control
+    from high makes the same calls with `WM_NULL` and `PurgeRigProbe` and `WM_GETOBJECT` as UI Automation sends it,
+    and they must all work, so that a failure from medium is UIPI; it runs again after the medium probes
+    (`pcontrol-after-<k>.json`, `control_after`) and must pass again. The control never sends winit's messages or
+    touches AccessKit's property: from high they would be taken.
   - *`consent-arm -Tag k`* (B3), real input from high on a fresh dialog; record `rule-arm-<k>.json`, screenshot
     `c<k>-<kind>-rule-arm`. `m3sec arm` (`ArmToolkit`, `toolkit_only`): times count from the moment the tool sees
     the end of the list on screen. A click on the button 250 ms after it (must be under 900 ms, the button still
@@ -2003,6 +2010,21 @@ powershell -NoProfile -File vm\truth\m3-sec-score.ps1 --self-test
     dialog in front: Cancel has the keyboard, so the request is declined and the dialog goes. The key may land
     before the dialog counts as on screen: the broker then declines without a `consent.shown` (review S2), and the
     scorer takes a missing `consent.shown` for this rule alone; one that was sent must say `toolkit`.
+  - *A list that does not fit* (review S-D; prepared, **not yet run**). A toolkit run installs fixture `lookalike45`
+    (m3-uac's: 45 look-alike leftovers, 41 and more attention entries), so the plan dialog's list must be scrolled
+    to its end; the scorer fails the plan dialog's `consent-arm` when its list fitted (`end_at_start`). The client
+    asks for the plan 11 times (10 used). On the plan dialog three more rules, each on a fresh dialog that must end
+    as `consent_declined` with nothing run, records `rule-<rule>-<k>.json`, screenshots `c<k>-plan-rule-<rule>`:
+    - *`consent-unseen -Tag k`*: the dialog up 1300 ms (over the dialog's own second; at least
+      `unseen_min_ms`), its end never on screen. A real click on the button, then a real click on the box: the
+      dialog stays, nothing is answered, the box stays unticked, the button stays disabled; then Esc.
+    - *`consent-tabspace -Tag k`*: the same state; real Tab, then Space. While the box is disabled Cancel is the
+      only stop of Tab (UI Automation's focus must be `ConsentCancel` after the Tab), so Space cancels.
+    - *`consent-tabearly -Tag k`*: End (posted), then at once by real input Tab (the box, which the end enabled),
+      Space (ticks it) and Tab again, under `tab_early_max_ms` after the end was seen: the second Tab must leave
+      the keyboard on Cancel, not on the button, which waits a second after the end. Enter then cancels. If the
+      keyboard is on the button all the same, the tool sends Esc instead of Enter (the test never approves) and the
+      scorer fails the row.
   - *`kill-start`, `kill-run`* (B3; before the main client, while the fixture program is still installed); record
     `orphan.json` in the lost client's record, screenshots `k00-client`, `k01-after-kill`. A client of its own with
     one uninstall dialog. `m3sec orphan` (high) waits for the dialog, ends the client (the broker's parent and the
@@ -2022,7 +2044,7 @@ powershell -NoProfile -File vm\truth\m3-sec-score.ps1 --self-test
   the contrast window are found by their class names); and the `orphan` role's own part (it ends a process of the
   script's and times the dialog going when the preview's closer fires). Never run there: the `internals` probes
   themselves (at the dialog's own level winit would take `Winit::ExecMsg` with a null closure), and the rules by
-  real input (`consent-arm`, `consent-enter`), which move the real pointer. That is the control side only; T1
+  real input (`consent-arm`, `consent-enter`, `consent-unseen`, `consent-tabspace`, `consent-tabearly`), which move the real pointer. That is the control side only; T1
   itself needs this mode. Not updated: `m3rec.cs`
   (`m3-recover` presses its dialogs by TaskDialog messages). Not in the rig at all: a per-user font planted under
   one of the families the window asks for (review B1; nothing to test until the toolkit can load fixed font files),
@@ -2058,8 +2080,8 @@ powershell -NoProfile -File vm\truth\m3-sec-score.ps1 --self-test
   only on the last page, at least 2 pages and 41 attention entries, the dialog in front; the execute result with a
   journal; the standard-user row; the named screenshots. `--self-test` builds a passing synthetic evidence directory
   per mode from the expectations and checks it passes, that an empty or missing directory fails, that a toolkit run
-  passes only under `-ConsentUi toolkit` (and a TaskDialog run only without it, 49 toolkit defects fail, an Enter that cancelled a dialog before it was shown passes), and
-  that 40 single defects each fail (102 checks).
+  passes only under `-ConsentUi toolkit` (and a TaskDialog run only without it, 81 toolkit defects fail, an Enter that cancelled a dialog before it was shown passes), and
+  that 40 single defects each fail (134 checks).
 - **Not settled without a run**: whether the scan of the fixture yields the look-alike files as absorbed children
   with their own attention entries (the scorer fails the paging row otherwise); whether the first-elevation dialog and
   the program row of the real UI are found by name; whether the credential prompt of this build focuses the password

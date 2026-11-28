@@ -508,6 +508,16 @@ function Invoke-M3SecDialogMatrix([int]$K, [string]$Kind, [int]$FirstWaitSec) {
         $null = Invoke-M3SecPhase 'consent-enter' "$K" -WaitSec 300
         Save-M3SecShot ('c{0:D2}-{1}-rule-enter' -f $K, $Kind)
         $K++
+        if ($Kind -eq 'plan') {
+            # On the plan dialog, whose list does not fit (fixture lookalike45; review S-D): the dialog up over a second
+            # with the end not seen (a real click on the button and on the box do nothing), Tab then Space (cancels),
+            # and Tab not reaching the button inside the second after the end. 10 of the 11 plan asks of a toolkit run.
+            foreach ($rule in 'unseen', 'tabspace', 'tabearly') {
+                $null = Invoke-M3SecPhase "consent-$rule" "$K" -WaitSec 300
+                Save-M3SecShot ('c{0:D2}-{1}-rule-{2}' -f $K, $Kind, $rule)
+                $K++
+            }
+        }
     }
     $null = Invoke-M3SecPhase 'consent-next' "$K" -WaitSec 300
     Save-M3SecShot ('c{0:D2}-{1}-shown' -f $K, $Kind)
@@ -517,7 +527,9 @@ function Invoke-M3SecDialogMatrix([int]$K, [string]$Kind, [int]$FirstWaitSec) {
 }
 
 function Invoke-M3SecConsent {
-    $base = Start-M3Sec 'lookalike3'
+    # A toolkit run's plan dialog has a list that does not fit (45 look-alike leftovers, m3-uac's fixture), so that its
+    # arming rules run where the end of the list has to be scrolled to (review S-D). The TaskDialog run keeps 3.
+    $base = Start-M3Sec $(if ("$ConsentUi" -eq 'toolkit') { 'lookalike45' } else { 'lookalike3' })
     if ("$ConsentUi" -eq 'toolkit') {
         # The client lost while a dialog is up (review B3): a client of its own first, while nothing is uninstalled yet.
         $null = Invoke-M3SecPhase 'kill-start' -WaitSec 120
