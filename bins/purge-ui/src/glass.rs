@@ -802,10 +802,7 @@ mod tests {
             }
         }
         // Nothing outside the keyed part was written into the copy.
-        assert!(
-            kept.px[..4 * 4 * 1].iter().all(|&b| b == 0),
-            "row 1 untouched"
-        );
+        assert!(kept.px[..16].iter().all(|&b| b == 0), "row 1 untouched");
     }
 
     #[test]
