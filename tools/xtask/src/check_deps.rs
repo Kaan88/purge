@@ -414,7 +414,7 @@ const TOOLKIT_DIR: &str = "src/consent/toolkit/";
 /// What the dialog's production code may name of each of them, as (the crate as code writes it, the
 /// first path segments allowed after it): the modules of the toolkit the dialog draws, lays out and
 /// talks to the window with; of the text crate the type it measures into and the fixed list of font
-/// files it draws with (TK-1: `fixed_fonts`, `FixedFonts`, `FixedFontsError`, `MAX_FONT_FILE`, so no
+/// files it draws with (TK-1: `fixed_fonts`, `FixedFonts`, `FixedFontsError`, so no
 /// family of the system's collection draws a glyph of it); and the two parts of winit it needs for
 /// the window's handle and size. Not the toolkit's menus, text fields, trays, thumbnails or desktop
 /// entries, not the image loading or the system's font collection (`shared_fonts`) of the text
@@ -432,13 +432,7 @@ const TOOLKIT_NAMES: [(&str, &[&str]); 3] = [
     ),
     (
         "mdshared_text",
-        &[
-            "Bitmap",
-            "FixedFonts",
-            "FixedFontsError",
-            "MAX_FONT_FILE",
-            "fixed_fonts",
-        ],
+        &["Bitmap", "FixedFonts", "FixedFontsError", "fixed_fonts"],
     ),
     ("winit", &["dpi", "raw_window_handle"]),
 ];

@@ -111,8 +111,13 @@ use purge_guard::deny::{DenyList, ObjectGuardFacts, ids};
 use purge_guard::prefix::{self, eq_ci, expand_env};
 use purge_model::exec::journal::{Intent, ItemFacts, UndoConflict, UndoOutcome};
 use purge_model::exec::op::{ExecOp, FailCode, Inverse, ItemOutcome, OpId, SkipReason};
-use purge_model::exec::regbackup::{RegBackup, RegBackupBody, RegBackupSchema, RegTree};
-use purge_model::{Blocker, Candidate, CandidateId, FileTime, ObjectKind, Reversibility};
+use purge_model::exec::regbackup::{RegBackup, RegTree};
+// Only the fake (`fake`, tests and `test-support`) builds backups and reads a tree's DeleteFlag.
+#[cfg(any(test, feature = "test-support"))]
+use purge_model::FileTime;
+#[cfg(any(test, feature = "test-support"))]
+use purge_model::exec::regbackup::{RegBackupBody, RegBackupSchema};
+use purge_model::{Blocker, Candidate, CandidateId, ObjectKind, Reversibility};
 use purge_model::{ServiceIdentity, Target};
 use purge_win::os::Win32Error;
 use purge_win::reg::{REG_DWORD, REG_EXPAND_SZ, REG_MULTI_SZ, REG_SZ, RegRoot, RegValue, RegView};
@@ -500,7 +505,8 @@ pub fn identity_from_tree(name: &str, tree: &RegTree) -> Result<ServiceIdentity,
     identity_from_values(name, &as_raw(&root), dll)
 }
 
-/// Whether the root of `tree` has `DeleteFlag` set.
+/// Whether the root of `tree` has `DeleteFlag` set. Used by the fake only.
+#[cfg(any(test, feature = "test-support"))]
 fn tree_delete_flag(tree: &RegTree) -> bool {
     tree_values(tree, 0).is_some_and(|values| delete_flag_of(&as_raw(&values)))
 }
