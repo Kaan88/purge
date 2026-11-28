@@ -650,7 +650,7 @@ crates at fixed versions (among them a second `miniz_oxide` and two more `window
   `BROKER_TOOLKIT` is in it, and no feature of the broker is on, in its own tree or in a default workspace build.
 - Rule 6, the tree with the feature: what it has beyond the first is exactly `BROKER_TOOLKIT`, crate by crate and
   version by version (grouped with the reason each is there), each from crates.io but the `mdshared-*` crates, which
-  come from the toolkit's repository at revision `294d330`, locked in `Cargo.lock` to the full commit
+  come from the toolkit's repository at revision `d789e8e` (the pin `ui/rust` moved to; `294d330` before), locked in `Cargo.lock` to the full commit
   (`TOOLKIT_COMMIT`); `mdshared-ui` is built with `host` and `a11y` only. A crate, a version or a toolkit revision
   an update starts to bring is a violation until its line here changes, in a commit somebody reads.
 - Rule 6, the sources: only `src/consent/toolkit/` names the feature's crates, and of each only what is listed:
@@ -678,6 +678,37 @@ Before this package nothing limited what the broker links from outside.
 | S8 | A minimised window never counted as shown and kept a dialog's words when it was taken down | Fixed: no minimise box; restored first |
 | S9 | Rule 6 checked crate names only: any version, any source and any toolkit revision passed | Fixed: "Dependencies" above |
 | S10 | The rig told the dialogs apart by the window class alone, took a window that was still there for a dialog that was not answered, and posted End before the first layout | Fixed: `consent.shown` says `ui`; the rig reads the client's answer and waits for the layout |
+
+**The second review** (Fable, 2026-11-28, of branch `broker/consent-ui-2`; ids as in that review). Its verdict: the
+branch may merge into `ui/rust` **with the TaskDialog the default**. Done with the merge of `ui/rust` (toolkit pin
+`d789e8e`; check-deps rule 6 moved with it, the same 86 crates; the dialog lets go of a held press on the host's
+`PressLost` and on `Focus(false)`, AGENTS.md rule 3):
+
+| Id | Finding | State |
+|---|---|---|
+| S-A | `install.ps1 -Broker`, the Inno pre-step and the release workflow take `target\release\purge-broker.exe`, the file a rig build with the feature writes | Fixed: the staging guard ("The switch" above); the rig builds the toolkit broker into its own `--target-dir` |
+| S-B | The internals probes counted any failed call as UIPI's refusal, ran the control from high before the medium probes only, and did not look at the windows after | Fixed in the rig, not run: the last error of every probe, 5 wanted; the control again after; `IsWindow` of all three targets |
+| S-C | The probes named three of winit's registered messages, and the count wanted was written by hand | Fixed in the rig, not run: every id winit 0.30.13 registers (also `Winit::SetRetainMaximized`, `TaskbarCreated`), the probes wanted derived from the lists |
+| S-D | The arming rules ran on lists that fit | Fixed in the rig, not run: fixture `lookalike45` for a toolkit run; on the plan dialog the clicks on a dialog up over a second whose end was not seen, Tab then Space, and Tab inside the second after the end |
+| N1 | `drop_job` threw away the phase it dropped: a cancel the window took between the end of the wait and the drop was asked again with the TaskDialog | Fixed: `drop_job` returns the phase before; `Unseen` stands as `Declined`, a dialog that reached the screen is declined, not asked again |
+| N4 | `readable` did not check the button and link colours | Checked: at `d789e8e` the contrast palette has no field for `button_text` or `hot_light` and takes `button_face` only where the window text reads on it at 4.5:1; a test pins that, so a pin that starts drawing with them fails it |
+| N5 | A literal `\u{` in a name reads as one of the dialog's escapes | Fixed where the text enters (`shown`, `shown_line`, both renderers): its backslash is written `\u{5c}`; `drawable` cannot tell a literal from an escape and leaves both alone |
+| N6 | Purge.exe's help offered `--broker-consent toolkit` without saying a release refuses it | Fixed: "for development builds only" |
+
+**Before the toolkit dialog can be the default** (step 4), besides the VM run of `m3-consent -ConsentUi toolkit` with
+the rig changes above:
+
+- **B1** (the first review): the window's fonts are found by family name in a collection a medium process can add
+  to. Needs the toolkit's fixed font files, `docs/TOOLKIT_REQUESTS.md` TK-1 (still not there at `d789e8e`).
+- **S-E**: an approval must need every attention row to have been on screen, not only the end of the list. Today
+  the end alone arms the box and the button; a long list scrolled to its end with End skips the rows between.
+- **S-F**: a panic test with a real window: the panic hook on the window's thread ("Threads": answer, mark dead,
+  hide the window, stop the thread) shown with the toolkit's loop running and a dialog up.
+- **S-G**: a kill in the middle of a plan: the client or the broker ended while a plan the toolkit dialog approved
+  executes.
+
+These stay open on purpose: the branch merges with the TaskDialog the default and the feature off in every release
+build, so none of them is in reach of a shipped broker.
 
 **The request to the toolkit (B1)** is `docs/TOOLKIT_REQUESTS.md`, TK-1, written to be handed over as it stands:
 why, the API (`mdshared_text::fixed_fonts`, `FixedFonts::has_glyph`, `Gfx::with_fonts`, `Config::fonts`,

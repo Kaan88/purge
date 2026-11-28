@@ -15,10 +15,10 @@ own and the section here gets the revision that closed it.
 ### Why
 
 The broker's consent dialog is drawn by an elevated process and read by the user as the truth about what will be
-deleted: names, paths, counts and the confirmation code. At toolkit revision `294d330` every glyph of it comes from
+deleted: names, paths, counts and the confirmation code. At toolkit revision `294d330`, and still at `d789e8e` (the pin since 2026-11-27), every glyph of it comes from
 a font that was found **by family name in the system's collection**:
 
-- `Gfx::new()` is the only constructor (`mdshared-ui/src/gfx.rs:168`). It takes `mdshared_text::shared_fonts()`
+- `Gfx::new()` is the only constructor (`mdshared-ui/src/gfx.rs:168`; line 183 at `d789e8e`). It takes `mdshared_text::shared_fonts()`
   (`mdshared-text/src/fonts.rs:16`): `parley::FontContext::new()`, which is the system's collection through
   DirectWrite, plus `add_fallbacks`, more families by name ("Segoe UI Symbol", "Segoe UI Emoji", "Microsoft
   YaHei", ...).
