@@ -12,10 +12,12 @@
 //! by the sample. The held events (the `inventory.changes` reply, late patches) follow the
 //! [`ClientEvent::Startup`] in their order.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
+use purge_model::ProgramId;
 use purge_rpc::methods::{MediumHello, NoParams, StdioCall};
 
 use crate::engine::{Engine, EngineClient, StartError};
@@ -24,6 +26,14 @@ use crate::{Answer, CallId, ClientError, ClientEvent, ProgramList, SampleEngine,
 
 /// How long the engine has to answer hello and the list before the sample data takes over.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// How long after the list reply the start waits for the list's `programs.patch`es. The engine
+/// sends its reply as soon as the raw rows are out and the patches right after it (they wait for
+/// the AppX package list); a raw row reads as a named app, so a list handed over without them
+/// would show every row in the Apps tab until they come. Once every row has its patch, or this
+/// long after the reply, the list goes to the page; patches later than that still reach it as
+/// [`ClientEvent::ProgramsPatched`].
+pub const PATCH_WAIT: Duration = Duration::from_millis(500);
 
 /// The sentence the fallback notice starts with.
 pub const FALLBACK_NOTICE: &str = "Purge couldn't use its engine, so this list is sample data. ";
@@ -58,6 +68,7 @@ pub struct Startup {
     timeout: Duration,
     engine_ready: Option<Mark>,
     list_reply: Option<Mark>,
+    list_patched: Option<Mark>,
 }
 
 impl Startup {
@@ -76,6 +87,7 @@ impl Startup {
             timeout: DEFAULT_TIMEOUT,
             engine_ready: None,
             list_reply: None,
+            list_patched: None,
         }
     }
 
@@ -87,6 +99,7 @@ impl Startup {
             timeout: DEFAULT_TIMEOUT,
             engine_ready: None,
             list_reply: None,
+            list_patched: None,
         }
     }
 
@@ -111,6 +124,12 @@ impl Startup {
     /// Called once the list is answered.
     pub fn on_list_reply(mut self, mark: Mark) -> Startup {
         self.list_reply = Some(mark);
+        self
+    }
+
+    /// Called once the real engine's list has its patches, or [`PATCH_WAIT`] after its reply.
+    pub fn on_list_patched(mut self, mark: Mark) -> Startup {
+        self.list_patched = Some(mark);
         self
     }
 
@@ -222,6 +241,51 @@ impl Gate {
         }
     }
 
+    /// Moves the engine's held `programs.patch`es into `list` until every row of it has one, the
+    /// engine closes (no patch can come after that), or `until`. What came later stays held for
+    /// the page, the engine's close too.
+    fn take_patches(&self, list: &mut ProgramList, until: Instant) {
+        let mut missing: HashSet<&ProgramId> = list.rows.iter().map(|r| &r.program_id).collect();
+        for p in &list.patches {
+            missing.remove(&p.program_id);
+        }
+        let mut taken = Vec::new();
+        let mut closed = false;
+        let mut state = lock(&self.state);
+        loop {
+            let held = std::mem::take(&mut state.held);
+            for (source, event) in held {
+                match event {
+                    ClientEvent::ProgramsPatched(patches) if source == Source::Engine => {
+                        for p in &patches {
+                            missing.remove(&p.program_id);
+                        }
+                        taken.extend(patches);
+                    }
+                    event => {
+                        closed |= source == Source::Engine
+                            && matches!(event, ClientEvent::EngineClosed { .. });
+                        state.held.push((source, event));
+                    }
+                }
+            }
+            if missing.is_empty() || closed || state.engine_dropped {
+                break;
+            }
+            let left = until.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                break;
+            }
+            state = self
+                .changed
+                .wait_timeout(state, left)
+                .map(|(s, _)| s)
+                .unwrap_or_else(|p| p.into_inner().0);
+        }
+        drop(state);
+        list.patches.extend(taken);
+    }
+
     /// Drops the engine's events, held and to come.
     fn drop_engine(&self) {
         let mut state = lock(&self.state);
@@ -256,6 +320,7 @@ fn run(startup: Startup, ui: Sink) {
         timeout,
         engine_ready,
         list_reply,
+        list_patched,
     } = startup;
     let sample = |gate: &Arc<Gate>| -> Arc<dyn Engine> {
         Arc::new(SampleEngine::new(gate.sink(Source::Sample)).with_bench_rows(bench_rows))
@@ -267,7 +332,12 @@ fn run(startup: Startup, ui: Sink) {
     };
     let error = match open(gate.sink(Source::Engine)) {
         Err(e) => describe(&e.to_string()),
-        Ok(engine) => match live(&gate, &engine, timeout, &engine_ready, &list_reply) {
+        Ok(engine) => match live(
+            &gate,
+            &engine,
+            timeout,
+            [&engine_ready, &list_reply, &list_patched],
+        ) {
             Ok(result) => {
                 gate.open(result);
                 return;
@@ -300,8 +370,7 @@ fn live(
     gate: &Arc<Gate>,
     engine: &Arc<dyn Engine>,
     timeout: Duration,
-    engine_ready: &Option<Mark>,
-    list_reply: &Option<Mark>,
+    [engine_ready, list_reply, list_patched]: [&Option<Mark>; 3],
 ) -> Result<StartupResult, String> {
     let deadline = Instant::now() + timeout;
     let too_slow = || {
@@ -321,13 +390,16 @@ fn live(
     // Written before the list request, so the engine answers it against the list of the last run.
     let changes = engine.request(StdioCall::InventoryChanges(NoParams {}));
     let list_call = engine.request(StdioCall::ProgramsList(NoParams {}));
-    let list = match gate.take_reply(list_call, Some(deadline)) {
+    let mut list = match gate.take_reply(list_call, Some(deadline)) {
         None => return Err(too_slow()),
         Some(Ok(Answer::Programs(list))) => list,
         Some(Ok(_)) => return Err("The engine's list is not a list.".into()),
         Some(Err(e)) => return Err(describe(&e.to_string())),
     };
     mark(list_reply);
+    // The page's first rows are already in their tabs: the patches that follow the reply first.
+    gate.take_patches(&mut list, (Instant::now() + PATCH_WAIT).min(deadline));
+    mark(list_patched);
     Ok(StartupResult {
         engine: engine.clone(),
         hello,

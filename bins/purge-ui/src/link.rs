@@ -15,7 +15,7 @@
 //! hands its scan's session to the Leftovers page) and ends it ([`BrokerHub::close`]). Only one
 //! page owns it at a time.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, channel};
 use std::sync::{Arc, Mutex};
@@ -52,8 +52,15 @@ pub enum Source {
 }
 
 impl Source {
-    /// The engine beside this exe.
-    pub fn beside_exe() -> Source {
+    /// The engine beside this exe, or, in a launch-bench run (`--bench-exit`) or a debug build, the
+    /// file `PURGE_ENGINE` names (the bench's `--engine`). An installed Purge started normally never
+    /// takes its engine from a per-user variable (Fable review of alpha.4, S3).
+    pub fn beside_exe(bench_exit: bool) -> Source {
+        if bench_exit || cfg!(debug_assertions) {
+            if let Some(path) = std::env::var_os("PURGE_ENGINE").filter(|p| !p.is_empty()) {
+                return Source::Engine(PathBuf::from(path));
+            }
+        }
         let exe = std::env::current_exe().ok();
         let dir = exe
             .as_deref()
@@ -314,6 +321,12 @@ struct IconLoad {
     stamps: HashMap<ProgramId, i64>,
     chunks: VecDeque<Vec<ProgramId>>,
     in_flight: Option<CallId>,
+    /// The programs of the chunk in flight.
+    asked: Vec<ProgramId>,
+    /// The programs whose icon is settled: applied from the atlas, or their chunk answered
+    /// (with an icon or without one: that row keeps its tile). A failed chunk settles nothing.
+    /// The launch bench's `icons_visible` waits for the rows on screen.
+    settled: HashSet<ProgramId>,
 }
 
 pub struct Link {
@@ -381,6 +394,9 @@ impl Link {
             }))
             .on_list_reply(Box::new(|| {
                 markers::mark("list_reply");
+            }))
+            .on_list_patched(Box::new(|| {
+                markers::mark("list_patched");
             }))
             .start(self.sink.clone());
     }
@@ -511,6 +527,10 @@ impl Link {
         // A live engine's icons are kept between runs; the sample's are not.
         self.atlas = Atlas::open(if live { icons::default_file() } else { None });
         model.mode = self.mode.clone();
+        if matches!(self.mode, Mode::Fallback(_)) {
+            // The bench's `--real-engine` mode refuses a run whose list is the sample data.
+            markers::mark("engine_fallback");
+        }
         if live {
             model.settings.facts.engine = Some(s.hello.hello.version.clone());
             model.settings.facts.policy = Some(s.hello.hello.policy_version.clone());
@@ -561,9 +581,13 @@ impl Link {
             (Pending::Details(id), r) => pr.page.on_details(&id, Err(failure(r))),
             (Pending::Sizes(g), Ok(_)) => pr.page.on_sizes_done(g, Ok(())),
             (Pending::Sizes(g), Err(e)) => pr.page.on_sizes_done(g, Err(call_error(e))),
-            (Pending::Icons(g), _) => {
+            (Pending::Icons(g), r) => {
                 // A failed chunk leaves its rows with their tiles; the next chunk still goes.
                 if g == self.icons.generation {
+                    let asked = std::mem::take(&mut self.icons.asked);
+                    if r.is_ok() {
+                        self.icons.settled.extend(asked);
+                    }
                     self.next_icons();
                 }
                 vec![]
@@ -665,14 +689,17 @@ impl Link {
         for w in wanted {
             let stamp = icons::stamp(w.version.as_deref(), w.install_time);
             match self.atlas.get(&icons::key_of(&w.program_id), stamp) {
-                Some(hit) => pr.set_icon(
-                    generation,
-                    ProgramIcon {
-                        program_id: w.program_id.clone(),
-                        px: hit.px,
-                        bgra: Some(hit.bgra.clone()),
-                    },
-                ),
+                Some(hit) => {
+                    pr.set_icon(
+                        generation,
+                        ProgramIcon {
+                            program_id: w.program_id.clone(),
+                            px: hit.px,
+                            bgra: Some(hit.bgra.clone()),
+                        },
+                    );
+                    self.icons.settled.insert(w.program_id.clone());
+                }
                 None => misses.push(w.program_id.clone()),
             }
             self.icons.stamps.insert(w.program_id, stamp);
@@ -688,7 +715,7 @@ impl Link {
             self.atlas.save();
             return;
         };
-        let Some(program_ids) = NonEmpty::new(chunk) else {
+        let Some(program_ids) = NonEmpty::new(chunk.clone()) else {
             return self.next_icons();
         };
         let call = StdioCall::ProgramsIcons(IconsParams {
@@ -696,7 +723,29 @@ impl Link {
             px: icons::PX,
         });
         let generation = self.icons.generation;
+        self.icons.asked = chunk;
         self.icons.in_flight = self.engine_call(call, Pending::Icons(generation));
+    }
+
+    /// Whether the icon of `id` is settled in the current icon load (see `IconLoad::settled`).
+    pub fn icon_settled(&self, id: &ProgramId) -> bool {
+        self.icons.settled.contains(id)
+    }
+
+    /// Whether an icon load still has chunks to fetch (its atlas is saved at its end).
+    pub fn icons_loading(&self) -> bool {
+        self.icons.in_flight.is_some() || !self.icons.chunks.is_empty()
+    }
+
+    /// The data is the real engine's.
+    pub fn live(&self) -> bool {
+        matches!(self.mode, Mode::Live)
+    }
+
+    /// Keeps the icons fetched so far for the next start (the launch bench, closing before the
+    /// load ended).
+    pub fn save_icons(&mut self) {
+        self.atlas.save();
     }
 
     /// A request of the removed-program check.

@@ -321,6 +321,12 @@ function Get-M3UiExe {
     $ui
 }
 
+# Whether $UiExe (Get-M3UiExe) is the WinUI app's Purge.exe in its publish folder: Purge.pri, the app's resource
+# index, lies beside it. The Rust UI has none.
+function Test-M3WinUiPublish([string]$UiExe) {
+    (Test-Path -LiteralPath $UiExe -PathType Leaf) -and (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $UiExe) 'Purge.pri') -PathType Leaf)
+}
+
 # The release artifacts the guest installs (install.ps1 -SkipBuild): purge-engine.exe, purge-broker.exe, kb\ and, when
 # there is one, ui\Purge.exe (Get-M3UiExe; the guest passes ui\ as -UiPublishDir). Returns the zip path in the host
 # temp directory.
@@ -337,7 +343,14 @@ function New-M3SecPayload {
     Copy-Item -LiteralPath $engine, $broker -Destination $stage
     Copy-Item -LiteralPath (Join-Path $script:RepoRoot 'kb') -Destination (Join-Path $stage 'kb') -Recurse
     $hasUi = Test-Path -LiteralPath $ui -PathType Leaf
-    if ($hasUi) {
+    # The WinUI publish folder (ui\Purge.App, dotnet publish: Purge.exe beside Purge.pri, the runtime DLLs and the
+    # language folders) goes whole; otherwise Purge.exe is the Rust UI, one file (a cargo target\release folder also
+    # holds the engine, the broker and build files that must not ride along). Either way the guest's install.ps1
+    # -UiPublishDir ui\ puts Purge.exe beside purge-engine.exe in C:\Program Files\Purge, as the Inno setup does.
+    $winUi = Test-M3WinUiPublish $ui
+    if ($winUi) {
+        Copy-Item -LiteralPath (Split-Path -Parent $ui) -Destination (Join-Path $stage 'ui') -Recurse
+    } elseif ($hasUi) {
         New-Item -ItemType Directory -Force (Join-Path $stage 'ui') | Out-Null
         Copy-Item -LiteralPath $ui -Destination (Join-Path $stage 'ui\Purge.exe')
     }
@@ -345,7 +358,7 @@ function New-M3SecPayload {
     $zip = "$stage.zip"
     Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip -Force
     Remove-Item -LiteralPath $stage -Recurse -Force
-    Write-RigLog "  payload: $engine, $broker, kb\$(if ($hasUi) { ", ui\ from $ui" }) ($([int]((Get-Item $zip).Length / 1MB)) MB)"
+    Write-RigLog "  payload: $engine, $broker, kb\$(if ($winUi) { ", ui\ = the WinUI publish folder $(Split-Path -Parent $ui)" } elseif ($hasUi) { ", ui\Purge.exe (Rust UI) from $ui" }) ($([int]((Get-Item $zip).Length / 1MB)) MB)"
     $zip
 }
 

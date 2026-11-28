@@ -29,7 +29,23 @@ pre-releases (`0.2.0-alpha.N`). Background: docs/UI_RUST_ASSESSMENT.md (mapping,
 | `crates/purge-ui-model` | UI-MODEL-A, UI-MODEL-B | View models: plain state machines, no I/O, no toolkit, `cargo test`able |
 
 The toolkit is a workspace dependency (`mdshared-ui` with `host`, `a11y`; `mdshared-app`) pinned to
-main `294d330`. No other new third-party crates without the coordinator's OK.
+main `d789e8e`. Before moving it, read `AGENTS.md` (the rules for using the toolkit) and the
+toolkit's `docs/CATALOGUE.md` at the new commit. No other new third-party crates without the
+coordinator's OK.
+
+| Pin | Since | What the move asked of Purge |
+|---|---|---|
+| `294d330` | the mockup | (the approved mockup's pin) |
+| `f45a71c` | 2026-11-25 | Nothing: no call changed; `anim::page` and `Painter::frame`/`gradient` unchanged, so `transition.rs` and `paint.rs` stay |
+| `48eedb8` | 2026-11-28 (purge#11) | Nothing: no deprecation, no changed call |
+| `d789e8e` | 2026-11-28 | `TextField::press`, `drag`, `select_word_at` and `Palette::press`, `pointer_move` deprecated. The Programs search field is on `textfield::FieldInput` (host route: drag with edge scroll, double and triple click, Shift+click, the right-click and Shift+F10 edit menu in English); the palette on its pointer route (`pointer_press`, `pointer_motion`, `pointer_release`, `secondary_press`, `key_with_menu`, `text_deadline`/`tick_text`); `Focus(false)` and `Event::PressLost` let go of every held press (`PurgeApp::let_go`, with `Palette::cancel`) |
+
+At `d789e8e` the toolkit also has `Cx::set_backdrop_veil(Option<u8>)` and `frost::Frost::set_veil`
+(roadmap X11), one veil for the whole frosted chrome. Purge's `glass.rs` keeps its own keying: it
+needs two veils (chrome and the raised page layer) and the contrast clamp, so the host's single veil
+would lose the second layer. The faster region blends and new page effects (X12) are still open
+(`PageEffect` is Crossfade, SlideFade and Push), so `transition.rs` and `paint.rs` stay. `Gfx` has
+no fixed font list yet (wanted by the broker consent dialog, B1).
 
 ## Contracts between the packages
 
@@ -89,6 +105,9 @@ What the rig relies on (UI-RIG, 2026-11-25):
   had ("You cancelled the Windows prompt.", "Not started.", "The uninstaller failed.", "Some parts
   remain", "Nothing was moved: the prompt was cancelled.", ...).
 - **Rail.** `NavPrograms`..`NavSettings` are tabs (SelectionItem only; the rig falls back to it).
+- **Window.** The rig takes the process's top-level element of control type Window (the process also has the winit
+  event target and the input indicator panes at the top level). `ConfirmUninstallButton` is disabled for `ARM_DELAY`
+  after the dialog opens; the rig waits for it enabled (host probe, 2026-11-28).
 - **Still owed by UI-PAGES** (the probe's BLOCKED lines): the broker consent wait page
   (`WaitingTitleText` "Confirm ... in the Purge security prompt." and `WaitingCodeText`; today
   `WaitingTitleText` is the leftovers scan wait), the first-elevation dialog, the cancelled / error /

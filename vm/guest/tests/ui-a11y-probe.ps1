@@ -12,7 +12,11 @@ param(
     [string]$Exe = 'E:\purge-target\ui\release\Purge.exe',
     [string]$Program = '7-Zip 24.08 (x64)',
     [int]$ScanWaitSec = 90,
-    [string]$Json = ''
+    [string]$Json = '',
+    # Read-only run against the real purge-engine.exe beside Purge.exe (the -RealEngine block below); -Program is
+    # then an installed program's DisplayName, -Ambiguous a name two rows carry (optional).
+    [switch]$RealEngine,
+    [string]$Ambiguous = ''
 )
 $ErrorActionPreference = 'Stop'
 $Guest = Split-Path -Parent $PSScriptRoot
@@ -37,11 +41,83 @@ function Describe($El) { if ($El) { "$(Get-Type $El) '$(Get-E2eName $El)' [$((Ge
 function Wait-Id($Win, [string]$Id, [int]$Sec = 10) { (Wait-E2eElement { Find-E2eById $Win $Id } $Sec).el }
 
 if (-not (Test-Path -LiteralPath $Exe)) { throw "no Purge.exe at $Exe (cargo build --release -p purge-ui)" }
+
+function Write-ProbeSummary {
+    $n = @{}; foreach ($s in 'PASS', 'FAIL', 'BLOCKED', 'INFO') { $n[$s] = @($results | Where-Object { $_.status -eq $s }).Count }
+    "ui-a11y-probe$(if ($RealEngine) { ' (real engine, read-only)' }): $($n.PASS) pass, $($n.FAIL) fail, $($n.BLOCKED) blocked, $($n.INFO) info"
+    if ($Json) { ConvertTo-Json @{ exe = $Exe; real_engine = [bool]$RealEngine; program = $Program; results = @($results) } -Depth 4 | Set-Content -LiteralPath $Json -Encoding UTF8 }
+    if ($n.FAIL) { exit 1 } else { exit 0 }
+}
+
+# ---- -RealEngine: Purge.exe with the real purge-engine.exe beside it, read-only. The rig's lookups on a real
+# inventory: the list, a row by name, Uninstall up to the first-elevation explanation, which is answered "Not now"
+# (no broker starts, no Windows prompt comes up), and the rail. Nothing here presses Continue, a confirmation's
+# Uninstall, Move or Put back; History and the vault are not opened (they would ask for the broker).
+if ($RealEngine) {
+    if (-not (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $Exe) 'purge-engine.exe'))) { throw "no purge-engine.exe beside $Exe" }
+    $proc = Start-Process -FilePath $Exe -PassThru
+    try {
+        $win = Get-E2eWindow $proc.Id 30
+        Check 'real: the process''s top-level Window (Get-E2eWindow)' ((Get-Type $win) -eq 'Window' -and (Get-E2eName $win) -ceq 'Purge') "name='$(Get-E2eName $win)' type=$(Get-Type $win)"
+        if (-not $win) { throw 'no window' }
+        $list = Wait-Id $win 'ProgramList' 30
+        Check 'real: ProgramList a List with Selection' ((Get-Type $list) -eq 'List' -and (Test-Pattern $list 'Selection')) (Describe $list)
+        $itemCond = New-Object System.Windows.Automation.PropertyCondition($ae::ControlTypeProperty, $CT::ListItem)
+        $null = Wait-E2eElement { if (@($list.FindAll([System.Windows.Automation.TreeScope]::Children, $itemCond)).Count -gt 5) { $list } } 60
+        $items = @($list.FindAll([System.Windows.Automation.TreeScope]::Children, $itemCond))
+        Check 'real: the inventory fills the list (ListItems with SelectionItem)' ($items.Count -gt 5 -and @($items | Where-Object { -not (Test-Pattern $_ 'SelectionItem') }).Count -eq 0) "$($items.Count) rows"
+        $t0 = Get-Date
+        $sel = Select-E2eProgramRow $win $Program '' 120
+        Check "real: Select-E2eProgramRow '$Program' (by name, the only row selected, DName)" ($sel.ok -and $sel.by -eq 'name' -and $sel.selected_n -eq 1 -and $sel.dname -ceq $Program) "how=$($sel.how) row='$($sel.row_text)' dname='$($sel.dname)' selected=$($sel.selected_n) s=$([int]((Get-Date) - $t0).TotalSeconds)"
+        if ($Ambiguous) {
+            $amb = Select-E2eProgramRow $win $Ambiguous '' 10
+            Check "real: two rows named '$Ambiguous' are refused, never the first" (-not $amb.ok -and "$($amb.how)" -like 'ambiguous*') "how=$($amb.how)"
+            $sel = Select-E2eProgramRow $win $Program '' 30
+        }
+        $ub = (Wait-E2eElement { Find-E2eById $win 'UninstallButton' } 20 -Enabled).el
+        Check 'real: UninstallButton enabled with Invoke' ((Get-Type $ub) -eq 'Button' -and (Test-Pattern $ub 'Invoke')) (Describe $ub)
+        if ($ub -and $sel.ok) {
+            # ui-uninstall's wait, without its focus of Continue: the first dialog must be the explanation.
+            $null = Invoke-E2eElement $ub
+            $watch = Watch-E2eWindow $win {
+                if (@(Get-Process -Name consent -ErrorAction SilentlyContinue).Count) { return 'uac' }
+                if (Find-E2eDialogButton $win 'Continue') { return 'explanation' }
+                if (Find-E2eDialogButton $win 'Uninstall') { return 'confirm' }
+                $null
+            } 20
+            $cont = Find-E2eDialogButton $win 'Continue'
+            Check 'real: Uninstall opens the first-elevation explanation (Continue = DialogPrimaryButton), no Windows prompt' ($watch.state -eq 'explanation' -and "$($cont.Current.AutomationId)" -eq 'DialogPrimaryButton') "state=$($watch.state) $(Describe $cont)"
+            $nn = Find-E2eDialogButton $win 'Not now' 'CloseButton'
+            Check 'real: its Not now is DialogCloseButton' ("$($nn.Current.AutomationId)" -eq 'DialogCloseButton') (Describe $nn)
+            $null = Invoke-E2eElement $nn
+            $gone = (Wait-E2eElement { if (-not (Find-E2eById $win 'ContentDialog')) { $win } } 5).el
+            Check 'real: Not now closes it' ([bool]$gone)
+            $ib = (Wait-E2eElement { Find-E2eById $win 'InfoBarHost' } 5).el
+            Add-Result 'INFO' 'real: the bar after Not now' (Describe $ib)
+        }
+        foreach ($nav in @(@('NavLeftovers', 'EmptyTitle'), @('NavQueue', ''), @('NavSettings', ''), @('NavPrograms', 'ProgramList'))) {
+            $tab = Find-E2eById $win $nav[0]
+            $how = Invoke-E2eElement $tab
+            Start-Sleep -Milliseconds 800
+            $el = $(if ($nav[1]) { Wait-Id $win $nav[1] 8 } else { $win })
+            $p = $null
+            $on = [bool]($tab -and $tab.TryGetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern, [ref]$p) -and $p.Current.IsSelected)
+            Check "real: rail $($nav[0]) pressed by SelectionItem$(if ($nav[1]) { ", then $($nav[1])" })" ($how -eq 'SelectionItem' -and $on -and [bool]$el) "pattern=$how selected=$on$(if ($nav[1]) { ' ' + (Describe $el) })"
+        }
+        Check 'real: no purge-broker and no Windows prompt came up' (-not @(Get-Process -Name purge-broker, consent -ErrorAction SilentlyContinue).Count)
+    } catch {
+        Add-Result 'FAIL' 'real probe' $_.Exception.Message
+    } finally {
+        Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+    }
+    Write-ProbeSummary
+}
+
 $proc = Start-Process -FilePath $Exe -ArgumentList '--sample' -PassThru
 try {
     # ---- the window (Get-E2eWindow, m3-clean Find-UiWindow, m3sec: the top-level window of the pid)
     $win = Get-E2eWindow $proc.Id 30
-    Check 'window: a top-level element of the process' ([bool]$win) "name='$(Get-E2eName $win)'"
+    Check 'window: the process''s top-level Window (Get-E2eWindow; not its winit / input-indicator panes)' ((Get-Type $win) -eq 'Window' -and (Get-E2eName $win) -ceq 'Purge') "name='$(Get-E2eName $win)' type=$(Get-Type $win)"
     if (-not $win) { throw 'no window' }
     Start-Sleep -Seconds 1
 
@@ -83,10 +159,17 @@ try {
     Check 'ui-uninstall / ui-undo: the first-elevation explanation''s Continue (DialogPrimaryButton)' ("$($cont.Current.AutomationId)" -eq 'DialogPrimaryButton' -and (Test-Pattern $cont 'Invoke')) (Describe $cont)
     $dlg = Find-E2eById $win 'ContentDialog'
     Check 'the explanation is a dialog element (ContentDialog) with DialogCloseButton "Not now"' ($dlg -and (Get-E2eName (Find-E2eById $dlg 'DialogCloseButton')) -eq 'Not now') (Describe $dlg)
+    # ui-uninstall / ui-undo focus Continue (SetFocus) and the VM host presses Space; a SetFocus that throws makes the
+    # driver fall back to Invoke, which gives Windows no real input (the UAC prompt then only flashes on the taskbar).
+    $focusErr = $null
+    try { $cont.SetFocus() } catch { $focusErr = $_.Exception.Message }
+    Start-Sleep -Milliseconds 400
+    Check 'ui-uninstall: SetFocus on Continue works (the host then presses Space)' ($null -eq $focusErr) "error=$focusErr"
+    Add-Result 'INFO' 'Continue after SetFocus (keyboard focus belongs to the input desktop; a hidden one has none)' "HasKeyboardFocus=$($cont.Current.HasKeyboardFocus)"
     $null = Invoke-E2eElement $cont
 
     # ---- the confirmation (m3-e2e ui-uninstall, ui-await-confirm, ui-confirm)
-    $ok = (Wait-E2eElement { Find-E2eDialogButton $win 'Uninstall' } 10).el
+    $ok = (Wait-E2eElement { Find-E2eDialogButton $win 'Uninstall' } 10 -Enabled).el
     Check 'Find-E2eDialogButton Uninstall: ConfirmUninstallButton, a Button with Invoke' ("$($ok.Current.AutomationId)" -eq 'ConfirmUninstallButton' -and (Test-Pattern $ok 'Invoke')) (Describe $ok)
     $dlg = Find-E2eById $win 'ContentDialog'
     Check 'the confirmation is a dialog element (ContentDialog) holding its buttons' ($dlg -and [bool](Find-E2eById $dlg 'ConfirmUninstallButton') -and [bool](Find-E2eById $dlg 'ConfirmNotNowButton')) (Describe $dlg)
@@ -113,7 +196,7 @@ try {
     # page; its button is on Programs. Explained once: no explanation the second time.
     $null = Invoke-E2eElement (Find-E2eById $win 'NavPrograms'); Start-Sleep -Milliseconds 800
     $null = Invoke-E2eElement (Wait-Id $win 'UninstallButton' 5)
-    $ok = (Wait-E2eElement { Find-E2eDialogButton $win 'Uninstall' } 10).el
+    $ok = (Wait-E2eElement { Find-E2eDialogButton $win 'Uninstall' } 10 -Enabled).el
     $how = Invoke-E2eElement $ok
     Check 'ui-confirm: Uninstall pressed by Invoke' ($how -eq 'Invoke')
     $nq = Wait-Id $win 'NavQueue' 10
@@ -187,7 +270,4 @@ try {
     Add-Result 'FAIL' 'm3sec probe' $_.Exception.Message
 } finally { Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue }
 
-$n = @{}; foreach ($s in 'PASS', 'FAIL', 'BLOCKED', 'INFO') { $n[$s] = @($results | Where-Object { $_.status -eq $s }).Count }
-"ui-a11y-probe: $($n.PASS) pass, $($n.FAIL) fail, $($n.BLOCKED) blocked, $($n.INFO) info"
-if ($Json) { ConvertTo-Json @{ exe = $Exe; results = @($results) } -Depth 4 | Set-Content -LiteralPath $Json -Encoding UTF8 }
-if ($n.FAIL) { exit 1 } else { exit 0 }
+Write-ProbeSummary

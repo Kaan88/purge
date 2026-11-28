@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use mdshared_ui::host::{App, Cx, Event};
+use mdshared_ui::host::{App, Button, Cx, Event};
 use mdshared_ui::keys::KeyName;
 
 use mdshared_app::backdrop::Backdrop;
@@ -51,6 +51,57 @@ fn row_middle(app: &PurgeApp, row: usize) -> (f32, f32) {
     let r = l.rows().rect(l.area, row);
     (r.x + 220.0, r.cy())
 }
+
+/// A press of `button` at `x, y` after a move there, as the host sends it.
+fn press_at(app: &mut PurgeApp, cx: &mut Cx<'_, ()>, x: f32, y: f32, button: Button) {
+    app.event(cx, Event::PointerMove { x, y });
+    app.event(
+        cx,
+        Event::Press {
+            x,
+            y,
+            button,
+            clicks: 1,
+        },
+    );
+}
+
+fn release_at(app: &mut PurgeApp, cx: &mut Cx<'_, ()>, x: f32, y: f32) {
+    app.event(
+        cx,
+        Event::Release {
+            x,
+            y,
+            button: Button::Left,
+        },
+    );
+}
+
+/// The window loses the focus and gets it back: what was held is let go, and a run of clicks
+/// ends, so the next press is a single click whatever the step before pressed.
+fn refocus(app: &mut PurgeApp, cx: &mut Cx<'_, ()>) {
+    app.event(cx, Event::Focus(false));
+    app.event(cx, Event::Focus(true));
+}
+
+/// Replaces the search field's text by typing, with the keyboard in it.
+fn retype_search(app: &mut PurgeApp, cx: &mut Cx<'_, ()>, text: &str) {
+    app.press_key(cx, KeyName::Char('f'), CTRL);
+    app.press_key(cx, KeyName::Char('a'), CTRL);
+    app.type_text(cx, text);
+}
+
+/// The search field's text and its selection.
+fn search_said(app: &PurgeApp) -> (String, String) {
+    (
+        app.view.search.text().to_string(),
+        app.view.search.selected_text().to_string(),
+    )
+}
+
+/// A query far too long for the search field, for its edge scroll.
+const LONG_QUERY: &str = "a query far too long for the search field so that its start scrolls out of \
+                          sight on the left and a drag past the left end has to bring it back again";
 
 fn click_row(app: &mut PurgeApp, cx: &mut Cx<'_, ()>, row: usize) {
     let (x, y) = row_middle(app, row);
@@ -365,6 +416,241 @@ pub fn steps() -> Vec<Step> {
             settle: 400,
         },
         Step {
+            name: "search-drag-selects",
+            act: |app, cx| {
+                // A press at the start of the text, a move past its end with the button down,
+                // the release.
+                let area = app.view.search_area;
+                let (x, y) = (area.x + 1.0, area.cy());
+                app.event(cx, Event::PointerMove { x, y });
+                app.event(
+                    cx,
+                    Event::Press {
+                        x,
+                        y,
+                        button: Button::Left,
+                        clicks: 1,
+                    },
+                );
+                let x = area.right() + 40.0;
+                app.event(cx, Event::PointerMove { x, y });
+                app.event(
+                    cx,
+                    Event::Release {
+                        x,
+                        y,
+                        button: Button::Left,
+                    },
+                );
+            },
+            check: |app| {
+                let s = app.view.search.selected_text();
+                want(s == "firezzz", format!("the drag selected {s:?}"))?;
+                Ok("the drag selected the whole query".to_string())
+            },
+            settle: 300,
+        },
+        Step {
+            name: "search-drag-ends-with-the-focus",
+            act: |app, cx| {
+                // The window loses the focus with the button down (winit sends no release then):
+                // the move after it selects nothing.
+                let area = app.view.search_area;
+                let (x, y) = (area.x + 1.0, area.cy());
+                app.event(cx, Event::PointerMove { x, y });
+                app.event(
+                    cx,
+                    Event::Press {
+                        x,
+                        y,
+                        button: Button::Left,
+                        clicks: 1,
+                    },
+                );
+                app.event(cx, Event::Focus(false));
+                app.event(cx, Event::Focus(true));
+                let x = area.right() + 40.0;
+                app.event(cx, Event::PointerMove { x, y });
+            },
+            check: |app| {
+                let s = app.view.search.selected_text();
+                want(s.is_empty(), format!("the move selected {s:?}"))?;
+                want(app.pressed.is_none(), "nothing is pressed")?;
+                Ok("the drag ended with the focus".to_string())
+            },
+            settle: 300,
+        },
+        // The search field's whole input (`textfield::FieldInput`).
+        Step {
+            name: "search-double-click-word",
+            act: |app, cx| {
+                refocus(app, cx);
+                retype_search(app, cx, "alpha beta");
+                let area = app.view.search_area;
+                let (x, y) = (area.x + 3.0, area.cy());
+                for _ in 0..2 {
+                    press_at(app, cx, x, y, Button::Left);
+                    release_at(app, cx, x, y);
+                }
+            },
+            check: |app| {
+                let (t, s) = search_said(app);
+                want(t == "alpha beta", format!("the field holds {t:?}"))?;
+                want(s == "alpha", format!("the double click selected {s:?}"))?;
+                Ok("a double click selected a word".to_string())
+            },
+            settle: 300,
+        },
+        Step {
+            name: "search-triple-click-all",
+            act: |app, cx| {
+                refocus(app, cx);
+                let area = app.view.search_area;
+                let (x, y) = (area.x + 3.0, area.cy());
+                for _ in 0..3 {
+                    press_at(app, cx, x, y, Button::Left);
+                    release_at(app, cx, x, y);
+                }
+            },
+            check: |app| {
+                let (_, s) = search_said(app);
+                want(
+                    s == "alpha beta",
+                    format!("the triple click selected {s:?}"),
+                )?;
+                Ok("a triple click selected everything".to_string())
+            },
+            settle: 300,
+        },
+        Step {
+            name: "search-right-click-menu",
+            act: |app, cx| {
+                refocus(app, cx);
+                let area = app.view.search_area;
+                press_at(app, cx, area.x + 3.0, area.cy(), Button::Right);
+            },
+            check: |app| {
+                want(
+                    app.view.search_input.menu_open(),
+                    "a right click opened no edit menu",
+                )?;
+                want(
+                    app.focus.focused() == Some(id("SearchBox")),
+                    "the keyboard is in the field",
+                )?;
+                Ok("the edit menu is open".to_string())
+            },
+            settle: 400,
+        },
+        Step {
+            name: "search-menu-takes-escape",
+            act: |app, cx| app.press_key(cx, KeyName::Escape, NONE),
+            check: |app| {
+                let (t, _) = search_said(app);
+                want(!app.view.search_input.menu_open(), "the menu is still open")?;
+                want(
+                    t == "alpha beta" && app.model.programs.query == "alpha beta",
+                    format!("Escape reached the field: it holds {t:?}"),
+                )?;
+                Ok("Escape closed the menu and nothing else".to_string())
+            },
+            settle: 300,
+        },
+        Step {
+            name: "search-shift-f10-menu",
+            act: |app, cx| app.press_key(cx, KeyName::F(10), SHIFT),
+            check: |app| {
+                want(
+                    app.view.search_input.menu_open(),
+                    "Shift+F10 opened no edit menu",
+                )?;
+                Ok("Shift+F10 opened the edit menu".to_string())
+            },
+            settle: 300,
+        },
+        Step {
+            name: "search-menu-closes-on-focus-loss",
+            act: refocus,
+            check: |app| {
+                want(!app.view.search_input.menu_open(), "the menu is still open")?;
+                Ok("the menu closed with the focus".to_string())
+            },
+            settle: 300,
+        },
+        Step {
+            name: "search-long-query",
+            act: |app, cx| retype_search(app, cx, LONG_QUERY),
+            check: |app| {
+                let (t, _) = search_said(app);
+                want(t == LONG_QUERY, format!("the field holds {t:?}"))?;
+                Ok(format!("{} chars typed", t.chars().count()))
+            },
+            settle: 400,
+        },
+        Step {
+            name: "search-edge-scroll",
+            act: |app, cx| {
+                // The caret is at the end of the long query, its start scrolled out on the
+                // left. A press on the first character in sight, the pointer held past the
+                // field's left end: the field scrolls back, and the selection reaches the start.
+                refocus(app, cx);
+                let area = app.view.search_area;
+                let y = area.cy();
+                press_at(app, cx, area.x + 2.0, y, Button::Left);
+                app.event(
+                    cx,
+                    Event::PointerMove {
+                        x: area.x - 60.0,
+                        y,
+                    },
+                );
+            },
+            check: |app| {
+                let (t, s) = search_said(app);
+                want(t == LONG_QUERY, format!("the field holds {t:?}"))?;
+                want(
+                    !s.is_empty() && t.starts_with(&s),
+                    format!("the held drag selected {s:?}, not the start"),
+                )?;
+                want(app.view.search_input.is_dragging(), "the drag is not held")?;
+                Ok(format!(
+                    "the field scrolled back: {} chars",
+                    s.chars().count()
+                ))
+            },
+            settle: 1500,
+        },
+        Step {
+            name: "search-press-lost",
+            act: |app, cx| {
+                // The drag above ends with the host's PressLost alone (no focus event).
+                app.event(
+                    cx,
+                    Event::PressLost {
+                        button: Button::Left,
+                    },
+                );
+                let area = app.view.search_area;
+                app.event(
+                    cx,
+                    Event::PointerMove {
+                        x: area.right() + 40.0,
+                        y: area.cy(),
+                    },
+                );
+            },
+            check: |app| {
+                want(!app.view.search_input.is_dragging(), "the drag is held")?;
+                let (t, s) = search_said(app);
+                want(
+                    t.starts_with(&s),
+                    format!("the move after the lost press selected {s:?}"),
+                )?;
+                Ok("PressLost ended the drag".to_string())
+            },
+            settle: 300,
+        },
+        Step {
             name: "esc-clears-search",
             act: |app, cx| {
                 app.press_key(cx, KeyName::Escape, NONE);
@@ -374,6 +660,49 @@ pub fn steps() -> Vec<Step> {
                 let pr = &app.model.programs;
                 want(pr.rows.len() == pr.count(Tab::Apps), "all rows back")?;
                 Ok(format!("{} rows", pr.rows.len()))
+            },
+            settle: 400,
+        },
+        Step {
+            name: "list-thumb-press-lost",
+            act: |app, cx| {
+                // The list's scroll thumb in hand, the press lost (PressLost alone): the move
+                // after it scrolls nothing.
+                let Some((_, thumb)) = app.view.list.bar else {
+                    app.note = "no bar".to_string();
+                    return;
+                };
+                press_at(app, cx, thumb.cx(), thumb.cy(), Button::Left);
+                let l = &app.view.list;
+                app.note = format!("{} {}", l.drag.is_some(), l.scroll.target());
+                app.event(
+                    cx,
+                    Event::PressLost {
+                        button: Button::Left,
+                    },
+                );
+                app.event(
+                    cx,
+                    Event::PointerMove {
+                        x: thumb.cx(),
+                        y: thumb.cy() + 200.0,
+                    },
+                );
+            },
+            check: |app| {
+                let l = &app.view.list;
+                let (held, before) = app.note.split_once(' ').unwrap_or_default();
+                want(
+                    held == "true",
+                    format!("the thumb was not held: {}", app.note),
+                )?;
+                want(l.drag.is_none(), "the thumb is still held")?;
+                let after = l.scroll.target().to_string();
+                want(
+                    after == before,
+                    format!("the move scrolled from {before} to {after}"),
+                )?;
+                Ok("the thumb let go".to_string())
             },
             settle: 400,
         },
@@ -1340,7 +1669,6 @@ pub fn steps() -> Vec<Step> {
                 ] {
                     has(app, name)?;
                 }
-                has_id(app, Id("TickRule", 1))?;
                 for i in 0..Preset::ALL.len() {
                     let sid = crate::screens::swatch_id(i);
                     want(app.ctl(sid).is_some(), format!("no swatch {sid:?}"))?;
@@ -1357,6 +1685,20 @@ pub fn steps() -> Vec<Step> {
                 Ok(about)
             },
             settle: 700,
+        },
+        Step {
+            // UI-FULLFROST: the backdrop's two rows took the room the tick rules had at the
+            // first sight of the page; they are a little way down.
+            name: "settings-tick-rules",
+            act: |app, _| {
+                let v = &mut app.view;
+                v.page_scroll.jump_to(360.0, v.page_content, v.page_area.h);
+            },
+            check: |app| {
+                has_id(app, Id("TickRule", 1))?;
+                Ok("the tick rules".to_string())
+            },
+            settle: 400,
         },
         Step {
             name: "settings-scrolled-down",
@@ -1774,6 +2116,128 @@ fn appearance_steps() -> Vec<Step> {
             },
             settle: 600,
         },
+        // ---- UI-FULLFROST: the backdrop's cover and strength ----
+        Step {
+            name: "glass-whole-window-by-keys",
+            act: |app, cx| {
+                // "Title and rail" down to "Whole window", then the slider two steps up.
+                app.focus.focus(id("BackdropCoversChoice"));
+                app.press_key(cx, KeyName::Enter, NONE);
+                app.press_key(cx, KeyName::Down, NONE);
+                app.press_key(cx, KeyName::Enter, NONE);
+                app.focus.focus(id("BackdropStrength"));
+                app.press_key(cx, KeyName::Right, NONE);
+                app.press_key(cx, KeyName::Right, NONE);
+            },
+            check: |app| {
+                let g = app.model.prefs.glass;
+                want(
+                    g.covers == crate::look::Covers::Window,
+                    format!("covers {:?}", g.covers),
+                )?;
+                let to = (crate::glass::STRENGTH_DEFAULT + 10).min(100);
+                want(
+                    g.strength == to,
+                    format!("strength {} (want {to})", g.strength),
+                )?;
+                let c = app
+                    .ctl(id("BackdropStrength"))
+                    .ok_or("no strength slider")?;
+                want(
+                    c.role == Role::Slider(f32::from(to)) && c.label == "Backdrop strength",
+                    format!("the slider says {:?} {:?}", c.label, c.role),
+                )?;
+                want(!c.disabled, "the slider is usable")?;
+                Ok(format!("whole window, {to}%"))
+            },
+            settle: 600,
+        },
+        Step {
+            name: "glass-strength-by-pointer",
+            act: |app, cx| {
+                // A press a fifth of the way along the slider's travel, then the arrows
+                // and Home.
+                if let Some(r) = app.ctl(id("BackdropStrength")).map(|c| c.rect) {
+                    let t = mdshared_ui::slider::THUMB;
+                    app.click_at(cx, r.x + t / 2.0 + 0.2 * (r.w - t), r.cy());
+                }
+                app.note = app.model.prefs.glass.strength.to_string();
+                app.press_key(cx, KeyName::Left, NONE);
+                app.press_key(cx, KeyName::PageUp, NONE);
+            },
+            check: |app| {
+                want(app.note == "20", format!("the press set {}", app.note))?;
+                let s = app.model.prefs.glass.strength;
+                want(s == 40, format!("Left then Page Up gave {s}"))?;
+                Ok("20% by a press, 40% by the keys".to_string())
+            },
+            settle: 600,
+        },
+        Step {
+            name: "glass-strength-press-lost",
+            act: |app, cx| {
+                // The thumb in hand at 40 %, the press lost (PressLost alone): the move after
+                // it to the far end of the slider changes nothing.
+                if let Some(r) = app.ctl(id("BackdropStrength")).map(|c| c.rect) {
+                    let t = mdshared_ui::slider::THUMB;
+                    press_at(
+                        app,
+                        cx,
+                        r.x + t / 2.0 + 0.4 * (r.w - t),
+                        r.cy(),
+                        Button::Left,
+                    );
+                    app.event(
+                        cx,
+                        Event::PressLost {
+                            button: Button::Left,
+                        },
+                    );
+                    app.event(
+                        cx,
+                        Event::PointerMove {
+                            x: r.right(),
+                            y: r.cy(),
+                        },
+                    );
+                }
+            },
+            check: |app| {
+                let s = app.model.prefs.glass.strength;
+                want(s == 40, format!("the move after the lost press set {s}"))?;
+                want(app.pressed.is_none(), "the slider is still held")?;
+                Ok("the slider let go at 40%".to_string())
+            },
+            settle: 400,
+        },
+        Step {
+            name: "glass-waits-without-a-backdrop",
+            act: |app, cx| app.set_backdrop(cx, Backdrop::Off),
+            check: |app| {
+                for name in ["BackdropCoversChoice", "BackdropStrength"] {
+                    let c = app.ctl(id(name)).ok_or(format!("no {name}"))?;
+                    want(c.disabled && !c.focusable, format!("{name} still usable"))?;
+                }
+                Ok("both wait".to_string())
+            },
+            settle: 500,
+        },
+        Step {
+            name: "glass-back",
+            act: |app, cx| {
+                app.set_backdrop(cx, Backdrop::Mica);
+                app.set_covers(cx, crate::look::Covers::Chrome);
+                app.set_strength(cx, crate::glass::STRENGTH_DEFAULT);
+            },
+            check: |app| {
+                want(
+                    app.model.prefs.glass == crate::glass::GlassPrefs::default(),
+                    "back to the defaults",
+                )?;
+                Ok("title and rail, the default strength".to_string())
+            },
+            settle: 500,
+        },
         Step {
             name: "transition-by-keys",
             act: |app, cx| {
@@ -1980,6 +2444,69 @@ fn bold_steps() -> Vec<Step> {
                 Ok("palette open, Quarantine found".to_string())
             },
             settle: 700,
+        },
+        // The palette's query box on the toolkit's pointer route (its whole field input).
+        Step {
+            name: "palette-right-click-menu",
+            act: |app, cx| {
+                let Some(r) = app.view.palette.as_ref().map(|p| p.field_rect()) else {
+                    return;
+                };
+                press_at(app, cx, r.cx(), r.cy(), Button::Right);
+            },
+            check: |app| {
+                let p = app.view.palette.as_ref().ok_or("the palette closed")?;
+                want(p.edit_menu_open(), "a right click opened no edit menu")?;
+                Ok("the query box's edit menu is open".to_string())
+            },
+            settle: 400,
+        },
+        Step {
+            name: "palette-menu-takes-escape",
+            act: |app, cx| app.press_key(cx, KeyName::Escape, NONE),
+            check: |app| {
+                let p = app
+                    .view
+                    .palette
+                    .as_ref()
+                    .ok_or("Escape closed the palette, not its menu")?;
+                want(!p.edit_menu_open(), "the menu is still open")?;
+                want(p.query() == "quar", format!("the query is {:?}", p.query()))?;
+                Ok("Escape closed the menu only".to_string())
+            },
+            settle: 300,
+        },
+        Step {
+            name: "palette-press-lost",
+            act: |app, cx| {
+                // A press on the found row, lost (PressLost alone), then a release on the same
+                // row: a release after a lost press chooses nothing (Palette::cancel).
+                let Some(r) = app.view.palette.as_ref().map(|p| p.row_rect(0)) else {
+                    return;
+                };
+                let (x, y) = (r.cx(), r.cy());
+                press_at(app, cx, x, y, Button::Left);
+                app.event(
+                    cx,
+                    Event::PressLost {
+                        button: Button::Left,
+                    },
+                );
+                release_at(app, cx, x, y);
+            },
+            check: |app| {
+                let p = app
+                    .view
+                    .palette
+                    .as_ref()
+                    .ok_or("the release after a lost press chose a row")?;
+                want(
+                    p.selected_id() == Some(4),
+                    format!("the palette lost its row: {:?}", p.selected_id()),
+                )?;
+                Ok("nothing chosen".to_string())
+            },
+            settle: 300,
         },
         Step {
             name: "bold-palette-runs",

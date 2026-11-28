@@ -2506,6 +2506,21 @@ with collateral, with a plan consent after it; the undo app empty; a WER APPCRAS
 1000 of purge-broker.exe, app-events.json missing) and passes (npp on the empty path; a RADAR_PRE_LEAK_64 warning row;
 the host error in the evidence row).
 
+**The Rust UI** (bins\purge-ui, the UI the installer ships; 2026-11-28). `-UiPublish` takes the Rust `Purge.exe`, or a
+folder holding it: the payload then carries `ui\Purge.exe` alone (a cargo `target\release` folder's engine, broker and
+build files never ride along), and the guest's `install.ps1 -SkipBuild -UiPublishDir ui\` puts it beside
+`purge-engine.exe` and `purge-broker.exe` in `C:\Program Files\Purge`, the layout of the Inno setup. A WinUI publish
+folder (`Purge.pri` beside `Purge.exe`, `Test-M3WinUiPublish`) still goes whole. Build the three binaries as the release
+does, one `cargo build --release --locked -p <package>` each (engine, broker, purge-ui), never one command for all.
+Found by the host probe (`vm\guest\tests\ui-a11y-probe.ps1`, sample and `-RealEngine` read-only, both on a hidden
+desktop through `tools\desk\run-hidden.ps1`): the Rust UI's process also has Win32 panes at the top level (winit's event
+target, the input indicator windows), so every driver takes the process's `ControlType.Window` (`Get-E2eWindow`,
+m3-clean `Find-UiWindow`, `m3sec.cs`, `m3rec.cs`); the confirmation arms its Uninstall 400 ms after it opens
+(`screens::ARM_DELAY`; a disabled AccessKit button has no Invoke), so `ui-await-confirm` and `ui-confirm` wait for it
+enabled; a bar is one Text "Title Message", which the scorer's 1603 / 3010 rows now match with `Test-E2eSaid`, as the
+guest does. The ambient set's provenance names the UI's SHA-256, so a gate with the Rust UI needs null runs (section
+17.1) of the same three binaries first.
+
 **Not settled without a VM run**: whether WinUI exposes the x:Name ids (`ProgramList`, `MoveButton`, ...) and the
 ContentDialog part `PrimaryButton` as UI Automation ids (the driver falls back to the button name, never to
 coordinates); whether ScrollPattern on the virtualized `ProgramList` realizes every row; whether the restart bar is

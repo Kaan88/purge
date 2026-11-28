@@ -482,16 +482,51 @@ impl Picture<'_> {
     }
 }
 
-/// `a` and `b` mixed, `w` of 256 parts `b`, rounded, opaque: red with blue in one multiply (each
-/// in its own 16 bits), green in another.
+/// `a` and `b` mixed, `w` of 256 parts `b`, rounded: red with blue in one multiply (each in its
+/// own 16 bits), green in another. The alpha byte is the one of whichever has more of the mix
+/// (UI-FULLFROST): it is opaque, or the mark that says how the glass keys the pixel
+/// (`glass`), and a mark is never a blend of two. So the old page's ground stays glass where it
+/// shows, and never shows through the new page's opaque surfaces past the switch's middle.
+/// (A picture's own sampling uses this; the cross-fade of two pages uses [`fade`].)
 #[inline]
 fn mix(a: u32, b: u32, w: u32) -> u32 {
+    fade(a, b, w, 128)
+}
+
+/// [`mix`], with the alpha byte `b`'s once `w` reaches `at` (1 to 255) rather than half way.
+#[inline]
+fn fade(a: u32, b: u32, w: u32, at: u32) -> u32 {
     const RB: u32 = 0x00FF_00FF;
     let v = 256 - w;
     let rb = (((a & RB) * v + (b & RB) * w + 0x0080_0080) >> 8) & RB;
     let g = ((((a >> 8) & 0xFF) * v + ((b >> 8) & 0xFF) * w + 0x80) >> 8) & 0xFF;
-    rb | (g << 8) | 0xFF00_0000
+    let alpha = (if w < at { a } else { b }) & 0xFF00_0000;
+    rb | (g << 8) | alpha
 }
+
+/// A 4 by 4 ordered dither (Bayer), as the points of a fade (8 to 248 of 256) at which a pixel
+/// takes the new page's mark, by its place in the bitmap.
+///
+/// UI-FULLFROST (alpha.4 review, N11): a mark is never a blend, so a pixel's glass is the old
+/// page's or the new one's. Were they all to flip at the middle of a cross-fade, a whole page's
+/// ground under the new page's cards would step at once from the ground's veil to the layer's
+/// (over a bright desktop at full strength, some 30 grey levels in one frame). Spread over the
+/// fade by this pattern, the share of pixels keyed the new way grows with the fade itself, in
+/// 16 steps of a pattern too fine to see at a pixel each, and only while the fade runs.
+const DITHER: [[u32; 4]; 4] = {
+    const B: [[u32; 4]; 4] = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
+    let mut out = [[0; 4]; 4];
+    let mut y = 0;
+    while y < 4 {
+        let mut x = 0;
+        while x < 4 {
+            out[y][x] = B[y][x] * 16 + 8;
+            x += 1;
+        }
+        y += 1;
+    }
+    out
+};
 
 /// Writes `old` and `new` over the region `rect` of a bitmap `width` px wide: mixed (`alpha` of
 /// 256 parts `new`) where both reach, either alone where one does, and the bitmap left as it is
@@ -528,14 +563,20 @@ fn compose(
             match alpha {
                 256 => {}
                 0 => put(line, both.clone(), o[both].iter().copied()),
-                a => put(
-                    line,
-                    both.clone(),
-                    o[both.clone()]
-                        .iter()
-                        .zip(&n[both])
-                        .map(|(&o, &n)| mix(o, n, a)),
-                ),
+                a => {
+                    // The marks change over the fade by the dither (`DITHER`).
+                    let at = &DITHER[(rect.1 as usize + first + i) & 3];
+                    let x = x0 + both.start;
+                    put(
+                        line,
+                        both.clone(),
+                        o[both.clone()]
+                            .iter()
+                            .zip(&n[both])
+                            .enumerate()
+                            .map(|(j, (&o, &n))| fade(o, n, a, at[(x + j) & 3])),
+                    )
+                }
             }
         }
     };
@@ -707,6 +748,40 @@ mod tests {
         assert_eq!(mix(o, n, 256), n);
         assert_eq!(mix(o, n, 128), u32::from_le_bytes([105, 60, 15, 255]));
         assert_eq!(mix(grey(0), grey(255), 128), grey(128));
+        // UI-FULLFROST: the glass's marks are kept, the one with more of the mix.
+        let (ground, card) = (254u32 << 24, 253u32 << 24);
+        let (o, n) = ((o & 0x00ff_ffff) | ground, (n & 0x00ff_ffff) | card);
+        assert_eq!(mix(o, n, 100) >> 24, 254);
+        assert_eq!(mix(o, n, 200) >> 24, 253);
+        assert_eq!(mix(o, n, 0), o);
+        assert_eq!(mix(o, n, 256), n);
+    }
+
+    #[test]
+    fn a_fade_hands_the_marks_over_bit_by_bit() {
+        // UI-FULLFROST, N11: over a 4 by 4 block, the share of pixels with the new page's mark
+        // follows the fade, and every one has it at the end.
+        let (ground, card) = (254u32 << 24 | 0x202020, 253u32 << 24 | 0x303030);
+        let share = |w: u32| {
+            DITHER
+                .iter()
+                .flatten()
+                .filter(|&&at| fade(ground, card, w, at) >> 24 == 253)
+                .count()
+        };
+        assert_eq!(share(1), 0);
+        assert_eq!(share(64), 4);
+        assert_eq!(share(128), 8);
+        assert_eq!(share(192), 12);
+        assert_eq!(share(255), 16);
+        let mut all: Vec<u32> = DITHER.iter().flatten().copied().collect();
+        all.sort_unstable();
+        assert_eq!(all, (0..16).map(|k| k * 16 + 8).collect::<Vec<_>>());
+        // The colour is the mix, whatever the mark.
+        assert_eq!(
+            fade(ground, card, 128, 8) & 0xff_ffff,
+            mix(ground, card, 128) & 0xff_ffff
+        );
     }
 
     #[test]

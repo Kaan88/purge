@@ -314,6 +314,10 @@ pub struct Programs {
     pub out: Vec<ProgramsRequest>,
     /// The model asked for this program to be scrolled into view.
     pub scroll_to: Option<ProgramId>,
+    /// A hash of what the accessibility tree reads of the list: the shown rows, in order, with
+    /// each one's name and text. Made in [`Programs::sync`], the one place they change, so a
+    /// frame's check for a changed tree (`app::signature`) does not hash every row again.
+    pub tree_sig: u64,
     icons: HashMap<ProgramId, Rc<AtlasIcon>>,
     by_id: HashMap<ProgramId, usize>,
     /// Programs a pretend uninstall of the sample data took off the list.
@@ -338,6 +342,7 @@ impl Programs {
             loaded: false,
             out: Vec::new(),
             scroll_to: None,
+            tree_sig: 0,
             icons: HashMap::new(),
             by_id: HashMap::new(),
             gone: HashSet::new(),
@@ -389,6 +394,16 @@ impl Programs {
         let same_rows = rows == self.rows;
         let have: Vec<usize> = self.sel.iter().collect();
         self.rows = rows;
+        self.tree_sig = {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            self.rows.hash(&mut h);
+            for &i in &self.rows {
+                self.all[i].accessible.hash(&mut h);
+                self.all[i].row_text.hash(&mut h);
+            }
+            h.finish()
+        };
         if !same_rows || have != want {
             self.sel.reset();
             for r in &want {

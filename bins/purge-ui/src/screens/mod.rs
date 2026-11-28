@@ -104,6 +104,8 @@ pub fn draw(ui: &mut Ui, m: &Model, v: &mut View) {
             if old != new && moves && v.shown == Some((m.page, m.prefs.design)) =>
         {
             let push = Effect::Toolkit(PageEffect::Push { from: Edge::Left });
+            // UI-FULLFROST: the old stage as drawn, not as the glass keyed it.
+            v.glass.restore(ui.p, flow_body);
             v.flow_tx.begin(ui.cx.anim(), ui.p, flow_body, push);
         }
         (_, None) if v.flow_tx.running() => v.flow_tx.cancel(ui.cx.anim()),
@@ -118,7 +120,11 @@ pub fn draw(ui: &mut Ui, m: &Model, v: &mut View) {
         && page != m.page
     {
         match m.prefs.transition.effect(page.index(), m.page.index()) {
-            Some(effect) => v.page_tx.begin(ui.cx.anim(), ui.p, content, effect),
+            Some(effect) => {
+                // UI-FULLFROST: the old page as drawn, not as the glass keyed it.
+                v.glass.restore(ui.p, content);
+                v.page_tx.begin(ui.cx.anim(), ui.p, content, effect)
+            }
             // No motion: a switch still running from the page before ends here, or the page
             // before that would go on blending over this one.
             None => v.page_tx.cancel(ui.cx.anim()),
@@ -163,6 +169,12 @@ pub fn draw(ui: &mut Ui, m: &Model, v: &mut View) {
     } else {
         v.page_ctls.clear();
     }
+    // UI-FULLFROST: the page is laid (drawn, or the switch's pictures blended): its opaque
+    // surfaces become the glass's second layer. What follows (the rail's cards, dialogs, menus,
+    // the palette, toasts) stays opaque.
+    if whole_glass(ui, m) {
+        crate::glass::raise(ui.p, content);
+    }
     if lk.rail_icons {
         rail_tip(ui, m);
     }
@@ -203,6 +215,8 @@ pub fn draw(ui: &mut Ui, m: &Model, v: &mut View) {
             draw_dropdown_menu_animated(ui.p, &pal, ui.cx.anim(), (dd, "menu"), d, window);
         }
     }
+    // The search field's edit menu (right click, Shift+F10), over everything too.
+    v.search_input.draw_menu(ui.p, &pal, window);
 
     if let Some(toast) = &v.toast {
         let t = ui.cx.anim().toggle("toast", true, fluent::ENTER);
@@ -224,10 +238,16 @@ fn page(ui: &mut Ui, m: &Model, v: &mut View, content: Rect, flow: bool, flow_bo
     }
     card(ui, content, lk.radius.min(10.0));
     if lk.hero && !ui.hc {
-        // D3: the accent falls away behind the page's title.
+        // D3: the accent falls away behind the page's title. Over the whole window it is
+        // glass, and the glass's clamp counts it as a ground (`glass::hero_tint`).
         let band = Rect::new(content.x + 1.0, content.y + 1.0, content.w + 10.0, 78.0);
-        let from = mix(pal.page, pal.accent, if pal.dark { 0.20 } else { 0.13 });
+        let from = mix(pal.page, pal.accent, crate::glass::hero_tint(pal.dark));
         crate::paint::gradient_down(ui.p, band, lk.radius.min(10.0) - 1.0, from, pal.page, 1.0);
+    }
+    // UI-FULLFROST: over the whole window the content card is glass like the chrome; what the
+    // page draws on it opaquely becomes the second layer once it is laid (`glass::raise`).
+    if whole_glass(ui, m) {
+        ui.cx.frost(ui.p, content);
     }
     let old = ui.clip(content);
     match m.page {
@@ -242,6 +262,11 @@ fn page(ui: &mut Ui, m: &Model, v: &mut View, content: Rect, flow: bool, flow_bo
     if flow {
         v.flow_tx.apply(ui.cx.anim(), ui.p, flow_body);
     }
+}
+
+/// UI-FULLFROST: the backdrop covers the whole window, and the window is frosted just now.
+fn whole_glass(ui: &Ui, m: &Model) -> bool {
+    m.prefs.glass.covers == crate::look::Covers::Window && ui.cx.frosted()
 }
 
 /// The content card: `content` and 12 px past the window's right and bottom edges, so only its
@@ -412,7 +437,46 @@ fn command_field(ui: &mut Ui, after: f32, before: f32) {
         pal.muted,
         r.w - 34.0 - 84.0,
     );
-    draw_keycaps(ui.p, &pal, Rect::new(r.x, r.y, r.w + 6.0, r.h), "Ctrl+K");
+    field_keycaps(ui, r, &["Ctrl", "K"]);
+}
+
+/// The command field's shortcut as small keycaps inside its pill. The toolkit's keycaps are
+/// 22 px tall with 12 px text, made for menus and tooltips: in a 28 px pill they crowd its round
+/// end and their letters sit low (text centred on the line box, not on the capitals). Here they
+/// are 18 px, clear of the end by the pill's radius, with the letters centred on their capitals.
+fn field_keycaps(ui: &mut Ui, field: Rect, keys: &[&str]) {
+    let pal = ui.pal;
+    let (h, size) = (18.0, 11.0);
+    let px = ui.p.px();
+    let mut x = field.right() - 9.0;
+    let y = (field.cy() - h / 2.0).round();
+    for key in keys.iter().rev() {
+        let tw = ui.p.measure(Face::Ui, size, key);
+        let w = (tw + 12.0).max(20.0).round();
+        x -= w;
+        let cap = Rect::new(x, y, w, h);
+        ui.p.frame(
+            cap,
+            4.0,
+            mix(pal.field, pal.text, 0.08),
+            mix(pal.popup_line, pal.text, 0.10),
+        );
+        ui.p.fill(
+            Rect::new(cap.x + 3.0, cap.bottom() - 1.0 - px, cap.w - 6.0, px),
+            mix(pal.popup_line, pal.text, 0.14),
+        );
+        // Capitals and digits only: their middle is about a pixel above the line box's.
+        ui.p.text(
+            Face::Ui,
+            size,
+            (cap.x + (w - tw) / 2.0).round(),
+            cap.cy() - 1.0,
+            key,
+            pal.muted,
+            tw + 2.0,
+        );
+        x -= 4.0;
+    }
 }
 
 fn chrome(ui: &mut Ui, m: &Model) {
@@ -432,8 +496,9 @@ fn chrome(ui: &mut Ui, m: &Model) {
         // (`frost`), so the accent is laid on a little stronger and never fades out wholly, or
         // a busy desktop behind the window would wash Bold's colour out of the rail.
         let rail = Rect::new(0.0, 0.0, lk.rail_w, h);
+        // The glass's clamp counts these tints as grounds (`glass::RAIL_TINT`).
         let (top, bottom) = if ui.cx.frosted() {
-            (0.30, 0.08)
+            crate::glass::RAIL_TINT
         } else {
             (0.22, 0.0)
         };

@@ -139,13 +139,24 @@ function Initialize-E2eUia {
 
 function New-E2eStep([string]$Name) { [ordered]@{ step = $Name; t = (Get-Date).ToString('o'); ok = $false; retries = 0; detail = $null } }
 
-# The top-level window of process $ProcessId (or $null after $TimeoutSec).
+# The top-level window of process $ProcessId (or $null after $TimeoutSec): a child of the desktop of that process
+# whose control type is Window. Not just any child: the Rust UI's process also owns Win32 panes at the top level (the
+# winit event target, the text input indicator windows "UAC Input Indicator" / "UAC_InputIndicatorOverlayWnd"), and
+# FindFirst on the process id alone returned one of those in the host probe (2026-11-28). Several Windows: the one
+# with a name first.
 function Get-E2eWindow([int]$ProcessId, [int]$TimeoutSec = 60) {
     Initialize-E2eUia
-    $cond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ProcessIdProperty, $ProcessId)
+    $ae = [System.Windows.Automation.AutomationElement]
+    $cond = New-Object System.Windows.Automation.AndCondition(
+        (New-Object System.Windows.Automation.PropertyCondition($ae::ProcessIdProperty, $ProcessId)),
+        (New-Object System.Windows.Automation.PropertyCondition($ae::ControlTypeProperty, [System.Windows.Automation.ControlType]::Window)))
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     do {
-        try { $w = [System.Windows.Automation.AutomationElement]::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Children, $cond) } catch { $w = $null }
+        $w = $null
+        try {
+            $all = @($ae::RootElement.FindAll([System.Windows.Automation.TreeScope]::Children, $cond))
+            $w = @($all | Where-Object { "$($_.Current.Name)" }) + @($all) | Select-Object -First 1
+        } catch { $w = $null }
         if ($w) { return $w }
         Start-Sleep -Milliseconds 500
     } while ((Get-Date) -lt $deadline)

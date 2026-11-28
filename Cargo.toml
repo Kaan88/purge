@@ -29,7 +29,7 @@ members = [
 exclude = ["vm"]
 
 [workspace.package]
-version = "0.2.0-alpha.3"
+version = "0.2.0-alpha.4"
 edition = "2024"
 rust-version = "1.85"
 publish = false
@@ -64,13 +64,14 @@ purge-exec = { path = "crates/purge-exec" }
 purge-kb = { path = "crates/purge-kb" }
 purge-rpc = { path = "crates/purge-rpc" }
 
-# The shared Rust UI toolkit (markdown-shared-rs), pinned to main 294d330 (feat/anim merged), as the
-# approved mockup uses it (DECISIONS 2026-11-25).
-mdshared-ui = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "294d330", features = ["host", "a11y"] }
-mdshared-app = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "294d330" }
+# The shared Rust UI toolkit (markdown-shared-rs), pinned to main d789e8e (textfield::FieldInput,
+# host::Event::PressLost, Palette::cancel). The approved mockup used main 294d330 (feat/anim
+# merged, DECISIONS 2026-11-25). Pin history: docs/UI_RUST_PLAN.md.
+mdshared-ui = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "d789e8e", features = ["host", "a11y"] }
+mdshared-app = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "d789e8e" }
 # The toolkit's bitmap, named by the broker's consent dialog where it draws without a window (its
 # preview pictures and tests). The same crate mdshared-ui draws with.
-mdshared-text = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "294d330" }
+mdshared-text = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "d789e8e" }
 # The window crate under the toolkit's host, at the toolkit's own version and features: named by the
 # broker's consent dialog for its window's handle and size (mdshared-ui does not re-export it).
 winit = { version = "=0.30.13", default-features = false, features = ["rwh_06"] }

@@ -13,7 +13,7 @@ use mdshared_ui::a11y::{self, accesskit};
 use mdshared_ui::cursor::Cursor;
 use mdshared_ui::dropdown::Outcome as DdOutcome;
 use mdshared_ui::focus::Focus;
-use mdshared_ui::gfx::{Painter, Rect, Rgb};
+use mdshared_ui::gfx::{Gfx, Painter, Rect, Rgb};
 use mdshared_ui::host::{App, Button, Cx, Event, KeyPress};
 use mdshared_ui::keys::{KeyName, Mods};
 use mdshared_ui::palette::{Entry, Outcome as PaletteOutcome, Palette as CommandPalette};
@@ -22,6 +22,7 @@ use mdshared_ui::rows::Nav;
 use mdshared_ui::scroll;
 use mdshared_ui::segments;
 use mdshared_ui::select::TypeAhead;
+use mdshared_ui::textfield::FieldOutcome;
 use mdshared_ui::theme::Palette;
 use mdshared_ui::tokens::{self, Tokens};
 
@@ -30,7 +31,7 @@ use purge_ui_model::programs::{Filter, ProgramCommand};
 
 use crate::link::{Link, Source};
 use crate::look::{Choice, Design, Preset, ThemeChoice, Transition};
-use crate::markers;
+use crate::markers::{self, BenchUntil};
 use purge_ui_model::leftovers::LeftoversPhase;
 
 use crate::model::DeleteFlyout;
@@ -43,6 +44,9 @@ use crate::view::{
     DD_ALL, DD_BACKDROP, DD_DESIGN, DD_PRESET, DD_RESTORE, DD_SORT, DD_THEME, DD_TRANSITION, Toast,
     View,
 };
+use crate::winplace::Placer;
+// UI-FULLFROST.
+use crate::view::DD_COVERS;
 
 const LIST: Id = Id("ProgramList", 0);
 const SEARCH: Id = Id("SearchBox", 0);
@@ -55,6 +59,9 @@ pub struct Options {
     pub saved: Prefs,
     /// Where the settings are saved.
     pub store: Store,
+    /// Put the window where it was last time and save where it goes (`winplace`): false for the
+    /// walk, timed runs and the bench.
+    pub remember_place: bool,
     /// The page to open on (`--page`).
     pub page: Page,
     /// `--bench-exit`: close once the launch markers are written.
@@ -67,8 +74,8 @@ pub struct Options {
     /// `--shot`: the PNG of the last frame of a `--seconds` run.
     pub shot_at_end: Option<PathBuf>,
     pub bench_exit: bool,
-    /// `--bench-until presented`: the bench ends at `presented`, not at `names_visible`.
-    pub bench_until_presented: bool,
+    /// `--bench-until`: the marker the bench ends at.
+    pub bench_until: BenchUntil,
     /// Where the program list comes from.
     pub source: Source,
     /// `--broker-consent`: who draws the broker's consent dialog.
@@ -145,8 +152,11 @@ pub struct PurgeApp {
     pub visited: Vec<Id>,
     store: Store,
     saved: Prefs,
+    /// Whether the window's place is remembered, and from the start on, its placer.
+    remember_place: bool,
+    place: Option<Placer>,
     bench_exit: bool,
-    bench_until_presented: bool,
+    bench_until: BenchUntil,
     /// The first frame was drawn and `presented` is still to be marked.
     presented_due: bool,
     /// A frame with the first real rows was drawn after the first frame, and `names_visible` is
@@ -154,6 +164,15 @@ pub struct PurgeApp {
     names_due: bool,
     /// The first real rows were drawn (`rows_set`, `first_row`).
     rows_drawn: bool,
+    /// A frame whose rows on screen all had their icons settled was drawn (`icons_visible`).
+    icons_drawn: bool,
+    /// ... and `icons_visible` is still to be marked once it is presented.
+    icons_due: bool,
+    /// When the bench gives up waiting for its end marker (`bench_timeout`).
+    bench_deadline: Option<Instant>,
+    /// The end marker was written with `--bench-exit` while the icon load still ran: the window
+    /// closes when it ends, or at this time.
+    close_after_icons: Option<Instant>,
     /// The marker line was written.
     markers_written: bool,
     /// The engine link, from the host's start on.
@@ -168,6 +187,13 @@ pub struct PurgeApp {
     /// For the walk: whether `paint`'s boxes and gradients came out as the toolkit's, checked
     /// on the first frame.
     pub paint_check: Option<Result<usize, String>>,
+    /// UI-FULLFROST: the keys of the look in force and what they were made for.
+    glass_keys: Option<(
+        Palette,
+        crate::glass::GlassPrefs,
+        crate::look::Design,
+        crate::glass::Keys,
+    )>,
 }
 
 impl PurgeApp {
@@ -212,11 +238,17 @@ impl PurgeApp {
             visited: Vec::new(),
             store: o.store,
             saved: o.saved,
+            remember_place: o.remember_place,
+            place: None,
             bench_exit: o.bench_exit,
-            bench_until_presented: o.bench_until_presented,
+            bench_until: o.bench_until,
             presented_due: false,
             names_due: false,
             rows_drawn: false,
+            icons_drawn: false,
+            icons_due: false,
+            bench_deadline: None,
+            close_after_icons: None,
             markers_written: false,
             link: None,
             source: o.source,
@@ -224,6 +256,8 @@ impl PurgeApp {
             accent: None,
             idle_draws: Vec::new(),
             paint_check: None,
+            // UI-FULLFROST.
+            glass_keys: None,
         }
     }
 
@@ -279,6 +313,13 @@ impl PurgeApp {
         }
         if prefs.backdrop != old.backdrop {
             s.backdrop = prefs.backdrop;
+        }
+        // UI-FULLFROST: each of the backdrop's two settings on its own.
+        if prefs.glass.covers != old.glass.covers {
+            s.glass.covers = prefs.glass.covers;
+        }
+        if prefs.glass.strength != old.glass.strength {
+            s.glass.strength = prefs.glass.strength;
         }
         self.model.prefs = prefs;
         self.store.save(&self.saved);
@@ -436,6 +477,91 @@ impl PurgeApp {
         any
     }
 
+    /// Lets go of every press in hand with no change where the pointer is: the button pressed,
+    /// the strength slider's thumb (it follows `pressed`), the list's scroll thumb, the
+    /// drop-downs, the palette (its rows, its scroll bar, its query box and the box's menu) and
+    /// the search field (its drag and its menu). For a press the window lost, and a press passed
+    /// over on a page coming in. True when anything was held.
+    fn let_go(&mut self) -> bool {
+        let mut ended = self.pressed.take().is_some();
+        ended |= self.view.list.drag.take().is_some();
+        for dd in DD_ALL {
+            if let Some(d) = self.view.dds.get(dd) {
+                ended |= d.cancel();
+            }
+        }
+        if let Some(p) = &mut self.view.palette {
+            ended |= p.cancel();
+        }
+        let dragging = self.view.search_input.is_dragging();
+        ended |= self.view.search_input.cancel() || dragging;
+        ended
+    }
+
+    /// Whether the search field takes the pointer and the keys now: drawn on the Programs page,
+    /// with nothing open over it.
+    fn search_live(&self) -> bool {
+        self.model.page == Page::Programs
+            && self.view.search_field.is_some()
+            && !self.overlay()
+            && self.view.dds.open().is_none()
+    }
+
+    /// Gives one event to the search field's input (`textfield::FieldInput`): every pointer
+    /// event, the keys and text while it has the keyboard, and the losses that end its drag.
+    /// True when the field took it, so it goes nowhere else.
+    fn search_event(&mut self, cx: &mut Cx<'_, ()>, event: &Event) -> bool {
+        let Some(area) = self.view.search_field else {
+            return false;
+        };
+        if !self.search_live() {
+            // Covered or gone: its drag ends and its menu closes.
+            if self.view.search_input.cancel() {
+                cx.request_redraw_all();
+            }
+            return false;
+        }
+        let focused = self.focus.is_focused(SEARCH);
+        let v = &mut self.view;
+        let gfx = v.hit_gfx.get_or_insert_with(Gfx::new);
+        let o = v
+            .search_input
+            .event(cx, &mut v.search, gfx, area, focused, event);
+        if !o.taken() {
+            return false;
+        }
+        if o.redraw() {
+            v.page_dirty = true;
+        }
+        match event {
+            Event::PointerMove { x, y } => {
+                let cursor = v.search_input.cursor_at(area, (*x, *y));
+                cx.set_cursor(cursor.unwrap_or(Cursor::Default));
+                self.pointer = (*x, *y);
+            }
+            Event::Press { x, y, .. } => {
+                self.pointer = (*x, *y);
+                self.close_dropdowns();
+                self.focus.pointer_used();
+                self.pressed = None;
+            }
+            Event::Key(_) => self.focus.key_used(),
+            _ => {}
+        }
+        match o {
+            FieldOutcome::Focus => {
+                self.focus.focus(SEARCH);
+            }
+            FieldOutcome::Edited => {
+                let q = self.view.search.text().to_string();
+                self.model.programs.set_query(&q);
+                self.view.list.jump_top();
+            }
+            _ => {}
+        }
+        true
+    }
+
     // ---- what a control does -----------------------------------------------------------------
 
     pub fn go(&mut self, page: Page) {
@@ -465,7 +591,7 @@ impl PurgeApp {
         match id.0 {
             "Minimize" => cx.minimize(),
             "Maximize" => cx.toggle_maximize(),
-            "Close" => cx.exit(),
+            "Close" => self.close(cx),
 
             // Programs.
             "TabApps" | "TabComponents" | "TabUnnamed" | "TabRecent" => {
@@ -683,6 +809,8 @@ impl PurgeApp {
             DD_TRANSITION => self.set_transition(cx, Transition::at(i)),
             DD_PRESET => self.set_preset(cx, Preset::at(i)),
             DD_BACKDROP => self.set_backdrop(cx, Backdrop::at(i)),
+            // UI-FULLFROST.
+            DD_COVERS => self.set_covers(cx, crate::look::Covers::at(i)),
             DD_RESTORE => self.model.flow_restore_point(i.min(2)),
             _ => {}
         }
@@ -832,11 +960,16 @@ impl PurgeApp {
 
     fn pointer_move(&mut self, cx: &mut Cx<'_, ()>, x: f32, y: f32) {
         self.pointer = (x, y);
+        // UI-FULLFROST: the strength slider's thumb in hand follows the pointer.
+        if self.slider_drag(cx, x, y) {
+            return;
+        }
         if let Some(p) = &mut self.view.palette {
-            if p.pointer_move(x, y) {
+            let gfx = self.view.hit_gfx.get_or_insert_with(Gfx::new);
+            if p.pointer_motion((x, y), cx.now(), gfx) {
                 cx.request_redraw_all();
             }
-            cx.set_cursor(Cursor::Default);
+            cx.set_cursor(p.cursor_at((x, y)).unwrap_or(Cursor::Default));
             return;
         }
         if let Some(grip) = self.view.list.drag {
@@ -903,7 +1036,8 @@ impl PurgeApp {
         self.focus.pointer_used();
         cx.request_redraw_all();
         if let Some(p) = &mut self.view.palette {
-            let o = p.press(x, y, cx.mods(), clicks.min(3) as u8);
+            let gfx = self.view.hit_gfx.get_or_insert_with(Gfx::new);
+            let o = p.pointer_press((x, y), cx.mods(), clicks.min(3) as u8, cx.now(), gfx);
             return self.palette_outcome(cx, o);
         }
         // An open menu takes the press: on a row it is remembered, elsewhere the menu closes.
@@ -937,18 +1071,11 @@ impl PurgeApp {
                     d.press(c.rect, x, y);
                 }
             }
-            Role::Edit(_) => {
-                let area = self.view.search_area;
-                let stops = std::mem::take(&mut self.view.search_stops);
-                if clicks == 2 {
-                    self.view.search.select_word_at(x - area.x, &stops);
-                } else if clicks >= 3 {
-                    self.view.search.select_all();
-                } else {
-                    self.view.search.press(x - area.x, &stops, cx.mods().shift);
-                }
-                self.view.search_stops = stops;
+            // UI-FULLFROST.
+            Role::Slider(_) => {
+                self.slider_drag(cx, x, y);
             }
+            // The search field's own presses are its input's (`search_event`), before this.
             _ => {}
         }
     }
@@ -988,7 +1115,8 @@ impl PurgeApp {
         self.pointer = (x, y);
         cx.request_redraw_all();
         if let Some(p) = &mut self.view.palette {
-            let o = p.release(x, y);
+            let gfx = self.view.hit_gfx.get_or_insert_with(Gfx::new);
+            let o = p.pointer_release((x, y), cx.now(), gfx);
             return self.palette_outcome(cx, o);
         }
         self.view.list.drag = None;
@@ -1079,7 +1207,8 @@ impl PurgeApp {
         cx.request_redraw_all();
 
         if let Some(p) = &mut self.view.palette {
-            let o = p.key(&name, mods, k.text.as_deref());
+            let gfx = self.view.hit_gfx.get_or_insert_with(Gfx::new);
+            let o = p.key_with_menu(&name, mods, k.text.as_deref(), gfx);
             return self.palette_outcome(cx, o);
         }
         self.focus.key_used();
@@ -1173,30 +1302,17 @@ impl PurgeApp {
         };
         let press = plain && matches!(name, KeyName::Enter | KeyName::Space);
         match c.role {
-            Role::Edit(_) => {
-                match self
-                    .view
-                    .search
-                    .handle_key(&name, mods, k.text.as_deref(), true)
+            // The editing keys were the field's input's (`search_event`); these are the rest.
+            Role::Edit(_) if matches!(name, KeyName::Down | KeyName::Enter) => {
+                // Down the list from the search field.
+                self.focus.focus(LIST);
+                if self.model.programs.sel.cursor().is_none()
+                    && !self.model.programs.rows.is_empty()
                 {
-                    Some(true) => {
-                        let q = self.view.search.text().to_string();
-                        self.model.programs.set_query(&q);
-                        self.view.list.jump_top();
-                    }
-                    Some(false) => {}
-                    None if matches!(name, KeyName::Down | KeyName::Enter) => {
-                        // Down the list from the search field.
-                        self.focus.focus(LIST);
-                        if self.model.programs.sel.cursor().is_none()
-                            && !self.model.programs.rows.is_empty()
-                        {
-                            self.model.programs.sel.select_only(0);
-                        }
-                    }
-                    None => {}
+                    self.model.programs.sel.select_only(0);
                 }
             }
+            Role::Edit(_) => {}
             Role::List => self.list_key(cx, &name, mods, k.text.as_deref()),
             Role::Tab(_) if screens::programs_tab(c.id).is_some() => {
                 let at = screens::programs_tab(c.id).map(Tab::index);
@@ -1260,6 +1376,8 @@ impl PurgeApp {
             Role::Button | Role::Link | Role::Check(_) | Role::Switch(_) if press => {
                 self.activate(cx, c.id);
             }
+            // UI-FULLFROST.
+            Role::Slider(_) if !mods.ctrl && !mods.alt => self.slider_key(cx, c.id, &name),
             _ => {}
         }
     }
@@ -1355,12 +1473,25 @@ impl PurgeApp {
     // ---- timers ------------------------------------------------------------------------------
 
     /// Asks for the earliest of the times still to come: the host gives one wake-up.
+    /// The window closes: its place is saved first.
+    fn close(&mut self, cx: &mut Cx<'_, ()>) {
+        if let Some(state) = self.place.as_mut().and_then(|p| p.close(cx)) {
+            self.store.save_window(&self.saved, state);
+        }
+        cx.exit();
+    }
+
     fn timers(&mut self, cx: &mut Cx<'_, ()>) {
         let wakes = [
-            (self.presented_due || self.names_due).then(|| cx.now()),
+            (self.presented_due || self.names_due || self.icons_due).then(|| cx.now()),
+            self.bench_deadline,
+            self.close_after_icons,
             self.until,
             self.view.toast.as_ref().map(|t| t.until),
             self.script.as_ref().and_then(|s| s.due()),
+            self.place.as_ref().and_then(|p| p.due(cx.now())),
+            // The palette's query box: a drag's edge scroll, its edit menu's delay.
+            self.view.palette.as_ref().and_then(|p| p.text_deadline()),
         ];
         if let Some(at) = wakes.into_iter().flatten().min() {
             cx.wake_at(at);
@@ -1368,6 +1499,17 @@ impl PurgeApp {
     }
 
     fn wake(&mut self, cx: &mut Cx<'_, ()>, now: Instant) {
+        if let Some(p) = &mut self.view.palette
+            && p.text_deadline().is_some_and(|at| at <= now)
+        {
+            let gfx = self.view.hit_gfx.get_or_insert_with(Gfx::new);
+            if p.tick_text(now, gfx) {
+                cx.request_redraw_all();
+            }
+        }
+        if let Some(state) = self.place.as_mut().and_then(|p| p.wake(cx, now)) {
+            self.store.save_window(&self.saved, state);
+        }
         if self.until.is_some_and(|u| u <= now)
             && let Some(path) = self.shot_at_end.take()
         {
@@ -1382,24 +1524,50 @@ impl PurgeApp {
             cx.exit();
             return;
         }
+        // The WinUI app's approximation of "presented": the next DWM composition after the frame
+        // was drawn. One composition serves every marker due now.
+        let mut flushed = false;
+        let mut flush = || {
+            if !std::mem::replace(&mut flushed, true) {
+                markers::dwm_flush();
+            }
+        };
         if std::mem::take(&mut self.presented_due) {
-            // The WinUI app's approximation: the next DWM composition after the first frame.
-            markers::dwm_flush();
+            flush();
             let at = markers::mark("presented");
             let names = self.rows_drawn && !self.names_due;
             if names {
                 markers::record("names_visible", at);
             }
-            if self.end_marker(cx, names) {
+            if self.end_marker(cx, BenchUntil::Presented)
+                || (names && self.end_marker(cx, BenchUntil::Names))
+            {
                 return;
             }
-        } else if self.names_due && (markers::enabled() || self.bench_exit) {
-            self.names_due = false;
-            markers::dwm_flush();
+        } else if std::mem::take(&mut self.names_due) {
+            flush();
             markers::mark("names_visible");
-            if self.end_marker(cx, true) {
+            if self.end_marker(cx, BenchUntil::Names) {
                 return;
             }
+        }
+        // After `names_visible`: a frame with icons has its rows.
+        if !self.presented_due && !self.names_due && std::mem::take(&mut self.icons_due) {
+            flush();
+            markers::mark("icons_visible");
+            if self.end_marker(cx, BenchUntil::Icons) {
+                return;
+            }
+        }
+        if self.bench_deadline.is_some_and(|d| d <= now) {
+            self.bench_deadline = None;
+            markers::mark("bench_timeout");
+            if self.end_marker(cx, self.bench_until) {
+                return;
+            }
+        }
+        if self.bench_close(cx, now) {
+            return;
         }
         if self.view.toast.as_ref().is_some_and(|t| t.until <= now) {
             self.view.toast = None;
@@ -1439,20 +1607,66 @@ impl PurgeApp {
         }
     }
 
-    /// At the bench's end marker (`presented` with `--bench-until presented`, else
-    /// `names_visible`) the marker line is written, once, and `--bench-exit` closes the window.
-    /// True when it closes. `names`: the names are on screen now. Not read back from the markers,
+    /// At the bench's end marker (`--bench-until`; `reached` is the one that came now) the
+    /// marker line is written, once, and `--bench-exit` closes the window: at once, or with a
+    /// live engine once its icon load ended (at most [`markers::ICONS_SAVE_WAIT`]), so its atlas
+    /// is saved for the next launch. True when it closes now. Not read back from the markers,
     /// which are kept only with `PURGE_BENCH_OUT` (without it `--bench-exit` never closed).
-    fn end_marker(&mut self, cx: &mut Cx<'_, ()>, names: bool) -> bool {
-        if self.markers_written || (!names && !self.bench_until_presented) {
+    fn end_marker(&mut self, cx: &mut Cx<'_, ()>, reached: BenchUntil) -> bool {
+        if self.markers_written || reached != self.bench_until {
             return false;
         }
         self.markers_written = true;
+        self.bench_deadline = None;
         markers::flush();
-        if self.bench_exit {
-            cx.exit();
+        if !self.bench_exit {
+            return false;
         }
-        self.bench_exit
+        self.close_after_icons = Some(Instant::now() + markers::ICONS_SAVE_WAIT);
+        self.bench_close(cx, Instant::now())
+    }
+
+    /// The bench's `icons_visible`: the data is the live engine's and every row the list shows
+    /// at its scroll has its icon settled: drawn from the atlas or `icon.batch`, or answered
+    /// without one (its tile is its look). The sample sends no icons, so it never counts.
+    fn icons_on_screen(&self) -> bool {
+        let Some(link) = self.link.as_ref().filter(|l| l.live()) else {
+            return false;
+        };
+        let pr = &self.model.programs;
+        let l = &self.view.list;
+        if !(l.row_h > 0.0 && l.offset.is_finite()) {
+            return false;
+        }
+        let first = (l.offset / l.row_h).floor().max(0.0) as usize;
+        let end = ((l.offset + l.area.h) / l.row_h).ceil().max(0.0) as usize;
+        let end = end.min(pr.rows.len());
+        first < end
+            && pr.rows[first..end].iter().all(|&i| {
+                let p = &pr.all[i];
+                p.icon.is_some() || link.icon_settled(&p.id)
+            })
+    }
+
+    /// `--bench-exit` after the end marker: closes once no live icon load runs, or at its time.
+    /// True when it closed.
+    fn bench_close(&mut self, cx: &mut Cx<'_, ()>, now: Instant) -> bool {
+        let Some(at) = self.close_after_icons else {
+            return false;
+        };
+        let loading = self
+            .link
+            .as_ref()
+            .is_some_and(|l| l.live() && l.icons_loading());
+        if loading && now < at {
+            return false;
+        }
+        self.close_after_icons = None;
+        if let Some(link) = &mut self.link {
+            link.save_icons();
+        }
+        cx.exit();
+        true
     }
 
     // ---- accessibility -----------------------------------------------------------------------
@@ -1469,7 +1683,10 @@ impl PurgeApp {
             (c.disabled, c.modal).hash(&mut h);
         }
         let pr = &self.model.programs;
-        pr.rows.hash(&mut h);
+        // The shown rows with their names and texts (a row's name changes with what the engine
+        // learns of it: a late patch, its kind). Every row is in the tree, the ones scrolled out
+        // of view too, so all of them count; the hash is made when they change (`sync`), not here.
+        pr.tree_sig.hash(&mut h);
         for r in pr.sel.ranges() {
             (r.start, r.end).hash(&mut h);
         }
@@ -1487,13 +1704,23 @@ impl PurgeApp {
             Role::Link => a11y::link(label, &author, r, c.disabled),
             Role::Check(on) => a11y::check_box(label, &author, r, *on, c.disabled),
             Role::Switch(on) => a11y::switch(label, &author, r, *on, c.disabled),
-            Role::Combo { value, open } => a11y::combo_box(label, &author, r, value, *open),
+            Role::Combo { value, open } => {
+                let mut n = a11y::combo_box(label, &author, r, value, *open);
+                // UI-FULLFROST: a drop-down that waits (the backdrop's cover, with none).
+                if c.disabled {
+                    n.set_disabled();
+                    n.clear_actions();
+                }
+                n
+            }
             // Its place in its row of tabs is set by `build_tree`, which knows the row.
             Role::Tab(on) => a11y::tab(label, &author, r, *on, 0),
             Role::Expander(open) => a11y::expander(label, &author, r, *open),
             Role::Text | Role::List => a11y::text(label, &author, r),
             Role::Edit(value) => a11y::text_input(label, &author, r, value, false),
             Role::Progress(f) => a11y::progress(label, &author, r, *f),
+            // UI-FULLFROST.
+            Role::Slider(v) => slider_node(label, &author, r, *v, c.disabled),
             Role::Item(on) => {
                 let mut n = a11y::button(label, &author, r, c.disabled);
                 n.set_role(accesskit::Role::ListBoxOption);
@@ -1713,7 +1940,8 @@ impl PurgeApp {
                 self.model.programs.set_query(&text);
                 self.view.list.jump_top();
             }
-            _ => {}
+            // UI-FULLFROST: the strength slider's RangeValue.
+            other => self.slider_request(cx, other),
         }
     }
 }
@@ -1880,15 +2108,36 @@ impl App for PurgeApp {
         self.link = Some(link);
         self.view.blink = platform::caret_blink_time();
         self.retheme(cx);
+        if self.remember_place {
+            self.place = Some(Placer::start(cx, self.store.window()));
+        }
         self.timers(cx);
     }
 
     fn message(&mut self, cx: &mut Cx<'_, ()>, _: ()) {
         self.pump(cx);
+        // The bench's window waits for the icon load to end before it closes.
+        if self.bench_close(cx, Instant::now()) {
+            return;
+        }
         // A dialog the link's answer opened or closed takes the keyboard now, not at the next
         // input event.
         self.sync_scope();
         self.timers(cx);
+    }
+
+    fn timer_fired(&mut self, cx: &mut Cx<'_, ()>, name: &str) {
+        // The search field's input: a drag's edge scroll, its edit menu's delay.
+        if let Some(area) = self.view.search_field {
+            let v = &mut self.view;
+            let gfx = v.hit_gfx.get_or_insert_with(Gfx::new);
+            if v.search_input
+                .timer_fired(cx, &mut v.search, gfx, area, name)
+                .redraw()
+            {
+                v.page_dirty = true;
+            }
+        }
     }
 
     fn event(&mut self, cx: &mut Cx<'_, ()>, event: Event) {
@@ -1902,13 +2151,7 @@ impl App for PurgeApp {
                 // Nothing pressed before goes on past a passed-over press or release: the
                 // button, the list's drag (its scroll bar) and a drop-down's press all end here
                 // (review N8), as when the window loses the focus.
-                let mut ended = self.view.list.drag.take().is_some();
-                for dd in DD_ALL {
-                    if let Some(d) = self.view.dds.get(dd) {
-                        ended |= d.cancel();
-                    }
-                }
-                if self.pressed.take().is_some() || ended {
+                if self.let_go() {
                     self.view.page_dirty = true;
                     cx.request_redraw_all();
                 }
@@ -1920,8 +2163,11 @@ impl App for PurgeApp {
                 false
             }
         };
+        // The search field's input sees every event first, wherever it happened: a press
+        // elsewhere is what ends its drag and closes its menu.
+        let taken = !blocked && self.search_event(cx, &event);
         match event {
-            _ if blocked => {}
+            _ if blocked || taken => {}
             Event::PointerMove { x, y } => self.pointer_move(cx, x, y),
             Event::PointerLeave => {
                 // Gone: the end of a page switch has nothing to look under.
@@ -1939,6 +2185,19 @@ impl App for PurgeApp {
                 button: Button::Left,
                 clicks,
             } => self.press(cx, x, y, clicks),
+            // The right button: the palette's query box has an edit menu.
+            Event::Press {
+                x,
+                y,
+                button: Button::Right,
+                ..
+            } => {
+                if let Some(p) = &mut self.view.palette {
+                    let gfx = self.view.hit_gfx.get_or_insert_with(Gfx::new);
+                    let o = p.secondary_press((x, y), cx.now(), gfx);
+                    self.palette_outcome(cx, o);
+                }
+            }
             Event::Release {
                 x,
                 y,
@@ -1946,42 +2205,54 @@ impl App for PurgeApp {
             } => self.release(cx, x, y),
             Event::Wheel { dy, .. } => self.wheel(cx, dy),
             Event::Key(k) => self.key(cx, k),
+            // The search field's text was its input's (`search_event`).
             Event::Text(t) => {
-                if let Some(p) = &mut self.view.palette {
+                // Committed text is dropped while the query box's edit menu is open, as a
+                // field's input drops it.
+                if let Some(p) = &mut self.view.palette
+                    && !p.edit_menu_open()
+                {
                     let o = p.key(&KeyName::Char(' '), Mods::default(), Some(&t));
                     self.palette_outcome(cx, o);
-                } else if self.focus.is_focused(SEARCH) && self.view.search.insert(&t) {
-                    let q = self.view.search.text().to_string();
-                    self.model.programs.set_query(&q);
-                    cx.request_redraw_all();
                 }
             }
+            // winit sends no release when the window loses the mouse in the middle of a press
+            // (Alt+Tab, a dialog): everything that holds one lets go where it is. The host follows
+            // a `Focus(false)` with a `PressLost` for each button still down; both let go.
             Event::Focus(on) => {
                 if !on {
-                    self.pressed = None;
-                    self.view.list.drag = None;
-                    for dd in DD_ALL {
-                        if let Some(d) = self.view.dds.get(dd) {
-                            d.cancel();
-                        }
-                    }
+                    self.let_go();
                 }
                 cx.request_redraw_all();
             }
+            Event::PressLost { .. } => {
+                if self.let_go() {
+                    self.view.page_dirty = true;
+                    cx.request_redraw_all();
+                }
+            }
             Event::Theme { .. } | Event::Contrast(_) => self.retheme(cx),
             Event::Wake(now) => self.wake(cx, now),
-            Event::CloseRequested => cx.exit(),
+            Event::CloseRequested => self.close(cx),
             Event::Action(req) => self.request(cx, req),
             _ => {}
         }
         self.pump(cx);
         self.sync_scope();
+        if let Some(place) = &mut self.place {
+            place.watch(cx, cx.now());
+        }
         self.timers(cx);
     }
 
     fn draw(&mut self, cx: &mut Cx<'_, ()>, p: &mut Painter, _damage: Rect) {
         let began = Instant::now();
+        if let Some(place) = &mut self.place {
+            place.drawn(cx);
+        }
         let size = cx.size();
+        // UI-FULLFROST: where this frame draws (`glass`).
+        self.view.glass.begin(p);
         self.focus.begin_frame();
         let switching = self.view.page_tx.running();
         let ctls = {
@@ -2004,9 +2275,6 @@ impl App for PurgeApp {
         };
         self.focus.end_frame();
         self.ctls = ctls;
-        if crate::transition::logging() {
-            self.log_draw(began.elapsed().as_secs_f64() * 1000.0, switching);
-        }
         if self.script.is_some() && self.paint_check.is_none() {
             self.paint_check = Some(crate::paint::self_check(p));
         }
@@ -2037,12 +2305,8 @@ impl App for PurgeApp {
             if cx.frosted() {
                 let over = path.with_extension("over-desktop.png");
                 let mut shot = p.bmp.clone();
-                over_desktop(
-                    &mut shot.pixels,
-                    shot.width as usize,
-                    &self.pal,
-                    self.model.prefs.backdrop,
-                );
+                let keys = self.glass_keys();
+                over_desktop(&mut shot.pixels, shot.width as usize, &keys);
                 match shot.write_png(&over) {
                     Ok(()) => println!("shot over a made-up desktop: {}", over.display()),
                     Err(e) => println!("shot failed: {}: {e}", over.display()),
@@ -2051,18 +2315,45 @@ impl App for PurgeApp {
                 println!("shot: the chrome was not frosted (no keyboard, or no backdrop here)");
             }
         }
+        // UI-FULLFROST: the marked pixels keyed with the user's strength, the frame as drawn
+        // kept for the next (`glass`). After the shot: it is the frame as drawn.
+        let keys = cx.frosted().then(|| self.glass_keys());
+        let lk = Look::of(self.model.prefs.design);
+        let areas = crate::glass::areas(self.model.prefs.glass.covers, lk.title_h, lk.rail_w, size);
+        let areas: Vec<Rect> = areas.into_iter().flatten().collect();
+        self.view.glass.end(p, keys.as_ref(), &areas);
+        if crate::transition::logging() {
+            self.log_draw(began.elapsed().as_secs_f64() * 1000.0, switching);
+        }
         self.frames += 1;
         // The launch markers at the moments they name: `first_tick` when the first frame is
         // drawn; `rows_set` and `first_row` when a frame first draws the list's rows (the first
         // frame itself when the list came first); `presented` on the next wake, once the host has
         // presented the first frame; `names_visible` once a frame with the rows is presented.
+        // `icons_visible` (a live engine only) once a frame drew the rows on screen with their icons
+        // settled. All of this before the first frame's deferred work below changes the model.
+        let bench = markers::enabled() || self.bench_exit;
         let rows_now = !self.rows_drawn
             && self.model.programs.loaded
             && self.model.page == Page::Programs
             && !self.model.programs.rows.is_empty();
+        let icons_now = bench
+            && !self.icons_drawn
+            && (self.rows_drawn || rows_now)
+            && self.model.page == Page::Programs
+            && self.icons_on_screen();
+        if icons_now {
+            self.icons_drawn = true;
+            self.icons_due = true;
+        }
         if self.frames == 1 {
             markers::mark("first_tick");
-            self.presented_due = markers::enabled() || self.bench_exit;
+            self.presented_due = bench;
+            // The launch bench (`PURGE_BENCH_OUT`) gets its line by the timeout too, with or
+            // without `--bench-exit`.
+            if bench && self.bench_until != BenchUntil::Presented {
+                self.bench_deadline = Some(Instant::now() + markers::BENCH_TIMEOUT);
+            }
             // The model's deferred work (sizes, icons, the removed group) waits for this frame.
             let r = self.model.programs.page.on_first_frame();
             self.model.programs.take(r);
@@ -2073,8 +2364,8 @@ impl App for PurgeApp {
             let at = markers::mark("rows_set");
             markers::record("first_row", at);
             // Rows in the first frame are visible when it is presented; later ones need a
-            // presentation of their own.
-            self.names_due = self.frames > 1;
+            // presentation of their own. Off the bench nothing waits for it.
+            self.names_due = bench && self.frames > 1;
         }
         if self.frames == 1 {
             self.view.first_frame_ms = Some(self.launched.elapsed().as_secs_f64() * 1000.0);
@@ -2100,18 +2391,19 @@ impl App for PurgeApp {
 /// when it presents (`frost::key_out`), then laid over a made-up "desktop": a smooth diagonal of
 /// strong colours, about what Acrylic's blur makes of a busy screen behind the window (Mica's
 /// tinted wallpaper is much flatter, so this is the harder case for it). `pixels` are BGRA.
-fn over_desktop(pixels: &mut [u8], width: usize, pal: &Palette, backdrop: Backdrop) {
-    use mdshared_ui::frost;
+/// UI-FULLFROST: keyed as the window is (`glass::Keys`: the user's strength, the whole window
+/// when it covers it).
+fn over_desktop(pixels: &mut [u8], width: usize, keys: &crate::glass::Keys) {
     if width == 0 {
         return;
     }
-    let key = frost::Key::new(frost::key_colour(pal), frost::veil(backdrop));
-    let mut px: Vec<u32> = pixels
+    let mut keyed = pixels.to_vec();
+    crate::glass::key_copy(&mut keyed, keys);
+    let px: Vec<u32> = keyed
         .chunks_exact(4)
         .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect();
     let rows = px.len() / width;
-    frost::key_out(&key, &mut px, width, (0, 0, width, rows));
     let span = (width + rows).max(1) as f32;
     for (i, (out, v)) in pixels.chunks_exact_mut(4).zip(px).enumerate() {
         let a = v >> 24;
@@ -2132,4 +2424,134 @@ fn over_desktop(pixels: &mut [u8], width: usize, pal: &Palette, backdrop: Backdr
         let ch = |k: usize| (c[k] as f32 + keep * d[k]).round().min(255.0) as u8;
         out.copy_from_slice(&[ch(2), ch(1), ch(0), 255]);
     }
+}
+
+// ---- UI-FULLFROST: the backdrop's cover and strength ------------------------------------------
+
+impl PurgeApp {
+    /// The keys of the look in force (`glass::Keys`), made again when the palette or the
+    /// setting changed.
+    fn glass_keys(&mut self) -> crate::glass::Keys {
+        let want = (self.pal, self.model.prefs.glass, self.model.prefs.design);
+        match self.glass_keys {
+            Some((pal, g, d, keys)) if (pal, g, d) == want => keys,
+            _ => {
+                let keys = crate::glass::Keys::new(&want.0, want.1.covers, want.2, want.1.strength);
+                self.glass_keys = Some((want.0, want.1, want.2, keys));
+                keys
+            }
+        }
+    }
+
+    pub fn set_covers(&mut self, cx: &mut Cx<'_, ()>, covers: crate::look::Covers) {
+        let mut p = self.model.prefs;
+        p.glass.covers = covers;
+        self.set_prefs(cx, p);
+    }
+
+    pub fn set_strength(&mut self, cx: &mut Cx<'_, ()>, strength: u8) {
+        let mut p = self.model.prefs;
+        p.glass.strength = strength.min(100);
+        self.set_prefs(cx, p);
+    }
+
+    /// The strength slider as the last frame declared it, if it can be used.
+    fn strength_ctl(&self, id: Id) -> Option<Ctl> {
+        self.ctl(id)
+            .filter(|c| matches!(c.role, Role::Slider(_)) && !c.disabled)
+            .cloned()
+    }
+
+    fn strength_slider(&self) -> mdshared_ui::slider::Slider {
+        let v = f32::from(self.model.prefs.glass.strength);
+        mdshared_ui::slider::Slider::new(0.0, 100.0, v).step(crate::glass::STEP)
+    }
+
+    /// With the slider's thumb in hand (pressed, or the press itself): the value under the
+    /// pointer. False when no slider is held.
+    fn slider_drag(&mut self, cx: &mut Cx<'_, ()>, x: f32, y: f32) -> bool {
+        let Some(c) = self.pressed.and_then(|id| self.strength_ctl(id)) else {
+            return false;
+        };
+        let v = self.strength_slider().value_at(c.rect, x, y);
+        self.set_strength(cx, v.round() as u8);
+        cx.request_redraw_all();
+        true
+    }
+
+    /// The keys on the slider: the arrows a step of 5 %, Page Up and Down five steps, Home and
+    /// End the ends.
+    fn slider_key(&mut self, cx: &mut Cx<'_, ()>, id: Id, name: &KeyName) {
+        use mdshared_ui::slider::Step;
+        if self.strength_ctl(id).is_none() {
+            return;
+        }
+        let step = match name {
+            KeyName::Left | KeyName::Down => Step::Less,
+            KeyName::Right | KeyName::Up => Step::More,
+            KeyName::PageDown => Step::PageLess,
+            KeyName::PageUp => Step::PageMore,
+            KeyName::Home => Step::Min,
+            KeyName::End => Step::Max,
+            _ => return,
+        };
+        let mut s = self.strength_slider();
+        if s.step_by(step) {
+            self.set_strength(cx, s.value().round() as u8);
+        }
+    }
+
+    /// What a reader asks of the slider: a value, or a step either way.
+    fn slider_request(&mut self, cx: &mut Cx<'_, ()>, req: a11y::Request) {
+        let (node, to) = match req {
+            a11y::Request::SetNumber(node, v) => (node, Some(v)),
+            a11y::Request::Other(r) => match r.action {
+                accesskit::Action::Increment | accesskit::Action::Decrement => {
+                    let mut s = self.strength_slider();
+                    let up = r.action == accesskit::Action::Increment;
+                    s.step_by(if up {
+                        mdshared_ui::slider::Step::More
+                    } else {
+                        mdshared_ui::slider::Step::Less
+                    });
+                    (r.target_node, Some(f64::from(s.value())))
+                }
+                _ => return,
+            },
+            _ => return,
+        };
+        let usable = self
+            .ctls
+            .iter()
+            .find(|c| a11y::id(&c.id.author()) == node)
+            .and_then(|c| self.strength_ctl(c.id))
+            .is_some();
+        if let Some(v) = to.filter(|v| usable && v.is_finite()) {
+            self.set_strength(cx, v.round().clamp(0.0, 100.0) as u8);
+        }
+    }
+}
+
+/// The slider's node: UIA RangeValue from 0 to 100 in steps of 5, settable, with Increment and
+/// Decrement.
+fn slider_node(label: &str, author: &str, r: Rect, value: f32, disabled: bool) -> accesskit::Node {
+    let mut n = accesskit::Node::new(accesskit::Role::Slider);
+    n.set_label(label);
+    n.set_author_id(author);
+    n.set_bounds(a11y::bounds(r));
+    n.set_min_numeric_value(0.0);
+    n.set_max_numeric_value(100.0);
+    n.set_numeric_value_step(f64::from(crate::glass::STEP));
+    n.set_numeric_value_jump(f64::from(crate::glass::STEP) * 5.0);
+    n.set_numeric_value(f64::from(value));
+    n.set_value(format!("{value:.0}%"));
+    if disabled {
+        n.set_disabled();
+    } else {
+        n.add_action(accesskit::Action::SetValue);
+        n.add_action(accesskit::Action::Increment);
+        n.add_action(accesskit::Action::Decrement);
+        n.add_action(accesskit::Action::Focus);
+    }
+    n
 }

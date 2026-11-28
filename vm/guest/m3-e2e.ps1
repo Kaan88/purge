@@ -608,8 +608,11 @@ switch ($Phase) {
     'ui-await-confirm' {
         $rec = New-E2eStep 'ui-await-confirm'
         $win = Get-UiWindow $st
-        $w = Wait-E2eElement { Find-E2eDialogButton $win 'Uninstall' } $(if ($WaitSec) { $WaitSec } else { 240 })
+        # Enabled: the Rust UI's confirmation arms its Uninstall 400 ms after the dialog appears (screens::ARM_DELAY;
+        # a disabled AccessKit button has no Invoke pattern), and keeps it disabled while it cannot uninstall.
+        $w = Wait-E2eElement { Find-E2eDialogButton $win 'Uninstall' } $(if ($WaitSec) { $WaitSec } else { 240 }) -Enabled
         $rec.retries = $w.retries; $rec.ok = [bool]$w.el; $rec.consent_up = (Test-ConsentUp)
+        if (-not $w.el) { $b = Find-E2eDialogButton $win 'Uninstall'; $rec.detail = $(if ($b) { 'the confirmation''s Uninstall never became enabled' } else { 'no confirmation' }) }
         Set-StateValue $st 'broker_pid' (Get-BrokerPid)
         Save-State $st; Save-Step $rec 'ui-await-confirm'
         "M3E UI-AWAIT-CONFIRM $App ok=$($rec.ok) broker=$($st.broker_pid) consent_up=$($rec.consent_up)"
@@ -618,7 +621,9 @@ switch ($Phase) {
     'ui-confirm' {
         $rec = New-E2eStep 'ui-confirm'
         $win = Get-UiWindow $st
-        $btn = Find-E2eDialogButton $win 'Uninstall'
+        $bw = Wait-E2eElement { Find-E2eDialogButton $win 'Uninstall' } 15 -Enabled
+        $btn = $bw.el
+        $rec.retries = $bw.retries
         $rec.texts = @(Get-E2eTexts $win)
         $q = Find-E2eQuietToggle $win
 
@@ -633,7 +638,7 @@ switch ($Phase) {
             $rec.invoked = Invoke-E2eElement $btn
             Set-StateValue $st 't_confirm' (NowIso)
             $rec.ok = [bool]$rec.invoked
-        } else { $rec.detail = 'no confirm dialog' }
+        } else { $rec.detail = $(if (Find-E2eDialogButton $win 'Uninstall') { 'the confirmation''s Uninstall is not enabled' } else { 'no confirm dialog' }) }
         Set-StateValue $st 'broker_pid' (Get-BrokerPid)
         Save-State $st; Save-Step $rec 'ui-confirm'
         "M3E UI-CONFIRM $App ok=$($rec.ok) route=$route quiet=$($rec.quiet) broker=$($st.broker_pid)"
@@ -951,7 +956,10 @@ switch ($Phase) {
                 if (Find-E2eById $win 'UndoTitleText') { return 'undone' }
                 $t = Get-E2eTexts $win
                 if ($t | Where-Object { $_ -like '*ended during the restore*' -or $_ -like '*ended while putting things back*' -or $_ -like '*cannot tell what was put back*' }) { return 'interrupted' }
-                if ($t | Where-Object { $_ -like 'Not put back:*' -or $_ -like 'Nothing was put back*' -or $_ -like 'Open History & undo to put back*' -or $_ -eq 'The administrator part refused or failed.' }) { return 'refused' }
+                # A bar is its own element (WinUI) or one Text "Title Message" (the Rust UI): a message is matched
+                # anywhere in the text, a title by Test-E2eSaid.
+                if ($t | Where-Object { $_ -like 'Not put back:*' -or $_ -like 'Nothing was put back*' -or $_ -like '*Open History & undo to put back*' }) { return 'refused' }
+                if (Test-E2eSaid $t 'The administrator part refused or failed.') { return 'refused' }
                 if ($t | Where-Object { $_ -like 'Confirm*Purge security prompt*' }) { return 'prompt' }
                 $null
             } 300 -Each {

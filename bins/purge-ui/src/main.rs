@@ -17,6 +17,8 @@ use mdshared_ui::platform;
 mod app;
 mod clock;
 mod flow;
+// UI-FULLFROST.
+mod glass;
 mod icons;
 mod link;
 mod look;
@@ -31,9 +33,11 @@ mod script_steps;
 mod transition;
 mod ui;
 mod view;
+mod winplace;
 
 use app::{Options, PurgeApp};
 use look::{Choice, Design, Preset, ThemeChoice, Transition};
+use markers::BenchUntil;
 use mdshared_app::backdrop::Backdrop;
 use model::Page;
 use prefs::Store;
@@ -46,6 +50,9 @@ const HELP: &str = "Purge: uninstalls programs and what they leave behind.
   --colour <name>      windows, blue, teal, violet, amber, rose or graphite, for this run
   --transition <name>  none, fade, slide, slide-side, flow, slide-up, scale or depth, for this run
   --backdrop <name>    off, mica or acrylic, for this run
+  --backdrop-covers <c> chrome (the title row and the rail) or window (the whole window),
+                       for this run
+  --backdrop-strength <n>  0 to 100: how much of the backdrop shows, for this run
   --page <key>         open on programs, queue, leftovers, history, vault or settings
   --sample             show the sample data without starting the engine
   --broker-consent <n> who draws the administrator part's security prompt, for this run:
@@ -53,8 +60,9 @@ const HELP: &str = "Purge: uninstalls programs and what they leave behind.
                        says and approves the same)
   --bench-stub         the launch bench's sample engine: 300 rows, no engine started
   --bench-exit         close once the launch markers are written (PURGE_BENCH_OUT)
-  --bench-until <m>    the marker the bench waits for: presented or names_visible (the
-                       default: the program names are in a presented frame)
+  --bench-until <m>    the marker the bench waits for: presented, names_visible (the
+                       default: the program names are in a presented frame) or icons_visible
+                       (the rows on screen show their icons; a live engine only)
   --seconds <n>        close by itself after n seconds
   --shot <file>        with --seconds: write a PNG of the last frame before closing
   --script             walk through the screens by made-up events on the sample data,
@@ -88,13 +96,16 @@ fn main() {
     let mut preset: Option<Preset> = None;
     let mut transition: Option<Transition> = None;
     let mut backdrop: Option<Backdrop> = None;
+    // UI-FULLFROST.
+    let mut covers: Option<look::Covers> = None;
+    let mut strength: Option<u8> = None;
     let mut page = Page::Programs;
     let mut seconds: Option<u64> = None;
     let mut script = false;
     let mut shots: Option<PathBuf> = None;
     let mut shot_at_end: Option<PathBuf> = None;
     let mut bench_exit = false;
-    let mut bench_until_presented = false;
+    let mut bench_until = BenchUntil::Names;
     let mut source: Option<link::Source> = None;
     let mut timeout: Option<u64> = None;
     let mut broker_consent = ConsentUi::default();
@@ -106,6 +117,15 @@ fn main() {
             "--colour" | "--color" => preset = Some(choice("--colour", args.next())),
             "--transition" => transition = Some(choice("--transition", args.next())),
             "--backdrop" => backdrop = Some(choice("--backdrop", args.next())),
+            // UI-FULLFROST.
+            "--backdrop-covers" => covers = Some(choice("--backdrop-covers", args.next())),
+            "--backdrop-strength" => match args.next().as_deref().and_then(glass::parse_strength) {
+                Some(n) => strength = Some(n),
+                None => {
+                    eprintln!("Purge: --backdrop-strength takes a number from 0 to 100");
+                    std::process::exit(2);
+                }
+            },
             "--page" => match args.next().as_deref().and_then(Page::parse_key) {
                 Some(p) => page = p,
                 None => {
@@ -129,12 +149,11 @@ fn main() {
             // The WinUI bench's stub: hello and 300 rows, answered at once.
             "--bench-stub" => source = Some(link::Source::Sample { bench_rows: 300 }),
             "--bench-exit" => bench_exit = true,
-            "--bench-until" => match args.next().as_deref() {
-                Some("presented") => bench_until_presented = true,
-                Some("names_visible") => bench_until_presented = false,
-                other => {
+            "--bench-until" => match args.next().as_deref().and_then(BenchUntil::parse) {
+                Some(u) => bench_until = u,
+                None => {
                     eprintln!(
-                        "Purge: --bench-until takes presented or names_visible, not {other:?}"
+                        "Purge: --bench-until takes presented, names_visible or icons_visible"
                     );
                     std::process::exit(2);
                 }
@@ -184,10 +203,25 @@ fn main() {
     prefs.preset = preset.unwrap_or(prefs.preset);
     prefs.transition = transition.unwrap_or(prefs.transition);
     prefs.backdrop = backdrop.unwrap_or(prefs.backdrop);
+    // UI-FULLFROST.
+    prefs.glass.covers = covers.unwrap_or(prefs.glass.covers);
+    prefs.glass.strength = strength.unwrap_or(prefs.glass.strength);
 
+    // The window's place is remembered only in a run a person sees: the walk, a timed run (and its
+    // shot) and the launch bench keep a fixed size and the system's position, and neither read
+    // nor write the saved place (`winplace`).
+    let bench = bench_exit
+        || std::env::var_os("PURGE_BENCH_OUT").is_some_and(|v| !v.is_empty())
+        || matches!(source, Some(link::Source::Sample { bench_rows }) if bench_rows > 0);
+    let remember_place = !script && !bench && seconds.is_none() && shot_at_end.is_none();
+    let size = if remember_place {
+        winplace::DEFAULT
+    } else {
+        winplace::FIXED
+    };
     let config = Config::new("Purge")
-        .size(1360.0, 860.0)
-        .min_size(1080.0, 700.0)
+        .size(size.0, size.1)
+        .min_size(winplace::MIN.0, winplace::MIN.1)
         .app_id("Purge")
         .icon_png(include_bytes!("../assets/Purge.png"))
         .dark(prefs.theme.dark(platform::system_is_dark()));
@@ -195,14 +229,15 @@ fn main() {
         prefs,
         saved,
         store,
+        remember_place,
         page,
         bench_exit,
-        bench_until_presented,
+        bench_until,
         // The walk checks what it knows: the sample data.
         source: if script {
             link::Source::Sample { bench_rows: 0 }
         } else {
-            source.unwrap_or_else(link::Source::beside_exe)
+            source.unwrap_or_else(|| link::Source::beside_exe(bench_exit))
         },
         broker_consent,
         seconds,

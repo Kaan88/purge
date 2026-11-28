@@ -338,8 +338,10 @@ function Test-App([string]$Ev, $A, $X, $Score, [bool]$Undo, [string]$AmbSha = ''
     $fc = Get-Step $e2e 'fail-check'
     switch ("$($A.kind)") {
         'fail-1603' {
-            $shown = ($seen -contains "$($X.texts.failed_bar)") -and ($codes -contains 1603)
-            Row "$id 1603 reported as a failure" $shown "bar=$($seen -contains "$($X.texts.failed_bar)") codes=$($codes -join ',')"
+            # A bar is said as its own element (WinUI's InfoBar title) or as the title of one Text "Title Message"
+            # (the Rust UI): Test-E2eSaid, as the guest matches it.
+            $shown = (Test-E2eSaid $seen "$($X.texts.failed_bar)") -and ($codes -contains 1603)
+            Row "$id 1603 reported as a failure" $shown "bar=$(Test-E2eSaid $seen "$($X.texts.failed_bar)") codes=$($codes -join ',')"
             $notOk = ($scan -and "$($scan.state)" -eq 'failed' -and -not (Get-Step $e2e 'ui-move') -and -not (Get-Step $e2e 'ui-wait-result'))
             Row "$id not shown as success (no review, no move, no result)" $notOk "scan state $(if ($scan) { $scan.state })"
             $nothing = ($fc -and @(Arr $fc.sessions_new).Count -eq 0 -and (Has $fc 'quarantine_after') -and [int]$fc.quarantine_after -eq [int]$fc.quarantine_before -and $fc.arp_present -eq $true -and $fc.fixture_key_present -eq $true)
@@ -347,8 +349,9 @@ function Test-App([string]$Ev, $A, $X, $Score, [bool]$Undo, [string]$AmbSha = ''
             return
         }
         'fail-3010' {
-            $shown = ($seen -contains "$($X.texts.restart_bar)") -and ($codes -contains 3010) -and -not ($seen -contains "$($X.texts.failed_bar)")
-            Row "$id 3010 reported as restart needed" $shown "restart_bar=$($seen -contains "$($X.texts.restart_bar)") failed_bar=$($seen -contains "$($X.texts.failed_bar)") codes=$($codes -join ',')"
+            $restart = Test-E2eSaid $seen "$($X.texts.restart_bar)"; $failed = Test-E2eSaid $seen "$($X.texts.failed_bar)"
+            $shown = $restart -and ($codes -contains 3010) -and -not $failed
+            Row "$id 3010 reported as restart needed" $shown "restart_bar=$restart failed_bar=$failed codes=$($codes -join ',')"
             $gone = ($scan -and "$($scan.state)" -in 'review', 'empty' -and $fc -and $fc.arp_present -eq $false -and $fc.fixture_key_present -eq $false)
             Row "$id uninstall done, scan reached" $gone $(if ($fc) { "scan=$($scan.state) arp=$($fc.arp_present) key=$($fc.fixture_key_present)" } else { 'no fail-check' })
             Row "$id nothing executed" ($fc -and @(Arr $fc.sessions_new).Count -eq 0 -and -not (Get-Step $e2e 'ui-move')) $(if ($fc) { "sessions_new=$(@(Arr $fc.sessions_new).Count)" })
@@ -573,6 +576,9 @@ function Get-E2eDefects {
         @{ name = 'a 1603 whose product is gone'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'msi1603\guest\e2e.json') { param($d) $d.steps.'fail-check'.arp_present = $false } } },
         @{ name = 'a 3010 without the restart bar'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'msi3010\guest\e2e.json') { param($d) $d.steps.'ui-wait-scan'.seen = @('Finished, exit code 3010') } } },
         @{ name = 'a 3010 shown as a failure'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'msi3010\guest\e2e.json') { param($d) $d.steps.'ui-wait-scan'.seen = @('A restart is needed.', 'The uninstaller failed.') } } },
+        # The Rust UI's bars: one Text "Title Message" each.
+        @{ name = 'a 3010 shown as a failure (Rust UI bar)'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'msi3010\guest\e2e.json') { param($d) $d.steps.'ui-wait-scan'.seen = @('A restart is needed. Restart Windows to finish.', 'The uninstaller failed. It ended with exit code 3010.') } } },
+        @{ name = 'a 1603 without its bar (Rust UI: another bar only)'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'msi1603\guest\e2e.json') { param($d) $d.steps.'ui-wait-scan'.seen = @('Not started. The uninstaller failed to start.', 'The uninstaller ended with exit code 1603.') } } },
         @{ name = 'executed set differs (one extra)'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'vscode\guest\e2e.json') { param($d) $c = $d.steps.'capture-exec'.compare; $c.equal = $false; $c.ui_n = 3; $c.extra = @('Path|c:\x|') } } },
         @{ name = 'executed set empty on both sides'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'git\guest\e2e.json') { param($d) $c = $d.steps.'capture-exec'.compare; $c.cli_n = 0; $c.ui_n = 0 } } },
         @{ name = 'danger in the executed set'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'score-rigtool.json') { param($d) ($d.apps | Where-Object { $_.id -eq 'firefox-tb' }).tools[0].danger_offered = 1 } } },
@@ -705,6 +711,15 @@ function Invoke-SelfTest {
         if (-not $r4.pass) { foreach ($row in $r4.rows) { if (-not $row.ok) { Write-Host "       $($row.row): $($row.detail)" } } }
         Check 'the empty path has its own rows (UI, no session) and an executed-set row of 0 == 0' (@($r4.rows | Where-Object { $_.row -eq 'npp UI: review, nothing preselected, Move disabled' -and $_.ok }).Count -eq 1 -and
             @($r4.rows | Where-Object { $_.row -eq 'npp no session (nothing preselected)' -and $_.ok }).Count -eq 1 -and @($r4.rows | Where-Object { $_.row -eq 'npp executed set == preselected set of the rig CLI plan' -and $_.ok -and "$($_.detail)" -like 'nothing preselected: cli 0, ui 0*' }).Count -eq 1)
+        # The Rust UI says a bar as one Text "Title Message" (ui.rs Ui::infobar): the failure and restart bars pass so.
+        $rb = Join-Path $root 'rust-bars'
+        New-PassEvidence $X $rb
+        Edit-E2eJson (Join-Path $rb 'msi1603\guest\e2e.json') { param($d) $d.steps.'ui-wait-scan'.seen = @('The uninstaller failed. It ended with exit code 1603. You can run the forced cleanup.', '2. Run its own uninstaller: Failed, exit code 1603') }
+        Edit-E2eJson (Join-Path $rb 'msi3010\guest\e2e.json') { param($d) $d.steps.'ui-wait-scan'.seen = @('A restart is needed. Restart Windows to finish the uninstall.', '2. Run its own uninstaller: Done. Finished, exit code 3010') }
+        $r8 = Invoke-Score $rb $X -Quiet -TruthDir $rb
+        Check 'the Rust UI''s bars (one Text "Title Message") pass the 1603 and 3010 rows' ($r8.pass -and
+            @($r8.rows | Where-Object { $_.row -in 'msi1603 1603 reported as a failure', 'msi3010 3010 reported as restart needed' -and $_.ok }).Count -eq 2)
+        if (-not $r8.pass) { foreach ($row in $r8.rows) { if (-not $row.ok) { Write-Host "       $($row.row): $($row.detail)" } } }
         # Application events: a leak report of Purge.exe is a warning row, not a failure.
         $lk = Join-Path $root 'leak'
         New-PassEvidence $X $lk
@@ -714,6 +729,8 @@ function Invoke-SelfTest {
         Check 'a RADAR_PRE_LEAK_64 of Purge.exe is a warning row, the run still passes' ($r5.pass -and $lr.Count -eq 1 -and $lr[0].ok -and $lr[0].warn -and "$($lr[0].detail)" -match 'RADAR_PRE_LEAK_64 Purge\.exe')
         Check 'an app without events has a plain passing events row' (@($r5.rows | Where-Object { $_.row -eq 'git app events: no crash of a Purge process' -and $_.ok -and -not $_.warn }).Count -eq 1)
         $cl = Get-E2eAppEventClasses @([pscustomobject]@{ provider = 'Windows Error Reporting'; id = 1001; message = "Event Name: APPCRASH`r`nP1: notepad.exe" }, [pscustomobject]@{ provider = '.NET Runtime'; id = 1026; message = "Application: Purge.exe`r`nDescription: ..." })
+        $rc = Get-E2eAppEventClasses @([pscustomobject]@{ provider = 'Application Error'; id = 1000; message = "Faulting application name: Purge.exe, version: 0.2.0.4, time stamp: 0x0`r`nException code: 0xc0000409" })
+        Check 'app events: the Rust UI''s abort (Application Error 1000 of Purge.exe, 0xc0000409) is a crash' ($rc.crashes.Count -eq 1 -and $rc.warnings.Count -eq 0)
         Check 'app events: a crash of another image is no Purge crash; a .NET 1026 of Purge.exe is' ($cl.crashes.Count -eq 1 -and "$($cl.crashes[0])" -like '.NET Runtime 1026*' -and $cl.warnings.Count -eq 1)
         # The host's error reaches the evidence row (the MSI smoke, a failed boot).
         $he = Join-Path $root 'host-error'
