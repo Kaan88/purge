@@ -349,7 +349,11 @@ function Test-App([string]$Ev, $A, $X, $Score, [bool]$Undo, [string]$AmbSha = ''
             return
         }
         'fail-3010' {
-            $restart = Test-E2eSaid $seen "$($X.texts.restart_bar)"; $failed = Test-E2eSaid $seen "$($X.texts.failed_bar)"
+            # The failure bar must be absent: a negative check matches by contains (Fable alpha.5 review N10), not by
+            # Test-E2eSaid's whole-element rule, so a failure said in the middle of a text still fails the row. No
+            # expected text fails it too.
+            $restart = Test-E2eSaid $seen "$($X.texts.restart_bar)"; $fb = "$($X.texts.failed_bar)"
+            $failed = (-not $fb) -or @(@($seen) | Where-Object { $_ -and "$_".Contains($fb) }).Count -gt 0
             $shown = $restart -and ($codes -contains 3010) -and -not $failed
             Row "$id 3010 reported as restart needed" $shown "restart_bar=$restart failed_bar=$failed codes=$($codes -join ',')"
             $gone = ($scan -and "$($scan.state)" -in 'review', 'empty' -and $fc -and $fc.arp_present -eq $false -and $fc.fixture_key_present -eq $false)
@@ -578,6 +582,8 @@ function Get-E2eDefects {
         @{ name = 'a 3010 shown as a failure'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'msi3010\guest\e2e.json') { param($d) $d.steps.'ui-wait-scan'.seen = @('A restart is needed.', 'The uninstaller failed.') } } },
         # The Rust UI's bars: one Text "Title Message" each.
         @{ name = 'a 3010 shown as a failure (Rust UI bar)'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'msi3010\guest\e2e.json') { param($d) $d.steps.'ui-wait-scan'.seen = @('A restart is needed. Restart Windows to finish.', 'The uninstaller failed. It ended with exit code 3010.') } } },
+        # N10: the failure said inside a longer text (neither its start nor its end) still fails the 3010 row.
+        @{ name = 'a 3010 with the failure inside a text'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'msi3010\guest\e2e.json') { param($d) $d.steps.'ui-wait-scan'.seen = @('A restart is needed.', 'Uninstall: The uninstaller failed. It ended with exit code 3010.') } } },
         @{ name = 'a 1603 without its bar (Rust UI: another bar only)'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'msi1603\guest\e2e.json') { param($d) $d.steps.'ui-wait-scan'.seen = @('Not started. The uninstaller failed to start.', 'The uninstaller ended with exit code 1603.') } } },
         @{ name = 'executed set differs (one extra)'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'vscode\guest\e2e.json') { param($d) $c = $d.steps.'capture-exec'.compare; $c.equal = $false; $c.ui_n = 3; $c.extra = @('Path|c:\x|') } } },
         @{ name = 'executed set empty on both sides'; act = { param($ev) Edit-E2eJson (Join-Path $ev 'git\guest\e2e.json') { param($d) $c = $d.steps.'capture-exec'.compare; $c.cli_n = 0; $c.ui_n = 0 } } },
