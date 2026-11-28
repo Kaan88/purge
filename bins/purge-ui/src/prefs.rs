@@ -172,22 +172,65 @@ impl Store {
         }
     }
 
-    /// Writes the settings. A failure is said on stderr and changes nothing else: the window
-    /// goes on with what was chosen.
-    pub fn save(&self, p: &Prefs) {
-        let (Some(path), true) = (&self.path, self.writable) else {
+    /// Writes the settings `p`. The window's place is the file's as it is now, when it has
+    /// one: another Purge window may have saved its place since this one read the file, and a
+    /// change of a setting here must not put an older place back. A failure is said on stderr
+    /// and changes nothing else: the window goes on with what was chosen.
+    pub fn save(&mut self, p: &Prefs) {
+        let Some(path) = self.writable_path() else {
             return;
+        };
+        if let Ok(Some(text)) = settings::read_patiently(&path)
+            && let Some(theirs) = window_of(&text)
+        {
+            self.window = Some(theirs);
+        }
+        write(&path, &p.text_with(self.window.as_ref()));
+    }
+
+    /// The file, when it may be written and its folder is there.
+    fn writable_path(&self) -> Option<PathBuf> {
+        let (Some(path), true) = (&self.path, self.writable) else {
+            return None;
         };
         if let Some(dir) = path.parent()
             && let Err(e) = std::fs::create_dir_all(dir)
         {
             eprintln!("Purge: {} could not be made ({e})", dir.display());
-            return;
+            return None;
         }
-        if let Err(e) = settings::write_atomic(path, &p.text_with(self.window.as_ref())) {
-            eprintln!("Purge: {} could not be written ({e})", path.display());
+        Some(path.clone())
+    }
+}
+
+fn write(path: &std::path::Path, text: &str) {
+    if let Err(e) = settings::write_atomic(path, text) {
+        eprintln!("Purge: {} could not be written ({e})", path.display());
+    }
+}
+
+/// `text` with its `window` line (all of them) replaced by one for `state`, where the first
+/// was, or at the end. Every other line is kept as it is, keys this build does not know too.
+fn with_window(text: &str, state: &WindowState) -> String {
+    let line = format!("{WINDOW}={}", state.to_setting());
+    let mut out = String::with_capacity(text.len() + line.len() + 1);
+    let mut placed = false;
+    for l in text.lines() {
+        let is_window = l.split_once('=').is_some_and(|(k, _)| k.trim() == WINDOW);
+        if !is_window {
+            out.push_str(l);
+            out.push('\n');
+        } else if !placed {
+            out.push_str(&line);
+            out.push('\n');
+            placed = true;
         }
     }
+    if !placed {
+        out.push_str(&line);
+        out.push('\n');
+    }
+    out
 }
 
 impl Store {
@@ -196,10 +239,29 @@ impl Store {
         self.window.clone()
     }
 
-    /// Saves the window's place with the settings `p` (the file's, not this run's).
+    /// Saves the window's place. The file is read again and only its `window` line is replaced:
+    /// its settings are kept as they are now, so another Purge window's later change is not
+    /// written over with this one's older settings. `p` (this run's file settings) is written
+    /// only when there is no file yet; a file that cannot be read is left alone.
     pub fn save_window(&mut self, p: &Prefs, state: WindowState) {
+        let Some(path) = self.writable_path() else {
+            self.window = Some(state);
+            return;
+        };
+        let text = match settings::read_patiently(&path) {
+            Ok(Some(text)) => with_window(&text, &state),
+            Ok(None) => p.text_with(Some(&state)),
+            Err(e) => {
+                eprintln!(
+                    "Purge: {} could not be read ({e}); the window's place is not saved",
+                    path.display()
+                );
+                self.window = Some(state);
+                return;
+            }
+        };
         self.window = Some(state);
-        self.save(p);
+        write(&path, &text);
     }
 }
 
@@ -373,6 +435,57 @@ mod tests {
         assert_eq!(odd.glass, GlassPrefs::default());
         let big = Prefs::parse("[purge-ui]\nversion=1\nbackdrop_strength=250\n");
         assert_eq!(big.glass.strength, 100);
+    }
+
+    fn other_state() -> WindowState {
+        WindowState::from_setting(
+            r"x=10;y=20;w=900;h=700;max=0;scale=1;mon=\\.\DISPLAY2;monx=2560;mony=0;monw=1920;monh=1080",
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn two_windows_on_one_file_keep_each_others_changes() {
+        let dir = std::env::temp_dir().join(format!("purge-ui-two-{}", std::process::id()));
+        let path = dir.join("ui-settings.ini");
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut a = Store::at(path.clone());
+        let mut b = Store::at(path.clone());
+        let a_prefs = a.load();
+        b.load();
+        // B changes a setting; then A closes and saves its place with its older settings.
+        let b_prefs = Prefs {
+            preset: Preset::Teal,
+            ..Prefs::default()
+        };
+        b.save(&b_prefs);
+        a.save_window(&a_prefs, state());
+        let mut read = Store::at(path.clone());
+        assert_eq!(read.load(), b_prefs, "A's place save kept B's setting");
+        assert_eq!(read.window(), Some(state()));
+        // B moves and saves its place; then A changes a setting: B's place stays.
+        b.save_window(&b_prefs, other_state());
+        let a_change = Prefs {
+            design: Design::Standard,
+            ..b_prefs
+        };
+        a.save(&a_change);
+        let mut read = Store::at(path.clone());
+        assert_eq!(read.load(), a_change);
+        assert_eq!(
+            read.window(),
+            Some(other_state()),
+            "A's prefs save kept B's place"
+        );
+        // A key this build does not know survives a place save.
+        let text = std::fs::read_to_string(&path).unwrap() + "later_key=7\n";
+        std::fs::write(&path, text).unwrap();
+        a.save_window(&a_change, state());
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("later_key=7\n"), "{text}");
+        assert_eq!(text.matches("window=").count(), 1, "{text}");
+        assert_eq!(window_of(&text), Some(state()));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
