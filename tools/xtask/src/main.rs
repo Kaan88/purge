@@ -20,11 +20,13 @@
 //!   bench_launch.rs).
 //! - `gen-dto`: JSON Schemas of the engine API's types and the C# source-generation glue, under
 //!   `ui/Purge.Client/` (see gen_dto.rs). `--check` fails on a difference.
+//! - `notices`: write `THIRD-PARTY-NOTICES.txt`, the licences of the crates the shipped binaries link,
+//!   from `Cargo.lock` (see notices.rs); `--check` fails when the committed file is out of date.
 //! - `broker-timings`: the broker's timing lines of a run (collected by `vm/guest/broker-timings.ps1`) as
 //!   the numbers of gate G12 (see broker_timings.rs; not part of `ci`).
 //! - `ci`: fmt check, clippy, tests, a standalone clippy of `purge-mcp`, clippy and the feature-gated
 //!   tests of the rig-exec build (engine CLI), every purge-exec test target with its `fault-inject` and
-//!   `test-support` features (crash matrix, object ops), check-deps, no-new-walks, ui-strings,
+//!   `test-support` features (crash matrix, object ops), check-deps, notices --check, no-new-walks, ui-strings,
 //!   scanner-coverage, `gen-dto --check`, and the UI (`dotnet build` and `dotnet test`; skipped when no
 //!   .NET SDK is installed unless `--require-ui` is given).
 
@@ -35,6 +37,7 @@ mod check_deps;
 mod gen_dto;
 mod lex;
 mod no_new_walks;
+mod notices;
 mod replay;
 mod replay_diff;
 mod scanner_coverage;
@@ -62,6 +65,7 @@ fn main() -> ExitCode {
         Some("replay-diff") => replay_diff::run(&workspace_root(), &args[1..]),
         Some("bench-launch") => bench_launch::run(&workspace_root(), &args[1..]),
         Some("gen-dto") => gen_dto::run(&workspace_root(), &args[1..]),
+        Some("notices") => notices::run(&workspace_root(), &args[1..]),
         Some("broker-timings") => broker_timings::run(&args[1..]),
         Some("ci") => ci(&workspace_root(), &args[1..]),
         Some("-h" | "--help") => {
@@ -210,6 +214,10 @@ fn ci(root: &Path, args: &[String]) -> Result<bool> {
     println!("xtask ci: check-deps");
     if !check_deps::run(root)? {
         bail!("step failed: check-deps");
+    }
+    println!("xtask ci: notices --check");
+    if !notices::run(root, &["--check".to_owned()])? {
+        bail!("step failed: notices --check");
     }
     println!("xtask ci: no-new-walks");
     if !no_new_walks::run(root)? {

@@ -8,3 +8,6 @@ ui/Purge.Client/Generated/*.cs text eol=lf
 # BL-GATE: the L3 reference plans and the self-test fixtures are compared by SHA-256 and byte for byte.
 vm/truth/baseline-local/l3-ref/*.json -text
 vm/truth/fixtures/bl/** -text
+# xtask notices writes LF; --check compares after normalising line ends, the installer ships this file.
+THIRD-PARTY-NOTICES.txt text eol=lf
+tools/xtask/src/notices/*.txt text eol=lf
