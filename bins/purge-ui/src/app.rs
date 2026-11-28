@@ -1602,11 +1602,10 @@ impl PurgeApp {
             (c.disabled, c.modal).hash(&mut h);
         }
         let pr = &self.model.programs;
-        pr.rows.hash(&mut h);
-        // A row's name changes with what the engine learns of it (a late patch, its kind).
-        for &i in &pr.rows {
-            pr.all[i].accessible.hash(&mut h);
-        }
+        // The shown rows with their names and texts (a row's name changes with what the engine
+        // learns of it: a late patch, its kind). Every row is in the tree, the ones scrolled out
+        // of view too, so all of them count; the hash is made when they change (`sync`), not here.
+        pr.tree_sig.hash(&mut h);
         for r in pr.sel.ranges() {
             (r.start, r.end).hash(&mut h);
         }
@@ -2240,7 +2239,9 @@ impl App for PurgeApp {
         if self.frames == 1 {
             markers::mark("first_tick");
             self.presented_due = bench;
-            if self.bench_exit && self.bench_until != BenchUntil::Presented {
+            // The launch bench (`PURGE_BENCH_OUT`) gets its line by the timeout too, with or
+            // without `--bench-exit`.
+            if bench && self.bench_until != BenchUntil::Presented {
                 self.bench_deadline = Some(Instant::now() + markers::BENCH_TIMEOUT);
             }
             // The model's deferred work (sizes, icons, the removed group) waits for this frame.
