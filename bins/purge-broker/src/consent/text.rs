@@ -7,6 +7,8 @@
 //! - control characters (C0, DEL, C1), bidirectional controls, zero-width and other invisible
 //!   characters (the braille blank included), line and paragraph separators, every space that is not
 //!   a plain space, private-use and non-characters, and the double quote are written as `\u{hex}`;
+//! - the backslash of a literal `\u{` is written as `\u{5c}`, so that every `\u{` in the dialog is an
+//!   escape (review N5);
 //! - a plain space is written that way too when it starts or ends a path component or follows another
 //!   space, so `Program Files` and `Program Files ` and `Program  Files` do not look alike;
 //! - in a word that holds an ASCII letter or digit, every alphanumeric character outside Basic Latin,
@@ -187,6 +189,15 @@ fn escape(c: char) -> String {
     format!("\\u{{{:x}}}", c as u32)
 }
 
+/// Whether `rest` starts with a literal `\u{`: text from outside that reads as an escape Purge
+/// wrote (review N5). Its backslash is written as `\u{5c}`, so that every `\u{` in the dialog is
+/// one of Purge's escapes and stands for the one character it names: a key named `u{430}` under
+/// `HKCU\Software` reads `HKCU\Software\u{5c}u{430}`, not as a Cyrillic letter, and a name cannot
+/// pass a word off as a character the font did not have ([`NO_GLYPH_NOTE`]).
+fn starts_literal_escape(rest: &[char]) -> bool {
+    matches!(rest, ['\\', 'u', '{', ..])
+}
+
 /// The text left out in the middle of a shown text.
 pub fn left_out(n: usize) -> String {
     if n == 1 {
@@ -210,7 +221,7 @@ fn component(comp: &str, flags: &mut Flags, cut: bool) -> Vec<String> {
                 || last_visible.is_none_or(|l| i > l)
                 || chars[i - 1] == ' '
         } else {
-            hidden(c) || look_alike[i]
+            hidden(c) || look_alike[i] || starts_literal_escape(&chars[i..])
         };
         if escape_it {
             flags.escaped = true;
@@ -281,9 +292,20 @@ pub fn shown(text: &str) -> Shown {
             flags.look_alike = true;
         }
     }
-    for (comp, sep) in parts {
+    for (k, &(comp, sep)) in parts.iter().enumerate() {
         pieces.extend(component(comp, &mut flags, true));
-        if !sep.is_empty() {
+        if sep.is_empty() {
+            continue;
+        }
+        // A separator that starts a literal `\u{` with the next component (review N5).
+        if sep == "\\"
+            && parts
+                .get(k + 1)
+                .is_some_and(|(next, _)| next.starts_with("u{"))
+        {
+            flags.escaped = true;
+            pieces.push(escape('\\'));
+        } else {
             pieces.push(sep.to_owned());
         }
     }
@@ -410,6 +432,11 @@ pub fn fixed_words_drawable(has_glyph: &dyn Fn(char) -> bool) -> bool {
 ///
 /// It is the renderer's pass and not [`shown`]'s: the TaskDialog draws the same view with the
 /// system's own fallback and shows these characters as they are.
+///
+/// A literal `\u{` (review N5) is not this pass's to escape: here it cannot be told from an escape
+/// [`shown`] wrote, and both renderers must show it the same. [`shown`] and [`shown_line`] write
+/// its backslash as `\u{5c}` where the text enters the view, so every `\u{` this pass sees is an
+/// escape, and this pass leaves escapes alone.
 pub fn drawable<'a>(text: &'a str, has_glyph: &dyn Fn(char) -> bool) -> std::borrow::Cow<'a, str> {
     let keeps = |c: char| fixed(c) || has_glyph(c);
     if text.chars().all(keeps) {
@@ -472,6 +499,30 @@ mod tests {
         // An escape is made of characters that are never rewritten: a second pass changes nothing.
         let once = drawable("\u{65e5}\u{e9}", &nothing).into_owned();
         assert_eq!(drawable(&once, &nothing), once);
+    }
+
+    /// Review N5: a literal `\u{` from outside cannot pass for one of Purge's escapes, in either
+    /// renderer, and the fixed-font pass leaves what `shown` wrote alone.
+    #[test]
+    fn a_literal_escape_is_escaped_where_the_text_enters() {
+        let sh = shown(r"HKCU\Software\u{430}");
+        assert_eq!(sh.text, r"HKCU\Software\u{5c}u{430}");
+        assert!(sh.flags.escaped);
+        let sh = shown(r"C:\Vendor\u{41}\app.exe");
+        assert_eq!(sh.text, r"C:\Vendor\u{5c}u{41}\app.exe");
+        // In free text the backslash is in the piece.
+        let sh = shown_line(r"/D=C:\x \u{202e}");
+        assert_eq!(sh.text, r"/D=C:\x \u{5c}u{202e}");
+        assert!(sh.flags.escaped);
+        // A name that is the sequence alone, and one with the brace missing (no escape then).
+        assert_eq!(shown_line(r"\u{").text, r"\u{5c}u{");
+        let plain = shown(r"C:\users\u1\app");
+        assert_eq!(plain.text, r"C:\users\u1\app");
+        assert!(plain.flags.is_plain());
+        // The renderer's pass keeps both escapes as they are.
+        let sh = shown("C:\\Vendor\\u{430}\\\u{202e}x");
+        assert_eq!(sh.text, r"C:\Vendor\u{5c}u{430}\\u{202e}x");
+        assert_eq!(drawable(&sh.text, &latin_only), sh.text);
     }
 
     #[test]
