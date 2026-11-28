@@ -241,14 +241,16 @@ impl Gate {
         }
     }
 
-    /// Moves the engine's held `programs.patch`es into `list` until every row of it has one, or
-    /// `until`. What came later stays held for the page.
+    /// Moves the engine's held `programs.patch`es into `list` until every row of it has one, the
+    /// engine closes (no patch can come after that), or `until`. What came later stays held for
+    /// the page, the engine's close too.
     fn take_patches(&self, list: &mut ProgramList, until: Instant) {
         let mut missing: HashSet<&ProgramId> = list.rows.iter().map(|r| &r.program_id).collect();
         for p in &list.patches {
             missing.remove(&p.program_id);
         }
         let mut taken = Vec::new();
+        let mut closed = false;
         let mut state = lock(&self.state);
         loop {
             let held = std::mem::take(&mut state.held);
@@ -260,10 +262,14 @@ impl Gate {
                         }
                         taken.extend(patches);
                     }
-                    event => state.held.push((source, event)),
+                    event => {
+                        closed |= source == Source::Engine
+                            && matches!(event, ClientEvent::EngineClosed { .. });
+                        state.held.push((source, event));
+                    }
                 }
             }
-            if missing.is_empty() {
+            if missing.is_empty() || closed || state.engine_dropped {
                 break;
             }
             let left = until.saturating_duration_since(Instant::now());
