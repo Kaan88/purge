@@ -19,9 +19,17 @@ As of M0 no BCU code has been ported yet; this entry is in place before the firs
 
 ## Rust crates
 
-The Rust crates Purge links (serde, schemars, windows-sys, …) and their licences will be listed here by
-`cargo-about`, generated from `Cargo.lock`, before the first release. Until then, `cargo tree` is the
-authoritative list.
+The Rust crates Purge links (serde, schemars, windows-sys, …) are listed in
+[`THIRD-PARTY-NOTICES.txt`](THIRD-PARTY-NOTICES.txt), with each crate's version, licence expression,
+repository and the full text of every licence and NOTICE file it ships. The setup installs that file
+next to `Purge.exe`, with `LICENSE` and `NOTICE`; Settings, About, "Third-party notices" opens it.
+
+It is generated from `Cargo.lock` by `cargo xtask notices` (`tools/xtask/src/notices.rs`): every crate
+that `purge-engine.exe`, `purge-broker.exe` and `Purge.exe` reach over normal dependencies for
+`x86_64-pc-windows-msvc` (no dev- or build-dependencies, not the xtask). After a dependency change, run
+`cargo xtask notices` and commit the file; `cargo xtask notices --check` (run by the release build,
+`install/inno/build-installer.ps1`, and by `cargo xtask ci`) fails while it is stale. The command also
+fails on a licence outside its permissive list or a crate that declares none, so a person decides.
 
 ## Not used
 
