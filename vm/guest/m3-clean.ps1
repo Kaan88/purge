@@ -244,7 +244,12 @@ function Find-UiWindow([int]$ProcessId, [int]$Sec) {
         (New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Window)))
     $deadline = (Get-Date).AddSeconds($Sec)
     do {
-        $w = $root.FindFirst([Windows.Automation.TreeScope]::Children, $cond)
+        # A named Window first (m3-e2e-ui.ps1 Get-E2eWindow): of two, the one with a title.
+        $w = $null
+        try {
+            $all = @($root.FindAll([Windows.Automation.TreeScope]::Children, $cond))
+            $w = @($all | Where-Object { "$($_.Current.Name)" }) + @($all) | Select-Object -First 1
+        } catch { $w = $null }
         if ($w) { return $w }
         Start-Sleep -Milliseconds 500
     } while ((Get-Date) -lt $deadline)

@@ -2554,8 +2554,17 @@ exit 0
     $winCs = 'new AndCondition(new PropertyCondition(AutomationElement.ProcessIdProperty, pid), new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Window))'
     $secCs = [IO.File]::ReadAllText((Join-Path $Guest 'm3sec.cs')); $recCs = [IO.File]::ReadAllText((Join-Path $Guest 'm3rec.cs'))
     Check 'm3-clean Find-UiWindow, m3sec.cs and m3rec.cs ui take the Window too' ($cleanFn -match 'ControlType\]::Window' -and $cleanFn -match 'AndCondition' -and
-        $secCs.Contains($winCs) -and $recCs.Contains($winCs) -and -not $secCs.Contains('FindFirst(TreeScope.Children, new PropertyCondition(AutomationElement.ProcessIdProperty, pid))') -and
+        $secCs.Contains($winCs) -and $recCs.Contains('win = UiWindow(pid);') -and -not $secCs.Contains('FindFirst(TreeScope.Children, new PropertyCondition(AutomationElement.ProcessIdProperty, pid))') -and
         -not $recCs.Contains('FindFirst(TreeScope.Children, new PropertyCondition(AutomationElement.ProcessIdProperty, pid))'))
+    # Fable alpha.5 review N9: every driver takes a named Window first, as Get-E2eWindow does (FindAll, the named
+    # ones before the rest), never the first Window FindFirst happens to give.
+    $uiWinCs = [regex]::Match($secCs, '(?s)\n    static AutomationElement UiWindow\(int pid\) \{.*?\n    \}').Value
+    Check 'N9: Get-E2eWindow, m3-clean Find-UiWindow and m3sec/m3rec UiWindow take a named Window first' (
+        $winFn -match 'FindAll' -and $winFn -match 'Where-Object \{ "\$\(\$_\.Current\.Name\)" \}' -and
+        $cleanFn -match 'FindAll' -and $cleanFn -match 'Where-Object \{ "\$\(\$_\.Current\.Name\)" \}' -and $cleanFn -notmatch 'FindFirst' -and
+        $uiWinCs.Contains($winCs) -and $uiWinCs.Contains('FindAll(TreeScope.Children, cond)') -and $uiWinCs.Contains('!string.IsNullOrEmpty(e.Current.Name)') -and
+        -not $secCs.Contains('RootElement.FindFirst(TreeScope.Children') -and -not $recCs.Contains('RootElement.FindFirst(TreeScope.Children') -and
+        $recCs.Contains('win = UiWindow(pid);') -and $secCs.Contains('win = UiWindow(pid);'))
     # The Rust UI's confirmation arms its Uninstall 400 ms after it opens (screens::ARM_DELAY; a disabled AccessKit
     # button has no Invoke): the wait and the press take it only enabled.
     $e2eGuest = [IO.File]::ReadAllText((Join-Path $Guest 'm3-e2e.ps1'))

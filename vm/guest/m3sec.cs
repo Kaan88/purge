@@ -472,6 +472,20 @@ static partial class M3Sec {
         if (target == "back") return "Back";
         return S(D(seen, "labels"), target, null);
     }
+    // The UI process's top-level Window (control type), a named one first: never one of its top-level Win32 panes
+    // (the Rust UI's winit event target and text input indicator windows), and of two Windows the one with a title
+    // (m3-e2e-ui.ps1 Get-E2eWindow). Shared with m3rec.cs (partial class). null while there is none.
+    static AutomationElement UiWindow(int pid) {
+        var cond = new AndCondition(new PropertyCondition(AutomationElement.ProcessIdProperty, pid), new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Window));
+        AutomationElement first = null;
+        try {
+            foreach (AutomationElement e in AutomationElement.RootElement.FindAll(TreeScope.Children, cond)) {
+                if (!string.IsNullOrEmpty(e.Current.Name)) return e;
+                if (first == null) first = e;
+            }
+        } catch (ElementNotAvailableException) { return null; }
+        return first;
+    }
     static AutomationElement UiaFind(AutomationElement root, ControlType type, string name) {
         foreach (AutomationElement e in root.FindAll(TreeScope.Descendants, new PropertyCondition(AutomationElement.ControlTypeProperty, type))) {
             string n = (e.Current.Name ?? "").Replace("&", "");
@@ -1065,7 +1079,7 @@ static partial class M3Sec {
         while (win == null && DateTime.Now < end) {
             // The process's Window, never one of its top-level Win32 panes (the Rust UI's winit event target and
             // text input indicator windows; m3-e2e-ui.ps1 Get-E2eWindow).
-            win = AutomationElement.RootElement.FindFirst(TreeScope.Children, new AndCondition(new PropertyCondition(AutomationElement.ProcessIdProperty, pid), new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Window)));
+            win = UiWindow(pid);
             if (win == null) Thread.Sleep(500);
         }
         rec["window_found"] = win != null;

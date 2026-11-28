@@ -463,7 +463,7 @@ static partial class M3Sec {
         while (win == null && DateTime.Now < end) {
             // The process's Window, never one of its top-level Win32 panes (the Rust UI's winit event target and
             // text input indicator windows; m3-e2e-ui.ps1 Get-E2eWindow).
-            win = AutomationElement.RootElement.FindFirst(TreeScope.Children, new AndCondition(new PropertyCondition(AutomationElement.ProcessIdProperty, pid), new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Window)));
+            win = UiWindow(pid);
             if (win == null) Thread.Sleep(500);
         }
         rec["window_found"] = win != null;
