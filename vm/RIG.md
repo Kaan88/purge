@@ -1939,6 +1939,116 @@ powershell -NoProfile -File vm\truth\m3-sec-score.ps1 --self-test
   stays as it was). Then `consent-approve` (high, `TDM_CLICK_VERIFICATION` + `TDM_CLICK_BUTTON 100` after the arming
   delay): the uninstaller runs; the plan executes and the journal has the session. The host takes a screenshot after
   every step (`c<k>-<kind>-shown|attack-<m>|control-<m>|approved.png`). Output `guest\m3-consent.json`.
+- **`m3-consent -ConsentUi toolkit`** (package BROKER-CONSENT-UI, M3_DESIGN 8.3; prepared, **not yet run**). The same
+  mode against the consent dialog drawn with Purge's own toolkit: `rig-m3.ps1 -Mode m3-consent -ConsentUi toolkit`
+  passes `-ConsentUi toolkit` to every guest phase, `consent-start` starts the broker with `--consent toolkit` (the
+  client spec's `args`), and the run is scored with `m3-sec-score.ps1 -Mode consent -ConsentUi toolkit`. `m3sec.exe`
+  tells the dialogs apart by the window class (the TaskDialog is `#32770`, the toolkit window is not) and writes
+  `flavour` into every record. On the toolkit dialog there are no child windows and no TaskDialog messages, so:
+  `observe` reads it through UI Automation by its ids (`ConsentApprove`, `ConsentCancel`, `ConsentVerify`,
+  `ConsentFooter`, `ConsentHint`, `ConsentList`, `ConsentLine_<n>`; `uia_ids` and `lines` in the record) and takes the
+  rectangles of the box and the buttons from there; `sendinput-key` is Tab Space on the box (Cancel has the keyboard
+  when it opens), Tab Tab Space and Enter on the button, Esc; `sendinput-mouse` clicks the same rectangles;
+  `postmessage` posts and sends the input itself (`WM_MOUSEMOVE`, `WM_LBUTTONDOWN`, `WM_LBUTTONUP` at the target,
+  `WM_KEYDOWN`/`WM_KEYUP` for End, Tab, Space, Enter, Esc) and the close requests (`WM_SYSCOMMAND SC_CLOSE`,
+  `WM_CLOSE`); `uia` lists the tree and calls `InvokePattern` and `TogglePattern` on the elements with those ids. The
+  high control cancels by the same method (`postmessage`: `WM_CLOSE`). `consent-approve` (high) posts End (the button
+  waits for the end of the list to have been on screen), ticks the box by `TogglePattern`, waits out the arming delay
+  and calls `InvokePattern` on `ConsentApprove`. The scorer's extra rows: every observed, attacked, controlled and
+  approved dialog has `flavour = toolkit` (the broker shows the TaskDialog when its toolkit window cannot be shown,
+  and such a run proves nothing about the toolkit dialog), the broker's arguments held `--consent toolkit`, and every
+  attacked dialog was read from high by its ids (the box id on the plan dialog, at least one line). `m3-uac`'s paged
+  rows (`page-next`, `arm-current` with `renavigate`) do not apply to it: it has no pages.
+  The broker under test is built with the cargo feature into a target directory of its own, never the release
+  one (`cargo build --release -p purge-broker --features toolkit-consent --target-dir <repo>\target\toolkit`, then
+  `-Broker <repo>\target\toolkit\release\purge-broker.exe`): a release broker refuses `--consent toolkit` before it
+  opens its pipe, and the run would have no dialog at all. Review S-A: the same file name in `target\release` is what
+  `install.ps1`, the Inno pre-step and the release workflow take as the release broker, so they refuse a broker with
+  the feature wherever it is (the staging marker, `install\README.md`). `rig-m3.ps1` checks the build on the host
+  (`-ConsentUi toolkit` takes only a toolkit build, named by `-Broker`; every other run only the release build)
+  and the guest installs it with `install.ps1 -ToolkitBroker`.
+  After the review of the package (M3_DESIGN 8.3, "The review of step 2"; all of it written and **not yet run**):
+  - *Which dialog* (S10). `consent.shown` has `"ui": "toolkit"` when the broker drew its toolkit window and no `ui`
+    for a TaskDialog; the scorer wants it for every dialog of a toolkit run beside the window class, and fails a
+    dialog the tool found as the toolkit's that the broker called a TaskDialog.
+  - *The code* (B3; both renderers). For every dialog observed from high, the approved one among them: the code in
+    its footer is the code `consent.shown` told the client and, for a plan, the code `plan.create` gave. A dialog
+    with no code, with no `consent.shown`, or never observed fails.
+  - *Answered* (S10). The toolkit window is one window for every dialog of the broker, hidden between two, so "the
+    window is gone" does not say a dialog was answered. An attempt `reached` when the window is gone **or** the
+    client's `consent-result-<k>.json` has the answer of that request. The effects compared from high before and
+    after a medium attempt now include the hint beside the button, where the list is scrolled to (the first and
+    last line with a place on screen), whether the box takes a tick, and the code in the footer.
+  - *End* (S10). End is posted only once the dialog is laid out (its button and a line of its list have a place),
+    not at all when the list fits, and again when the end did not come on screen; the box is ticked only after.
+  - *`consent-probe -Tag k`* (S1), on the dialog the medium attacks were just made on; record `probe-<k>.json`,
+    screenshot `c<k>-<kind>-probe`. `m3sec drive` with method `internals`: from medium, every message winit
+    registers at the version in `Cargo.lock` (winit 0.30.13, `src\platform_impl\windows\event_loop.rs`:
+    `Winit::WakeupMsg`, `Winit::DestroyMsg`, `Winit::ExecMsg`, `Winit::SetRetainMaximized` and the taskbar's
+    `TaskbarCreated`; review S-C) posted and sent to the dialog, to winit's "Winit Thread Event Target" window and
+    to the toolkit's contrast-watching window (`mdshared-contrast`) and posted to the dialog's thread; `SetProp` and
+    `RemoveProp` of `AccessKitAdapter` and of a property of the rig's own (`PurgeRigProbe`, which shows that the
+    window refuses and not the name); `WM_GETOBJECT` sent directly. Each must fail outright with the Win32 last
+    error 5 (`ERROR_ACCESS_DENIED`, recorded per attempt as `lasterror`; review S-B: a call that failed for another
+    reason is not UIPI's refusal), none skipped, the broker alive after them, and the three targets still windows
+    (`alive_after`, `IsWindow`). The scorer derives the probes it wants, by name and count (40 at these lists),
+    from `consent.toolkit.winit_messages`, `probe_windows` and `probe_props` of `m3-sec-expect.json`; a pin of winit
+    that registers another message changes that list and `WinitMessages` in `m3sec.cs` together. First the control
+    from high makes the same calls with `WM_NULL` and `PurgeRigProbe` and `WM_GETOBJECT` as UI Automation sends it,
+    and they must all work, so that a failure from medium is UIPI; it runs again after the medium probes
+    (`pcontrol-after-<k>.json`, `control_after`) and must pass again. The control never sends winit's messages or
+    touches AccessKit's property: from high they would be taken.
+  - *`consent-arm -Tag k`* (B3), real input from high on a fresh dialog; record `rule-arm-<k>.json`, screenshot
+    `c<k>-<kind>-rule-arm`. `m3sec arm` (`ArmToolkit`, `toolkit_only`): times count from the moment the tool sees
+    the end of the list on screen. A click on the button 250 ms after it (must be under 900 ms, the button still
+    disabled, nothing answered); then a press that goes down at 600 ms on the disabled button and is let go on it
+    at 1700 ms, across the arming moment (down under 900 ms, up after 1100 ms: must press nothing, the dialog stays
+    and is not approved); the button must be seen enabled afterwards; then Esc, so the request ends as declined
+    and the uninstaller did not run.
+  - *`consent-enter -Tag k`* (B3), on a fresh uninstall dialog; record `rule-enter-<k>.json`, screenshot
+    `c<k>-<kind>-rule-enter`. Enter by real input as the dialog opens (within 1000 ms of its being found), the
+    dialog in front: Cancel has the keyboard, so the request is declined and the dialog goes. The key may land
+    before the dialog counts as on screen: the broker then declines without a `consent.shown` (review S2), and the
+    scorer takes a missing `consent.shown` for this rule alone; one that was sent must say `toolkit`.
+  - *A list that does not fit* (review S-D; prepared, **not yet run**). A toolkit run installs fixture `lookalike45`
+    (m3-uac's: 45 look-alike leftovers, 41 and more attention entries), so the plan dialog's list must be scrolled
+    to its end; the scorer fails the plan dialog's `consent-arm` when its list fitted (`end_at_start`). The client
+    asks for the plan 11 times (10 used). On the plan dialog three more rules, each on a fresh dialog that must end
+    as `consent_declined` with nothing run, records `rule-<rule>-<k>.json`, screenshots `c<k>-plan-rule-<rule>`:
+    - *`consent-unseen -Tag k`*: the dialog up 1300 ms (over the dialog's own second; at least
+      `unseen_min_ms`), its end never on screen. A real click on the button, then a real click on the box: the
+      dialog stays, nothing is answered, the box stays unticked, the button stays disabled; then Esc.
+    - *`consent-tabspace -Tag k`*: the same state; real Tab, then Space. While the box is disabled Cancel is the
+      only stop of Tab (UI Automation's focus must be `ConsentCancel` after the Tab), so Space cancels.
+    - *`consent-tabearly -Tag k`*: End (posted), then at once by real input Tab (the box, which the end enabled),
+      Space (ticks it) and Tab again, under `tab_early_max_ms` after the end was seen: the second Tab must leave
+      the keyboard on Cancel, not on the button, which waits a second after the end. Enter then cancels. If the
+      keyboard is on the button all the same, the tool sends Esc instead of Enter (the test never approves) and the
+      scorer fails the row.
+  - *`kill-start`, `kill-run`* (B3; before the main client, while the fixture program is still installed); record
+    `orphan.json` in the lost client's record, screenshots `k00-client`, `k01-after-kill`. A client of its own with
+    one uninstall dialog. `m3sec orphan` (high) waits for the dialog, ends the client (the broker's parent and the
+    other end of its pipe) and times what follows: the dialog gone within 5 s (the toolkit window hidden), the
+    broker ended within 30 s with exit code 0, and the uninstaller did not run. Nobody is left to read the answer
+    the request got; the agent judges that nothing ran.
+  A toolkit test made on a TaskDialog (the broker fell back) is left alone by the tool, cancelled by the agent so
+  that the client goes on, and failed by the scorer. The numbers are `consent.toolkit` in `m3-sec-expect.json`.
+  Before the VM run, `vm\guest\tests\consent-ui-probe.ps1` runs the same tool against the preview harness on the
+  host, tool and dialog both at medium (no VM, no broker, no elevation; 53 checks, passed 2026-11-28 on the build
+  with `toolkit-consent`): the dialog is found and read by its ids, every method cancels it, the posted keys and
+  clicks and the UI Automation calls work when UIPI is not in the way, the approval the rig uses approves, and the
+  broker's own consent service answers Approved, Declined and, when its closer fires, Declined. Of what the review
+  added it runs what can be run there: the box of a long list is disabled and takes no Toggle before the end was
+  on screen; the approval waits for the layout and sees the end before it ticks; the service's `shown` line names
+  the toolkit; the control half of `internals` (all seven plain calls work, and winit's event-target window and
+  the contrast window are found by their class names); and the `orphan` role's own part (it ends a process of the
+  script's and times the dialog going when the preview's closer fires). Never run there: the `internals` probes
+  themselves (at the dialog's own level winit would take `Winit::ExecMsg` with a null closure), and the rules by
+  real input (`consent-arm`, `consent-enter`, `consent-unseen`, `consent-tabspace`, `consent-tabearly`), which move the real pointer. That is the control side only; T1
+  itself needs this mode. Not updated: `m3rec.cs`
+  (`m3-recover` presses its dialogs by TaskDialog messages). Not in the rig at all: a per-user font planted under
+  one of the families the window asks for (review B1; nothing to test until the toolkit can load fixed font files),
+  Windows 10 beside Windows 11, a contrast theme, and a second monitor of another scale.
 - **`m3-uac`** (G5, T8, 8.1; from `m3-uac-on`, fixture `lookalike45`). (1) The real UI from `C:\Program Files\PurgeUI`
   at medium; `m3sec ui` (UI Automation from high) selects "Purge Rig App", invokes Uninstall and Continue; the host
   answers the secure desktop with Alt+N (Esc only while `consent.exe` is still up); the agent reads the bar "You
@@ -1969,8 +2079,9 @@ powershell -NoProfile -File vm\truth\m3-sec-score.ps1 --self-test
   button enabled after the delay); every page seen, the code on every page equal to the plan's, the primary button
   only on the last page, at least 2 pages and 41 attention entries, the dialog in front; the execute result with a
   journal; the standard-user row; the named screenshots. `--self-test` builds a passing synthetic evidence directory
-  per mode from the expectations and checks it passes, that an empty or missing directory fails, and that 31 single
-  defects each fail.
+  per mode from the expectations and checks it passes, that an empty or missing directory fails, that a toolkit run
+  passes only under `-ConsentUi toolkit` (and a TaskDialog run only without it, 81 toolkit defects fail, an Enter that cancelled a dialog before it was shown passes), and
+  that 40 single defects each fail (134 checks).
 - **Not settled without a run**: whether the scan of the fixture yields the look-alike files as absorbed children
   with their own attention entries (the scorer fails the paging row otherwise); whether the first-elevation dialog and
   the program row of the real UI are found by name; whether the credential prompt of this build focuses the password

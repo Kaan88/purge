@@ -2126,6 +2126,8 @@ dependencies = [
 name = "purge-broker"
 version = "0.2.0-alpha.5"
 dependencies = [
+ "mdshared-text",
+ "mdshared-ui",
  "purge-engine",
  "purge-exec",
  "purge-guard",
@@ -2140,6 +2142,7 @@ dependencies = [
  "purge-source",
  "purge-win",
  "serde_json",
+ "winit",
 ]
 
 [[package]]

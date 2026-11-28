@@ -156,6 +156,14 @@ jobs:
           & .\install\inno\build-installer.ps1 -InnoCompiler $env:ISCC
           if (-not $?) { throw 'build-installer.ps1 failed' }
 
+      # build-installer.ps1 checked it before ISCC; again here with install.ps1's own check (review S-A
+      # of BROKER-CONSENT-UI: never a broker built with --features toolkit-consent).
+      - name: The staged broker is the release build
+        shell: powershell
+        run: |
+          & { param($Exe, $Script) . $Script; Assert-ReleaseBroker $Exe } "$env:CARGO_TARGET_DIR\release\purge-broker.exe" .\install\install.ps1
+          if (-not $?) { throw 'the staged purge-broker.exe is not the release build' }
+
       - name: Version resources
         shell: pwsh
         run: |

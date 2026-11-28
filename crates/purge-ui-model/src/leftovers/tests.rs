@@ -323,6 +323,7 @@ fn shown(model: &mut LeftoversModel, n: u32) {
             2 => "E5F6-A7B8",
             _ => "ABCD-EF01",
         }),
+        ui: Default::default(),
     });
 }
 

@@ -47,8 +47,8 @@ use crate::{Answer, CallId, ClientError, ClientEvent, Sink};
 
 pub use check::{ServerCheck, ServerCheckStatus, check_server};
 pub use launcher::{
-    CONNECT_TIMEOUT, HELLO_TIMEOUT, Launch, LaunchFailure, LaunchStatus, STANDARD_USER_MESSAGE,
-    broker_beside_app, classify_shell_failure, launch,
+    CONNECT_TIMEOUT, ConsentUi, HELLO_TIMEOUT, Launch, LaunchFailure, LaunchStatus,
+    STANDARD_USER_MESSAGE, broker_beside_app, classify_shell_failure, launch, launch_with,
 };
 
 /// The UI's view of a broker session. Every request returns at once; its answer is a

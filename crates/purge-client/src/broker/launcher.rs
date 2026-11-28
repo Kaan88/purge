@@ -9,7 +9,10 @@
 //!    that was started.
 //! 3. A pipe name of 128 random bits (`BCryptGenRandom` through `purge_win::os::random_u64`, 32
 //!    lower-case hex digits), and the arguments `--pipe <name> --parent <pid> --parent-ctime
-//!    <filetime>`: the broker holds this process as its parent and exits when it goes.
+//!    <filetime>`: the broker holds this process as its parent and exits when it goes. With
+//!    [`ConsentUi::Toolkit`], `--consent toolkit` is added ([`launch_with`]): the broker then draws
+//!    its consent dialog with Purge's own toolkit. Without it the broker uses its own default, the
+//!    TaskDialog.
 //! 4. `ShellExecuteExW("runas")` on its own STA thread with no owner window (DECISIONS 2026-11-23 "UAC
 //!    prompt owner"), keeping the process handle: the pid cannot be reused while it is held.
 //! 5. Connect to `\\.\pipe\purge-<name>` with `SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION` (the
@@ -95,6 +98,44 @@ impl LaunchFailure {
     }
 }
 
+/// Who draws the broker's consent dialog (package BROKER-CONSENT-UI). The broker's own argument
+/// `--consent` names the same two; the dialog says and approves the same whichever draws it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ConsentUi {
+    /// The Win32 TaskDialog: the default, and what a broker started without the argument shows.
+    #[default]
+    TaskDialog,
+    /// Purge's own toolkit, with the TaskDialog behind it when its window cannot be shown.
+    Toolkit,
+}
+
+impl ConsentUi {
+    /// The name on Purge's and the broker's command lines.
+    pub fn name(self) -> &'static str {
+        match self {
+            ConsentUi::TaskDialog => "taskdialog",
+            ConsentUi::Toolkit => "toolkit",
+        }
+    }
+
+    /// The choice `name` names, exactly as [`ConsentUi::name`] writes it.
+    pub fn parse(name: &str) -> Option<ConsentUi> {
+        [ConsentUi::TaskDialog, ConsentUi::Toolkit]
+            .into_iter()
+            .find(|c| c.name() == name)
+    }
+}
+
+/// The broker's arguments (step 3). The default dialog adds nothing, so a broker that does not know
+/// `--consent` starts as before.
+pub(crate) fn arguments(name: &str, pid: u32, ctime: u64, consent: ConsentUi) -> String {
+    let base = format!("--pipe {name} --parent {pid} --parent-ctime {ctime}");
+    match consent {
+        ConsentUi::TaskDialog => base,
+        ConsentUi::Toolkit => format!("{base} --consent {}", consent.name()),
+    }
+}
+
 /// A launch in progress. Its answer is a [`ClientEvent::BrokerLaunched`] with [`Launch::call`].
 #[derive(Debug, Clone)]
 pub struct Launch {
@@ -145,6 +186,11 @@ pub fn classify_shell_failure(error: u32) -> LaunchFailure {
 /// The thread is detached: it ends after this one launch, once the Windows prompt is answered and at
 /// most [`CONNECT_TIMEOUT`] and [`HELLO_TIMEOUT`] later ([`Launch::stop`] ends it at its next step).
 pub fn launch(broker: &Path, sink: Sink) -> Launch {
+    launch_with(broker, ConsentUi::default(), sink)
+}
+
+/// [`launch`], naming who draws the broker's consent dialog.
+pub fn launch_with(broker: &Path, consent: ConsentUi, sink: Sink) -> Launch {
     let launch = Launch {
         call: CallId::next(),
         stop: Arc::new(AtomicBool::new(false)),
@@ -156,7 +202,7 @@ pub fn launch(broker: &Path, sink: Sink) -> Launch {
     let spawned = std::thread::Builder::new()
         .name("purge-broker-launcher".into())
         .spawn(move || {
-            let result = run(&broker, worker_sink.clone(), &stop);
+            let result = run(&broker, consent, worker_sink.clone(), &stop);
             deliver(call, result, &worker_sink);
         });
     if let Err(e) = spawned {
@@ -219,7 +265,12 @@ fn stopped() -> LaunchFailure {
     LaunchFailure::new(LaunchStatus::Stopped, "The request was cancelled.")
 }
 
-fn run(broker: &Path, sink: Sink, stop: &AtomicBool) -> Result<Arc<BrokerClient>, LaunchFailure> {
+fn run(
+    broker: &Path,
+    consent: ConsentUi,
+    sink: Sink,
+    stop: &AtomicBool,
+) -> Result<Arc<BrokerClient>, LaunchFailure> {
     if !can_elevate() {
         return Err(LaunchFailure::new(
             LaunchStatus::NotAdministrator,
@@ -259,7 +310,7 @@ fn run(broker: &Path, sink: Sink, stop: &AtomicBool) -> Result<Arc<BrokerClient>
             ),
         )
     })?;
-    let arguments = format!("--pipe {name} --parent {pid} --parent-ctime {ctime}");
+    let arguments = arguments(&name, pid, ctime, consent);
     let directory = broker
         .parent()
         .map(Path::to_path_buf)

@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, channel};
 use std::sync::{Arc, Mutex};
 
-use purge_client::broker::{self, Launch, LaunchFailure, LaunchStatus};
+use purge_client::broker::{self, ConsentUi, Launch, LaunchFailure, LaunchStatus};
 use purge_client::startup::{Startup, StartupResult};
 use purge_client::{Answer, Broker, BrokerClient, CallId, ClientError, ClientEvent, Engine, Sink};
 use purge_model::ProgramId;
@@ -152,6 +152,9 @@ impl Owner {
 pub struct BrokerHub {
     session: Option<(Owner, Arc<dyn Broker>)>,
     launching: Option<(Owner, Launch)>,
+    /// Who draws the broker's consent dialog: every launch passes it on (`--broker-consent`; the
+    /// TaskDialog unless that names the toolkit).
+    pub consent: ConsentUi,
 }
 
 impl BrokerHub {
@@ -177,7 +180,7 @@ impl BrokerHub {
         let Some(path) = broker::broker_beside_app().filter(|p| p.is_file()) else {
             return Err("purge-broker.exe is not beside Purge.exe.".into());
         };
-        let launch = broker::launch(&path, sink);
+        let launch = broker::launch_with(&path, self.consent, sink);
         let call = launch.call;
         self.launching = Some((owner, launch));
         Ok(call)

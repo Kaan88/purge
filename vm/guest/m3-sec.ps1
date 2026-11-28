@@ -2,10 +2,33 @@
   Purge rig, M3 security modes m3-broker, m3-consent, m3-uac (vm\RIG.md section 14; docs\M3_DESIGN.md 4 T1, T2, T5-T8,
   11.2, 11.3, gate G3, G4, G5, G10; docs\M3_FINISH_PLAN.md B4-B6). Guest side, Windows PowerShell 5.1, run elevated by
   C:\cr\agent.ps1 as one job per phase; the host driver is vm\rig-m3.ps1. The tool is C:\cr\m3sec\m3sec.exe, built
-  from vm\guest\m3sec.cs (roles: client, drive, observe, focus, focuswin, procinfo, arm, press, ui, inputdesk,
+  from vm\guest\m3sec.cs (roles: client, drive, observe, focus, focuswin, procinfo, arm, orphan, press, ui, inputdesk,
   fixture-uninstall).
 
-    & C:\cr\guest\m3-sec.ps1 -Phase <phase> [-Tag <t>] [-Method <m>] [-WaitSec <n>]
+    & C:\cr\guest\m3-sec.ps1 -Phase <phase> [-Tag <t>] [-Method <m>] [-WaitSec <n>] [-ConsentUi taskdialog|toolkit]
+
+  -ConsentUi toolkit (package BROKER-CONSENT-UI): consent-start starts the broker with "--consent toolkit", so its
+  consent dialog is the one drawn with Purge's own toolkit. Every other phase is the same: m3sec.exe tells the two
+  dialogs apart by the window class and writes "flavour" (taskdialog | toolkit) into what it observes and drives, and
+  the scorer (m3-sec-score.ps1 -ConsentUi toolkit) fails a run whose dialogs were not the toolkit's (the broker falls
+  back to the TaskDialog when its toolkit window cannot be shown). The broker says it too: "ui":"toolkit" in the
+  consent.shown of a dialog its toolkit window drew, nothing for a TaskDialog (consent-shown-<k>.json).
+
+  Phases only a toolkit run has (the host runs them with -ConsentUi toolkit; review of BROKER-CONSENT-UI, B3 and S1):
+    kill-start, kill-run   a client of its own before the main one: its one dialog is up, the client is ended; the
+                           dialog must go and the broker must end with nothing run (m3-consent-kill.json).
+    consent-probe -Tag k   from medium, what must not even be accepted by the dialog's process: winit's registered
+                           messages, AccessKit's window property, a direct WM_GETOBJECT (m3sec.cs, Internals); from
+                           high first, the same calls with a message and a property that mean nothing must work.
+    consent-arm -Tag k     real input from high on a fresh dialog: a click on the button before it is armed, a press
+                           held across the arming moment, then Esc. The request must end as consent_declined.
+    consent-enter -Tag k   Enter as a fresh dialog opens (Cancel has the keyboard): consent_declined.
+  The plan dialog's list does not fit (fixture lookalike45 for a toolkit run; review S-D), and three more rules run on it:
+    consent-unseen -Tag k  the dialog up over a second, the end of its list not seen: a real click on the button and one
+                           on the box do nothing (nothing answered, the box unticked, the button disabled); then Esc.
+    consent-tabspace -Tag k  the same dialog state: Tab, then Space (Cancel is the only stop of Tab): consent_declined.
+    consent-tabearly -Tag k  End, then at once Tab, Space, Tab: the second Tab must not reach the button (it waits a
+                           second after the end); Enter then cancels.
 
   Every output is under C:\cr\out\m3-sec\ (log sec.log); result lines start with "M3S ".
 
@@ -26,7 +49,9 @@
   The values before and after go to uac-silent.json, which both summaries carry as uac_silent.
     m3-broker:  broker-case -Tag <case id>, broker-summary
     m3-consent: consent-start, consent-next -Tag k, consent-attack -Tag k -Method m, consent-control -Tag k -Method m,
-                consent-approve -Tag k, client-end -Tag consent
+                consent-approve -Tag k, client-end -Tag consent; with -ConsentUi toolkit also kill-start, kill-run,
+                consent-probe -Tag k, consent-arm -Tag k, consent-enter -Tag k, and on the plan dialog consent-unseen -Tag k,
+                consent-tabspace -Tag k, consent-tabearly -Tag k
     m3-uac:     ui-start, ui-result, flow-start -Tag no|yes, flow-launch -Tag no|yes, arm-next -Tag k, consent-next,
                 page-next -Tag k, arm-current -Tag k, consent-approve, client-end -Tag yes, std-start, std-result
   Methods: sendinput-key, sendinput-mouse, postmessage, uia.
@@ -35,12 +60,15 @@ param(
     [Parameter(Mandatory)]
     [ValidateSet('build', 'install', 'uac-check', 'uac-silent', 'pack', 'broker-case', 'broker-summary',
                  'consent-start', 'consent-next', 'consent-attack', 'consent-control', 'consent-approve', 'client-end',
+                 'kill-start', 'kill-run', 'consent-probe', 'consent-arm', 'consent-enter', 'consent-unseen', 'consent-tabspace',
+                 'consent-tabearly',
                  'ui-start', 'ui-result', 'flow-start', 'flow-launch', 'arm-next', 'page-next', 'arm-current',
                  'std-start', 'std-result', 'uac-summary')]
     [string] $Phase,
     [string] $Tag = '',
     [ValidateSet('', 'sendinput-key', 'sendinput-mouse', 'postmessage', 'uia')] [string] $Method = '',
-    [int] $WaitSec = 120
+    [int] $WaitSec = 120,
+    [ValidateSet('taskdialog', 'toolkit')] [string] $ConsentUi = 'taskdialog'
 )
 . C:\cr\guest\riglib.ps1
 $ErrorActionPreference = 'Continue'
@@ -404,7 +432,7 @@ function Invoke-Observe([int]$BrokerPid, [string]$Path, [int]$WaitMs = 10000) {
 
 function Format-Dialog($D) {
     if (-not $D -or -not $D.found) { return 'found=False' }
-    "found=True page=$($D.page)/$($D.pages) footer=$($D.footer_code) primary=$($D.has_primary)/$($D.primary_enabled) next=$($D.has_next) verify=$(if ($D.verify) { $D.verify.toggle } else { 'none' }) fg=$($D.foreground) broker_il=$($D.broker_il) attention=$($D.attention_total)"
+    "found=True flavour=$($D.flavour) page=$($D.page)/$($D.pages) footer=$($D.footer_code) primary=$($D.has_primary)/$($D.primary_enabled) next=$($D.has_next) verify=$(if ($D.verify) { $D.verify.toggle } else { 'none' }) fg=$($D.foreground) broker_il=$($D.broker_il) attention=$($D.attention_total)"
 }
 
 # The targets a medium attack aims at on the dialog as observed: the box first, then Next, the primary button, Cancel.
@@ -464,6 +492,66 @@ function Wait-Consent([int]$Sec) {
 
 function Get-InputDesk([string]$Path) { $null = Invoke-Sec @('inputdesk', $Path) 30; Read-Json $Path }
 
+# What a medium attempt changed, read from high before and after it: any true member is an effect. The dialog, its box,
+# its page and its button as before; and what only the toolkit dialog has to change (review S10): the hint beside its
+# button, where its list is scrolled to (the first and last line with a place on screen), whether its box takes a tick
+# (it does once the end of the list was on screen), and the code in its footer (another dialog in the same window).
+function Get-AttackEffects($Pre, $Post, [int]$K, $J0, $J1) {
+    $both = ($Pre -and $Post -and $Post.found)
+    [ordered]@{
+        dialog_gone       = (-not ($Post -and $Post.found))
+        hwnd_changed      = ($both -and "$($Post.hwnd)" -ne "$($Pre.hwnd)")
+        verify_changed    = ($Pre -and $Post -and $Pre.verify -and $Post.verify -and "$($Pre.verify.toggle)" -ne "$($Post.verify.toggle)")
+        verify_enabled_changed = ($Pre -and $Post -and $Pre.verify -and $Post.verify -and "$($Pre.verify.enabled)" -ne "$($Post.verify.enabled)")
+        page_changed      = ($both -and "$($Pre.page)" -ne "$($Post.page)")
+        primary_enabled_changed = ($both -and "$($Pre.primary_enabled)" -ne "$($Post.primary_enabled)" -and -not $Pre.primary_enabled)
+        hint_changed      = ($both -and "$($Pre.hint)" -ne "$($Post.hint)")
+        scroll_changed    = ($both -and (@($Pre.lines_in_view) -join ',') -ne (@($Post.lines_in_view) -join ','))
+        code_changed      = ($both -and "$($Pre.footer_code)" -ne "$($Post.footer_code)")
+        answered          = (Test-Path -LiteralPath (Join-Path $CDir "consent-result-$K.json"))
+        journal_changed   = (-not (Test-JournalSame $J0 $J1))
+        uninstaller_ran   = (Test-Path -LiteralPath $FixMarker)
+    }
+}
+
+# The client's argument template: with -ConsentUi toolkit the broker's argument for the toolkit dialog, as Purge.exe
+# passes it (--broker-consent toolkit).
+function Set-ConsentArgs($Spec) {
+    if ($ConsentUi -eq 'toolkit') { $Spec.args = '--pipe {pipe} --parent {pid} --parent-ctime {ctime} --consent toolkit' }
+}
+
+# The toolkit dialog's rules by real input from high, on the fresh dialog k (m3sec.exe arm, toolkit_only). $More is
+# the rest of the arm spec. A dialog that is not the toolkit's is left alone by the tool and cancelled here, so that
+# the client goes on; the record says which it was and the scorer fails it.
+function Invoke-ToolkitRule([int]$K, [string]$Name, $More) {
+    $r = Get-Ready $K $WaitSec
+    if (-not $r) { return $null }
+    $bp = [int]$r.broker_pid
+    $j0 = Get-JournalState
+    $res = Join-Path $CDir "consent-result-$K.json"
+    $aspec = [ordered]@{ out = (Join-Path $CDir "tk$Name-$K.json"); broker_pid = $bp; go_file = (Join-Path $CDir "go-$K"); wait_ms = 300000
+                         toolkit_only = $true; result_file = $res }
+    foreach ($key in $More.Keys) { $aspec[$key] = $More[$key] }
+    $sp = Join-Path $CDir "tk$Name-spec-$K.json"
+    Write-Spec $aspec $sp
+    $null = Invoke-Sec @('arm', $sp) 400
+    $a = Read-Json $aspec.out
+    if (-not (Wait-File $res 10)) {
+        # Still up (not the toolkit dialog, or the tool's own cancel did not land): Cancel through the tool.
+        $pspec = [ordered]@{ out = (Join-Path $CDir "tk$Name-cancel-$K.json"); broker_pid = $bp; tick = $false; button = 2; arm_wait_ms = 100; wait_ms = 5000 }
+        Write-Spec $pspec (Join-Path $CDir "tk$Name-cancel-spec-$K.json")
+        $null = Invoke-Sec @('press', (Join-Path $CDir "tk$Name-cancel-spec-$K.json")) 60
+        $null = Wait-File $res 30
+    }
+    $result = Read-Json $res
+    $j1 = Get-JournalState
+    $rec = [ordered]@{ k = $K; kind = $r.method; rule = $Name; arm = $a; shown = (Read-Json (Join-Path $CDir "consent-shown-$K.json")); cancelled_by_rig = (Test-Path -LiteralPath (Join-Path $CDir "tk$Name-cancel-$K.json"))
+                       result_kind = $(if ($result) { $result.kind }); declined = ($result -and $result.kind -eq 'consent_declined')
+                       journal_changed = (-not (Test-JournalSame $j0 $j1)); uninstaller_ran = (Test-Path -LiteralPath $FixMarker) }
+    Write-JsonFile $rec (Join-Path $CDir "rule-$Name-$K.json") 12
+    $rec
+}
+
 # ------------------------------------------------------------------------------------------------ phases
 
 Log "== phase $Phase$(if ($Tag) { " tag=$Tag" })$(if ($Method) { " method=$Method" })"
@@ -488,6 +576,10 @@ switch ($Phase) {
         Expand-Archive -LiteralPath (Join-Path $Bin 'payload.zip') -DestinationPath $Payload -Force
         $common = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', 'C:\cr\install\install.ps1', '-SkipBuild',
                     '-Engine', (Join-Path $Payload 'purge-engine.exe'), '-Broker', (Join-Path $Payload 'purge-broker.exe'), '-Kb', (Join-Path $Payload 'kb'))
+        # A toolkit run installs the broker built with --features toolkit-consent, knowingly: install.ps1 refuses it
+        # otherwise, and refuses a release broker with the switch; -Check the same (review S-A).
+        $tk = @(); if ($ConsentUi -eq 'toolkit') { $tk = @('-ToolkitBroker') }
+        $common += $tk
         $runs = @(@{ name = 'Purge'; args = @('-UiPublishDir', $ClientDir); check = @() })
         if (Test-Path -LiteralPath (Join-Path $Payload 'ui\Purge.exe')) {
             $rec.ui = $true
@@ -499,7 +591,7 @@ switch ($Phase) {
             $o = @(& powershell.exe @($common + $r.args) 2>&1 | ForEach-Object { "$_" }); $code = $LASTEXITCODE
             foreach ($l in $o) { Log "  install $($r.name): $l" }
             $rec.install += [ordered]@{ name = $r.name; exit = $code; tail = @($o | Select-Object -Last 5) }
-            $c = @(& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File 'C:\cr\install\install.ps1' -Check @($r.check) 2>&1 | ForEach-Object { "$_" }); $cc = $LASTEXITCODE
+            $c = @(& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File 'C:\cr\install\install.ps1' -Check @($r.check) @tk 2>&1 | ForEach-Object { "$_" }); $cc = $LASTEXITCODE
             $rec.check += [ordered]@{ name = $r.name; exit = $cc; tail = @($c | Select-Object -Last 5) }
             if ($code -ne 0 -or $cc -ne 0) { $ok = $false }
         }
@@ -551,11 +643,15 @@ switch ($Phase) {
         $spec = [ordered]@{ broker = $Broker; launch = 'runas'; window = $true; connects = 1; connect_wait_ms = 20000; exit_wait_ms = 120000; go = $true
                             steps = @(@{ op = 'prepare'; program = $FixProgram }, @{ op = 'run'; quiet = $true; repeat = 8 }, @{ op = 'scan' },
                                       @{ op = 'plan_execute'; select = 'all'; repeat = 8; restore_point = 'off' }) }
+        # The broker's argument for the toolkit dialog, as Purge.exe passes it (--broker-consent toolkit). The plan
+        # dialog then takes three more asks (consent-unseen, -tabspace, -tabearly; review S-D): 4 controls, arm, enter,
+        # those three and the approval are 10 of 11.
+        if ($ConsentUi -eq 'toolkit') { $spec.args = '--pipe {pipe} --parent {pid} --parent-ctime {ctime} --consent toolkit'; $spec.steps[3].repeat = 11 }
         $s = Start-Client 'consent' $spec
         Write-JsonFile $s (Join-Path $s.dir 'start.json')
         $l = $null
         if (Wait-File (Join-Path $s.dir 'launched.json') 60) { $l = Read-Json (Join-Path $s.dir 'launched.json') }
-        "M3S CONSENT-START client=$($s.client_pid) window_fg=$($s.window_foreground) launch_ok=$(if ($l) { $l.ok }) broker=$(if ($l) { $l.broker_pid })"
+        "M3S CONSENT-START client=$($s.client_pid) window_fg=$($s.window_foreground) launch_ok=$(if ($l) { $l.ok }) broker=$(if ($l) { $l.broker_pid }) consent_ui=$ConsentUi"
     }
     'consent-next' {
         Use-CurrentClient
@@ -579,7 +675,7 @@ switch ($Phase) {
         $j0 = Get-JournalState
         $null = Invoke-Sec @('focus', "$bp", (Join-Path $CDir "focus-$k-$Method.json")) 30
         $dspec = [ordered]@{ out = (Join-Path $CDir "drive-$k-$Method.json"); broker_pid = $bp; method = $Method; mode = 'attack'
-                             targets = @(Get-AttackTargets $pre); seen = (Join-Path $CDir "pre-$k-$Method.json") }
+                             targets = @(Get-AttackTargets $pre); seen = (Join-Path $CDir "pre-$k-$Method.json"); result_file = (Join-Path $CDir "consent-result-$k.json") }
         $sp = Join-Path $CDir "drive-spec-$k-$Method.json"
         Write-Spec $dspec $sp
         Remove-Item -LiteralPath $dspec.out -Force -ErrorAction SilentlyContinue
@@ -590,16 +686,7 @@ switch ($Phase) {
         $drive = Read-Json $dspec.out
         $post = Invoke-Observe $bp (Join-Path $CDir "post-$k-$Method.json") 3000
         $j1 = Get-JournalState
-        $effects = [ordered]@{
-            dialog_gone       = (-not ($post -and $post.found))
-            hwnd_changed      = ($pre -and $post -and $post.found -and "$($post.hwnd)" -ne "$($pre.hwnd)")
-            verify_changed    = ($pre -and $post -and $pre.verify -and $post.verify -and "$($pre.verify.toggle)" -ne "$($post.verify.toggle)")
-            page_changed      = ($pre -and $post -and $post.found -and "$($pre.page)" -ne "$($post.page)")
-            primary_enabled_changed = ($pre -and $post -and $post.found -and "$($pre.primary_enabled)" -ne "$($post.primary_enabled)" -and -not $pre.primary_enabled)
-            answered          = (Test-Path -LiteralPath (Join-Path $CDir "consent-result-$k.json"))
-            journal_changed   = (-not (Test-JournalSame $j0 $j1))
-            uninstaller_ran   = (Test-Path -LiteralPath $FixMarker)
-        }
+        $effects = Get-AttackEffects $pre $post $k $j0 $j1
         $n = @($effects.Values | Where-Object { $_ -eq $true }).Count
         $rec = [ordered]@{ k = $k; method = $Method; kind = $r.method; level = 'medium'; drive = $drive; pre = $pre; post = $post; effects = $effects; effect_count = $n }
         Write-JsonFile $rec (Join-Path $CDir "attack-$k-$Method.json") 12
@@ -614,7 +701,8 @@ switch ($Phase) {
         $pre = Invoke-Observe $bp (Join-Path $CDir "cpre-$k-$Method.json")
         $j0 = Get-JournalState
         $null = Invoke-Sec @('focus', "$bp", (Join-Path $CDir "cfocus-$k-$Method.json")) 30
-        $dspec = [ordered]@{ out = (Join-Path $CDir "control-drive-$k-$Method.json"); broker_pid = $bp; method = $Method; mode = 'control'; seen = (Join-Path $CDir "cpre-$k-$Method.json") }
+        $dspec = [ordered]@{ out = (Join-Path $CDir "control-drive-$k-$Method.json"); broker_pid = $bp; method = $Method; mode = 'control'; seen = (Join-Path $CDir "cpre-$k-$Method.json")
+                             result_file = (Join-Path $CDir "consent-result-$k.json") }
         $sp = Join-Path $CDir "control-spec-$k-$Method.json"
         Write-Spec $dspec $sp
         $null = Invoke-Sec @('drive', $sp) 120
@@ -646,6 +734,130 @@ switch ($Phase) {
         $outcome = $(if ($res -and $res.response -and $res.response.result) { "$($res.response.result.outcome)" } else { '' })
         "M3S APPROVE $k method=$($r.method) result=$($rec.result_kind) outcome=$outcome journal_changed=$($rec.journal_changed) uninstaller_ran=$($rec.uninstaller_ran)"
     }
+
+    # ------------------------------------------------------------- m3-consent, the toolkit dialog only
+    'kill-start' {
+        # The parent lost while a dialog is up (design 3.6, 8.3): a client of its own, with one uninstall dialog and
+        # nothing after it. Before the main client, while the fixture program is still installed.
+        $spec = [ordered]@{ broker = $Broker; launch = 'runas'; window = $true; connects = 1; connect_wait_ms = 20000; exit_wait_ms = 5000; go = $true
+                            steps = @(@{ op = 'prepare'; program = $FixProgram }, @{ op = 'run'; quiet = $true; repeat = 1 }) }
+        Set-ConsentArgs $spec
+        $s = Start-Client 'kill' $spec
+        Write-JsonFile $s (Join-Path $s.dir 'start.json')
+        $l = $null
+        if (Wait-File (Join-Path $s.dir 'launched.json') 60) { $l = Read-Json (Join-Path $s.dir 'launched.json') }
+        "M3S KILL-START client=$($s.client_pid) window_fg=$($s.window_foreground) launch_ok=$(if ($l) { $l.ok }) broker=$(if ($l) { $l.broker_pid }) consent_ui=$ConsentUi"
+    }
+    'kill-run' {
+        Use-CurrentClient
+        $k = 1
+        $r = Get-Ready $k $WaitSec
+        if (-not $r) { "M3S KILL ready=False"; break }
+        $st = Read-Json (Join-Path $CDir 'start.json')
+        $bp = [int]$r.broker_pid
+        $j0 = Get-JournalState
+        $since = (Get-Date).AddSeconds(-2)
+        [IO.File]::WriteAllText((Join-Path $CDir "go-$k"), (NowIso))
+        $d = Invoke-Observe $bp (Join-Path $CDir "dialog-$k.json") 120000
+        $null = Wait-File (Join-Path $CDir "consent-shown-$k.json") 15
+        $sh = Read-Json (Join-Path $CDir "consent-shown-$k.json")
+        # The tool ends the client itself, so that its clock starts at the kill.
+        $ospec = [ordered]@{ out = (Join-Path $CDir 'orphan.json'); broker_pid = $bp; kill_pid = [int]$st.client_pid; wait_ms = 15000; settle_ms = 1500; gone_wait_ms = 15000; exit_wait_ms = 60000 }
+        Write-Spec $ospec (Join-Path $CDir 'orphan-spec.json')
+        $null = Invoke-Sec @('orphan', (Join-Path $CDir 'orphan-spec.json')) 150
+        $o = Read-Json $ospec.out
+        Stop-Task $Tasks.client
+        Start-Sleep -Seconds 2
+        $j1 = Get-JournalState
+        $rec = [ordered]@{ t = (NowIso); consent_ui = $ConsentUi; kind = $r.method; launched = (Read-Json (Join-Path $CDir 'launched.json')); dialog = $d; shown = $sh; orphan = $o
+                           answered = (Test-Path -LiteralPath (Join-Path $CDir "consent-result-$k.json")); journal_changed = (-not (Test-JournalSame $j0 $j1))
+                           uninstaller_ran = (Test-Path -LiteralPath $FixMarker); fixture_arp_present = (Test-Path -LiteralPath $FixArp)
+                           broker_running = [bool](Get-Process -Id $bp -ErrorAction SilentlyContinue); events = @(Get-PurgeEvents $since) }
+        Write-JsonFile $rec (Join-Path $Out 'm3-consent-kill.json') 12
+        "M3S KILL $(Format-Dialog $d) killed=$(if ($o) { $o.killed }) dialog_gone=$(if ($o) { $o.dialog_gone }) gone_ms=$(if ($o) { $o.dialog_gone_ms }) broker_exited=$(if ($o) { $o.broker_exited }) exit_ms=$(if ($o) { $o.broker_exit_ms }) exit_code=$(if ($o) { $o.exit_code }) journal_changed=$($rec.journal_changed) uninstaller_ran=$($rec.uninstaller_ran)"
+    }
+    'consent-probe' {
+        # Review S1 (m3sec.cs, Internals), on the dialog k that the medium attacks were just made on.
+        Use-CurrentClient
+        $k = [int]$Tag
+        $r = Read-Json (Join-Path $CDir "ready-$k.json")
+        $bp = [int]$r.broker_pid
+        $pre = Invoke-Observe $bp (Join-Path $CDir "ppre-$k.json")
+        $j0 = Get-JournalState
+        # From high first: the same calls with a message and a property that mean nothing must work on this window.
+        $cspec = [ordered]@{ out = (Join-Path $CDir "pcontrol-$k.json"); broker_pid = $bp; method = 'internals'; mode = 'control' }
+        Write-Spec $cspec (Join-Path $CDir "pcontrol-spec-$k.json")
+        $null = Invoke-Sec @('drive', (Join-Path $CDir "pcontrol-spec-$k.json")) 120
+        $control = Read-Json $cspec.out
+        $dspec = [ordered]@{ out = (Join-Path $CDir "pdrive-$k.json"); broker_pid = $bp; method = 'internals'; mode = 'attack'; result_file = (Join-Path $CDir "consent-result-$k.json") }
+        $sp = Join-Path $CDir "pdrive-spec-$k.json"
+        Write-Spec $dspec $sp
+        Remove-Item -LiteralPath $dspec.out -Force -ErrorAction SilentlyContinue
+        Start-Medium $Exe "drive `"$sp`"" $Tasks.drive
+        $null = Wait-File $dspec.out 180
+        Stop-Task $Tasks.drive
+        Start-Sleep -Seconds 1
+        $drive = Read-Json $dspec.out
+        # From high again, after the medium probes (review S-B): the plain calls still work on all three windows, so
+        # the probes neither destroyed one nor left the process unable to take a message.
+        $aspec = [ordered]@{ out = (Join-Path $CDir "pcontrol-after-$k.json"); broker_pid = $bp; method = 'internals'; mode = 'control' }
+        Write-Spec $aspec (Join-Path $CDir "pcontrol-after-spec-$k.json")
+        $null = Invoke-Sec @('drive', (Join-Path $CDir "pcontrol-after-spec-$k.json")) 120
+        $controlAfter = Read-Json $aspec.out
+        $post = Invoke-Observe $bp (Join-Path $CDir "ppost-$k.json") 3000
+        $j1 = Get-JournalState
+        $effects = Get-AttackEffects $pre $post $k $j0 $j1
+        $effects.broker_gone = (-not (Get-Process -Id $bp -ErrorAction SilentlyContinue))
+        $n = @($effects.Values | Where-Object { $_ -eq $true }).Count
+        $rec = [ordered]@{ k = $k; method = 'internals'; kind = $r.method; level = 'medium'; control = $control; drive = $drive; control_after = $controlAfter; pre = $pre; post = $post; effects = $effects; effect_count = $n }
+        Write-JsonFile $rec (Join-Path $CDir "probe-$k.json") 12
+        $att = @($drive.attempts | Where-Object { -not $_.skipped })
+        "M3S PROBE $k driver_il=$($drive.driver_il) flavour=$($drive.flavour) attempts=$($att.Count) skipped=$(@($drive.attempts | Where-Object { $_.skipped }).Count) reached=$(@($att | Where-Object { $_.reached }).Count) denied=$(@($att | Where-Object { $_.access_denied }).Count) effects=$n control_ok=$(if ($control) { $control.control_ok }) control_after_ok=$(if ($controlAfter) { $controlAfter.control_ok })"
+    }
+    'consent-arm' {
+        Use-CurrentClient
+        $k = [int]$Tag
+        # The box is ticked at once (it is not what is tested), the button clicked 250 ms after the end of the list was
+        # on screen, then pressed at 600 ms and let go at 1700 ms, across the second the button waits; then Esc.
+        $rec = Invoke-ToolkitRule $k 'arm' @{ tick = $true; early_ms = 250; late_ms = 1800; click_late = $false; hold = $true; hold_down_ms = 600; hold_up_ms = 1700; cancel_after = $true }
+        if (-not $rec) { "M3S TKARM $k ready=False"; break }
+        $a = $rec.arm
+        "M3S TKARM $k method=$($rec.kind) flavour=$(if ($a) { $a.flavour }) end=$(if ($a) { $a.end_in_view }) early_ms=$(if ($a) { $a.early_click_ms }) alive_after_early=$(if ($a) { $a.dialog_alive_after_early }) down_ms=$(if ($a) { $a.hold_down_ms }) armed_at_down=$(if ($a) { $a.primary_enabled_at_down }) up_ms=$(if ($a) { $a.hold_up_ms }) armed_at_up=$(if ($a) { $a.primary_enabled_at_up }) alive_after_hold=$(if ($a) { $a.dialog_alive_after_hold }) result=$($rec.result_kind) journal_changed=$($rec.journal_changed)"
+    }
+    'consent-enter' {
+        Use-CurrentClient
+        $k = [int]$Tag
+        $rec = Invoke-ToolkitRule $k 'enter' @{ enter_at_open = $true }
+        if (-not $rec) { "M3S TKENTER $k ready=False"; break }
+        $a = $rec.arm
+        "M3S TKENTER $k method=$($rec.kind) flavour=$(if ($a) { $a.flavour }) fg=$(if ($a) { $a.foreground_at_enter }) enter_ms=$(if ($a) { $a.enter_ms }) alive_after=$(if ($a) { $a.dialog_alive_after_enter }) result=$($rec.result_kind) cancelled_by_rig=$($rec.cancelled_by_rig) journal_changed=$($rec.journal_changed)"
+    }
+    # Review S-D, on the plan dialog of a list that does not fit (fixture lookalike45); each on a fresh dialog that must
+    # end as consent_declined.
+    'consent-unseen' {
+        Use-CurrentClient
+        $k = [int]$Tag
+        $rec = Invoke-ToolkitRule $k 'unseen' @{ unseen = $true; unseen_ms = 1300 }
+        if (-not $rec) { "M3S TKUNSEEN $k ready=False"; break }
+        $a = $rec.arm
+        "M3S TKUNSEEN $k method=$($rec.kind) flavour=$(if ($a) { $a.flavour }) end_at_start=$(if ($a) { $a.end_at_start }) unseen_ms=$(if ($a) { $a.unseen_ms }) alive_after_primary=$(if ($a) { $a.dialog_alive_after_primary }) alive_after_verify=$(if ($a) { $a.dialog_alive_after_verify }) verify=$(if ($a) { $a.verify_after }) result=$($rec.result_kind) journal_changed=$($rec.journal_changed)"
+    }
+    'consent-tabspace' {
+        Use-CurrentClient
+        $k = [int]$Tag
+        $rec = Invoke-ToolkitRule $k 'tabspace' @{ tab_space = $true; unseen_ms = 1300 }
+        if (-not $rec) { "M3S TKTABSPACE $k ready=False"; break }
+        $a = $rec.arm
+        "M3S TKTABSPACE $k method=$($rec.kind) flavour=$(if ($a) { $a.flavour }) end_at_start=$(if ($a) { $a.end_at_start }) focus_after_tab=$(if ($a) { $a.focus_after_tab }) alive_after=$(if ($a) { $a.dialog_alive_after_space }) result=$($rec.result_kind) journal_changed=$($rec.journal_changed)"
+    }
+    'consent-tabearly' {
+        Use-CurrentClient
+        $k = [int]$Tag
+        $rec = Invoke-ToolkitRule $k 'tabearly' @{ tab_early = $true }
+        if (-not $rec) { "M3S TKTABEARLY $k ready=False"; break }
+        $a = $rec.arm
+        "M3S TKTABEARLY $k method=$($rec.kind) flavour=$(if ($a) { $a.flavour }) end_at_start=$(if ($a) { $a.end_at_start }) tab1=$(if ($a) { $a.focus_after_tab1 }) tab2=$(if ($a) { $a.focus_after_tab2 }) tab2_ms=$(if ($a) { $a.tab2_ms }) withheld=$(if ($a) { $a.enter_withheld }) result=$($rec.result_kind) journal_changed=$($rec.journal_changed)"
+    }
     'client-end' {
         Use-CurrentClient
         $null = Wait-File (Join-Path $CDir 'client.json') $WaitSec
@@ -653,12 +865,16 @@ switch ($Phase) {
         $client = Read-Json (Join-Path $CDir 'client.json')
         $col = { param($p) @(Get-ChildItem -LiteralPath $CDir -Filter $p -ErrorAction SilentlyContinue | Sort-Object Name | ForEach-Object { [ordered]@{ file = $_.Name; data = (Read-Json $_.FullName) } }) }
         $sum = [ordered]@{
-            schema = "purge.rig.m3sec.$Tag/1"; t = (NowIso); uac = (Get-UacValues); uac_silent = (Read-Json (Join-Path $Out 'uac-silent.json')); install = (Read-Json (Join-Path $Out 'install.json'))
+            schema = "purge.rig.m3sec.$Tag/1"; t = (NowIso); consent_ui = $ConsentUi; uac = (Get-UacValues); uac_silent = (Read-Json (Join-Path $Out 'uac-silent.json')); install = (Read-Json (Join-Path $Out 'install.json'))
             start = (Read-Json (Join-Path $CDir 'start.json')); launched = (Read-Json (Join-Path $CDir 'launched.json')); client = $client
             dialogs = (& $col 'dialog-*.json'); shown = (& $col 'consent-shown-*.json'); ready = (& $col 'ready-*.json'); results = (& $col 'consent-result-*.json')
             attacks = (& $col 'attack-*.json'); controls = (& $col 'control-[0-9]*.json'); approves = (& $col 'approve-*.json'); arms = (& $col 'arm-*.json')
             pages = (& $col 'page-*.json'); journal_start = (Read-Json (Join-Path $CDir 'journal-start.json')); journal_end = (Get-JournalState)
             fixture_marker = (Read-Json $FixMarker); fixture_arp_present = (Test-Path -LiteralPath $FixArp)
+            # A toolkit run's own records (empty or null otherwise).
+            probes = (& $col 'probe-*.json'); rule_arms = (& $col 'rule-arm-*.json'); rule_enters = (& $col 'rule-enter-*.json')
+            rule_unseens = (& $col 'rule-unseen-*.json'); rule_tabspaces = (& $col 'rule-tabspace-*.json'); rule_tabearlies = (& $col 'rule-tabearly-*.json')
+            kill = (Read-Json (Join-Path $Out 'm3-consent-kill.json'))
         }
         $name = $(if ($Tag -eq 'consent') { 'm3-consent.json' } else { "m3-uac-flow-$Tag.json" })
         Write-JsonFile $sum (Join-Path $Out $name) 16

@@ -1095,3 +1095,25 @@ fn a_pipe_that_refuses_this_client_ends_the_broker() {
     assert_eq!(failure.win32_error, 5);
     assert_eq!(process.terminations(), 1);
 }
+
+/// The broker's command line: unchanged for the default dialog (a broker that does not know
+/// `--consent` still starts), and the toolkit dialog asked for by exactly the words the broker reads.
+#[test]
+fn the_consent_dialog_is_named_only_when_it_is_not_the_default() {
+    let name = "0123456789abcdef0123456789abcdef";
+    assert_eq!(ConsentUi::default(), ConsentUi::TaskDialog);
+    assert_eq!(
+        launcher::arguments(name, 4321, 133_800_000_000_000_000, ConsentUi::TaskDialog),
+        "--pipe 0123456789abcdef0123456789abcdef --parent 4321 --parent-ctime 133800000000000000"
+    );
+    assert_eq!(
+        launcher::arguments(name, 4321, 7, ConsentUi::Toolkit),
+        "--pipe 0123456789abcdef0123456789abcdef --parent 4321 --parent-ctime 7 --consent toolkit"
+    );
+    for c in [ConsentUi::TaskDialog, ConsentUi::Toolkit] {
+        assert_eq!(ConsentUi::parse(c.name()), Some(c));
+    }
+    for other in ["", "Toolkit", "toolkit ", "auto", "--consent"] {
+        assert_eq!(ConsentUi::parse(other), None, "{other:?}");
+    }
+}

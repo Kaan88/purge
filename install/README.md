@@ -24,7 +24,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File install\install.ps1 -Eng
 | Parameter | Default | Meaning |
 |---|---|---|
 | `-Engine` | `<repo>\target\release\purge-engine.exe` | Engine to deploy; the file must be named `purge-engine.exe` and carry no executor marker. |
-| `-Broker` | `<repo>\target\release\purge-broker.exe` | Broker to deploy; the file must be named `purge-broker.exe`. |
+| `-Broker` | `<repo>\target\release\purge-broker.exe` | Broker to deploy; the file must be named `purge-broker.exe` and be the release build: a broker built with `--features toolkit-consent` (the rig's and the preview's) is refused, wherever it is (the staging marker, below). The rig builds that one into its own `--target-dir` (`vm\RIG.md` 14), so it never sits at this default. |
+| `-ToolkitBroker` | | VM rig only (`m3-consent -ConsentUi toolkit`): the `-Broker` given is a build with `--features toolkit-consent`, installed knowingly, and must be one. Needs `-SkipBuild` and `-Broker`; `-Check` takes it for the installed broker. |
 | `-Ui` | `<repo>\target\release\Purge.exe` | The UI to deploy (`cargo build --release -p purge-ui`); the file must be named `Purge.exe` and is copied alone. |
 | `-UiPublishDir` | | Instead of `-Ui`: a folder holding `Purge.exe`, copied as a whole (the VM rig's client folders). |
 | `-Kb` | `<engine dir>\kb` if it exists, else `<repo>\kb` | Knowledge files copied to `%ProgramFiles%\Purge\kb` (the broker and the engine read `<exe dir>\kb`). |
@@ -34,9 +35,11 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File install\install.ps1 -Eng
 | `-EngineOnly` | | Legacy M1b/M2 rig mode: deploy `purge-engine.exe` and `kb\` plus the data root only; no broker, UI, event-log source or shortcut, and no build. `-Check` and `-Uninstall` honour it. |
 | `-ProgramFilesDir`, `-DataRoot`, `-StartMenuDir` | `%ProgramFiles%\Purge`, `%ProgramData%\Purge`, the all-users Start-menu `Programs` folder | Test overrides only (absolute drive paths). |
 | `-WhatIf` (alias `-DryRun`) | | Print every step and change nothing. Needs no elevation; exit 0 when the plan is valid. |
-| `-Check` | | Verify both trees, every deployed file, the shortcut and the event-log source; change nothing. Exit 0 only when everything is exactly as installed. |
+| `-Check` | | Verify both trees, every deployed file, the shortcut, the event-log source and that the installed broker is the release build; change nothing. Exit 0 only when everything is exactly as installed. |
 | `-Uninstall` | | Remove `%ProgramFiles%\Purge`, the shortcut and the event-log source. The data root is never touched. |
 | `-ReportPath` | | Write a `purge.install/1` JSON report (actions, renamed-aside trees with reasons, final SDDLs, checks, log). |
+
+**The staging marker** (review S-A of BROKER-CONSENT-UI). A broker built without the feature `toolkit-consent` holds the words it refuses `--consent toolkit` with, "this purge-broker was built without the toolkit consent dialog" (`purge_broker::args::STAGING_MARKER`, part of `TOOLKIT_REFUSED`): the constant is compiled only without the feature and is reached from the command line, so it is always in such a binary and never in one with the feature. A build with the feature holds the toolkit's source paths (`mdshared-ui\src`, from its panic locations) instead. `install.ps1` (install, `-ProtectOnly` and `-Check`), `install\inno\build-installer.ps1` (before ISCC) and the release workflow take a broker only when the marker is there and no toolkit path is (`Get-BrokerBuild`, `Assert-ReleaseBroker`); `purge-broker`'s test `tests/staging_marker.rs` checks both builds' binaries and that these scripts name the same strings.
 
 Exit code: 0 on success (including "nothing to do" and "something was renamed aside"; the report and the
 log say so), 1 on any failure (not elevated, 32-bit host, an artifact missing, an install directory off the

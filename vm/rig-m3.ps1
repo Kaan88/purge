@@ -88,7 +88,10 @@ param(
     [int] $Count = 6,
     [int] $NullWaitSec = 10,
     [string] $RunPrefix = '',
-    [string] $AmbientFile = ''
+    [string] $AmbientFile = '',
+    # m3-consent: which consent dialog the broker is started with (package BROKER-CONSENT-UI). toolkit: the broker gets
+    # "--consent toolkit" and the run is scored with m3-sec-score.ps1 -Mode consent -ConsentUi toolkit.
+    [ValidateSet('taskdialog', 'toolkit')] [string] $ConsentUi = 'taskdialog'
 )
 $ErrorActionPreference = 'Stop'
 
@@ -297,6 +300,7 @@ function New-M3SecPhaseText([string]$Phase, [string]$Tag = '', [string]$Method =
     $t = "& 'C:\cr\guest\m3-sec.ps1' -Phase '$Phase'"
     if ($Tag) { $t += " -Tag '$Tag'" }
     if ($Method) { $t += " -Method '$Method'" }
+    if ("$ConsentUi" -eq 'toolkit') { $t += " -ConsentUi 'toolkit'" }
     $t + " -WaitSec $WaitSec"
 }
 
@@ -333,6 +337,17 @@ function New-M3SecPayload {
     foreach ($f in @(@($engine, 'purge-engine.exe'), @($broker, 'purge-broker.exe'))) {
         if (-not (Test-Path -LiteralPath $f[0] -PathType Leaf)) { throw "missing $($f[0]) (cargo build --release -p $([IO.Path]::GetFileNameWithoutExtension($f[1])), or pass -Engine / -Broker)" }
         if ((Split-Path -Leaf $f[0]) -ne $f[1]) { throw "the file must be named $($f[1]): $($f[0])" }
+    }
+    # The broker's build, by install.ps1's staging check (review S-A): -ConsentUi toolkit takes only a broker built
+    # with --features toolkit-consent into its own --target-dir and named by -Broker (never the target\release
+    # default, where the release broker lives); every other run only the release build. The guest's install.ps1
+    # checks it again (-ToolkitBroker for a toolkit run).
+    $build = & { param($Exe, $Script) . $Script; Get-BrokerBuild $Exe } $broker (Join-Path $script:RepoRoot 'install\install.ps1')
+    if ("$ConsentUi" -eq 'toolkit') {
+        if (-not $M3.broker) { throw "-ConsentUi toolkit needs -Broker <its own target dir>\release\purge-broker.exe (cargo build --release -p purge-broker --features toolkit-consent --target-dir <dir>; vm\RIG.md 14)" }
+        if ($build -ne 'toolkit') { throw "-ConsentUi toolkit: $broker is the '$build' build, not one with --features toolkit-consent" }
+    } elseif ($build -ne 'release') {
+        throw "$broker is the '$build' build, not the release broker (a toolkit build is for -Mode m3-consent -ConsentUi toolkit only)"
     }
     $stage = Join-Path (Get-HostTemp) "m3sec-payload-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
     New-Item -ItemType Directory -Force $stage | Out-Null
@@ -445,7 +460,7 @@ function Complete-M3Sec([string]$Base, [hashtable]$Extra = @{}) {
         Remove-Item -LiteralPath $zip -Force
         Write-RigLog "  guest outputs in $g"
     } else { Write-RigLog "  !! copyfrom of the guest zip failed: $($c.out -join ' ')"; $script:M3Fail = $true }
-    $sum = [ordered]@{ schema = 'purge.rig.m3sec.summary/1'; mode = $M3.mode; vm = $M3Vm; snapshot = $Base; started = $script:M3Started
+    $sum = [ordered]@{ schema = 'purge.rig.m3sec.summary/1'; mode = $M3.mode; consent_ui = $ConsentUi; vm = $M3Vm; snapshot = $Base; started = $script:M3Started
                        ended = (Get-Date).ToString('o'); failed_step = $script:M3Fail; shots = $script:M3Shots; lines = $script:M3Lines }
     foreach ($k in $Extra.Keys) { $sum[$k] = $Extra[$k] }
     [IO.File]::WriteAllText((Join-Path $M3.evidence 'summary.json'), (ConvertTo-Json $sum -Depth 8), (New-Object System.Text.UTF8Encoding($false)))
@@ -469,6 +484,11 @@ function Invoke-M3SecDialogMatrix([int]$K, [string]$Kind, [int]$FirstWaitSec) {
         $null = Invoke-M3SecPhase 'consent-attack' "$K" $m -WaitSec 300
         Save-M3SecShot ('c{0:D2}-{1}-attack-{2}' -f $K, $Kind, $m)
     }
+    if ("$ConsentUi" -eq 'toolkit') {
+        # What must not even be accepted by the toolkit dialog's process (review S1), on the same dialog.
+        $null = Invoke-M3SecPhase 'consent-probe' "$K" -WaitSec 300
+        Save-M3SecShot ('c{0:D2}-{1}-probe' -f $K, $Kind)
+    }
     foreach ($m in $M3SecMethods) {
         if ($m -ne $M3SecMethods[0]) {
             $null = Invoke-M3SecPhase 'consent-next' "$K" -WaitSec 300
@@ -478,6 +498,27 @@ function Invoke-M3SecDialogMatrix([int]$K, [string]$Kind, [int]$FirstWaitSec) {
         Save-M3SecShot ('c{0:D2}-{1}-control-{2}' -f $K, $Kind, $m)
         $K++
     }
+    if ("$ConsentUi" -eq 'toolkit') {
+        # The toolkit dialog's own rules by real input from high, each on a fresh dialog that ends as declined (review
+        # B3): a click before the button is armed and a press held across the arming moment; Enter as it opens. With
+        # the four controls and the approval these are seven of the eight asks the client makes of a kind.
+        $null = Invoke-M3SecPhase 'consent-arm' "$K" -WaitSec 300
+        Save-M3SecShot ('c{0:D2}-{1}-rule-arm' -f $K, $Kind)
+        $K++
+        $null = Invoke-M3SecPhase 'consent-enter' "$K" -WaitSec 300
+        Save-M3SecShot ('c{0:D2}-{1}-rule-enter' -f $K, $Kind)
+        $K++
+        if ($Kind -eq 'plan') {
+            # On the plan dialog, whose list does not fit (fixture lookalike45; review S-D): the dialog up over a second
+            # with the end not seen (a real click on the button and on the box do nothing), Tab then Space (cancels),
+            # and Tab not reaching the button inside the second after the end. 10 of the 11 plan asks of a toolkit run.
+            foreach ($rule in 'unseen', 'tabspace', 'tabearly') {
+                $null = Invoke-M3SecPhase "consent-$rule" "$K" -WaitSec 300
+                Save-M3SecShot ('c{0:D2}-{1}-rule-{2}' -f $K, $Kind, $rule)
+                $K++
+            }
+        }
+    }
     $null = Invoke-M3SecPhase 'consent-next' "$K" -WaitSec 300
     Save-M3SecShot ('c{0:D2}-{1}-shown' -f $K, $Kind)
     $null = Invoke-M3SecPhase 'consent-approve' "$K" -WaitSec 1200
@@ -486,7 +527,16 @@ function Invoke-M3SecDialogMatrix([int]$K, [string]$Kind, [int]$FirstWaitSec) {
 }
 
 function Invoke-M3SecConsent {
-    $base = Start-M3Sec 'lookalike3'
+    # A toolkit run's plan dialog has a list that does not fit (45 look-alike leftovers, m3-uac's fixture), so that its
+    # arming rules run where the end of the list has to be scrolled to (review S-D). The TaskDialog run keeps 3.
+    $base = Start-M3Sec $(if ("$ConsentUi" -eq 'toolkit') { 'lookalike45' } else { 'lookalike3' })
+    if ("$ConsentUi" -eq 'toolkit') {
+        # The client lost while a dialog is up (review B3): a client of its own first, while nothing is uninstalled yet.
+        $null = Invoke-M3SecPhase 'kill-start' -WaitSec 120
+        Save-M3SecShot 'k00-client'
+        $null = Invoke-M3SecPhase 'kill-run' -WaitSec 900
+        Save-M3SecShot 'k01-after-kill'
+    }
     $null = Invoke-M3SecPhase 'consent-start' -WaitSec 120
     Save-M3SecShot 'c00-client'
     $k = Invoke-M3SecDialogMatrix 1 'uninstall' 900

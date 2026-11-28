@@ -1428,6 +1428,27 @@ pub struct BaselineChanged {
     pub rescan_offered: Vec<ScanId>,
 }
 
+/// Which of the broker's two consent dialogs is on screen (M3_DESIGN.md §8.3). The names are the
+/// values of the broker's `--consent` argument.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+pub enum ConsentRenderer {
+    /// The Win32 TaskDialog: the default, and what a toolkit dialog that cannot be shown becomes.
+    #[default]
+    #[serde(rename = "taskdialog")]
+    TaskDialog,
+    /// The window drawn with Purge's own toolkit (a broker built with `toolkit-consent`, started
+    /// with `--consent toolkit`).
+    #[serde(rename = "toolkit")]
+    Toolkit,
+}
+
+impl ConsentRenderer {
+    /// Whether this is the TaskDialog: `consent.shown` then leaves `ui` out.
+    pub fn is_task_dialog(&self) -> bool {
+        matches!(self, ConsentRenderer::TaskDialog)
+    }
+}
+
 /// `consent.shown`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ConsentShown {
@@ -1435,6 +1456,12 @@ pub struct ConsentShown {
     pub request: RequestId,
     /// The code the dialog shows.
     pub code: ConfirmCode,
+    /// The dialog that is on screen, said by the broker that drew it. Left out for the TaskDialog,
+    /// so a release broker's line is what it always was; a reader takes its absence as that. A
+    /// client shows the same state for both: this is for the rig, which must not take a toolkit
+    /// run that fell back to the TaskDialog for a test of the toolkit dialog (review S10).
+    #[serde(default, skip_serializing_if = "ConsentRenderer::is_task_dialog")]
+    pub ui: ConsentRenderer,
 }
 
 macro_rules! server_notifications {

@@ -24,9 +24,14 @@
 //!      tests). purge-engine with every feature but `rig-exec` has no purge-exec; with `rig-exec`
 //!      purge-exec has `fault-inject`, and under no feature `test-support`. purge-exec reaches none of
 //!      purge-engine, purge-broker and purge-mcp, not even as a dev-dependency (see `exec_violations`).
-//!    - (b) purge-broker has no cargo feature. Its tree under any feature, dev-dependencies included,
-//!      has purge-exec with no feature at all (so neither `fault-inject` nor `test-support`) and
-//!      purge-engine with no feature the release engine lacks (so no `rig-exec`, no `inject-view`).
+//!    - (b) purge-broker has one cargo feature, [`BROKER_FEATURE`] (`toolkit-consent`: the consent
+//!      dialog drawn with Purge's own toolkit, review B2 of BROKER-CONSENT-UI), and no other: it is
+//!      not a default feature, it turns on nothing but the three optional dependencies of
+//!      [`BROKER_FEATURE_DEPS`], and those three are optional and are the broker's only optional
+//!      dependencies. No rig feature can exist. Its tree under any feature, dev-dependencies
+//!      included, has purge-exec with no feature at all (so neither `fault-inject` nor `test-support`)
+//!      and purge-engine with no feature the release engine lacks (so no `rig-exec`, no
+//!      `inject-view`). A default workspace build turns no feature of the broker on.
 //!    - (c) purge-engine's release tree has neither purge-exec nor `purge-win/write`, and neither has
 //!      the release tree of any other package with a binary target except purge-broker. A default
 //!      workspace build links purge-exec into purge-broker alone and turns on neither executor feature.
@@ -53,6 +58,29 @@
 //!    that creates, changes, saves or merges an offline hive, never mounts a hive (`RegLoadKey`,
 //!    `RegLoadAppKey`), and never spawns `netsh` or PowerShell (see `identifier_violations`).
 //!
+//! 6. **The broker's outside crates** (BROKER-CONSENT-UI). The elevated binary links only what is
+//!    listed, and there are two trees to hold to it, both read for the shipped target with
+//!    dev-dependencies:
+//!    - **the tree every release has**, without [`BROKER_FEATURE`]: every crate that is not a Purge
+//!      crate is in [`BROKER_OUTSIDE`] (what the broker linked before the toolkit dialog) and comes
+//!      from crates.io, none of [`BROKER_TOOLKIT`] is in it, and no feature of the broker is on, in
+//!      its own tree or in a default workspace build (see `broker_default_violations`);
+//!    - **the tree with the feature on** (`--all-features`): what it has beyond the first tree is
+//!      exactly [`BROKER_TOOLKIT`], crate by crate **and version by version** (what drawing its
+//!      consent dialog with Purge's own toolkit brings: the toolkit, the window loop, accessibility,
+//!      text, and what the toolkit's crates link without the dialog using it). Each comes from
+//!      crates.io, but the `mdshared-*` crates, which come from the toolkit's repository at
+//!      [`TOOLKIT_REV`]; `Cargo.lock` holds them at [`TOOLKIT_COMMIT`] (see `lock_violations`); and
+//!      `mdshared-ui` is built with `host` and `a11y` only, in the broker's own tree and in a
+//!      workspace build (see `broker_outside_violations`);
+//!    - **the broker's sources**: only `src/consent/toolkit` names a crate the feature brings, and
+//!      of each only what [`TOOLKIT_NAMES`] and [`TOOLKIT_ITEMS`] list (see
+//!      `toolkit_name_violations`).
+//!
+//!    Before this rule nothing limited what the broker links from outside; a crate, a version or a
+//!    toolkit revision an update starts to bring is now a violation until it is listed (review S9 of
+//!    BROKER-CONSENT-UI: names alone let any version, any source and any revision through).
+//!
 //! `xtask ci` also builds purge-mcp on its own (`cargo clippy -p purge-mcp`), so code that only compiles
 //! with features another member turns on fails CI.
 
@@ -73,24 +101,40 @@ const ALLOWED: [&str; 2] = ["purge-model", "purge-rpc"];
 #[derive(Debug, PartialEq, Eq)]
 struct TreeLine<'a> {
     name: &'a str,
+    /// Without the `v`.
+    version: &'a str,
+    /// Where it comes from, as cargo prints it with its parentheses (a path, a repository's URL with
+    /// the revision, another registry); empty for a crate from crates.io.
+    source: &'a str,
     features: Vec<&'a str>,
 }
 
-/// Parses `name vX.Y.Z [(source)] [feat1,feat2] [(*)]`.
+/// Parses `name vX.Y.Z [(proc-macro)] [(source)] [feat1,feat2] [(*)]`.
 fn parse_line(line: &str) -> Option<TreeLine<'_>> {
     let line = line.trim();
     let line = line.strip_suffix("(*)").unwrap_or(line).trim_end();
     let (name, rest) = line.split_once(' ')?;
-    let feats = match rest.rfind(')') {
-        Some(i) => &rest[i + 1..],
-        None => rest.split_once(' ').map_or("", |(_version, f)| f),
+    let (version, rest) = rest.split_once(' ').unwrap_or((rest, ""));
+    let rest = rest.trim_start();
+    let rest = rest
+        .strip_prefix("(proc-macro)")
+        .unwrap_or(rest)
+        .trim_start();
+    let (source, feats) = match rest.rfind(')') {
+        Some(i) if rest.starts_with('(') => (&rest[..=i], &rest[i + 1..]),
+        _ => ("", rest),
     };
     let features = feats
         .split(',')
         .map(str::trim)
         .filter(|f| !f.is_empty())
         .collect();
-    Some(TreeLine { name, features })
+    Some(TreeLine {
+        name,
+        version: version.strip_prefix('v').unwrap_or(version),
+        source,
+        features,
+    })
 }
 
 fn is_purge(name: &str) -> bool {
@@ -176,6 +220,234 @@ const EXEC_RIG_FEATURES: [&str; 2] = ["fault-inject", "test-support"];
 const WRITE_ASKERS: [&str; 2] = [EXEC, BROKER];
 /// The packages that may ask for `purge-win/write` as a dev-dependency (rule 4f).
 const WRITE_DEV_ASKERS: [&str; 3] = [EXEC, BROKER, ENGINE];
+
+/// The broker's one cargo feature (rule 4b): the consent dialog drawn with Purge's own toolkit. Off
+/// by default; no release build and no installer turns it on.
+const BROKER_FEATURE: &str = "toolkit-consent";
+/// Everything [`BROKER_FEATURE`] turns on, sorted: the broker's three optional dependencies, and
+/// nothing else (no feature of another crate, no feature of the broker's own).
+const BROKER_FEATURE_DEPS: [&str; 3] = ["dep:mdshared-text", "dep:mdshared-ui", "dep:winit"];
+
+/// The target a release is built for (`.cargo/config.toml`): rule 6 reads the broker's tree for it,
+/// since a crate another system would link is not in the binary.
+const SHIPPED_TARGET: &str = "x86_64-pc-windows-msvc";
+/// The crates from outside the workspace the broker linked before its consent dialog could be drawn
+/// with the toolkit (rule 6): serialisation, hashing, compression, the Windows bindings.
+pub const BROKER_OUTSIDE: &[&str] = &[
+    "adler2",
+    "anyhow",
+    "block-buffer",
+    "cfg-if",
+    "cpufeatures",
+    "crc32fast",
+    "crypto-common",
+    "digest",
+    "dyn-clone",
+    "flate2",
+    "generic-array",
+    "itoa",
+    "memchr",
+    "miniz_oxide",
+    "proc-macro2",
+    "quick-xml",
+    "quote",
+    "ref-cast",
+    "ref-cast-impl",
+    "schemars",
+    "schemars_derive",
+    "serde",
+    "serde_core",
+    "serde_derive",
+    "serde_derive_internals",
+    "serde_json",
+    "sha2",
+    "simd-adler32",
+    "syn",
+    "thiserror",
+    "thiserror-impl",
+    "tinyvec",
+    "typenum",
+    "unicode-ident",
+    "unicode-normalization",
+    "version_check",
+    "windows",
+    "windows-collections",
+    "windows-core",
+    "windows-future",
+    "windows-implement",
+    "windows-interface",
+    "windows-link",
+    "windows-numerics",
+    "windows-result",
+    "windows-strings",
+    "windows-sys",
+    "windows-threading",
+    "zmij",
+];
+/// The crates the toolkit dialog brings into the broker (rule 6; package BROKER-CONSENT-UI, the user's
+/// decision of 2026-11-25: the elevated consent dialog is drawn with Purge's own toolkit so that it
+/// looks like the application). Each group says why it is there. Nothing else from outside may be
+/// added to the elevated binary without a line here.
+///
+/// Each entry is a crate **at one version** (review S9: a name alone let any version of it in, and
+/// hid that the feature links a second `miniz_oxide` and two more `windows-sys`). The list is exactly
+/// what the feature adds to the broker's tree: a crate or a version it starts to bring is a
+/// violation, and so is an entry it no longer brings. A `cargo update` that moves one of these moves
+/// the line here in the same commit, which is the point: what the elevated dialog links changes only
+/// with a change somebody reads.
+pub const BROKER_TOOLKIT: &[(&str, &str)] = &[
+    // The toolkit itself, at the revision the workspace pins ([`TOOLKIT_COMMIT`]).
+    ("mdshared-ui", "0.1.0"),
+    ("mdshared-text", "0.1.0"),
+    ("mdshared-app", "0.1.0"),
+    // The window, its loop and its present: winit (named by the broker too, for the window's handle
+    // and size), softbuffer, and what they bring. The two `windows-sys` are older versions of a crate
+    // the broker already has (0.52 for winit; 0.59 for the toolkit's crates and rfd).
+    ("winit", "0.30.13"),
+    ("softbuffer", "0.4.8"),
+    ("raw-window-handle", "0.6.2"),
+    ("dpi", "0.1.2"),
+    ("cursor-icon", "1.2.0"),
+    ("smol_str", "0.2.2"),
+    ("cfg_aliases", "0.2.2"),
+    ("tracing", "0.1.44"),
+    ("tracing-core", "0.1.36"),
+    ("pin-project-lite", "0.2.18"),
+    ("bitflags", "2.13.2"),
+    ("windows-sys", "0.52.0"),
+    ("windows-sys", "0.59.0"),
+    ("windows-targets", "0.52.6"),
+    ("windows_x86_64_msvc", "0.52.6"),
+    // Accessibility: the tree and its UI Automation provider.
+    ("accesskit", "0.25.2"),
+    ("accesskit_consumer", "0.39.2"),
+    ("accesskit_windows", "0.35.2"),
+    ("accesskit_winit", "0.34.2"),
+    ("hashbrown", "0.17.2"),
+    ("foldhash", "0.2.0"),
+    ("static_assertions", "1.1.0"),
+    ("uuid", "1.26.1"),
+    // Text: layout (parley), shaping (harfrust), font lookup (fontique, which maps font files into
+    // memory), font parsing and scaling (read-fonts, skrifa, swash, zeno), and the Unicode tables.
+    ("parley", "0.12.0"),
+    ("parley_data", "0.12.0"),
+    ("parley_emoji", "0.12.0"),
+    ("parley_engine", "0.12.0"),
+    ("parlance", "0.1.1"),
+    ("harfrust", "0.12.0"),
+    ("fontique", "0.12.0"),
+    ("memmap2", "0.9.12"),
+    ("linebender_resource_handle", "0.1.1"),
+    ("read-fonts", "0.41.0"),
+    ("font-types", "0.12.7"),
+    ("skrifa", "0.44.0"),
+    ("swash", "0.2.10"),
+    ("yazi", "0.2.2"),
+    ("zeno", "0.3.3"),
+    ("bytemuck", "1.25.2"),
+    ("bytemuck_derive", "1.12.1"),
+    ("once_cell", "1.21.4"),
+    ("smallvec", "1.16.6"),
+    ("unicode-segmentation", "1.13.3"),
+    ("utf8_iter", "1.1.0"),
+    ("utf_types", "1.0.0"),
+    ("icu_collections", "2.4.0"),
+    ("icu_locale_core", "2.4.0"),
+    ("icu_locale_fallback", "2.4.0"),
+    ("icu_locale_fallback_data", "2.4.0"),
+    ("icu_normalizer", "2.4.0"),
+    ("icu_normalizer_data", "2.4.0"),
+    ("icu_properties", "2.4.0"),
+    ("icu_properties_data", "2.4.0"),
+    ("icu_provider", "2.4.0"),
+    ("icu_segmenter", "2.4.0"),
+    ("icu_segmenter_data", "2.4.0"),
+    ("displaydoc", "0.2.7"),
+    ("litemap", "0.8.3"),
+    ("potential_utf", "0.1.6"),
+    ("stable_deref_trait", "1.2.1"),
+    ("synstructure", "0.14.0"),
+    ("tinystr", "0.8.5"),
+    ("writeable", "0.6.4"),
+    ("yoke", "0.8.4"),
+    ("yoke-derive", "0.8.4"),
+    ("zerofrom", "0.1.8"),
+    ("zerofrom-derive", "0.1.8"),
+    ("zerotrie", "0.2.5"),
+    ("zerovec", "0.11.9"),
+    ("zerovec-derive", "0.11.7"),
+    // Linked because the toolkit's crates depend on them, and not used by the dialog: image decoding
+    // (mdshared-text: png with its own older `miniz_oxide`, JPEG), the file watcher of mdshared-app
+    // (notify), the file dialogs of mdshared-ui (rfd). Rule 6's source scan keeps the dialog's code
+    // from naming the parts of the toolkit that reach them ([`TOOLKIT_NAMES`]).
+    ("png", "0.18.1"),
+    ("fdeflate", "0.3.7"),
+    ("miniz_oxide", "0.8.9"),
+    ("zune-core", "0.5.3"),
+    ("zune-jpeg", "0.5.15"),
+    ("notify", "8.2.1"),
+    ("notify-types", "2.1.0"),
+    ("walkdir", "2.5.1"),
+    ("same-file", "1.0.6"),
+    ("winapi-util", "0.1.11"),
+    ("libc", "0.2.191"),
+    ("log", "0.4.35"),
+    ("rfd", "0.15.4"),
+];
+/// The toolkit crate, and the only features the broker (and any build that unifies with it) may
+/// build it with: the window host and accessibility. Not `recycle`, `media-session` or `notify`.
+const TOOLKIT: &str = "mdshared-ui";
+/// See [`TOOLKIT`].
+const TOOLKIT_FEATURES: [&str; 2] = ["a11y", "host"];
+/// The toolkit's repository: where every `mdshared-*` crate comes from.
+const TOOLKIT_REPO: &str = "https://github.com/Kaan88/markdown-shared-rs";
+/// The revision the workspace's manifest names for it (`rev = "…"`).
+const TOOLKIT_REV: &str = "d789e8e";
+/// The commit that revision is locked to in `Cargo.lock`, in full: the toolkit code the elevated
+/// dialog is built from. A pin bump changes the two constants and is reviewed as what it is, a
+/// change of what runs elevated (review S9: any revision passed before).
+const TOOLKIT_COMMIT: &str = "d789e8ec21f4e0235e91eeb86d693662b6193ab6";
+
+/// The one directory of the broker's sources that may name the crates [`BROKER_FEATURE`] brings
+/// (rule 6), with its trailing `/`.
+const TOOLKIT_DIR: &str = "src/consent/toolkit/";
+/// What the dialog's production code may name of each of them, as (the crate as code writes it, the
+/// first path segments allowed after it): the modules of the toolkit the dialog draws, lays out and
+/// talks to the window with, the one type of the text crate it measures into, and the two parts of
+/// winit it needs for the window's handle and size. Not the toolkit's menus, text fields, trays,
+/// thumbnails or desktop entries, not the image or file loading of the text crate, nor anything of
+/// winit that makes a window or a loop of its own; `platform` is listed and narrowed to four
+/// functions by [`TOOLKIT_ITEMS`]. A new name is a violation until it is listed here, with the reason
+/// (review S9).
+const TOOLKIT_NAMES: [(&str, &[&str]); 3] = [
+    (
+        "mdshared_ui",
+        &[
+            "a11y", "check", "chrome", "cover", "cursor", "focus", "gfx", "glyph", "host", "keys",
+            "overlay", "platform", "scroll", "theme", "tokens",
+        ],
+    ),
+    ("mdshared_text", &["Bitmap"]),
+    ("winit", &["dpi", "raw_window_handle"]),
+];
+/// What the dialog may name one segment further into a module that [`TOOLKIT_NAMES`] does not list,
+/// as (crate, module, the items): of `winit::window`, which has `Window` and its attributes, the set
+/// of title-bar buttons alone, by which the dialog leaves itself the close box and no minimise box
+/// (review S8). Each is written out as `crate::module::Item`; the module is never imported by itself.
+const TOOLKIT_PATHS: [(&str, &str, &[&str]); 1] = [("winit", "window", &["WindowButtons"])];
+/// The items the dialog may name of a toolkit module that also holds what an elevated dialog must
+/// not reach: beside the system's colours and scale, `mdshared_ui::platform` has the file dialogs
+/// (rfd), the clipboard, `open_url`, `open_file`, `reveal_in_file_manager` and the recycle bin. Below
+/// [`TOOLKIT_DIR`] the name `platform` is that module's and is followed by one of these.
+const TOOLKIT_ITEMS: [(&str, &[&str]); 1] = [(
+    "platform",
+    &[
+        "system_contrast_colors",
+        "system_high_contrast",
+        "system_is_dark",
+        "system_scale",
+    ],
+)];
 
 /// The package names of a listing, root first.
 fn names(listing: &str) -> Vec<&str> {
@@ -328,6 +600,299 @@ fn exec_violations(l: &ExecListings<'_>) -> Vec<String> {
     out
 }
 
+/// The crates of a listing that are not Purge's, as (name, version, source): what rule 6 compares.
+fn outside_crates(listing: &str) -> BTreeSet<(&str, &str, &str)> {
+    listing
+        .lines()
+        .filter_map(parse_line)
+        .filter(|l| !is_purge(l.name))
+        .map(|l| (l.name, l.version, l.source))
+        .collect()
+}
+
+/// How `cargo tree` prints the source of a toolkit crate at the pin: the repository, the revision
+/// the manifest names, and the first eight digits of the commit it is locked to.
+fn toolkit_tree_source() -> String {
+    format!(
+        "({TOOLKIT_REPO}?rev={TOOLKIT_REV}#{})",
+        &TOOLKIT_COMMIT[..8]
+    )
+}
+
+/// Violations of rule 6 in `Cargo.lock`: every `mdshared-*` package is locked to [`TOOLKIT_COMMIT`]
+/// in full (`cargo tree` shows eight digits of it).
+fn lock_violations(lock: &str) -> Vec<String> {
+    let wanted = format!("git+{TOOLKIT_REPO}?rev={TOOLKIT_REV}#{TOOLKIT_COMMIT}");
+    let mut out = Vec::new();
+    for block in lock.split("[[package]]").skip(1) {
+        let field = |key: &str| {
+            block.lines().find_map(|l| {
+                let value = l.trim().strip_prefix(key)?.trim_start().strip_prefix('=')?;
+                value.trim().strip_prefix('"')?.strip_suffix('"')
+            })
+        };
+        let Some(name) = field("name") else {
+            continue;
+        };
+        if !name.starts_with("mdshared-") {
+            continue;
+        }
+        let source = field("source");
+        if source != Some(wanted.as_str()) {
+            out.push(format!(
+                "Cargo.lock has {name} from {}; the toolkit is locked to {wanted}",
+                source.unwrap_or("no source (a path)")
+            ));
+        }
+    }
+    out
+}
+
+/// What follows a name in code, for rule 6's source scan.
+#[derive(Debug, PartialEq, Eq)]
+enum After<'a> {
+    /// `::item`.
+    Item(&'a str),
+    /// `;`: the name ends a `use`.
+    End,
+    /// Anything else: `::{`, `::*`, ` as x`, a comma of a group.
+    Other,
+}
+
+/// What follows the name that ends at `end` in `code`.
+fn after_name(code: &str, end: usize) -> After<'_> {
+    let rest = code[end..].trim_start();
+    if rest.starts_with(';') {
+        return After::End;
+    }
+    let Some(rest) = rest.strip_prefix("::") else {
+        return After::Other;
+    };
+    let rest = rest.trim_start();
+    let len = rest.bytes().take_while(|c| is_ident_byte(*c)).count();
+    if len == 0 || rest.as_bytes()[0].is_ascii_digit() {
+        After::Other
+    } else {
+        After::Item(&rest[..len])
+    }
+}
+
+/// Violations of rule 6 in the broker's production sources (review S9: the dependency lists say what
+/// is linked, this says what of it the dialog's code can reach by name):
+/// - a crate of [`TOOLKIT_NAMES`] is named only below [`TOOLKIT_DIR`];
+/// - there, each mention is `crate::<listed first segment>`: no group, glob or alias of the crate,
+///   which would hide what is used; or it is `crate::module::<listed item>` of [`TOOLKIT_PATHS`];
+/// - a module of [`TOOLKIT_ITEMS`] is named only as `module::<listed item>` (or as the end of the
+///   `use` that brings the module in).
+///
+/// It reads names, so it does not see what a method of an allowed type does (see BROKER-CONSENT-UI's
+/// review notes); it does keep a later change from importing the file dialogs or the clipboard
+/// without a line in this file.
+fn toolkit_name_violations(sources: &[Source]) -> Vec<String> {
+    let mut out = Vec::new();
+    for s in sources.iter().filter(|s| s.krate == BROKER) {
+        let inside = s.file.starts_with(TOOLKIT_DIR);
+        for (at, word) in idents(&s.code) {
+            let place = format!("{BROKER} {}:{}", s.file, s.line_of(at) + 1);
+            let after = after_name(&s.code, at + word.len());
+            if let Some((_, allowed)) = TOOLKIT_NAMES.iter().find(|(c, _)| *c == word) {
+                if !inside {
+                    out.push(format!(
+                        "{place} names {word}; only {TOOLKIT_DIR} names a crate of feature \
+                         {BROKER_FEATURE}"
+                    ));
+                    continue;
+                }
+                match after {
+                    After::Item(item) if allowed.contains(&item) => {}
+                    After::Item(item) => {
+                        let narrowed = TOOLKIT_PATHS
+                            .iter()
+                            .find(|(c, m, _)| *c == word && *m == item);
+                        let Some((_, _, only)) = narrowed else {
+                            out.push(format!(
+                                "{place} names {word}::{item}, which rule 6 does not list for the \
+                                 consent dialog"
+                            ));
+                            continue;
+                        };
+                        // `item` is a slice of the code: where it ends is where the next name starts.
+                        let end = item.as_ptr() as usize - s.code.as_ptr() as usize + item.len();
+                        match after_name(&s.code, end) {
+                            After::Item(inner) if only.contains(&inner) => {}
+                            _ => out.push(format!(
+                                "{place} names {word}::{item} for more than {}, all that rule 6 \
+                                 lists of it for the consent dialog",
+                                only.join(", ")
+                            )),
+                        }
+                    }
+                    After::End | After::Other => out.push(format!(
+                        "{place} names {word} without one listed name after it (a group, a glob \
+                         or an alias hides what the dialog uses)"
+                    )),
+                }
+            } else if let Some((_, allowed)) =
+                TOOLKIT_ITEMS.iter().find(|(m, _)| inside && *m == word)
+            {
+                match after {
+                    After::End => {}
+                    After::Item(item) if allowed.contains(&item) => {}
+                    After::Item(item) => out.push(format!(
+                        "{place} names {word}::{item}; of the toolkit's {word} the consent dialog \
+                         names only {}",
+                        allowed.join(", ")
+                    )),
+                    After::Other => out.push(format!(
+                        "{place} names {word} without one listed item after it (a group, a glob \
+                         or an alias hides what the dialog uses)"
+                    )),
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Violations of rule 6 in the tree with the feature on. `tree` is `cargo tree -p purge-broker
+/// --all-features -f "{p} {f}"` for the shipped target with dev edges; `default_tree` the same
+/// without a feature (what `broker_default_violations` reads); `workspace` is `tree`'s query for
+/// `--workspace`, which holds the features a unified build gives the toolkit.
+fn broker_outside_violations(tree: &str, default_tree: &str, workspace: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    if !expect_root(
+        tree,
+        BROKER,
+        "-p purge-broker --all-features (shipped target)",
+        &mut out,
+    ) {
+        return out;
+    }
+    // What the broker links without the feature is `broker_default_violations`' to judge; what is
+    // left is what the feature adds, crate by crate and version by version.
+    let before = outside_crates(default_tree);
+    let all = outside_crates(tree);
+    let toolkit_source = toolkit_tree_source();
+    for &(name, version, source) in all.difference(&before) {
+        if !BROKER_TOOLKIT.contains(&(name, version)) {
+            let listed: Vec<&str> = BROKER_TOOLKIT
+                .iter()
+                .filter(|(n, _)| *n == name)
+                .map(|(_, v)| *v)
+                .collect();
+            out.push(if listed.is_empty() {
+                format!(
+                    "{name} v{version} is in {BROKER}'s tree with feature {BROKER_FEATURE} and not \
+                     in the list of rule 6: the elevated binary links only what is listed, with the \
+                     reason written down"
+                )
+            } else {
+                format!(
+                    "{name} v{version} is in {BROKER}'s tree with feature {BROKER_FEATURE}; rule 6 \
+                     lists it at v{}: a version the elevated dialog links changes together with \
+                     the list",
+                    listed.join(" and v")
+                )
+            });
+        }
+        if name.starts_with("mdshared-") {
+            if source != toolkit_source {
+                out.push(format!(
+                    "{name} in {BROKER}'s tree comes from {}, not from the toolkit's repository at \
+                     the pinned revision {toolkit_source}",
+                    if source.is_empty() {
+                        "crates.io"
+                    } else {
+                        source
+                    }
+                ));
+            }
+        } else if !source.is_empty() {
+            out.push(format!(
+                "{name} v{version} in {BROKER}'s tree comes from {source}; every crate the toolkit \
+                 dialog brings comes from crates.io at its locked version"
+            ));
+        }
+    }
+    // The list names nothing the feature does not bring (only read when the toolkit is there at all:
+    // a broker without the dialog has nothing to list).
+    if all.iter().any(|(name, ..)| *name == TOOLKIT) {
+        for (name, version) in BROKER_TOOLKIT {
+            let same = |(n, v, _): &(&str, &str, &str)| n == name && v == version;
+            if !all.iter().any(same) {
+                out.push(format!(
+                    "{name} v{version} is listed in rule 6 and not in {BROKER}'s tree with feature \
+                     {BROKER_FEATURE}: the list is what the feature brings, take the line out"
+                ));
+            } else if before.iter().any(same) {
+                out.push(format!(
+                    "{name} v{version} is listed in rule 6 as brought by the toolkit dialog, and \
+                     {BROKER} links it without feature {BROKER_FEATURE}"
+                ));
+            }
+        }
+    }
+    for (what, listing) in [(BROKER, tree), ("a workspace build", workspace)] {
+        let Some(features) = features_of(listing, TOOLKIT) else {
+            continue;
+        };
+        for extra in features.iter().filter(|f| !TOOLKIT_FEATURES.contains(*f)) {
+            out.push(format!(
+                "{what} builds {TOOLKIT} with feature {extra}; the broker links it with {} only",
+                TOOLKIT_FEATURES.join(" and ")
+            ));
+        }
+    }
+    out
+}
+
+/// Violations of rule 6 in the tree every release has. `tree` is `cargo tree -p purge-broker
+/// -f "{p} {f}"` (no feature) for the shipped target with dev edges; `workspace` is `cargo tree
+/// --workspace -f "{p} {f}"`, a default workspace build, in which the broker must have no feature on
+/// either.
+fn broker_default_violations(tree: &str, workspace: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    if !expect_root(
+        tree,
+        BROKER,
+        "-p purge-broker (shipped target, no feature)",
+        &mut out,
+    ) {
+        return out;
+    }
+    for (name, version, source) in outside_crates(tree) {
+        if BROKER_TOOLKIT.contains(&(name, version)) {
+            out.push(format!(
+                "{name} v{version} is in {BROKER}'s tree without feature {BROKER_FEATURE}: a \
+                 release build links nothing the toolkit consent dialog brings"
+            ));
+        } else if !BROKER_OUTSIDE.contains(&name) {
+            out.push(format!(
+                "{name} v{version} is in {BROKER}'s tree without feature {BROKER_FEATURE} and not \
+                 in the list of rule 6: the elevated binary links only what is listed, with the \
+                 reason written down"
+            ));
+        }
+        if !source.is_empty() {
+            out.push(format!(
+                "{name} v{version} in {BROKER}'s tree comes from {source}; the elevated binary \
+                 links outside crates from crates.io only, at their locked versions"
+            ));
+        }
+    }
+    for (what, listing) in [
+        (format!("{BROKER} without a feature named"), tree),
+        ("a default workspace build".to_owned(), workspace),
+    ] {
+        for feature in features_of(listing, BROKER).unwrap_or_default() {
+            out.push(format!(
+                "{what} has {BROKER} feature {feature} on; no feature of the broker is a default"
+            ));
+        }
+    }
+    out
+}
+
 /// Violations of rule 4b. `broker` is `cargo tree -p purge-broker --all-features -f "{p} {f}"` with
 /// dev edges; `release_engine` is `cargo tree -p purge-engine -f "{p} {f}"`, whose root line carries the
 /// features a release engine has.
@@ -452,6 +1017,8 @@ struct Dep {
     dev: bool,
     /// The features it asks for.
     features: Vec<String>,
+    /// An optional dependency.
+    optional: bool,
 }
 
 /// The members of `cargo metadata --no-deps --format-version 1` output; a field missing is an error.
@@ -507,6 +1074,9 @@ fn parse_members(json: &str) -> Result<Vec<Member>> {
                     .iter()
                     .map(|x| str_of(x, "dependency feature"))
                     .collect::<Result<_>>()?,
+                optional: d["optional"]
+                    .as_bool()
+                    .with_context(|| format!("cargo metadata: {name} dependency {dep_name}"))?,
                 name: dep_name,
             });
         }
@@ -532,16 +1102,64 @@ fn parse_members(json: &str) -> Result<Vec<Member>> {
     Ok(out)
 }
 
-/// Violations of rule 4f (and 4b's "no feature") in the members' manifests.
+/// Violations of rule 4b's "one feature" in the broker's manifest: [`BROKER_FEATURE`] and no other,
+/// never a default, turning on only [`BROKER_FEATURE_DEPS`], which are optional and the only optional
+/// dependencies.
+fn broker_feature_violations(broker: &Member) -> Vec<String> {
+    let mut out = Vec::new();
+    let others: Vec<&str> = broker
+        .features
+        .keys()
+        .map(String::as_str)
+        .filter(|f| *f != BROKER_FEATURE)
+        .collect();
+    if !others.is_empty() {
+        out.push(format!(
+            "{BROKER} declares cargo features ({}); its only feature is {BROKER_FEATURE}, and it has \
+             no default feature",
+            others.join(", ")
+        ));
+    }
+    let wanted: BTreeSet<&str> = BROKER_FEATURE_DEPS.into_iter().collect();
+    // A broker without the feature has no toolkit dialog to gate: its three crates are then either
+    // absent or plain dependencies, which the loop below and rule 6's default tree both refuse.
+    if let Some(implied) = broker.features.get(BROKER_FEATURE) {
+        let implied: BTreeSet<&str> = implied.iter().map(String::as_str).collect();
+        if implied != wanted {
+            let list: Vec<&str> = implied.iter().copied().collect();
+            out.push(format!(
+                "{BROKER} feature {BROKER_FEATURE} turns on ({}); it turns on {} and nothing else",
+                list.join(", "),
+                BROKER_FEATURE_DEPS.join(", ")
+            ));
+        }
+    }
+    for d in broker.deps.iter().filter(|d| !d.dev) {
+        let gated = wanted.contains(format!("dep:{}", d.key).as_str());
+        if gated && !d.optional {
+            out.push(format!(
+                "{BROKER} depends on {} without `optional`: a build without {BROKER_FEATURE} would \
+                 link it",
+                d.name
+            ));
+        }
+        if !gated && d.optional {
+            out.push(format!(
+                "{BROKER} has the optional dependency {}; only the three of {BROKER_FEATURE} are \
+                 optional",
+                d.name
+            ));
+        }
+    }
+    out
+}
+
+/// Violations of rule 4f (and 4b's "one feature") in the members' manifests.
 fn manifest_violations(members: &[Member]) -> Vec<String> {
     let mut out = Vec::new();
     for m in members {
-        if m.name == BROKER && !m.features.is_empty() {
-            let list: Vec<&str> = m.features.keys().map(String::as_str).collect();
-            out.push(format!(
-                "{BROKER} declares cargo features ({}); it may have none",
-                list.join(", ")
-            ));
+        if m.name == BROKER {
+            out.extend(broker_feature_violations(m));
         }
         if m.name == WIN {
             for (feature, implied) in &m.features {
@@ -1376,10 +1994,15 @@ fn privilege_violations(sources: &[Source]) -> (Vec<String>, Option<String>) {
 
 /// `cargo tree <args> -e <edges> --target all --prefix none` in `root`.
 fn cargo_tree(root: &Path, args: &[&str], edges: &str) -> Result<String> {
+    cargo_tree_for(root, args, edges, "all")
+}
+
+/// [`cargo_tree`] for one target.
+fn cargo_tree_for(root: &Path, args: &[&str], edges: &str, target: &str) -> Result<String> {
     let output = crate::cargo()
         .arg("tree")
         .args(args)
-        .args(["-e", edges, "--target", "all", "--prefix", "none"])
+        .args(["-e", edges, "--target", target, "--prefix", "none"])
         .current_dir(root)
         .output()
         .context("running cargo tree")?;
@@ -1420,7 +2043,7 @@ const NORMAL: &str = "normal,build";
 /// Normal, build and dev edges.
 const WITH_DEV: &str = "normal,build,dev";
 
-/// Rules 1 to 5 on the workspace at `root`.
+/// Rules 1 to 6 on the workspace at `root`.
 fn check(root: &Path) -> Result<Report> {
     let tree = |args: &[&str], edges: &str| cargo_tree(root, args, edges);
 
@@ -1505,12 +2128,34 @@ fn check(root: &Path) -> Result<Report> {
         &["--workspace", "--all-features", "-i", BROKER, "-f", "{p}"],
         WITH_DEV,
     )?));
-    let (privilege, privilege_ok) = privilege_violations(&production_sources(&members)?);
+    let sources = production_sources(&members)?;
+    let (privilege, privilege_ok) = privilege_violations(&sources);
     found.extend(privilege);
+    found.extend(toolkit_name_violations(&sources));
     found.extend(manifest_violations(&members));
     found.extend(cfg_violations(root, &members)?);
 
     found.extend(win_source_violations(root)?);
+
+    let shipped = |args: &[&str]| cargo_tree_for(root, args, WITH_DEV, SHIPPED_TARGET);
+    let broker_default = shipped(&["-p", BROKER, "-f", "{p} {f}"])?;
+    found.extend(broker_default_violations(
+        &broker_default,
+        &shipped(&["--workspace", "-f", "{p} {f}"])?,
+    ));
+    let broker_shipped = shipped(&["-p", BROKER, "--all-features", "-f", "{p} {f}"])?;
+    found.extend(broker_outside_violations(
+        &broker_shipped,
+        &broker_default,
+        &shipped(&["--workspace", "--all-features", "-f", "{p} {f}"])?,
+    ));
+    // `cargo tree` has read the lock file, or written it.
+    let lock = root.join("Cargo.lock");
+    found.extend(lock_violations(
+        &std::fs::read_to_string(&lock).with_context(|| format!("reading {}", lock.display()))?,
+    ));
+    let default_outside = outside_crates(&broker_default).len();
+    let feature_outside = outside_crates(&broker_shipped).len() - default_outside;
 
     let ok = vec![
         format!(
@@ -1522,8 +2167,8 @@ fn check(root: &Path) -> Result<Report> {
         ),
         format!(
             "{EXEC} is linked only by {BROKER} and, with {RIG_EXEC}, {ENGINE} (fault-inject only \
-             through {RIG_EXEC}, test-support only in {ENGINE}'s tests); {BROKER} has no feature, \
-             builds {EXEC} with none and {ENGINE} as released, and nothing depends on it; the release \
+             through {RIG_EXEC}, test-support only in {ENGINE}'s tests); {BROKER} has no feature but \
+             {BROKER_FEATURE}, builds {EXEC} with none and {ENGINE} as released, and nothing depends on it; the release \
              builds of {} have no {EXEC} and no purge-win/write",
             bins.join(", ")
         ),
@@ -1536,6 +2181,17 @@ fn check(root: &Path) -> Result<Report> {
             "purge-win names none of {}, no `INetFwRules` removal, no {}",
             FORBIDDEN_WIN_IDENTS.join(", "),
             FORBIDDEN_WIN_WORDS.join(" or ")
+        ),
+        format!(
+            "{BROKER} links {default_outside} crates from outside the workspace for \
+             {SHIPPED_TARGET}, all from crates.io and each of the {} names listed, and none of the \
+             toolkit's; feature {BROKER_FEATURE}, which no default build has on, adds \
+             {feature_outside}, each listed with its version ({} lines), the toolkit at commit \
+             {TOOLKIT_COMMIT} with {} only; only {TOOLKIT_DIR} names the feature's crates, and of \
+             them only what is listed",
+            BROKER_OUTSIDE.len(),
+            BROKER_TOOLKIT.len(),
+            TOOLKIT_FEATURES.join(" and ")
         ),
     ];
     Ok(Report { found, ok })
@@ -1744,6 +2400,8 @@ mod tests {
             parse_line(r"purge-win v0.1.0 (C:\a b\crates\purge-win) default,read,write"),
             Some(TreeLine {
                 name: "purge-win",
+                version: "0.1.0",
+                source: r"(C:\a b\crates\purge-win)",
                 features: vec!["default", "read", "write"]
             })
         );
@@ -1751,6 +2409,8 @@ mod tests {
             parse_line(r"purge-model v0.1.0 (C:\x\purge-model)"),
             Some(TreeLine {
                 name: "purge-model",
+                version: "0.1.0",
+                source: r"(C:\x\purge-model)",
                 features: vec![]
             })
         );
@@ -1758,6 +2418,8 @@ mod tests {
             parse_line("serde v1.0.228 default,derive,std (*)"),
             Some(TreeLine {
                 name: "serde",
+                version: "1.0.228",
+                source: "",
                 features: vec!["default", "derive", "std"]
             })
         );
@@ -1765,7 +2427,39 @@ mod tests {
             parse_line("itoa v1.0.15"),
             Some(TreeLine {
                 name: "itoa",
+                version: "1.0.15",
+                source: "",
                 features: vec![]
+            })
+        );
+        // A procedural macro is marked before its source, and is from crates.io when it has none.
+        assert_eq!(
+            parse_line("serde_derive v1.0.229 (proc-macro) default (*)"),
+            Some(TreeLine {
+                name: "serde_derive",
+                version: "1.0.229",
+                source: "",
+                features: vec!["default"]
+            })
+        );
+        assert_eq!(
+            parse_line(r"purge-macro v0.1.0 (proc-macro) (C:\x (y)\purge-macro) fast"),
+            Some(TreeLine {
+                name: "purge-macro",
+                version: "0.1.0",
+                source: r"(C:\x (y)\purge-macro)",
+                features: vec!["fast"]
+            })
+        );
+        assert_eq!(
+            parse_line(
+                "mdshared-ui v0.1.0 (https://github.com/Kaan88/markdown-shared-rs?rev=d789e8e#d789e8ec) a11y,host"
+            ),
+            Some(TreeLine {
+                name: "mdshared-ui",
+                version: "0.1.0",
+                source: "(https://github.com/Kaan88/markdown-shared-rs?rev=d789e8e#d789e8ec)",
+                features: vec!["a11y", "host"]
             })
         );
     }
@@ -1940,6 +2634,418 @@ mod tests {
         );
     }
 
+    /// The broker's tree without its feature, for rule 6's tests: the broker, a Purge crate, and
+    /// [`BROKER_OUTSIDE`] from crates.io.
+    fn default_tree() -> String {
+        let mut tree = format!("{BROKER} v0.1.0 (C:\\x\\purge-broker)\n");
+        tree += "purge-win v0.1.0 (C:\\x\\purge-win) read,write\n";
+        for name in BROKER_OUTSIDE {
+            tree += &format!("{name} v1.0.0\n");
+        }
+        tree
+    }
+
+    /// [`default_tree`] with the feature on: [`BROKER_TOOLKIT`] added, the toolkit from its pin.
+    fn feature_tree() -> String {
+        let mut tree = default_tree().replacen(
+            "purge-broker)\n",
+            &format!("purge-broker) {BROKER_FEATURE}\n"),
+            1,
+        );
+        for (name, version) in BROKER_TOOLKIT {
+            let rest = match *name {
+                "mdshared-ui" => format!(" {} a11y,host", toolkit_tree_source()),
+                n if n.starts_with("mdshared-") => format!(" {}", toolkit_tree_source()),
+                _ => String::new(),
+            };
+            tree += &format!("{name} v{version}{rest}\n");
+        }
+        tree
+    }
+
+    /// Rule 6, the tree every release has: only [`BROKER_OUTSIDE`], from crates.io, nothing of the
+    /// toolkit, and no feature of the broker on.
+    #[test]
+    fn rule_6_a_release_broker_links_nothing_of_the_toolkit() {
+        let clean = default_tree();
+        assert_eq!(
+            broker_default_violations(&clean, &clean),
+            Vec::<String>::new()
+        );
+        // The lists name nothing twice.
+        let outside: BTreeSet<&str> = BROKER_OUTSIDE.iter().copied().collect();
+        assert_eq!(outside.len(), BROKER_OUTSIDE.len());
+        let toolkit: BTreeSet<(&str, &str)> = BROKER_TOOLKIT.iter().copied().collect();
+        assert_eq!(toolkit.len(), BROKER_TOOLKIT.len());
+
+        // A crate of the toolkit dialog without the feature: at the listed version, at another
+        // one, and as a second version of a crate the broker has anyway.
+        let linked = format!("{clean}winit v0.30.13\nwinit v0.30.13 (*)\nparley v0.13.0\n");
+        assert_eq!(
+            broker_default_violations(&linked, &clean),
+            [
+                "parley v0.13.0 is in purge-broker's tree without feature toolkit-consent and not \
+                 in the list of rule 6: the elevated binary links only what is listed, with the \
+                 reason written down",
+                "winit v0.30.13 is in purge-broker's tree without feature toolkit-consent: a \
+                 release build links nothing the toolkit consent dialog brings",
+            ]
+        );
+        assert_eq!(
+            broker_default_violations(&format!("{clean}windows-sys v0.52.0\n"), &clean),
+            [
+                "windows-sys v0.52.0 is in purge-broker's tree without feature toolkit-consent: a \
+                 release build links nothing the toolkit consent dialog brings"
+            ]
+        );
+        // A listed name from somewhere that is not crates.io.
+        let moved = clean.replace(
+            "serde v1.0.0\n",
+            "serde v1.0.0 (https://github.com/x/serde#0123abcd)\n",
+        );
+        assert_eq!(
+            broker_default_violations(&moved, &clean),
+            ["serde v1.0.0 in purge-broker's tree comes from \
+                 (https://github.com/x/serde#0123abcd); the elevated binary links outside crates \
+                 from crates.io only, at their locked versions"]
+        );
+        // The feature made a default, seen in the broker's own tree and in a workspace build.
+        let on = feature_tree();
+        let found = broker_default_violations(&on, &on);
+        assert_has(
+            &found,
+            &[
+                "mdshared-ui v0.1.0 is in purge-broker's tree without feature toolkit-consent: a \
+                 release build links nothing the toolkit consent dialog brings",
+                "purge-broker without a feature named has purge-broker feature toolkit-consent on; \
+                 no feature of the broker is a default",
+                "a default workspace build has purge-broker feature toolkit-consent on; no feature \
+                 of the broker is a default",
+            ],
+        );
+        // Each listed crate once, the toolkit's own crates a second time for where they come from
+        // (a git commit, not crates.io), and the feature twice.
+        let from_git = BROKER_TOOLKIT
+            .iter()
+            .filter(|(name, _)| name.starts_with("mdshared-"))
+            .count();
+        assert!(from_git > 0);
+        assert_eq!(
+            found.iter().filter(|v| v.contains(" comes from ")).count(),
+            from_git
+        );
+        assert_eq!(found.len(), BROKER_TOOLKIT.len() + from_git + 2);
+        // A listing of something else is not read as clean.
+        assert_eq!(
+            broker_default_violations("purge-engine v0.1.0\n", &clean).len(),
+            1
+        );
+    }
+
+    /// Rule 6, the tree with the feature on: beyond the release tree exactly [`BROKER_TOOLKIT`],
+    /// each crate at its listed version and from crates.io, the toolkit from its pinned commit and
+    /// with the window host and accessibility only (review S9).
+    #[test]
+    fn rule_6_the_feature_adds_only_the_listed_crates_at_their_versions() {
+        let before = default_tree();
+        let clean = feature_tree();
+        let found = |tree: &str| broker_outside_violations(tree, &before, &clean);
+        assert_eq!(found(&clean), Vec::<String>::new());
+        // A broker without the dialog has nothing to list.
+        assert_eq!(
+            broker_outside_violations(&before, &before, &before),
+            Vec::<String>::new()
+        );
+
+        // A crate nobody listed, once however often the tree repeats it.
+        assert_eq!(
+            found(&format!("{clean}reqwest v0.12.0\nreqwest v0.12.0 (*)\n")),
+            [
+                "reqwest v0.12.0 is in purge-broker's tree with feature toolkit-consent and not in \
+                 the list of rule 6: the elevated binary links only what is listed, with the reason \
+                 written down"
+            ]
+        );
+        // A listed crate at another version: the new one is not listed, the old one is not there.
+        assert_eq!(
+            found(&clean.replace("winit v0.30.13\n", "winit v0.30.14\n")),
+            [
+                "winit v0.30.14 is in purge-broker's tree with feature toolkit-consent; rule 6 \
+                 lists it at v0.30.13: a version the elevated dialog links changes together with \
+                 the list",
+                "winit v0.30.13 is listed in rule 6 and not in purge-broker's tree with feature \
+                 toolkit-consent: the list is what the feature brings, take the line out",
+            ]
+        );
+        // One more version of a crate: of one the list has twice, and of one the broker had before
+        // (what a name alone let through).
+        assert_eq!(
+            found(&format!("{clean}windows-sys v0.48.5\nserde v0.9.15\n")),
+            [
+                "serde v0.9.15 is in purge-broker's tree with feature toolkit-consent and not in \
+                 the list of rule 6: the elevated binary links only what is listed, with the reason \
+                 written down",
+                "windows-sys v0.48.5 is in purge-broker's tree with feature toolkit-consent; rule 6 \
+                 lists it at v0.52.0 and v0.59.0: a version the elevated dialog links changes \
+                 together with the list",
+            ]
+        );
+        // A listed crate the broker links without the feature too.
+        assert_eq!(
+            broker_outside_violations(&clean, &format!("{before}log v0.4.35\n"), &clean),
+            [
+                "log v0.4.35 is listed in rule 6 as brought by the toolkit dialog, and purge-broker \
+                 links it without feature toolkit-consent"
+            ]
+        );
+        // The toolkit from somewhere else: a path, crates.io, another revision of its repository.
+        let pin = toolkit_tree_source();
+        let text = format!("mdshared-text v0.1.0 {pin}\n");
+        assert!(clean.contains(&text));
+        for (source, named) in [
+            (" (C:\\src\\mdshared-text)", "(C:\\src\\mdshared-text)"),
+            ("", "crates.io"),
+            (
+                " (https://github.com/Kaan88/markdown-shared-rs?rev=f45a71c#f45a71c0)",
+                "(https://github.com/Kaan88/markdown-shared-rs?rev=f45a71c#f45a71c0)",
+            ),
+            (
+                " (https://github.com/Kaan88/markdown-shared-rs?branch=main#d789e8ec)",
+                "(https://github.com/Kaan88/markdown-shared-rs?branch=main#d789e8ec)",
+            ),
+        ] {
+            assert_eq!(
+                found(&clean.replace(&text, &format!("mdshared-text v0.1.0{source}\n"))),
+                [format!(
+                    "mdshared-text in purge-broker's tree comes from {named}, not from the \
+                     toolkit's repository at the pinned revision {pin}"
+                )]
+            );
+        }
+        // A crate of the list from a repository instead of crates.io.
+        assert_eq!(
+            found(&clean.replace(
+                "parley v0.12.0\n",
+                "parley v0.12.0 (https://github.com/x/parley#0123abcd)\n"
+            )),
+            ["parley v0.12.0 in purge-broker's tree comes from \
+                 (https://github.com/x/parley#0123abcd); every crate the toolkit dialog brings comes \
+                 from crates.io at its locked version"]
+        );
+        // A feature beyond the window host and accessibility, in the broker's tree or switched on
+        // by another member of a workspace build.
+        let recycle = clean.replace("a11y,host", "a11y,host,recycle");
+        assert_eq!(
+            broker_outside_violations(&recycle, &before, &clean),
+            [
+                "purge-broker builds mdshared-ui with feature recycle; the broker links it with \
+                 a11y and host only"
+            ]
+        );
+        assert_eq!(
+            broker_outside_violations(&clean, &before, &recycle),
+            [
+                "a workspace build builds mdshared-ui with feature recycle; the broker links it \
+                 with a11y and host only"
+            ]
+        );
+        // A listing of something else is not read as clean.
+        assert_eq!(found("purge-engine v0.1.0\n").len(), 1);
+    }
+
+    /// Rule 6, the lock file: the toolkit's crates at the pinned commit, in full.
+    #[test]
+    fn rule_6_the_lock_file_holds_the_toolkit_at_its_commit() {
+        let package = |name: &str, source: &str| {
+            format!(
+                "[[package]]\nname = \"{name}\"\nversion = \"0.1.0\"\n{source}dependencies = [\n \"serde\",\n]\n\n"
+            )
+        };
+        let pinned =
+            format!("source = \"git+{TOOLKIT_REPO}?rev={TOOLKIT_REV}#{TOOLKIT_COMMIT}\"\n");
+        let registry = "source = \"registry+https://github.com/rust-lang/crates.io-index\"\n";
+        let clean = format!(
+            "version = 4\n\n{}{}{}{}",
+            package("mdshared-ui", &pinned),
+            package("mdshared-text", &pinned),
+            package("serde", registry),
+            package("purge-broker", "")
+        );
+        assert_eq!(lock_violations(&clean), Vec::<String>::new());
+        assert_eq!(lock_violations(""), Vec::<String>::new());
+        // Another commit behind the same short revision, and a toolkit crate from a path.
+        let other = pinned.replace(TOOLKIT_COMMIT, "d789e8ecffffffffffffffffffffffffffffffff");
+        let bad = format!(
+            "{}{}",
+            package("mdshared-ui", &other),
+            package("mdshared-app", "")
+        );
+        assert_eq!(
+            lock_violations(&bad),
+            [
+                format!(
+                    "Cargo.lock has mdshared-ui from git+{TOOLKIT_REPO}?rev={TOOLKIT_REV}\
+                     #d789e8ecffffffffffffffffffffffffffffffff; the toolkit is locked to \
+                     git+{TOOLKIT_REPO}?rev={TOOLKIT_REV}#{TOOLKIT_COMMIT}"
+                ),
+                format!(
+                    "Cargo.lock has mdshared-app from no source (a path); the toolkit is locked to \
+                     git+{TOOLKIT_REPO}?rev={TOOLKIT_REV}#{TOOLKIT_COMMIT}"
+                ),
+            ]
+        );
+        assert!(TOOLKIT_COMMIT.starts_with(TOOLKIT_REV) && TOOLKIT_COMMIT.len() == 40);
+    }
+
+    /// Rule 6, the sources: only `src/consent/toolkit` names the feature's crates, and of each only
+    /// what is listed; `platform` only for its four functions.
+    #[test]
+    fn rule_6_only_the_dialog_names_the_toolkit_and_only_what_is_listed() {
+        const DIALOG: &str = "src/consent/toolkit/look.rs";
+        let clean = sources(&[
+            (
+                BROKER,
+                DIALOG,
+                "use mdshared_ui::gfx::{Rgb, mix};\n\
+                 use mdshared_ui::platform;\n\
+                 use winit::dpi::LogicalSize;\n\
+                 use winit::window::WindowButtons;\n\
+                 fn window() -> u32 {\n    winit::window::WindowButtons::CLOSE.bits()\n}\n\
+                 fn scale() -> f32 {\n    platform::system_scale()\n}\n\
+                 fn dark() -> bool {\n    mdshared_ui :: platform :: system_is_dark()\n}\n\
+                 fn bitmap() -> mdshared_text::Bitmap {\n    mdshared_text::Bitmap::new(1, 1)\n}\n\
+                 // mdshared_ui::menu and platform::open_url in a comment\n\
+                 #[cfg(test)]\n\
+                 mod tests {\n    use mdshared_ui::menu::Menu;\n\
+                 \x20   fn t() {\n        super::platform::open_url(\"x\");\n    }\n}\n",
+            ),
+            (
+                BROKER,
+                "src/main.rs",
+                "// winit runs the loop\nfn main() {\n    let platform = \"mdshared_ui\";\n    \
+                 let _ = platform;\n}\n",
+            ),
+            (
+                "purge-ui",
+                "src/main.rs",
+                "use mdshared_ui::menu;\nuse mdshared_ui::platform::open_url;\n",
+            ),
+        ]);
+        assert_eq!(toolkit_name_violations(&clean), Vec::<String>::new());
+
+        let found =
+            |file: &str, text: &str| toolkit_name_violations(&sources(&[(BROKER, file, text)]));
+        // Outside the dialog's directory, any mention.
+        assert_eq!(
+            found("src/main.rs", "fn f() {}\nuse winit::dpi::LogicalSize;\n"),
+            [
+                "purge-broker src/main.rs:2 names winit; only src/consent/toolkit/ names a crate of \
+                 feature toolkit-consent"
+            ]
+        );
+        assert_eq!(
+            found("src/consent/sheet.rs", "use mdshared_ui::gfx::Rgb;\n").len(),
+            1
+        );
+        // In it: a module, a type or a part of winit that is not listed.
+        assert_eq!(
+            found(
+                DIALOG,
+                "use mdshared_ui::menu::Menu;\nuse mdshared_text::decode_png;\n\
+                 use winit::event_loop::EventLoop;\n"
+            ),
+            [
+                "purge-broker src/consent/toolkit/look.rs:1 names mdshared_ui::menu, which rule 6 \
+                 does not list for the consent dialog",
+                "purge-broker src/consent/toolkit/look.rs:2 names mdshared_text::decode_png, which \
+                 rule 6 does not list for the consent dialog",
+                "purge-broker src/consent/toolkit/look.rs:3 names winit::event_loop, which rule 6 \
+                 does not list for the consent dialog",
+            ]
+        );
+        // Of `winit::window` the buttons alone: not the window, not the module, not a group of it.
+        for more in [
+            "use winit::window::Window;\n",
+            "use winit::window::WindowAttributes;\n",
+            "use winit::window;\n",
+            "use winit::window::{Window, WindowButtons};\n",
+            "use winit::window::*;\n",
+            "use winit::window as w;\n",
+        ] {
+            assert_eq!(
+                found(DIALOG, more),
+                [
+                    "purge-broker src/consent/toolkit/look.rs:1 names winit::window for more than \
+                     WindowButtons, all that rule 6 lists of it for the consent dialog"
+                ],
+                "{more}"
+            );
+        }
+        // What would hide the name: a group, a glob, an alias, the crate alone.
+        for hidden in [
+            "use mdshared_ui::{gfx, menu};\n",
+            "use mdshared_ui::*;\n",
+            "use mdshared_ui as ui;\n",
+            "use mdshared_ui;\n",
+            "extern crate winit as w;\n",
+        ] {
+            let got = found(DIALOG, hidden);
+            assert_eq!(got.len(), 1, "{hidden}: {got:#?}");
+            assert!(
+                got[0].ends_with(
+                    "without one listed name after it (a group, a glob or an alias hides what the \
+                     dialog uses)"
+                ),
+                "{hidden}: {got:#?}"
+            );
+        }
+        // `platform` beyond its four functions: by path, by import, and hidden.
+        assert_eq!(
+            found(
+                DIALOG,
+                "use mdshared_ui::platform;\nfn f() {\n    platform::pick_files();\n}\n"
+            ),
+            [
+                "purge-broker src/consent/toolkit/look.rs:3 names platform::pick_files; of the \
+                 toolkit's platform the consent dialog names only system_contrast_colors, \
+                 system_high_contrast, system_is_dark, system_scale"
+            ]
+        );
+        assert_eq!(
+            found(DIALOG, "use mdshared_ui::platform::open_url;\n").len(),
+            1
+        );
+        for hidden in [
+            "use mdshared_ui::platform as p;\n",
+            "use mdshared_ui::platform::*;\n",
+            "use mdshared_ui::platform::{self, set_clipboard_text};\n",
+        ] {
+            let got = found(DIALOG, hidden);
+            assert_eq!(got.len(), 1, "{hidden}: {got:#?}");
+            assert!(
+                got[0].ends_with(
+                    "names platform without one listed item after it (a group, a glob or an alias \
+                     hides what the dialog uses)"
+                ),
+                "{hidden}: {got:#?}"
+            );
+        }
+        // Every list is sorted, so a line added to one is easy to find.
+        for (_, list) in TOOLKIT_NAMES.iter().chain(&TOOLKIT_ITEMS) {
+            assert!(list.is_sorted(), "{list:?}");
+        }
+        // A module narrowed one segment further is not also listed whole.
+        for (krate, module, list) in TOOLKIT_PATHS {
+            assert!(list.is_sorted(), "{list:?}");
+            let whole = TOOLKIT_NAMES.iter().find(|(c, _)| *c == krate).unwrap().1;
+            assert!(!whole.contains(&module), "{krate}::{module}");
+        }
+        assert_eq!(after_name("a::b", 1), After::Item("b"));
+        assert_eq!(after_name("a ;", 1), After::End);
+        assert_eq!(after_name("a::{b}", 1), After::Other);
+        assert_eq!(after_name("a", 1), After::Other);
+    }
+
     /// Rule 4b: the broker builds the executor with no feature and the engine as released.
     #[test]
     fn rule_4b_broker_has_no_rig_features() {
@@ -2061,6 +3167,7 @@ mod tests {
                     key: (*dep).to_owned(),
                     dev: *dev,
                     features: features.iter().map(|s| (*s).to_owned()).collect(),
+                    optional: false,
                 })
                 .collect(),
             ..Member::default()
@@ -2114,7 +3221,7 @@ mod tests {
             manifest_violations(&bad),
             [
                 "purge-win feature `turbo` turns on `write`",
-                "purge-broker declares cargo features (extra); it may have none",
+                "purge-broker declares cargo features (extra); its only feature is toolkit-consent, and it has no default feature",
                 "purge-scan asks for purge-win/write as a dev-dependency; only purge-exec, purge-broker, purge-engine may",
                 "purge-engine asks for purge-win/write; only purge-exec and purge-broker may",
                 "purge-mcp asks for purge-win/write; only purge-exec and purge-broker may",
@@ -2125,6 +3232,91 @@ mod tests {
         let mut renamed = member("purge-x", &[(WIN, false, &[])], &[("f", &["win/write"])]);
         renamed.deps[0].key = "win".to_owned();
         assert_eq!(manifest_violations(&[renamed]).len(), 1);
+    }
+
+    /// Rule 4b's one feature (review B2): `toolkit-consent`, never a default, turning on its three
+    /// optional dependencies and nothing else; no other dependency of the broker is optional.
+    #[test]
+    fn rule_4b_the_broker_has_one_feature_and_it_is_no_default() {
+        let gated = || {
+            let mut m = member(
+                BROKER,
+                &[
+                    (WIN, false, &["write"]),
+                    ("mdshared-ui", false, &[]),
+                    ("mdshared-text", false, &[]),
+                    ("winit", false, &[]),
+                    ("purge-plan", true, &[]),
+                ],
+                &[(BROKER_FEATURE, &BROKER_FEATURE_DEPS)],
+            );
+            for d in &mut m.deps[1..4] {
+                d.optional = true;
+            }
+            m
+        };
+        assert_eq!(manifest_violations(&[gated()]), Vec::<String>::new());
+        // A broker without the dialog has no feature at all.
+        let none = member(BROKER, &[(WIN, false, &["write"])], &[]);
+        assert_eq!(manifest_violations(&[none]), Vec::<String>::new());
+
+        let mut default = gated();
+        default
+            .features
+            .insert("default".to_owned(), vec![BROKER_FEATURE.to_owned()]);
+        assert_eq!(
+            manifest_violations(&[default]),
+            [
+                "purge-broker declares cargo features (default); its only feature is \
+                 toolkit-consent, and it has no default feature"
+            ]
+        );
+        // The feature switching on more than its three crates: a feature of one of them.
+        let mut wide = gated();
+        wide.features
+            .get_mut(BROKER_FEATURE)
+            .unwrap()
+            .push("mdshared-ui/recycle".to_owned());
+        assert_eq!(
+            manifest_violations(&[wide]),
+            [
+                "purge-broker feature toolkit-consent turns on (dep:mdshared-text, dep:mdshared-ui, \
+                 dep:winit, mdshared-ui/recycle); it turns on dep:mdshared-text, dep:mdshared-ui, \
+                 dep:winit and nothing else"
+            ]
+        );
+        // One of the three as a plain dependency, which every build would link.
+        let mut plain = gated();
+        plain.deps[2].optional = false;
+        assert_eq!(
+            manifest_violations(&[plain]),
+            [
+                "purge-broker depends on mdshared-text without `optional`: a build without \
+                 toolkit-consent would link it"
+            ]
+        );
+        // The toolkit as a plain dependency of a broker that has dropped the feature.
+        let mut dropped = gated();
+        dropped.features.clear();
+        dropped.deps[1].optional = false;
+        dropped.deps[2].optional = false;
+        dropped.deps[3].optional = false;
+        assert_eq!(manifest_violations(&[dropped]).len(), 3);
+        // Another optional dependency: nothing else of the broker hangs on a feature.
+        let mut extra = gated();
+        extra.deps.push(Dep {
+            name: "rfd".to_owned(),
+            key: "rfd".to_owned(),
+            optional: true,
+            ..Dep::default()
+        });
+        assert_eq!(
+            manifest_violations(&[extra]),
+            [
+                "purge-broker has the optional dependency rfd; only the three of toolkit-consent \
+                 are optional"
+            ]
+        );
     }
 
     /// The production sources of `files` as (crate, file, text).
@@ -2607,6 +3799,76 @@ mod tests {
         );
     }
 
+    /// Rules 4b and 6 on real manifests (review B2): a broker whose toolkit dialog is behind the
+    /// feature has nothing of it in the tree a release builds; the same feature made a default is
+    /// refused by the manifest rule, by the default tree and by the workspace build. The fixture's
+    /// three crates stand in for the toolkit's by name and version, so the tree with the feature on
+    /// has rule 6's source violations, which is not what this test reads.
+    #[test]
+    fn rule_6_fails_when_the_toolkit_feature_is_a_default() {
+        let gate = FixtureWorkspace::new("broker-feature", "", "");
+        for (name, version) in [
+            ("mdshared-ui", "0.1.0"),
+            ("mdshared-text", "0.1.0"),
+            ("winit", "0.30.13"),
+        ] {
+            gate.append(
+                &format!("{name}/Cargo.toml"),
+                &format!(
+                    "[package]\nname = \"{name}\"\nversion = \"{version}\"\nedition = \"2021\"\n"
+                ),
+            );
+            gate.append(&format!("{name}/src/lib.rs"), "");
+            gate.append(
+                "purge-broker/Cargo.toml",
+                &format!("{name} = {{ path = \"../{name}\", optional = true }}\n"),
+            );
+        }
+        gate.edit(
+            "Cargo.toml",
+            "\"purge-other\"]",
+            "\"purge-other\", \"mdshared-ui\", \"mdshared-text\", \"winit\"]",
+        );
+        gate.append(
+            "purge-broker/Cargo.toml",
+            "[features]\ntoolkit-consent = [\"dep:mdshared-ui\", \"dep:mdshared-text\", \"dep:winit\"]\n",
+        );
+        let found = gate.found();
+        assert!(
+            !found.iter().any(|f| f.contains("without feature")
+                || f.contains("declares cargo features")
+                || f.contains("is a default")),
+            "{found:#?}"
+        );
+        assert!(
+            found.iter().any(|f| {
+                f.starts_with("winit v0.30.13 in purge-broker's tree comes from (")
+                    && f.ends_with("comes from crates.io at its locked version")
+            }),
+            "{found:#?}"
+        );
+
+        gate.append(
+            "purge-broker/Cargo.toml",
+            "default = [\"toolkit-consent\"]\n",
+        );
+        assert_has(
+            &gate.found(),
+            &[
+                "purge-broker declares cargo features (default); its only feature is \
+                 toolkit-consent, and it has no default feature",
+                "mdshared-ui v0.1.0 is in purge-broker's tree without feature toolkit-consent: a \
+                 release build links nothing the toolkit consent dialog brings",
+                "winit v0.30.13 is in purge-broker's tree without feature toolkit-consent: a \
+                 release build links nothing the toolkit consent dialog brings",
+                "purge-broker without a feature named has purge-broker feature toolkit-consent on; \
+                 no feature of the broker is a default",
+                "a default workspace build has purge-broker feature toolkit-consent on; no feature \
+                 of the broker is a default",
+            ],
+        );
+    }
+
     /// Rule 4 against M3-R1 ("break check-deps with a feature or a dev-dependency"): the broker
     /// switching on the engine's rig feature, dev-dependencies on the executor and on the broker, the
     /// executor reaching the engine or purge-mcp, purge-mcp reaching purge-win through a feature of its
@@ -2693,7 +3955,7 @@ mod tests {
             &found,
             &[
                 "purge-win is in purge-mcp's dependency tree; only purge-model and purge-rpc are allowed",
-                "purge-broker declares cargo features (extra); it may have none",
+                "purge-broker declares cargo features (extra); its only feature is toolkit-consent, and it has no default feature",
                 "purge-win feature `turbo` turns on `write`",
                 ".cargo/config.toml passes --cfg to rustc",
             ],

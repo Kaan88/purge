@@ -106,7 +106,8 @@ check "the client". The server side sets the DACL at high integrity and can iden
 serves.
 
 1. The UI makes a 128-bit random name and starts `purge-broker.exe --pipe <name> --parent <pid> --parent-ctime
-   <filetime>` with `ShellExecuteExW("runas")` on an STA thread (`SEE_MASK_NOCLOSEPROCESS`, no owner window (hwnd 0), see DECISIONS 2026-11-23 "UAC prompt owner").
+   <filetime>` with `ShellExecuteExW("runas")` on an STA thread (`SEE_MASK_NOCLOSEPROCESS`, no owner window (hwnd 0), see DECISIONS 2026-11-23 "UAC prompt owner"). The UI may add `--consent toolkit` (8.3): who draws the consent
+   dialog, and nothing else.
 2. The broker runs its start checks (3.4). Then it creates `\\.\pipe\purge-<name>` with
    `FILE_FLAG_FIRST_PIPE_INSTANCE`, `PIPE_REJECT_REMOTE_CLIENTS`, one instance, DACL = the broker's user SID and
    SYSTEM. If the name exists already, it exits.
@@ -192,7 +193,7 @@ against automation and against a standard user. It is not a sandbox for the admi
 
 | # | Threat | Answer | Test |
 |---|---|---|---|
-| T1 | A medium process of the same user drives the consent | The dialog belongs to the high-integrity broker; UIPI blocks input and messages from below. Cancel is the default button. No owner window from another process. | VM `m3-consent`: `SendInput`, `PostMessage`, UI Automation Invoke from medium fail; the same from high succeeds (control) |
+| T1 | A medium process of the same user drives the consent | The dialog belongs to the high-integrity broker; UIPI blocks input and messages from below. Cancel is the default button. No owner window from another process. **With the toolkit dialog (8.3; a build with `toolkit-consent` only) what UIPI guards is more than a button**: winit calls the closure whose address is the WPARAM of its registered message `Winit::ExecMsg`, and AccessKit takes the address of its adapter from the window property `AccessKitAdapter`. Whatever gets a message or a property past UIPI (a UIAccess process, a UIPI bypass) gets code run as the administrator there; on the TaskDialog it gets a click on a dialog whose words the user can still read. The mitigation is the same UIPI and nothing in Purge's code adds to it; this is one more reason the toolkit dialog is not in a release | VM `m3-consent`: `SendInput`, `PostMessage`, UI Automation Invoke from medium fail; the same from high succeeds (control). `-ConsentUi toolkit` also (review S1): from medium, winit's three registered messages posted to the dialog, to winit's event-target window, to the toolkit's contrast-watching window and to the dialog's thread, `SetProp`/`RemoveProp` of `AccessKitAdapter`, and a direct `WM_GETOBJECT` must each fail outright, while the same calls from high with a message and a property that mean nothing succeed |
 | T2 | A medium process starts its own broker and talks to it | Client check of 3.3 step 4: pid, creation time, image `<own dir>\Purge.exe`, same account. An accepted client still sends ids only, and every change outside Purge's store still ends in the dialog (B4; a recovery that only writes Purge's own records runs without one, review M3-R2 point 2). | VM `m3-broker`: wrong pid, wrong creation time, a copy of `Purge.exe` elsewhere, a second client |
 | T3 | The client supplies evidence (BL-R1 N5) | No request type has a field for a path, target, fingerprint, scan or plan. Requests hold ids, enums, booleans and integers. Unknown fields are refused. | ci: a schema walk over every broker request type; a fuzz of extra fields |
 | T4 | Plan tampering between consent and execution | The plan lives only in broker memory. The dialog and the executor use one frozen `BoundPlan`. The act-time gates re-check every item. | ci: `plan.execute` on a plan id of another scan, a reused plan id, a changed selection |
@@ -493,6 +494,268 @@ Rules:
 | Delete now | `quarantine.purge` (ids of quarantined items that are not due) | Icon: warning. "Delete 3 quarantined items now, before their retention ends? This cannot be undone." The summary adds: "This is before the retention date. Until then Purge keeps these items, and Undo can put them back. Once they are deleted here, Undo and History can no longer restore them." Every item is named, in pages, never cut; never a backup. User data: one item per dialog ("Delete this user data now, before its retention ends? This cannot be undone."). Button "Delete 3 items now, for good". Its confirmation code is never the purge dialog's (DECISIONS 2026-11-23). |
 | Delete backups now | `quarantine.purge` (ids of backups that are not due) | Icon: warning. "Delete 3 registry backups now, before their retention ends? Undo can then no longer restore these registry changes. This cannot be undone." The summary adds: "These backups are what Undo restores the registry, service and task changes of the cleanup from. This is before their retention date; until then Purge keeps them. Once they are deleted here, Undo and History can no longer undo these changes: what the cleanup removed there stays removed." Every backup is named with the change it would undo and every backup file ("Delete the backup of: "HKLM\SOFTWARE\Vendor" · backup file "reg\000003.regbackup.json""), in pages, never cut; never a quarantined item. A user-data op: one backup per dialog. Asked last, and not at all when the request named files that are not due and none of their "Delete now" dialogs was approved. Button "Delete 3 registry backups now, for good". Its confirmation code is never the purge dialog's nor the "Delete now" dialog's (DECISIONS 2026-11-24). |
 | Quarantine, then delete | `plan.execute {delete_after: true}` | Two dialogs, never one. First the Quarantine variant unchanged (same code), with one more summary line: "You asked to delete instead of keeping in quarantine: after the move, a second prompt names the quarantined files and asks whether to delete them for good. Nothing is deleted without it, and this prompt approves the move only." Then, once the run is recorded, the Delete now variant over exactly the quarantined items of that run's session (user data one item per dialog). Cancel of the second keeps everything in quarantine (DECISIONS 2026-11-24). |
+
+### 8.3 The toolkit renderer (package BROKER-CONSENT-UI, 2026-11-25)
+
+The user's decision: the consent dialog is drawn with Purge's own toolkit (`mdshared-ui`, the one `Purge.exe` is
+built on), so that it looks like the application. It stays in the elevated `purge-broker.exe`: that is the boundary
+of T1. Plan: (1) built behind a switch, the TaskDialog kept as the default and as the fall back; (2) a security
+review; (3) the VM mode `m3-consent` against it (`-ConsentUi toolkit`, RIG.md 14); (4) only then the default.
+**Step 2 was made (2026-11-25: 3 blockers, 10 should-fix; "The review of step 2" below says what became of each) and
+is not passed: B1 needs a change in the toolkit. Steps 3 and 4 are open. Until all pass, the TaskDialog of 8.1 is
+the only dialog a release has: the toolkit dialog is compiled only with the cargo feature `toolkit-consent`, which
+no release build turns on (see "The switch").**
+
+Code: `bins/purge-broker/src/consent/sheet.rs` (the view as one sheet) and `consent/toolkit/` (`state` the rules,
+`look` the colours, `draw` measuring and drawing, `access` UI Automation, `app` the window, `service` the threads and
+the fall back). Preview without a broker: `cargo run --release -p purge-broker --example consent_preview`
+(`--shots <dir>` every variant as PNG without a window; a sample's name the real window; `--service` the samples
+asked through the real `ToolkitConsent` with the broker's two threads, `--close-after` firing the closer).
+
+**What it says.** The same `ConsentView`. `sheet::sheet` regroups it and adds two headings and no other word: the
+summary lines, "⚠ Needs your attention (N)" and every attention entry, "The other items" and the other items with
+their "and N more". Where the TaskDialog pages the attention list and folds the others behind "Show details", the
+sheet is one list that scrolls; the box, the footer (with the code) and the two buttons stay in view under it. Text
+is wrapped, never cut (a path breaks inside a word). The drawing adds two hints beside a disabled button ("Scroll to
+the end of the list to continue.", "Tick the box to continue."), "Cancel", and the names "Details" (the list) and
+"Close" (the close box) for a screen reader. Tests hold the sheet to the view and to the TaskDialog's pages.
+
+**The rules, against 8.1.**
+
+| 8.1 (TaskDialog) | Toolkit dialog |
+|---|---|
+| Cancel is the default; Esc, Alt+F4 and the close box mean Cancel | Cancel has the keyboard when it opens, and shows it; Enter and Space press what has the keyboard, so on open they cancel; Esc, Alt+F4, the title row's close box and the taskbar's "Close window" cancel |
+| The primary button is armed a second after its page shows | Enabled only 1 s (`state::ARM_DELAY`) after the dialog is first on screen, by the clock at the moment of the press, not by what was drawn. On screen means: a frame of this dialog was drawn for the visible window and presented, and the clock was read after that (review S5), not when a frame was still to be drawn |
+| The primary button exists only on the last page, and the delay starts again when that page shows | Enabled only once the end of the list has been on screen, and 1 s after it first was (a list that fits: with the dialog). So End and a click at once press nothing, however long the dialog has been up (review S6) |
+| The verification box gates the button, and is cleared when the last page shows | The box takes a tick only once the end of the list has been on screen (by click, key or UI Automation; until then it is disabled and has no Toggle), so it cannot be ticked before anything was read (review S6). Unticking closes the button again; a tick does not shorten either second |
+| No timeout answer, no hyperlink, no command link, no owner window | The same: a timer only enables; nothing in the list can be pressed; the window is a top-level window of the broker with no owner |
+| A held key | A key the system repeats never presses a button |
+| A disabled button takes no click | A click is a press and a release on the same control; on the button that approves it must have been enabled when the pointer went down too, so a press begun on the disabled button and let go after it armed presses nothing |
+| `SetForegroundWindow` on creation, a flash when refused; centred on the cursor's monitor | The same (`purge_win::topwindow`), once per dialog; no input is synthesised to take the foreground |
+| Parent gone or pipe broken: closed as Cancel (3.6) | The request is answered `Declined` by the `Closer` itself, without waiting for the window; the window is told to take the dialog down |
+| A dialog that cannot be shown counts as Cancel | A toolkit window that cannot be shown is the **TaskDialog** for that dialog (never an approval): no window or surface, the fonts or the first measuring panicked, fonts that cannot draw the dialog's own words, not on screen within 10 s (`service::SHOW_WAIT`), or the window's thread died before the dialog was up. Died while it was up: `Declined`, and the window is hidden at once (review S4) |
+| Esc before the dialog is drawn | A key reaches a window before its first frame does. A cancel (Esc, Enter on Cancel, Alt+F4) that comes before the dialog was on screen is `Declined`, and the request is not told that a dialog was shown: no `consent.shown`, and no TaskDialog asked afterwards (review S2). An approval before it is on screen is nobody's |
+| The dialog is always a window on screen | The window has the close box only, no minimise box, and one size. If something minimises it all the same it is restored before a dialog is put in it or taken down: the host draws nothing in a minimised window, so a dialog there would never count as shown and one taken down there would keep its words (review S8) |
+| `Approved` only for the primary button with the box ticked | `Approved` only from `state::Prompt::press(Approve)` under the rules above, for the job at the desk, once, and only while it is on screen (`service`) |
+
+`consent.shown` is sent when the dialog is on screen, as before; the code in the footer is the view's. For the toolkit
+window it also has `"ui": "toolkit"` (`purge_rpc::ConsentRenderer`); for the TaskDialog the member is left out, so a
+release broker's line is what it always was. The window that drew the dialog says which it is, so a toolkit dialog
+that fell back to the TaskDialog is not reported as the toolkit's (review S10). A client shows the same state for
+both; the member is for the rig.
+
+**What it cannot draw.** The sheet is passed through `Sheet::drawable` before it is measured: every character the
+window's fonts have no glyph for is written as `\u{hex}` in place (`text::drawable`, the form `shown` already uses
+for a hidden character), in every line, the button and the box included, and when one was, the summary ends with
+"Characters this window has no font for are shown as \u{...}; they are part of the name." The lines keep their
+number, order and kinds, and the code in the footer is untouched. Fonts that lack a printable ASCII character or one
+of the three marks draw no dialog at all (`text::fixed_words_drawable`; the TaskDialog asks). **This is the Purge
+half of review B1 and it changes nothing yet**: at the pinned toolkit revision the window cannot be asked what it
+would draw a character with, so `service::fonts_have` says yes to every character. See the review below.
+
+**The switch.** `purge-broker.exe ... [--consent taskdialog|toolkit]`, at most once, any other value refused
+(`args.rs`). Without it: `ConsentUi::DEFAULT`, the TaskDialog. `Purge.exe --broker-consent toolkit` passes it for
+that run (`purge_client::broker::launch_with`); nothing saves it. It is an argument because an elevated process
+must not take its behaviour from a file or an environment a medium process can write (T7). Whoever starts the
+broker can pass either value (an edited shortcut, `Purge.exe --broker-consent toolkit`, an injected Purge.exe). That
+is harmless only while both dialogs give the same guarantees, and the toolkit dialog's are not shown yet (B1 is
+open, no VM run). So the argument alone does not reach it (review B2):
+
+- The toolkit dialog and the three crates it names (`mdshared-ui`, `mdshared-text`, `winit`, optional dependencies)
+  are compiled only with the cargo feature **`toolkit-consent`** of `purge-broker`: its one feature, never a default,
+  turned on by no release build and not by the installer (`cargo build --release -p purge-broker`).
+- A broker without the feature has no `ConsentUi` that names the toolkit. It refuses `--consent toolkit` before it
+  opens its pipe, in so many words (`args::TOOLKIT_REFUSED`: "--consent toolkit is refused: this purge-broker was
+  built without the toolkit consent dialog ..."), and does not fall back to the TaskDialog on its own word: the
+  caller asked for something this build cannot do, and is told. Its usage line names only `taskdialog`.
+- The broker is the authority, not `Purge.exe`: `--broker-consent toolkit` is always passed on, and it is the broker
+  that takes it or refuses it.
+- `xtask check-deps` holds this (rules 4b and 6, "Dependencies" below): a feature made a default, a second feature,
+  or a toolkit crate in the tree a release builds fails the gate.
+
+The rig and the preview build with the feature, into a target directory of their own: `cargo build --release -p
+purge-broker --features toolkit-consent --target-dir target\toolkit` (`--example consent_preview` needs it too).
+
+**The staging guard** (review S-A). `target\release\purge-broker.exe` is the default of `install.ps1 -Broker` and what
+the Inno pre-step packs, so a toolkit build written there would be installed or shipped as the release broker. A
+broker without the feature holds the words of `TOOLKIT_REFUSED` (`args::STAGING_MARKER`: compiled only without the
+feature and reached from the command line, so always in such a binary and never in one with it); a broker with it
+holds the toolkit's source paths (`mdshared-ui\src`, its panic locations). `install.ps1` (install, `-ProtectOnly`,
+`-Check`), `build-installer.ps1` before ISCC and the release workflow take a broker only with the marker and without
+those paths; the rig's toolkit run passes `-ToolkitBroker`, which wants the toolkit build instead, and `rig-m3.ps1`
+checks the build on the host. `tests/staging_marker.rs` checks both binaries and that the scripts name the same
+strings.
+
+Making the toolkit dialog the default (step 4) is then three changes that are read as what they are: the feature
+into the release build, `ConsentUi::DEFAULT`, and the staging guard turned the other way.
+
+**Threads.** The toolkit's window loop (winit) can be made once in a process and only on the thread the process
+started on. With `--consent toolkit`, `main` serves the pipe from a second thread and gives its own to the window
+(`serve_beside_the_window`), which sleeps until the first dialog is asked for: a broker that never asks makes no
+loop, no window, and loads no font. The one window lives as long as the broker and is hidden between dialogs; it is
+painted blank before it is hidden, so the words of one dialog are never on screen as another. Without the argument
+nothing changes: the pipe is served on the first thread and the TaskDialog runs on its own, as before.
+
+What a panic does, on either thread (review S3, S4, S7):
+
+- **On the window's thread**, wherever it is in its work (reading the fonts and measuring the first dialog, making
+  the loop, or inside it): the panic hook answers the request that waits on it (`Declined` when the dialog was up,
+  the TaskDialog when nothing was on screen yet), marks the toolkit dead so that no later request waits on a window
+  that is gone, hides the window (`purge_win::topwindow::hide`), and stops the thread for good where it is. It does
+  not go back into a loop that would spin on a window nobody answers for, and it does not unwind out of `main`,
+  which would end the broker in the middle of a request. The thread never holds the service's lock while it calls
+  anything of the toolkit, so stopping it there blocks nobody. The serving thread goes on with the TaskDialog.
+- **On the serving thread**: the process ends with it, however it ends (`EndsTheProcess`, exit code 101 for a panic,
+  as when the pipe is served on the first thread). The first thread is the window's and would otherwise stay,
+  elevated, with nobody to serve.
+
+**The look.** Purge's Bold design with the Violet preset, fixed in the broker (`look::violet`); light or dark from
+Windows; under a contrast theme the theme's colours. The broker does not read Purge's settings file and nothing
+visual comes over the pipe. A contrast theme's colours are the session's system colours, which a medium process can
+set too: they are used only when text reads on the window (4.5:1), the highlight text on the highlight (4.5:1) and
+the disabled text is seen (2:1); otherwise the toolkit's own contrast palette is used. Under a contrast theme tinted
+fills become frames and the window gets an edge.
+
+**UI Automation** (AccessKit; `access.rs`). The provider is in the broker, so UIPI keeps a medium client out, as it
+does for the TaskDialog; that is what `m3-consent` checks, not something this code does.
+
+| AutomationId | Control type | Name | Patterns |
+|---|---|---|---|
+| (the window) | Window | "Purge security prompt" | |
+| `ConsentInstruction` | Text | the main instruction | |
+| `ConsentList` | List | "Details" | |
+| `ConsentLine_<n>` | ListItem | line n of the list, 0 first: a summary line, a heading, an attention entry, another item | |
+| `ConsentVerify` | CheckBox | the verification text | Toggle, once the end of the list has been on screen; disabled before |
+| `ConsentFooter` | Text | the footer, with "Code XXXX-XXXX" | |
+| `ConsentHint` | Text | why the button is disabled, while a hint shows | |
+| `ConsentApprove` | Button | the label of the button that approves | Invoke while enabled; disabled otherwise |
+| `ConsentCancel` | Button | "Cancel" | Invoke |
+| `ConsentClose` | Button | "Close" | Invoke |
+
+Every line is in the tree whether in view or not (one out of view has no rectangle), so a reader reads the whole
+list. Invoke and Toggle go through the same `press` as a click, with the same rules. The focus is the keyboard's
+place. Windows adds its own elements for the frame, as for any top-level window: a TitleBar, the system menu, and
+the buttons `Minimize`, `Maximize` and `Close` (its `Close` is the close request: Cancel). Checked at medium against
+the preview with the rig's own tool (`vm/guest/tests/consent-ui-probe.ps1`): the ids, the names, Toggle and Invoke,
+and through the service the approval, the cancel and the closer.
+
+**Dependencies.** A release broker links what it linked before this package: 49 crate names from outside the
+workspace (50 crates, one name at two versions), all from crates.io, and nothing of the toolkit. The feature adds 86
+crates at fixed versions (among them a second `miniz_oxide` and two more `windows-sys`, which a list of names hid).
+`xtask check-deps` holds both trees, read for the shipped target with dev-dependencies (review B2, S9):
+
+- Rule 4b: `purge-broker` has one cargo feature, `toolkit-consent`; it is no default, turns on its three optional
+  dependencies and nothing else, and the broker has no other optional dependency.
+- Rule 6, the tree every release has: every outside crate is in `BROKER_OUTSIDE` and from crates.io, none of
+  `BROKER_TOOLKIT` is in it, and no feature of the broker is on, in its own tree or in a default workspace build.
+- Rule 6, the tree with the feature: what it has beyond the first is exactly `BROKER_TOOLKIT`, crate by crate and
+  version by version (grouped with the reason each is there), each from crates.io but the `mdshared-*` crates, which
+  come from the toolkit's repository at revision `d789e8e` (the pin `ui/rust` moved to; `294d330` before), locked in `Cargo.lock` to the full commit
+  (`TOOLKIT_COMMIT`); `mdshared-ui` is built with `host` and `a11y` only. A crate, a version or a toolkit revision
+  an update starts to bring is a violation until its line here changes, in a commit somebody reads.
+- Rule 6, the sources: only `src/consent/toolkit/` names the feature's crates, and of each only what is listed:
+  fifteen modules of `mdshared_ui`, `mdshared_text::Bitmap`, `winit::dpi`, `winit::raw_window_handle` and
+  `winit::window::WindowButtons`; never as a group, a glob or an alias. `mdshared_ui::platform`, which also holds the
+  file dialogs, the clipboard, `open_url` and the recycle bin, only for its four functions that read the system's
+  colours and scale. This reads names: it does not see what a method of an allowed type does.
+
+Before this package nothing limited what the broker links from outside.
+
+**The review of step 2** (2026-11-25, of the package as first built; ids as in the review).
+
+| Id | Finding | State |
+|---|---|---|
+| B1 | The elevated window finds its fonts by family name in the system's collection, which holds the fonts any process of the user installed for that user, and falls back by name too. A medium process that registers a font under one of those families chooses the glyphs the elevated dialog draws: a name, a path or the code can read as something else. The TaskDialog's text is drawn by the system with the system's fonts | **Open, and not Purge's to close.** Purge's half is in (the escape pass above, with nothing to ask yet). The toolkit must give a way to load a fixed list of font files with the system's collection and its fallback off, and to ask that collection whether it has a glyph. The request is `docs/TOOLKIT_REQUESTS.md`, TK-1 |
+| B2 | A release build took `--consent toolkit` from whoever starts the broker | Fixed: the feature `toolkit-consent` ("The switch") |
+| B3 | The VM mode did not check that the code a dialog shows is the code the client was told, nor the toolkit dialog's own rules, nor the lost client | Fixed in the rig, not run: RIG.md 14 |
+| S1 | Nothing showed that winit's registered messages and AccessKit's window property cannot be reached from medium (the WPARAM of `Winit::ExecMsg` is the address of a closure winit calls) | Probes in the rig, not run: RIG.md 14 |
+| S2 | A cancel that came before the first frame was lost: the request waited 10 s and asked again with the TaskDialog | Fixed: `Declined`, nothing shown |
+| S3 | A panic while the fonts were read or the first dialog measured was outside the catch | Fixed: everything on the window's thread is inside it |
+| S4 | A panic with a dialog up left its words on screen beside the TaskDialog that asked next, and the loop spinning | Fixed: the window is hidden and the thread stops |
+| S5 | The arming delay ran from a frame that was still to be measured, drawn and presented | Fixed: from the first clock read after a presented frame |
+| S6 | End and a click at once pressed the button of a dialog that had been up a second; the box could be ticked before anything was read | Fixed: a second after the end of the list is on screen; the box only then. Seen with the probe: while the box is disabled Cancel is the only stop of Tab, so Tab and Space on a long list that was not scrolled cancel |
+| S7 | A panic of the serving thread left the window's thread, elevated, with nobody to serve | Fixed: the process ends |
+| S8 | A minimised window never counted as shown and kept a dialog's words when it was taken down | Fixed: no minimise box; restored first |
+| S9 | Rule 6 checked crate names only: any version, any source and any toolkit revision passed | Fixed: "Dependencies" above |
+| S10 | The rig told the dialogs apart by the window class alone, took a window that was still there for a dialog that was not answered, and posted End before the first layout | Fixed: `consent.shown` says `ui`; the rig reads the client's answer and waits for the layout |
+
+**The second review** (Fable, 2026-11-28, of branch `broker/consent-ui-2`; ids as in that review). Its verdict: the
+branch may merge into `ui/rust` **with the TaskDialog the default**. Done with the merge of `ui/rust` (toolkit pin
+`d789e8e`; check-deps rule 6 moved with it, the same 86 crates; the dialog lets go of a held press on the host's
+`PressLost` and on `Focus(false)`, AGENTS.md rule 3):
+
+| Id | Finding | State |
+|---|---|---|
+| S-A | `install.ps1 -Broker`, the Inno pre-step and the release workflow take `target\release\purge-broker.exe`, the file a rig build with the feature writes | Fixed: the staging guard ("The switch" above); the rig builds the toolkit broker into its own `--target-dir` |
+| S-B | The internals probes counted any failed call as UIPI's refusal, ran the control from high before the medium probes only, and did not look at the windows after | Fixed in the rig, not run: the last error of every probe, 5 wanted; the control again after; `IsWindow` of all three targets |
+| S-C | The probes named three of winit's registered messages, and the count wanted was written by hand | Fixed in the rig, not run: every id winit 0.30.13 registers (also `Winit::SetRetainMaximized`, `TaskbarCreated`), the probes wanted derived from the lists |
+| S-D | The arming rules ran on lists that fit | Fixed in the rig, not run: fixture `lookalike45` for a toolkit run; on the plan dialog the clicks on a dialog up over a second whose end was not seen, Tab then Space, and Tab inside the second after the end |
+| N1 | `drop_job` threw away the phase it dropped: a cancel the window took between the end of the wait and the drop was asked again with the TaskDialog | Fixed: `drop_job` returns the phase before; `Unseen` stands as `Declined`, a dialog that reached the screen is declined, not asked again |
+| N4 | `readable` did not check the button and link colours | Checked: at `d789e8e` the contrast palette has no field for `button_text` or `hot_light` and takes `button_face` only where the window text reads on it at 4.5:1; a test pins that, so a pin that starts drawing with them fails it |
+| N5 | A literal `\u{` in a name reads as one of the dialog's escapes | Fixed where the text enters (`shown`, `shown_line`, both renderers): its backslash is written `\u{5c}`; `drawable` cannot tell a literal from an escape and leaves both alone |
+| N6 | Purge.exe's help offered `--broker-consent toolkit` without saying a release refuses it | Fixed: "for development builds only" |
+
+**Before the toolkit dialog can be the default** (step 4), besides the VM run of `m3-consent -ConsentUi toolkit` with
+the rig changes above:
+
+- **B1** (the first review): the window's fonts are found by family name in a collection a medium process can add
+  to. Needs the toolkit's fixed font files, `docs/TOOLKIT_REQUESTS.md` TK-1 (still not there at `d789e8e`).
+- **S-E**: an approval must need every attention row to have been on screen, not only the end of the list. Today
+  the end alone arms the box and the button; a long list scrolled to its end with End skips the rows between.
+- **S-F**: a panic test with a real window: the panic hook on the window's thread ("Threads": answer, mark dead,
+  hide the window, stop the thread) shown with the toolkit's loop running and a dialog up.
+- **S-G**: a kill in the middle of a plan: the client or the broker ended while a plan the toolkit dialog approved
+  executes.
+
+These stay open on purpose: the branch merges with the TaskDialog the default and the feature off in every release
+build, so none of them is in reach of a shipped broker.
+
+**The request to the toolkit (B1)** is `docs/TOOLKIT_REQUESTS.md`, TK-1, written to be handed over as it stands:
+why, the API (`mdshared_text::fixed_fonts`, `FixedFonts::has_glyph`, `Gfx::with_fonts`, `Config::fonts`,
+`Face::weight`), its use from the broker, the three font files under `GetSystemWindowsDirectoryW()\Fonts`
+(`segoeui.ttf`, `seguisb.ttf`, `seguisym.ttf`, the same on Windows 10 and 11) and the escape rule. Purge does not
+change the toolkit. One thing an earlier draft of the request here missed: the frame is painted with a `Gfx` the
+host makes itself (`host/run.rs`), so a constructor on `Gfx` alone would not have reached the pixels; the request
+asks for `Config::fonts` too. Purge's half is in the broker already ("What it cannot draw" above).
+
+Until then a toolkit build of the broker is for the rig and the preview only.
+
+**Risks that stay, with the feature on.**
+
+- The elevated process parses fonts itself (read-fonts, skrifa, swash, harfrust, through parley and fontique),
+  from the system's font collection, which holds fonts a user installed for themselves (files a medium process can
+  write). The TaskDialog's text is drawn by GDI. The parsers are safe Rust, so the expected failure is a panic, and a
+  panic on the window's thread is a Cancel or the TaskDialog. A font that draws misleading glyphs is review B1: it
+  was written here as "in reach of both renderers", which is wrong for the families the window asks for by name,
+  and it is what keeps the feature out of a release.
+- Crates linked and not used by the dialog: image decoding (png, zune-jpeg), a file watcher (notify), file dialogs
+  (rfd). Nothing calls them from the broker; the toolkit has no feature to leave them out.
+- winit registers its own window classes and a message-only window, softbuffer presents with GDI; AccessKit serves
+  UI Automation. All in the high-integrity process, behind UIPI. `m3-consent` must show that posted messages, input
+  and UI Automation from medium do not reach them.
+- The first thread of the broker becomes the window's thread with `--consent toolkit`. A panic inside the window
+  loop was seen (in `Purge.exe`) to leave the loop spinning rather than ending: here the panic hook stops that
+  thread for good ("Threads"), so it burns nothing, and it stays stopped until the serving thread ends the process.
+  A stopped thread still owns its hidden window: nothing answers messages sent to it any more.
+- The environment, which is the caller's (T7). The review named three variables the toolkit reads (`MD_SHADOW`,
+  `MDSHARED_NO_SHADOW`, `MDSHARED_NO_BLUR`). At the pinned commit none of them is read in a Windows build:
+  `MDSHARED_NO_SHADOW` and `MDSHARED_NO_BLUR` are read only inside `cfg(target_os = "linux")` code (the Linux
+  `impl Shadow` of `shadow.rs`, the two Linux blocks of `blur.rs`), and `MD_SHADOW` only by
+  `shadow::Mode::from_env`, whose one caller is in that Linux-only `impl`. The other reads of `mdshared-ui` and
+  `mdshared-text` outside their examples (`XDG_*`, `HOME`) are in the desktop-entry, recycle-bin, placement and
+  media-session modules, none of which the dialog names. So there is nothing to stop in the broker; a pin bump has
+  to look again (`rg "env::var" crates/mdshared-ui/src crates/mdshared-text/src`). Looked again at `d789e8e`: the
+  same; the reads it added are in tests, in `mdshared-app`'s AppImage runtime (Linux) and in its single-instance key
+  (`COMPUTERNAME`), which the dialog does not use. The crates under the toolkit
+  (winit, softbuffer, AccessKit, parley and the rest) were not read for this.
+- The source rule of check-deps reads names. What the toolkit's own code does inside an allowed module (the host
+  registering a drop target, the contrast watcher's hidden window) is the toolkit's, at the pinned commit.
+- Not seen on a real elevated broker: everything was developed with the preview harness at medium (no UAC prompt was
+  approved on the development PC). The foreground behaviour after a real `runas`, the first dialog's start-up time
+  (font load, loop, window; the preview had its first dialog on screen between 0.1 and 0.8 s after its process
+  started, later ones reuse the window) and the window on a second monitor of another scale are for the VM.
+- winit registers every window it makes as an OLE drop target; the toolkit's host has no way to turn that off, and
+  drops nothing into the application. UIPI does not let a medium process drag onto a high window.
 
 ## 9. Launch gates and benches
 

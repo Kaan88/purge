@@ -36,7 +36,26 @@
     "kinds": ["uninstall.run", "plan.execute"],
     "min_medium_attempts": 24,
     "plan_needs_verification_box": true,
-    "shot_patterns": { "shown": 10, "attack": 8, "control": 8, "approved": 2 }
+    "shot_patterns": { "shown": 10, "attack": 8, "control": 8, "approved": 2 },
+    "toolkit": {
+      "_": "Only a -ConsentUi toolkit run. Probes (review S-B, S-C): SetProp and RemoveProp of each of probe_props, WM_GETOBJECT, and for each of winit_messages (every id winit 0.30.13 registers, src/platform_impl/windows/event_loop.rs) 1 to the dialog's thread and a post and a send to each of probe_windows; the scorer derives the names and the count from these lists, and wants every probe failed with probe_lasterror (ERROR_ACCESS_DENIED), the three windows alive after, and the control from high passing before and after. Times count from the end of the list on screen (arm) or the dialog found (enter), and from the kill.",
+      "winit_messages": ["Winit::WakeupMsg", "Winit::DestroyMsg", "Winit::ExecMsg", "Winit::SetRetainMaximized", "TaskbarCreated"],
+      "probe_windows": ["dialog", "event-target", "contrast"],
+      "probe_props": ["PurgeRigProbe", "AccessKitAdapter"],
+      "probe_lasterror": 5,
+      "_long": "Review S-D: the kinds whose list does not fit in a toolkit run (fixture lookalike45): their arming rule must have had to scroll, and three more rules run on them: unseen (up over unseen_min_ms, the end not seen: a real click on the button and on the box do nothing), tabspace (Tab, Space: Cancel), tabearly (End, then Tab, Space, Tab inside tab_early_max_ms: the keyboard not on the button, Enter cancels).",
+      "long_kinds": ["plan.execute"],
+      "unseen_min_ms": 1100,
+      "tab_early_max_ms": 900,
+      "early_click_max_ms": 900,
+      "hold_down_max_ms": 900,
+      "hold_up_min_ms": 1100,
+      "enter_max_ms": 1000,
+      "kill_dialog_gone_max_ms": 5000,
+      "kill_exit_max_ms": 30000,
+      "kill_exit_code": 0,
+      "shot_patterns": { "probe": 2, "rule-arm": 2, "rule-enter": 2, "rule-unseen": 1, "rule-tabspace": 1, "rule-tabearly": 1, "after-kill": 1 }
+    }
   },
   "uac": {
     "uac_admin": 5,

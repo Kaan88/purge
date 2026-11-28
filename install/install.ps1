@@ -18,6 +18,8 @@
 #      purge-broker.exe, Purge.exe (or a folder holding it, -UiPublishDir) and the kb\ tree are
 #      copied in (files whose SHA-256 already matches are left alone). Every deployed object is checked
 #      against the broker's rule (owner, no non-administrator write) and re-protected when it fails.
+#      purge-broker.exe must be the release build: one built with the cargo feature toolkit-consent
+#      is refused (the staging marker, Assert-ReleaseBroker; -ToolkitBroker is the VM rig's way in).
 #   3. %ProgramData%\Purge with sessions, Quarantine, fp, kb and sessions\index.json (created as "{}"):
 #      every object is created with its own protected DACL in the same call that creates it
 #      (CreateDirectoryW / CreateFileW CREATE_NEW with a security descriptor), so there is no window in
@@ -43,7 +45,9 @@
 param(
     # purge-engine.exe to deploy. Default: the repo's target\release\purge-engine.exe.
     [string]$Engine = '',
-    # purge-broker.exe to deploy. Default: the repo's target\release\purge-broker.exe.
+    # purge-broker.exe to deploy. Default: the repo's target\release\purge-broker.exe. It must be the
+    # release build: a broker built with --features toolkit-consent is refused (Assert-ReleaseBroker,
+    # review S-A), wherever it is; the rig builds that one into its own --target-dir (vm\RIG.md 14).
     [string]$Broker = '',
     # Purge.exe (the Rust UI, bins\purge-ui) to deploy. Default: the repo's target\release\Purge.exe.
     [string]$Ui = '',
@@ -78,7 +82,12 @@ param(
     [Alias('DryRun')]
     [switch]$WhatIf,
     # Optional JSON report (schema purge.install/1).
-    [string]$ReportPath = ''
+    [string]$ReportPath = '',
+    # VM rig only (m3-consent -ConsentUi toolkit): the broker is a build with the cargo feature
+    # toolkit-consent and is installed knowingly; it must then be one. Needs -SkipBuild (this script
+    # builds only the release broker). Without it a toolkit broker is refused (review S-A); -Check
+    # takes it too, for the installed broker.
+    [switch]$ToolkitBroker
 )
 
 # ============================================================================================ constants
@@ -130,6 +139,16 @@ $script:StartMenuShortcutName = 'Purge.lnk'
 # engine must contain none of them (M3-INSTALL test: "the installed purge-engine.exe imports no executor
 # symbol").
 $script:ExecutorMarkers = @('purge-exec\src', 'purge-exec/src')
+
+# The staging guard of the broker (review S-A of BROKER-CONSENT-UI): a purge-broker.exe built with the
+# cargo feature toolkit-consent (the rig's and the preview's build) is never installed as the release
+# broker. A release broker holds the words it refuses "--consent toolkit" with (purge_broker::args::
+# STAGING_MARKER, compiled only without the feature and reached from the command line, so always kept);
+# a toolkit build holds none of them, and holds the toolkit's source paths (its panic locations).
+# Both are checked: the marker must be there (a check that fails closed), the toolkit's paths must not.
+# tests/staging_marker.rs of purge-broker keeps these two lines equal to the broker's constants.
+$script:BrokerReleaseMarker = 'this purge-broker was built without the toolkit consent dialog'
+$script:BrokerToolkitMarkers = @('mdshared-ui\src', 'mdshared-ui/src')
 
 # Set by the driver from -WhatIf; the action helpers below ask it before they touch the machine.
 $script:DryRun = [bool]$WhatIf
@@ -1002,6 +1021,36 @@ function Assert-EngineWithoutExecutor([string]$Path) {
     Write-InstallLog "engine: no executor marker in $Path"
 }
 
+# Which build a purge-broker.exe is (review S-A): 'release' (the release marker, no toolkit path),
+# 'toolkit' (a toolkit path, no release marker: built with --features toolkit-consent) or 'unknown'
+# (neither or both: not a broker this repository builds, refused either way).
+function Get-BrokerBuild([string]$Path) {
+    $bytes = [IO.File]::ReadAllBytes($Path)
+    $text = [Text.Encoding]::ASCII.GetString($bytes)
+    $release = $text.IndexOf($script:BrokerReleaseMarker, [StringComparison]::Ordinal) -ge 0
+    $toolkit = $false
+    foreach ($m in $script:BrokerToolkitMarkers) {
+        if ($text.IndexOf($m, [StringComparison]::Ordinal) -ge 0) { $toolkit = $true }
+    }
+    if ($release -and -not $toolkit) { 'release' } elseif ($toolkit -and -not $release) { 'toolkit' } else { 'unknown' }
+}
+
+# Refuses a broker that is not the release build. -Toolkit (the VM rig's m3-consent -ConsentUi toolkit
+# only, through install.ps1 -ToolkitBroker): it must be the toolkit build instead, so that a run meant
+# for the toolkit dialog never tests the TaskDialog by mistake either.
+function Assert-ReleaseBroker([string]$Path, [switch]$Toolkit) {
+    $build = Get-BrokerBuild $Path
+    $want = if ($Toolkit) { 'toolkit' } else { 'release' }
+    if ($build -ne $want) {
+        if ($build -eq 'toolkit') {
+            throw "purge-broker.exe was built with the feature toolkit-consent (a rig or preview build): $Path. A release broker is 'cargo build --release -p purge-broker' without features; a rig build of the toolkit broker goes to its own --target-dir (vm\RIG.md 14)"
+        }
+        if ($Toolkit) { throw "-ToolkitBroker: $Path is not a broker built with --features toolkit-consent (it is '$build')" }
+        throw "purge-broker.exe is not a release broker this repository builds (no staging marker): $Path"
+    }
+    Write-InstallLog "broker: $want build ($Path)"
+}
+
 # The install directory must be on the running system's volume (M3-INSTALL). The parent is used as the
 # probe because the directory itself may not exist yet.
 function Assert-SystemVolume([string]$Dir, [string]$WindowsDir) {
@@ -1063,12 +1112,19 @@ function Invoke-PurgeInstall {
                 $payload = Test-PayloadLayout $pf $(if ($EngineOnly) { $null } else { $shortcut }) $script:AdminSids -EngineOnly:$EngineOnly
                 $b = Test-Tree $dr (Get-PurgeDataLayout) 'data-root'
                 $sourceOk = $true
+                $brokerBuild = $null; $brokerOk = $true
                 if (-not $EngineOnly) {
                     $sourceOk = Test-EventLogSourceKey
                     if (-not $sourceOk) { Write-InstallLog "event log: the Application source '$($script:EventLogSource)' is not registered" }
+                    # The installed broker is the release build (review S-A); -ToolkitBroker: the rig's toolkit build.
+                    $installedBroker = Join-Path $pf 'purge-broker.exe'
+                    $wantBuild = if ($ToolkitBroker) { 'toolkit' } else { 'release' }
+                    $brokerBuild = if (Test-Path -LiteralPath $installedBroker -PathType Leaf) { Get-BrokerBuild $installedBroker } else { 'missing' }
+                    $brokerOk = ($brokerBuild -eq $wantBuild)
+                    if (-not $brokerOk) { Write-InstallLog "broker: $installedBroker is the '$brokerBuild' build, not the $wantBuild build" }
                 }
-                $report.check = [ordered]@{ program_files = $a; payload = $payload; data_root = $b; event_log_source = $sourceOk }
-                $report.ok = ($a.verdict -eq 'good' -and $payload.ok -and $b.verdict -eq 'good' -and $sourceOk)
+                $report.check = [ordered]@{ program_files = $a; payload = $payload; data_root = $b; event_log_source = $sourceOk; broker_build = $brokerBuild }
+                $report.ok = ($a.verdict -eq 'good' -and $payload.ok -and $b.verdict -eq 'good' -and $sourceOk -and $brokerOk)
             }
         } elseif ($mode -eq 'uninstall') {
             if ($script:DryRun) {
@@ -1116,7 +1172,12 @@ function Invoke-PurgeInstall {
                 $report.ok = $true
             } else {
                 $reprotected = @()
-                if ($ProtectOnly) { $reprotected = @(Protect-Tree $pf (Get-PurgeSddlTable).ProgramFiles) }
+                if ($ProtectOnly) {
+                    # The setup's payload: never a toolkit broker (review S-A; build-installer.ps1 refuses
+                    # one before ISCC, this is the installed copy).
+                    Assert-ReleaseBroker (Join-Path $pf 'purge-broker.exe')
+                    $reprotected = @(Protect-Tree $pf (Get-PurgeSddlTable).ProgramFiles)
+                }
                 $changed = ($reprotected.Count -gt 0)
                 if ($DataRootOnly) {
                     $b = Install-Tree $dr (Get-PurgeDataLayout) 'data-root'
@@ -1132,6 +1193,7 @@ function Invoke-PurgeInstall {
             $enginePath = if ($Engine) { $Engine } else { Join-Path $repo 'target\release\purge-engine.exe' }
             $brokerPath = if ($EngineOnly) { '' } elseif ($Broker) { $Broker } else { Join-Path $repo 'target\release\purge-broker.exe' }
             if ($Ui -and $UiPublishDir) { throw 'pass -Ui (Purge.exe) or -UiPublishDir (a folder holding it), not both' }
+            if ($ToolkitBroker -and ($EngineOnly -or -not $SkipBuild -or -not $Broker)) { throw '-ToolkitBroker (VM rig only) needs -SkipBuild and -Broker <a broker built with --features toolkit-consent>, and no -EngineOnly' }
             $uiDir = if ($EngineOnly) { '' } elseif ($UiPublishDir) { $UiPublishDir } elseif ($Ui) { $Ui } else { Join-Path $repo 'target\release\Purge.exe' }
             $kbDir = $Kb
             if (-not $kbDir) {
@@ -1150,6 +1212,7 @@ function Invoke-PurgeInstall {
 
             if ($script:DryRun) {
                 Write-InstallLog "what-if: check that purge-engine.exe carries no executor marker"
+                if (-not $EngineOnly) { Write-InstallLog "what-if: check that purge-broker.exe is the $(if ($ToolkitBroker) { 'toolkit' } else { 'release' }) build (staging marker)" }
                 Write-InstallLog "what-if: install the program-files tree $pf with the ProgramFiles descriptor"
                 if ($EngineOnly) { Write-InstallLog "what-if: copy purge-engine.exe and kb\ into $pf" }
                 else { Write-InstallLog "what-if: copy purge-engine.exe, purge-broker.exe, Purge.exe ($uiDir) and kb\ into $pf" }
@@ -1176,6 +1239,7 @@ function Invoke-PurgeInstall {
                 if (-not (Test-Path -LiteralPath $kbDir -PathType Container)) { throw "kb folder not found: $kbDir" }
 
                 Assert-EngineWithoutExecutor $enginePath
+                if (-not $EngineOnly) { Assert-ReleaseBroker $brokerPath -Toolkit:$ToolkitBroker }
                 $a = Install-Tree $pf (Get-PurgeProgramFilesLayout) 'program-files'
                 $payload = Copy-Payload $pf $enginePath $brokerPath $uiDir $kbDir (Get-PurgeSddlTable).ProgramFiles
                 $b = Install-Tree $dr (Get-PurgeDataLayout) 'data-root'

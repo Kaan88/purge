@@ -23,6 +23,25 @@ purge-index.workspace = true
 purge-rpc.workspace = true
 purge-win = { workspace = true, features = ["write"] }
 serde_json.workspace = true
+# The consent dialog drawn with Purge's own toolkit (src/consent/toolkit; `--consent toolkit`): the
+# toolkit and the two crates of it the dialog has to name. Optional, and linked only with the
+# feature `toolkit-consent`; `xtask check-deps` rule 6 lists every crate they bring into the elevated
+# binary and why, and checks that a build without the feature has none of them.
+mdshared-ui = { workspace = true, optional = true }
+mdshared-text = { workspace = true, optional = true }
+winit = { workspace = true, optional = true }
+
+[features]
+# The broker's one feature (check-deps rule 4b), and never a default: the consent dialog drawn with
+# Purge's own toolkit. A release build and the installer do not turn it on (`cargo build --release
+# -p purge-broker`, install/README.md), so the shipped broker has neither the code nor its crates and
+# refuses `--consent toolkit`. It stays off until the toolkit dialog has passed its security review
+# and the VM mode `m3-consent -ConsentUi toolkit` (package BROKER-CONSENT-UI, review B2).
+toolkit-consent = ["dep:mdshared-ui", "dep:mdshared-text", "dep:winit"]
+
+[[example]]
+name = "consent_preview"
+required-features = ["toolkit-consent"]
 
 [dev-dependencies]
 purge-plan.workspace = true

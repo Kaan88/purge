@@ -475,8 +475,12 @@ fn consent_shown_is_sent_when_the_dialog_is_up() {
     assert_eq!(shown["method"], "consent.shown");
     assert_eq!(shown["params"]["request"], 3);
     assert_eq!(shown["params"]["code"], "A1B2-C3D4");
+    // The TaskDialog's line is what it always was: `ui` is said only for the toolkit dialog.
+    assert_eq!(shown["params"].get("ui"), None, "{shown}");
     assert!(h.consent.wait_open(SECS));
     assert_eq!(h.consent.primary(), 100);
+    // Asked with pages only (`Ctx::consent`): no sheet reaches the consent.
+    assert_eq!(h.consent.sheet(), None);
     h.consent.answer(Outcome::Declined);
     assert_eq!(kind(&c.reply()), "consent_declined");
     c.close();
@@ -831,7 +835,7 @@ fn a_full_event_channel_does_not_block_the_pipe_broken_signal() {
             _: &[purge_win::taskdialog::Page],
             _: i32,
             _: &Closer,
-            _: &(dyn Fn() + Sync),
+            _: &(dyn Fn(purge_rpc::methods::ConsentRenderer) + Sync),
         ) -> io::Result<Outcome> {
             Ok(Outcome::Declined)
         }

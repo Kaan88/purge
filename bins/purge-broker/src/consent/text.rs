@@ -7,6 +7,8 @@
 //! - control characters (C0, DEL, C1), bidirectional controls, zero-width and other invisible
 //!   characters (the braille blank included), line and paragraph separators, every space that is not
 //!   a plain space, private-use and non-characters, and the double quote are written as `\u{hex}`;
+//! - the backslash of a literal `\u{` is written as `\u{5c}`, so that every `\u{` in the dialog is an
+//!   escape (review N5);
 //! - a plain space is written that way too when it starts or ends a path component or follows another
 //!   space, so `Program Files` and `Program Files ` and `Program  Files` do not look alike;
 //! - in a word that holds an ASCII letter or digit, every alphanumeric character outside Basic Latin,
@@ -187,6 +189,15 @@ fn escape(c: char) -> String {
     format!("\\u{{{:x}}}", c as u32)
 }
 
+/// Whether `rest` starts with a literal `\u{`: text from outside that reads as an escape Purge
+/// wrote (review N5). Its backslash is written as `\u{5c}`, so that every `\u{` in the dialog is
+/// one of Purge's escapes and stands for the one character it names: a key named `u{430}` under
+/// `HKCU\Software` reads `HKCU\Software\u{5c}u{430}`, not as a Cyrillic letter, and a name cannot
+/// pass a word off as a character the font did not have ([`NO_GLYPH_NOTE`]).
+fn starts_literal_escape(rest: &[char]) -> bool {
+    matches!(rest, ['\\', 'u', '{', ..])
+}
+
 /// The text left out in the middle of a shown text.
 pub fn left_out(n: usize) -> String {
     if n == 1 {
@@ -210,7 +221,7 @@ fn component(comp: &str, flags: &mut Flags, cut: bool) -> Vec<String> {
                 || last_visible.is_none_or(|l| i > l)
                 || chars[i - 1] == ' '
         } else {
-            hidden(c) || look_alike[i]
+            hidden(c) || look_alike[i] || starts_literal_escape(&chars[i..])
         };
         if escape_it {
             flags.escaped = true;
@@ -281,9 +292,20 @@ pub fn shown(text: &str) -> Shown {
             flags.look_alike = true;
         }
     }
-    for (comp, sep) in parts {
+    for (k, &(comp, sep)) in parts.iter().enumerate() {
         pieces.extend(component(comp, &mut flags, true));
-        if !sep.is_empty() {
+        if sep.is_empty() {
+            continue;
+        }
+        // A separator that starts a literal `\u{` with the next component (review N5).
+        if sep == "\\"
+            && parts
+                .get(k + 1)
+                .is_some_and(|(next, _)| next.starts_with("u{"))
+        {
+            flags.escaped = true;
+            pieces.push(escape('\\'));
+        } else {
             pieces.push(sep.to_owned());
         }
     }
@@ -381,9 +403,158 @@ impl Stamp {
     }
 }
 
+/// What a sheet says when [`drawable`] wrote a character as an escape.
+pub const NO_GLYPH_NOTE: &str =
+    "Characters this window has no font for are shown as \\u{...}; they are part of the name.";
+
+/// The characters the dialog's own words and every escape are made of: printable ASCII and the
+/// three marks. [`drawable`] never rewrites them; [`fixed_words_drawable`] is the check that it
+/// need not.
+fn fixed(c: char) -> bool {
+    (' '..='~').contains(&c) || [MARK, BULLET, SEP].iter().any(|m| m.contains(c))
+}
+
+/// Whether a renderer can draw the dialog's own words and every escape: it has a glyph for each
+/// printable ASCII character and for the three marks. A renderer that cannot must not draw the
+/// dialog at all (the broker asks with the TaskDialog): an escape it cannot draw says nothing.
+pub fn fixed_words_drawable(has_glyph: &dyn Fn(char) -> bool) -> bool {
+    ('!'..='~')
+        .chain([MARK, BULLET, SEP].iter().flat_map(|m| m.chars()))
+        .filter(|c| *c != ' ')
+        .all(has_glyph)
+}
+
+/// `text`, which is ready for the dialog, for a renderer that draws with a fixed set of fonts
+/// (review B1 of BROKER-CONSENT-UI): every character the set has no glyph for is written as
+/// `\u{hex}`, as [`shown`] writes a hidden one. Nothing is then drawn as an empty box, as nothing,
+/// or with a font that was found by a name anybody can register. `has_glyph` is the renderer's
+/// answer for one character; it is not asked about the characters of [`fixed`].
+///
+/// It is the renderer's pass and not [`shown`]'s: the TaskDialog draws the same view with the
+/// system's own fallback and shows these characters as they are.
+///
+/// A literal `\u{` (review N5) is not this pass's to escape: here it cannot be told from an escape
+/// [`shown`] wrote, and both renderers must show it the same. [`shown`] and [`shown_line`] write
+/// its backslash as `\u{5c}` where the text enters the view, so every `\u{` this pass sees is an
+/// escape, and this pass leaves escapes alone.
+pub fn drawable<'a>(text: &'a str, has_glyph: &dyn Fn(char) -> bool) -> std::borrow::Cow<'a, str> {
+    let keeps = |c: char| fixed(c) || has_glyph(c);
+    if text.chars().all(keeps) {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let mut out = String::with_capacity(text.len() + 16);
+    for c in text.chars() {
+        if keeps(c) {
+            out.push(c);
+        } else {
+            out.push_str(&escape(c));
+        }
+    }
+    std::borrow::Cow::Owned(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A renderer with the Latin fonts only: Basic Latin, Latin-1, Latin Extended-A and the marks.
+    fn latin_only(c: char) -> bool {
+        (c as u32) < 0x180 || [MARK, BULLET, SEP].iter().any(|m| m.contains(c))
+    }
+
+    #[test]
+    fn what_the_fonts_cannot_draw_is_written_as_an_escape() {
+        // Nothing to do: the same text, not a copy.
+        for plain in [
+            r"C:\Program Files\Mozilla Firefox",
+            "Caf\u{e9} M\u{fc}nchen",
+            "\u{26a0} Needs your attention (3)",
+            "\u{2022} HKLM\\SOFTWARE\\Vendor \u{b7} 12 values",
+            r"Mozill\u{430}",
+            "",
+        ] {
+            let got = drawable(plain, &latin_only);
+            assert!(matches!(got, std::borrow::Cow::Borrowed(_)), "{plain}");
+            assert_eq!(got, plain);
+        }
+        // A name in a script the fonts do not have: each character, in order, and nothing else.
+        assert_eq!(
+            drawable("C:\\\u{65e5}\u{672c}\\app \u{1f600}.exe", &latin_only),
+            r"C:\\u{65e5}\u{672c}\app \u{1f600}.exe"
+        );
+        assert_eq!(
+            drawable(
+                "\u{42f}\u{43d}\u{434}\u{435}\u{43a}\u{441} Browser",
+                &latin_only
+            ),
+            r"\u{42f}\u{43d}\u{434}\u{435}\u{43a}\u{441} Browser"
+        );
+        // A font that claims nothing still leaves the dialog's own characters alone: they are
+        // what `fixed_words_drawable` answers for.
+        let nothing = |_: char| false;
+        assert_eq!(
+            drawable("\u{26a0} a\u{e9}b \u{b7} \"x\"", &nothing),
+            "\u{26a0} a\\u{e9}b \u{b7} \"x\""
+        );
+        // An escape is made of characters that are never rewritten: a second pass changes nothing.
+        let once = drawable("\u{65e5}\u{e9}", &nothing).into_owned();
+        assert_eq!(drawable(&once, &nothing), once);
+    }
+
+    /// Review N5: a literal `\u{` from outside cannot pass for one of Purge's escapes, in either
+    /// renderer, and the fixed-font pass leaves what `shown` wrote alone.
+    #[test]
+    fn a_literal_escape_is_escaped_where_the_text_enters() {
+        let sh = shown(r"HKCU\Software\u{430}");
+        assert_eq!(sh.text, r"HKCU\Software\u{5c}u{430}");
+        assert!(sh.flags.escaped);
+        let sh = shown(r"C:\Vendor\u{41}\app.exe");
+        assert_eq!(sh.text, r"C:\Vendor\u{5c}u{41}\app.exe");
+        // In free text the backslash is in the piece.
+        let sh = shown_line(r"/D=C:\x \u{202e}");
+        assert_eq!(sh.text, r"/D=C:\x \u{5c}u{202e}");
+        assert!(sh.flags.escaped);
+        // A name that is the sequence alone, and one with the brace missing (no escape then).
+        assert_eq!(shown_line(r"\u{").text, r"\u{5c}u{");
+        let plain = shown(r"C:\users\u1\app");
+        assert_eq!(plain.text, r"C:\users\u1\app");
+        assert!(plain.flags.is_plain());
+        // The renderer's pass keeps both escapes as they are.
+        let sh = shown("C:\\Vendor\\u{430}\\\u{202e}x");
+        assert_eq!(sh.text, r"C:\Vendor\u{5c}u{430}\\u{202e}x");
+        assert_eq!(drawable(&sh.text, &latin_only), sh.text);
+    }
+
+    #[test]
+    fn a_renderer_without_the_dialogs_own_characters_is_refused() {
+        assert!(fixed_words_drawable(&latin_only));
+        assert!(fixed_words_drawable(&|_| true));
+        assert!(!fixed_words_drawable(&|_| false));
+        // One missing is enough: a letter, a digit, a brace of the escape, each mark.
+        for missing in [
+            'a', 'Z', '7', '\\', '{', '}', '\u{26a0}', '\u{2022}', '\u{b7}',
+        ] {
+            assert!(
+                !fixed_words_drawable(&|c| c != missing && latin_only(c)),
+                "{missing:?}"
+            );
+        }
+        // The plain space needs no glyph.
+        assert!(fixed_words_drawable(&|c| c != ' ' && latin_only(c)));
+        // The dialog's fixed words are of those characters alone.
+        let (one, many) = (left_out(1), left_out(12));
+        for words in [
+            TITLE,
+            MARK,
+            BULLET,
+            SEP,
+            NO_GLYPH_NOTE,
+            one.as_str(),
+            many.as_str(),
+        ] {
+            assert!(words.chars().all(fixed), "{words}");
+        }
+    }
 
     #[test]
     fn plain_names_and_paths_are_unchanged() {

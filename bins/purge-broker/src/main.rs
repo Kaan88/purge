@@ -12,19 +12,26 @@
 //! standard handles are closed; the timing lines start going to the event log (`purge_broker::timing`,
 //! the `broker_start` mark was taken right after the DLL-search and working-directory restriction);
 //! the local-baseline build starts on its own thread; and the serving loop runs until it ends. The
-//! timing lines are flushed for at most `FLUSH_WAIT` before the process ends. The handler is [`purge_broker::broker::BrokerHandler`]: the flow over the live
+//! timing lines are flushed for at most `FLUSH_WAIT` before the process ends. With `--consent toolkit`,
+//! which only a build with the cargo feature `toolkit-consent` takes (`purge_broker::args`; no release
+//! build has it), the serving loop runs on a second thread and this one is the consent window's
+//! (`serve_beside_the_window`); otherwise everything is as it was. The handler is [`purge_broker::broker::BrokerHandler`]: the flow over the live
 //! machine (M3-BROKER-FLOW), `plan.execute` (M3-EXEC), history, undo and recovery (M3-UNDO) and the purge
 //! of expired quarantine (M3-PURGE).
 
 use std::process::ExitCode;
 use std::sync::Arc;
 
+use purge_broker::args::ConsentUi;
 use purge_broker::baseline::{BuildHandle, LiveHost};
 use purge_broker::broker::BrokerHandler;
+#[cfg(feature = "toolkit-consent")]
+use purge_broker::consent::toolkit::ToolkitConsent;
 use purge_broker::exec_live::LiveExec;
 use purge_broker::lifetime::{SystemClock, codes};
 use purge_broker::live::LiveBackend;
 use purge_broker::purge::Purger;
+use purge_broker::serve::Consent;
 use purge_broker::serve::{Limits, Wiring, run_timed};
 use purge_broker::timing::{ChannelSink, FLUSH_WAIT, ProcessTimer, Timings};
 use purge_broker::undo::UndoMethods;
@@ -32,6 +39,7 @@ use purge_broker::uninstall::{Flow, LiveMachine};
 use purge_broker::wire::{PipeLink, ProcessParent, TaskDialogConsent};
 use purge_broker::{args, start};
 use purge_engine::pipeline::{self, Sources};
+use purge_exec::storage::StorageRoots;
 use purge_rpc::timing::{TIMING_EVENT_ID, TimingName};
 use purge_source::live::{Live, LiveLocal};
 use purge_win::pipe::{ExpectedPeer, PipeError};
@@ -113,15 +121,96 @@ fn main() -> ExitCode {
         timings.attach(sink);
     }
 
-    let expected = ExpectedPeer {
-        pid: args.parent_pid,
-        creation_time: args.parent_ctime,
-        image: started.client_image.clone(),
+    let parts = Parts {
+        link,
+        parent,
+        parent_pid: args.parent_pid,
+        parent_ctime: args.parent_ctime,
         user_sid,
+        started,
+        timings,
+    };
+    match args.consent {
+        ConsentUi::TaskDialog => serve(parts, Arc::new(TaskDialogConsent)),
+        #[cfg(feature = "toolkit-consent")]
+        ConsentUi::Toolkit => serve_beside_the_window(parts),
+    }
+}
+
+/// What `main` made before the pipe is served.
+struct Parts {
+    link: PipeLink,
+    parent: ProcessParent,
+    parent_pid: u32,
+    parent_ctime: u64,
+    user_sid: String,
+    started: start::Started<StorageRoots>,
+    timings: Arc<Timings>,
+}
+
+/// The exit code of a process whose first thread panicked: what the broker ends with when its
+/// serving thread does, on whichever thread that is.
+#[cfg(feature = "toolkit-consent")]
+const PANIC_EXIT: i32 = 101;
+
+/// Ends the process when it is dropped: held by the serving thread of `serve_beside_the_window`.
+#[cfg(feature = "toolkit-consent")]
+struct EndsTheProcess;
+
+#[cfg(feature = "toolkit-consent")]
+impl Drop for EndsTheProcess {
+    fn drop(&mut self) {
+        std::process::exit(PANIC_EXIT);
+    }
+}
+
+/// `--consent toolkit`: the toolkit's window loop must run on the thread the process started on
+/// (`consent::toolkit::service`), so the pipe is served from a second thread and this one becomes the
+/// window's. It makes no window until a dialog is asked for. If the second thread cannot be started,
+/// the pipe is served here with the TaskDialog, as without the argument.
+#[cfg(feature = "toolkit-consent")]
+fn serve_beside_the_window(parts: Parts) -> ! {
+    type Job = Box<dyn FnOnce() + Send>;
+    let (hand, taken) = std::sync::mpsc::channel::<Job>();
+    let spawned = std::thread::Builder::new()
+        .name("purge-broker-serve".into())
+        .spawn(move || {
+            // However this thread ends, the process ends with it (review S7). `serve` ends the
+            // process itself; what is left is a panic that unwinds out of it, or no job to take.
+            // Served on the first thread, either would end the process; here the first thread is
+            // the window's and would stay, elevated, with nobody to serve.
+            let _ends = EndsTheProcess;
+            if let Ok(job) = taken.recv() {
+                job();
+            }
+        });
+    if spawned.is_err() {
+        serve(parts, Arc::new(TaskDialogConsent));
+    }
+    let (consent, window) = ToolkitConsent::new();
+    let job: Job = Box::new(move || serve(parts, Arc::new(consent)));
+    if hand.send(job).is_ok() {
+        window.run();
+    }
+    // The window's loop ended or never began (the dialogs are TaskDialogs from here on), or the
+    // serving thread is gone, and the process with it (`EndsTheProcess`). The serving thread ends
+    // the process; this one has nothing left to do.
+    loop {
+        std::thread::park();
+    }
+}
+
+/// Serves the pipe until the broker ends, and ends the process.
+fn serve(parts: Parts, consent: Arc<dyn Consent>) -> ! {
+    let expected = ExpectedPeer {
+        pid: parts.parent_pid,
+        creation_time: parts.parent_ctime,
+        image: parts.started.client_image.clone(),
+        user_sid: parts.user_sid,
     };
     // The MSI table cache and the local baseline cache are the store's checked `fp\msitables` and
     // `baseline`, never the directories by path.
-    let mut settings = started.broker_settings();
+    let mut settings = parts.started.broker_settings();
     let live = Live::new();
     let local = LiveLocal::new();
     let sources = Sources {
@@ -136,34 +225,36 @@ fn main() -> ExitCode {
         settings.local_build = build.clone();
         let exit = run_timed(
             Wiring {
-                link,
+                link: parts.link,
                 handler: BrokerHandler::new(
-                    Flow::new(Arc::new(LiveMachine::new(started.store.clone()))),
-                    Purger::from_store(started.store.clone()),
+                    Flow::new(Arc::new(LiveMachine::new(parts.started.store.clone()))),
+                    Purger::from_store(parts.started.store.clone()),
                     UndoMethods::new(LiveBackend::new(
-                        started.store.clone(),
+                        parts.started.store.clone(),
                         settings.purge_dirs.clone(),
                     )),
-                    Arc::new(LiveExec::new(started.store, settings.purge_dirs.clone())),
+                    Arc::new(LiveExec::new(
+                        parts.started.store,
+                        settings.purge_dirs.clone(),
+                    )),
                 ),
                 expected,
-                parent: Arc::new(parent),
-                consent: Arc::new(TaskDialogConsent),
+                parent: Arc::new(parts.parent),
+                consent,
                 host: Arc::new(LiveHost::new(settings.clone())),
                 clock: Arc::new(SystemClock::new()),
                 build: build.map(|b| Arc::new(b) as Arc<dyn BuildHandle>),
                 settings: settings.clone(),
                 limits: Limits::design(),
             },
-            timings.clone(),
+            parts.timings.clone(),
         );
-        timings.flush(FLUSH_WAIT);
+        parts.timings.flush(FLUSH_WAIT);
         if exit.code() != 0 {
             start::report_exit(exit.code(), &exit.line());
         }
         // The process ends here, not when the scope joins: a build still in its current part is not
         // waited for, and leaves no partial cache (its parts are renamed into place).
-        std::process::exit(i32::from(exit.code()));
-    });
-    ExitCode::SUCCESS
+        std::process::exit(i32::from(exit.code()))
+    })
 }

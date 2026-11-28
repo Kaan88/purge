@@ -58,4 +58,5 @@ pub mod sxs;
 pub mod taskdialog;
 pub mod taskschd;
 pub mod token;
+pub mod topwindow;
 pub mod versioninfo;
