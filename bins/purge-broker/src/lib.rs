@@ -19,7 +19,10 @@
 //! | [`wire`] | the named pipe, the TaskDialog and the parent handle |
 //! | [`timing`] | the timing marks of design 9.1 (gate G12): on four results and in the event log |
 //!
-//! There is no cargo feature: the scripted fakes of the tests exist only under `cfg(test)`.
+//! There is one cargo feature, `toolkit-consent`, off by default and off in every release build: it
+//! adds `consent::toolkit` (the consent dialog drawn with Purge's own toolkit) and the crates that
+//! needs, and without it `--consent toolkit` is refused ([`args`]). It relaxes nothing: no rule of
+//! the broker depends on it. The scripted fakes of the tests exist only under `cfg(test)`.
 
 // M3-UNDO: `history.get`, `undo.run` and the `journal.*` methods ([`undo::UndoMethods`]) over a
 // [`backend::Backend`]; [`live::LiveBackend`] is the real one.

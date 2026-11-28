@@ -114,6 +114,11 @@ const RIG_FEATURES: &str = "purge-engine/rig-exec,purge-exec/test-support";
 /// build unifies in (`rig-exec` enables `fault-inject`), named on purge-exec alone.
 const EXEC_TEST_FEATURES: &str = "purge-exec/fault-inject,purge-exec/test-support";
 
+/// The broker's one feature, which no default build turns on (check-deps rules 4b and 6): the consent
+/// dialog drawn with the toolkit. The `ci` steps that name it are the only ones that compile
+/// `consent::toolkit`, its tests and the preview example.
+const BROKER_TOOLKIT_FEATURE: &str = "toolkit-consent";
+
 fn ci(root: &Path, args: &[String]) -> Result<bool> {
     let mut require_ui = false;
     for arg in args {
@@ -122,7 +127,7 @@ fn ci(root: &Path, args: &[String]) -> Result<bool> {
             other => bail!("ci: unknown argument {other}"),
         }
     }
-    let cargo_steps: [&[&str]; 7] = [
+    let cargo_steps: [&[&str]; 9] = [
         &["fmt", "--all", "--", "--check"],
         &[
             "clippy",
@@ -176,6 +181,26 @@ fn ci(root: &Path, args: &[String]) -> Result<bool> {
             "engine",
         ],
         &["test", "-p", "purge-exec", "--features", EXEC_TEST_FEATURES],
+        // The broker with its toolkit consent dialog, which the workspace steps above do not compile
+        // (review of BROKER-CONSENT-UI, B2): the dialog's own modules and tests, and the preview.
+        &[
+            "clippy",
+            "-p",
+            "purge-broker",
+            "--features",
+            BROKER_TOOLKIT_FEATURE,
+            "--all-targets",
+            "--",
+            "-D",
+            "warnings",
+        ],
+        &[
+            "test",
+            "-p",
+            "purge-broker",
+            "--features",
+            BROKER_TOOLKIT_FEATURE,
+        ],
     ];
     for step in cargo_steps {
         if !cargo_step(root, step)? {
