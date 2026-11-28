@@ -236,9 +236,10 @@ fn page(ui: &mut Ui, m: &Model, v: &mut View, content: Rect, flow: bool, flow_bo
     }
     card(ui, content, lk.radius.min(10.0));
     if lk.hero && !ui.hc {
-        // D3: the accent falls away behind the page's title.
+        // D3: the accent falls away behind the page's title. Over the whole window it is
+        // glass, and the glass's clamp counts it as a ground (`glass::hero_tint`).
         let band = Rect::new(content.x + 1.0, content.y + 1.0, content.w + 10.0, 78.0);
-        let from = mix(pal.page, pal.accent, if pal.dark { 0.20 } else { 0.13 });
+        let from = mix(pal.page, pal.accent, crate::glass::hero_tint(pal.dark));
         crate::paint::gradient_down(ui.p, band, lk.radius.min(10.0) - 1.0, from, pal.page, 1.0);
     }
     // UI-FULLFROST: over the whole window the content card is glass like the chrome; what the
@@ -493,8 +494,9 @@ fn chrome(ui: &mut Ui, m: &Model) {
         // (`frost`), so the accent is laid on a little stronger and never fades out wholly, or
         // a busy desktop behind the window would wash Bold's colour out of the rail.
         let rail = Rect::new(0.0, 0.0, lk.rail_w, h);
+        // The glass's clamp counts these tints as grounds (`glass::RAIL_TINT`).
         let (top, bottom) = if ui.cx.frosted() {
-            (0.30, 0.08)
+            crate::glass::RAIL_TINT
         } else {
             (0.22, 0.0)
         };

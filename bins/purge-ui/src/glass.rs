@@ -26,7 +26,9 @@
 //!
 //! **The clamp.** A strength of 100 % is the most backdrop that keeps text readable over the
 //! worst backdrop: body text ([`Palette::text`]) at 4.5 : 1 (WCAG AA) and secondary text
-//! ([`Palette::muted`]) at 3 : 1, over the ground and the chrome, with the backdrop anywhere
+//! ([`Palette::muted`]) at 3 : 1, over every glass ground text is drawn on ([`grounds`]: the
+//! chrome, the page, and Bold's tints of the accent in the rail and the title band), with the
+//! backdrop anywhere
 //! between [`WORST_DARK`] or [`WORST_LIGHT`]. Those are what Acrylic itself measured over a pure
 //! black and a pure white window (dark: 53 to 144; light: 135 to 227, grey levels), widened by
 //! about 15 levels; Mica's tinted wallpaper stays well inside them. In dark the clamp lets 40 to
@@ -41,10 +43,10 @@
 use mdshared_app::settings::Writer;
 use mdshared_ui::cover::contrast;
 use mdshared_ui::frost::{self, Key, MARK};
-use mdshared_ui::gfx::{Painter, Rect, Rgb};
+use mdshared_ui::gfx::{Painter, Rect, Rgb, mix};
 use mdshared_ui::theme::Palette;
 
-use crate::look::{Choice, Covers};
+use crate::look::{Choice, Covers, Design};
 
 /// The strength a new settings file starts with, picked from real captures over a busy desktop:
 /// the backdrop reads clearly in dark and light, and the page's cards stay apart from its ground.
@@ -67,7 +69,15 @@ pub const WORST_LIGHT: (u8, u8) = (120, 242);
 
 /// Body text's least contrast over the backdrop, and secondary text's.
 pub const TEXT_CONTRAST: f32 = 4.5;
+/// Secondary text is 12 to 13 px, so WCAG AA would want 4.5 : 1 of it too. It is kept at 3 : 1
+/// on purpose (alpha.4 review, N3): measured with 4.5 : 1, the clamp lets only 7 to 16 % of the
+/// backdrop through in dark (40 to 47 % at 3 : 1), and in Bold over the whole window nothing at
+/// all for some presets, where the title band's tint gives muted text 4.1 : 1 even opaque. The
+/// slider would have no range left. Raising it means darker or lighter muted colours in the
+/// palettes first, not a tighter clamp.
 pub const MUTED_CONTRAST: f32 = 3.0;
+/// An icon's least contrast over the backdrop, where no text is drawn (WCAG 1.4.11, non-text).
+pub const ICON_CONTRAST: f32 = 3.0;
 
 // ---- the settings ----------------------------------------------------------------------------
 
@@ -153,54 +163,116 @@ fn veil_of(keep: f32) -> u8 {
     255 - (keep.clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
-/// The least contrast of text over the ground and the chrome, at `keep`, over the worst
-/// backdrop: body text's and secondary text's.
-pub fn worst_contrast(pal: &Palette, covers: Covers, keep: f32) -> (f32, f32) {
+/// D3 (Bold): the accent's share in the rail's gradient over a backdrop, at its top and its
+/// bottom (`screens::chrome`). It is glass, and the rail's text is drawn over it.
+pub const RAIL_TINT: (f32, f32) = (0.30, 0.08);
+
+/// D3: the accent's share at the top of the band behind a page's title (`screens::page`); the
+/// band fades to the page. Over the whole window it is glass, and the title is drawn over it.
+pub fn hero_tint(dark: bool) -> f32 {
+    if dark { 0.20 } else { 0.13 }
+}
+
+/// A ground marked as glass, and what is drawn on it: text (body and secondary), or only icons
+/// in body text's colour.
+#[derive(Clone, Copy, PartialEq, Debug)]
+struct Ground {
+    colour: Rgb,
+    /// Text is drawn on it: body text needs [`TEXT_CONTRAST`] and secondary text
+    /// [`MUTED_CONTRAST`]. Otherwise only icons are, which need [`ICON_CONTRAST`] (WCAG 1.4.11).
+    text: bool,
+}
+
+/// The glass grounds of `design` with `covers`: the title row, the key colour, the page ("Whole
+/// window"), and Bold's two tints of the accent: the rail's gradient (sampled along it) and the
+/// band behind a page's title.
+///
+/// Bold's rail carries only its icons, in body text's colour (`screens::chrome`; the selected
+/// one is on its accent pill, a badge's count on its own accent disc): no text is drawn on it.
+/// (Secondary text could not be: the rail's top is too strong a tint for it even opaque,
+/// 2.5 : 1 in some dark presets.) The title band carries the page's title and, beside it, its
+/// secondary line.
+fn grounds(pal: &Palette, covers: Covers, design: Design) -> Vec<Ground> {
+    let both = |colour| Ground { colour, text: true };
+    let mut out = vec![both(pal.title), both(key_colour(pal, covers))];
+    if covers == Covers::Window {
+        out.push(both(pal.page));
+    }
+    if design == Design::Bold {
+        // The gradient is a line through the colours; its luminance need not change one way
+        // along it (the accent's channels move apart), so it is sampled, ends included.
+        let (top, bottom) = RAIL_TINT;
+        for i in 0..=4 {
+            let t = top + (bottom - top) * i as f32 / 4.0;
+            out.push(Ground {
+                colour: mix(pal.title, pal.accent, t),
+                text: false,
+            });
+        }
+        if covers == Covers::Window {
+            let from = hero_tint(pal.dark);
+            for i in 0..=2 {
+                out.push(both(mix(pal.page, pal.accent, from * i as f32 / 2.0)));
+            }
+        }
+    }
+    out
+}
+
+/// The least contrast over the glass grounds of `design` ([`grounds`]), at `keep`, over the
+/// worst backdrop, each as a share of what it needs: body text's, secondary text's and icons'.
+/// 1 or more passes.
+fn worst_share(pal: &Palette, covers: Covers, design: Design, keep: f32) -> f32 {
+    let (text, muted, icons) = worst_contrast(pal, covers, design, keep);
+    (text / TEXT_CONTRAST)
+        .min(muted / MUTED_CONTRAST)
+        .min(icons / ICON_CONTRAST)
+}
+
+/// The least contrast over the glass grounds of `design` ([`grounds`]), at `keep`, over the
+/// worst backdrop: body text's and secondary text's where text is drawn, and icons' (body
+/// text's colour) where only icons are.
+pub fn worst_contrast(pal: &Palette, covers: Covers, design: Design, keep: f32) -> (f32, f32, f32) {
     let k = key_colour(pal, covers);
     let key = Key::new(k, veil_of(keep));
     let (lo, hi) = if pal.dark { WORST_DARK } else { WORST_LIGHT };
-    let mut grounds = vec![pal.title, k];
-    if covers == Covers::Window {
-        grounds.push(pal.page);
-    }
-    let (mut text, mut muted) = (f32::MAX, f32::MAX);
+    let grounds = grounds(pal, covers, design);
+    let (mut text, mut muted, mut icons) = (f32::MAX, f32::MAX, f32::MAX);
     for d in [lo, hi] {
         for g in &grounds {
-            let g = over(key.apply(pack(*g)), d);
-            text = text.min(contrast(over(key.apply(pack(pal.text)), d), g));
-            muted = muted.min(contrast(over(key.apply(pack(pal.muted)), d), g));
+            let ground = over(key.apply(pack(g.colour)), d);
+            let ink = contrast(over(key.apply(pack(pal.text)), d), ground);
+            if g.text {
+                text = text.min(ink);
+                muted = muted.min(contrast(over(key.apply(pack(pal.muted)), d), ground));
+            } else {
+                icons = icons.min(ink);
+            }
         }
     }
-    (text, muted)
+    (text, muted, icons)
 }
 
 /// The clamp: the largest share of the backdrop (0 to 1) whose text still reads over the
 /// worst backdrop ([`TEXT_CONTRAST`], [`MUTED_CONTRAST`]).
-pub fn keep_max(pal: &Palette, covers: Covers) -> f32 {
-    let ok = |keep: f32| {
-        let (t, m) = worst_contrast(pal, covers, keep);
-        t >= TEXT_CONTRAST && m >= MUTED_CONTRAST
-    };
-    if ok(1.0) {
-        return 1.0;
-    }
-    let (mut good, mut bad) = (0.0_f32, 1.0_f32);
-    for _ in 0..16 {
-        let mid = (good + bad) / 2.0;
-        if ok(mid) {
-            good = mid;
-        } else {
-            bad = mid;
+pub fn keep_max(pal: &Palette, covers: Covers, design: Design) -> f32 {
+    // The contrast need not fall evenly as the veil thins (a tint keeps more of itself than the
+    // key does), so every whole step of the veil is tried from opaque on, and the clamp is the
+    // last before the first that fails: every veil the slider can give is one that passed.
+    let mut good = 0u8;
+    for clear in 1..=255u8 {
+        if worst_share(pal, covers, design, clear as f32 / 255.0) < 1.0 {
+            break;
         }
+        good = clear;
     }
-    // Whole steps of the veil: the one found, or a step more opaque.
-    (255 - veil_of(good)) as f32 / 255.0
+    good as f32 / 255.0
 }
 
 /// The veils of the ground (and chrome) and of the page's surfaces, 0 to 255, at `strength`
 /// (0 to 100) of the most the palette allows.
-pub fn veils(pal: &Palette, covers: Covers, strength: u8) -> (u8, u8) {
-    let keep = strength.min(100) as f32 / 100.0 * keep_max(pal, covers);
+pub fn veils(pal: &Palette, covers: Covers, design: Design, strength: u8) -> (u8, u8) {
+    let keep = strength.min(100) as f32 / 100.0 * keep_max(pal, covers, design);
     // The ground's veil rounded first, so the layer never lets more through than the ground.
     let base = veil_of(keep);
     let layer = veil_of((255 - base) as f32 / 255.0 * LAYER_SHARE);
@@ -215,9 +287,9 @@ pub struct Keys {
 }
 
 impl Keys {
-    pub fn new(pal: &Palette, covers: Covers, strength: u8) -> Keys {
+    pub fn new(pal: &Palette, covers: Covers, design: Design, strength: u8) -> Keys {
         let k = key_colour(pal, covers);
-        let (base, layer) = veils(pal, covers, strength);
+        let (base, layer) = veils(pal, covers, design, strength);
         Keys {
             base: Key::new(k, base),
             layer: Key::new(k, layer),
@@ -535,14 +607,74 @@ mod tests {
     fn text_reads_over_the_worst_backdrop_at_every_strength() {
         for pal in palettes() {
             for covers in Covers::ALL {
-                for s in (0..=100).step_by(5) {
-                    let (base, layer) = veils(&pal, *covers, s);
-                    assert!(layer >= base, "the layer is never clearer than the ground");
-                    let keep = (255 - base) as f32 / 255.0;
-                    let (t, m) = worst_contrast(&pal, *covers, keep);
+                for design in Design::ALL {
+                    for s in (0..=100).step_by(5) {
+                        let (base, layer) = veils(&pal, *covers, *design, s);
+                        assert!(layer >= base, "the layer is never clearer than the ground");
+                        let keep = (255 - base) as f32 / 255.0;
+                        let (t, m, i) = worst_contrast(&pal, *covers, *design, keep);
+                        assert!(
+                            t >= TEXT_CONTRAST && m >= MUTED_CONTRAST && i >= ICON_CONTRAST,
+                            "dark={} {covers:?} {design:?} {s}%: text {t:.2}, muted {m:.2}, icons {i:.2}",
+                            pal.dark
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn bolds_tints_of_the_accent_are_grounds_of_the_clamp() {
+        // The review's case (alpha.4, S1): Bold, dark, whole window, at 100 %. Text over the
+        // rail's gradient and the title band reads at the limits, over the worst backdrop.
+        for pal in palettes().into_iter().filter(|p| p.dark) {
+            let g: Vec<Rgb> = grounds(&pal, Covers::Window, Design::Bold)
+                .iter()
+                .map(|g| g.colour)
+                .collect();
+            let rail = [
+                mix(pal.title, pal.accent, RAIL_TINT.0),
+                mix(pal.title, pal.accent, RAIL_TINT.1),
+            ];
+            let band = mix(pal.page, pal.accent, hero_tint(true));
+            assert!(rail.iter().chain([&band]).all(|c| g.contains(c)));
+            let (base, _) = veils(&pal, Covers::Window, Design::Bold, 100);
+            let key = Key::new(key_colour(&pal, Covers::Window), base);
+            let at = |c: Rgb, d: u8| over(key.apply(pack(c)), d);
+            for d in [WORST_DARK.0, WORST_DARK.1] {
+                for tint in rail {
+                    let icons = contrast(at(pal.text, d), at(tint, d));
+                    assert!(icons >= ICON_CONTRAST, "rail {tint:?} over {d}: {icons:.2}");
+                }
+                let text = contrast(at(pal.text, d), at(band, d));
+                let muted = contrast(at(pal.muted, d), at(band, d));
+                assert!(
+                    text >= TEXT_CONTRAST && muted >= MUTED_CONTRAST,
+                    "band over {d}: {text:.2} {muted:.2}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_clamp_lets_a_good_part_of_the_backdrop_through() {
+        // The trial is worth having only if the slider has room: at least a quarter of the
+        // backdrop shows at 100 % in every palette, and a fifth in Bold over the whole window,
+        // where the page's title and its secondary line sit on a tint of the accent (in dark
+        // with the brightest accents, 24 %).
+        for pal in palettes() {
+            for covers in Covers::ALL {
+                for design in Design::ALL {
+                    let k = keep_max(&pal, *covers, *design);
+                    let least = if (*covers, *design) == (Covers::Window, Design::Bold) {
+                        0.20
+                    } else {
+                        0.25
+                    };
                     assert!(
-                        t >= TEXT_CONTRAST && m >= MUTED_CONTRAST,
-                        "dark={} {covers:?} {s}%: text {t:.2}, muted {m:.2}",
+                        k >= least,
+                        "dark={} {covers:?} {design:?}: {k:.2}",
                         pal.dark
                     );
                 }
@@ -551,24 +683,12 @@ mod tests {
     }
 
     #[test]
-    fn the_clamp_lets_a_good_part_of_the_backdrop_through() {
-        // The trial is worth having only if the slider has room: at least a quarter of the
-        // backdrop shows at 100 % in every palette.
-        for pal in palettes() {
-            for covers in Covers::ALL {
-                let k = keep_max(&pal, *covers);
-                assert!(k >= 0.25, "dark={} {covers:?}: {k:.2}", pal.dark);
-            }
-        }
-    }
-
-    #[test]
     fn zero_is_opaque_and_strength_grows_the_backdrop() {
-        let (b0, l0) = veils(&DARK, Covers::Window, 0);
+        let (b0, l0) = veils(&DARK, Covers::Window, Design::Bold, 0);
         assert_eq!((b0, l0), (255, 255));
         let mut last = 255;
         for s in (0..=100).step_by(5) {
-            let (b, _) = veils(&DARK, Covers::Window, s);
+            let (b, _) = veils(&DARK, Covers::Window, Design::Bold, s);
             assert!(b <= last, "{s}");
             last = b;
         }
@@ -577,7 +697,7 @@ mod tests {
 
     #[test]
     fn keys_leave_unmarked_pixels_and_never_leave_the_hosts_mark() {
-        let keys = Keys::new(&DARK, Covers::Window, 100);
+        let keys = Keys::new(&DARK, Covers::Window, Design::Bold, 100);
         assert_eq!(keys.apply(0xff12_3456), 0xff12_3456);
         assert_eq!(keys.apply(0x0012_3456), 0x0012_3456);
         for c in (0..=255u32).step_by(5) {
@@ -596,7 +716,7 @@ mod tests {
     #[test]
     fn the_layer_shows_less_backdrop_than_the_ground() {
         for pal in [DARK, LIGHT] {
-            let keys = Keys::new(&pal, Covers::Window, 100);
+            let keys = Keys::new(&pal, Covers::Window, Design::Bold, 100);
             let k = key_colour(&pal, Covers::Window);
             let px = |mark: u8| {
                 ((mark as u32) << 24) | ((k[0] as u32) << 16) | ((k[1] as u32) << 8) | k[2] as u32
