@@ -80,8 +80,15 @@ pub struct Shown {
     pub flags: Flags,
 }
 
-/// Characters that are never shown as themselves.
-fn hidden(c: char) -> bool {
+/// Characters that are never shown as themselves, in either renderer: every name and path of the
+/// view goes through [`shown`] or [`shown_line`] before the TaskDialog's pages or the toolkit's sheet
+/// are made of it. Beside the controls, the spaces other than U+0020 and the invisible format
+/// characters, the code points a system font maps to a glyph with no outline (TK-1 review S1:
+/// `segoeui.ttf` and `seguisb.ttf` map the unassigned U+1CBB and U+1CBC to blank glyphs as wide as
+/// a letter, so `C:\Program\u{1cbb}Files` would read as `C:\Program Files`). The toolkit dialog's
+/// test `blank_glyphs_of_the_segoe_files_are_hidden` draws every code point of the three Segoe
+/// files and fails on a blank one that is not here.
+pub(crate) fn hidden(c: char) -> bool {
     let u = c as u32;
     c == '"'
         || c.is_control()
@@ -97,6 +104,7 @@ fn hidden(c: char) -> bool {
                 | 0x17B4
                 | 0x17B5
                 | 0x180B..=0x180F
+                | 0x1CBB..=0x1CBC
                 | 0x200B..=0x200F
                 | 0x2028..=0x202F
                 | 0x205F..=0x206F

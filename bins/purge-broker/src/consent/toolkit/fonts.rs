@@ -166,6 +166,55 @@ mod tests {
         assert!(first.ends_with(r"Fonts\segoeui.ttf"), "{}", first.display());
     }
 
+    /// TK-1 review S1: a code point a file maps to a glyph with no outline draws as a gap that
+    /// can pass for a space. Each of the three files alone: every code point its character map
+    /// has (`has_glyph` of a collection of that one file) is drawn with the dialog's own painter
+    /// at 48 px, and one that leaves no ink must be U+0020 or [`hidden`], which both renderers
+    /// escape. The outlines are not read directly: the font parsers (skrifa, read-fonts) are in
+    /// the tree only under the toolkit and would be a new direct dependency of the broker, so
+    /// this asks the drawing the window does instead.
+    ///
+    /// Seen 2026-11-28 on Windows 11 build 26300: U+1CBB and U+1CBC in `segoeui.ttf` and
+    /// `seguisb.ttf` (and the spaces and format characters `hidden` already had); none in
+    /// `seguisym.ttf`.
+    #[test]
+    fn blank_glyphs_of_the_segoe_files_are_hidden() {
+        use super::super::super::text::hidden;
+        let windows = purge_win::known_folders::system_windows_dir().unwrap();
+        let mut blank_found = Vec::new();
+        let mut bad = Vec::new();
+        for (file, face) in files_in(&windows)
+            .iter()
+            .zip([Face::Ui, Face::Semibold, Face::Ui])
+        {
+            let one = fixed_fonts(&[file.as_path()]).unwrap();
+            let mut gfx = Gfx::with_fonts(&one);
+            let mut bmp = mdshared_text::Bitmap::new(240, 120);
+            let mut mapped = 0;
+            for c in (0..=0x10FFFF_u32).filter_map(char::from_u32) {
+                if !one.has_glyph(face.weight(), c) {
+                    continue;
+                }
+                mapped += 1;
+                bmp.clear([255, 255, 255]);
+                let mut p = Painter::new(&mut bmp, &mut gfx, 1.0);
+                p.text(face, 48.0, 100.0, 60.0, &c.to_string(), [0, 0, 0], 140.0);
+                if bmp.pixels.iter().any(|&v| v < 250) {
+                    continue;
+                }
+                blank_found.push(c as u32);
+                if c != ' ' && !hidden(c) {
+                    bad.push(format!("{}: U+{:04X}", file.display(), c as u32));
+                }
+            }
+            assert!(mapped > 500, "{}: {mapped} code points", file.display());
+        }
+        // The scan sees a blank glyph when there is one: the space's.
+        assert!(blank_found.contains(&0x20), "{blank_found:x?}");
+        eprintln!("blank glyphs: {blank_found:x?}");
+        assert!(bad.is_empty(), "blank glyphs not escaped: {bad:#?}");
+    }
+
     #[test]
     fn a_file_that_cannot_be_read_is_no_fonts_never_fewer() {
         let dir = std::env::temp_dir().join(format!("purge-tk1-fonts-{}", std::process::id()));

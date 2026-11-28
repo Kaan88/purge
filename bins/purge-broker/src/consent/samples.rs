@@ -237,7 +237,7 @@ fn long(n: usize) -> BoundPlan {
 }
 
 /// Names that try to mislead: a right-to-left override, a line break, a look-alike and a name
-/// longer than the cut. And one that does not: a folder named wholly in another script, which the
+/// longer than the cut, and a blank glyph that reads as a space. And one that does not: a folder named wholly in another script, which the
 /// view shows as it is and a renderer with a fixed set of fonts may have no glyphs for (review B1;
 /// `Sheet::drawable`). It is the only text of any sample outside ASCII that reaches a sheet.
 fn hostile() -> BoundPlan {
@@ -253,6 +253,9 @@ fn hostile() -> BoundPlan {
             "h5",
             "C:\\Users\\kaan\\Documents\\\u{65e5}\u{672c}\u{8a9e}\u{306e}\u{30e1}\u{30e2}",
         ),
+        // A code point the Segoe fonts map to a blank glyph as wide as a letter (TK-1 review S1):
+        // drawn, it would read as "C:\Program Files\Vendor".
+        file("h6", "C:\\Program\u{1CBB}Files\\Vendor"),
     ])
 }
 

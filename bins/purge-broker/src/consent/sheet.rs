@@ -199,6 +199,23 @@ mod tests {
     use super::super::text::drawable;
     use super::*;
 
+    /// TK-1 review S1: a code point the Segoe fonts draw as a blank glyph is escaped where the
+    /// text enters the view, so the TaskDialog's pages and the toolkit's sheet both show it.
+    #[test]
+    fn a_blank_glyph_is_escaped_for_both_renderers() {
+        let all = samples::all();
+        let hostile = all.iter().find(|s| s.name == "hostile").unwrap();
+        let paged: String = pages(&hostile.view)
+            .iter()
+            .flat_map(|p| [p.content.clone(), p.expanded.clone().unwrap_or_default()])
+            .collect();
+        let lines = sheet(&hostile.view).lines().join("\n");
+        for text in [&paged, &lines] {
+            assert!(text.contains(r"C:\Program\u{1cbb}Files\Vendor"), "{text}");
+            assert!(!text.contains('\u{1cbb}'));
+        }
+    }
+
     /// TK-1, rule 2: what the renderer's layout says it cannot draw is written out, the note is
     /// added, and a renderer that still says so of the result gets no sheet.
     #[test]
