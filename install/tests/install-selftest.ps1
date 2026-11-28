@@ -393,6 +393,39 @@ Check 'install.ps1 compiles as a script block' ($null -ne $sb)
     $threw = $null
     try { Assert-EngineWithoutExecutor $badEngine } catch { $threw = $_.Exception.Message }
     Check 'engine marker: the install refuses an executor build' ($threw -match 'rig-exec')
+
+    # The staging guard of the broker (review S-A): the release marker must be there, the toolkit's
+    # source paths must not.
+    $relBroker = Join-Path $Work 'broker-release.exe'
+    $tkBroker = Join-Path $Work 'broker-toolkit.exe'
+    $bothBroker = Join-Path $Work 'broker-both.exe'
+    [IO.File]::WriteAllText($relBroker, "x --consent toolkit is refused: $($script:BrokerReleaseMarker) (cargo ...) y")
+    [IO.File]::WriteAllText($tkBroker, 'x C:\cargo\git\checkouts\markdown-shared-rs-1\d789e8e\crates\mdshared-ui\src\host\run.rs y')
+    [IO.File]::WriteAllText($bothBroker, "$($script:BrokerReleaseMarker) /home/x/crates/mdshared-ui/src/a.rs")
+    Check 'broker build: the release marker alone is the release build' ((Get-BrokerBuild $relBroker) -eq 'release')
+    Check 'broker build: a toolkit path alone is the toolkit build' ((Get-BrokerBuild $tkBroker) -eq 'toolkit')
+    Check 'broker build: neither is unknown' ((Get-BrokerBuild $good) -eq 'unknown')
+    Check 'broker build: both is unknown' ((Get-BrokerBuild $bothBroker) -eq 'unknown')
+    $threw = $null
+    try { Assert-ReleaseBroker $relBroker } catch { $threw = $_.Exception.Message }
+    Check 'broker build: the release build is taken' ($null -eq $threw)
+    foreach ($case in @(@($tkBroker, 'toolkit-consent'), @($good, 'staging marker'), @($bothBroker, 'staging marker'))) {
+        $threw = $null
+        try { Assert-ReleaseBroker $case[0] } catch { $threw = $_.Exception.Message }
+        Check "broker build: $(Split-Path -Leaf $case[0]) is refused as the release broker" ($threw -match $case[1])
+    }
+    $threw = $null
+    try { Assert-ReleaseBroker $tkBroker -Toolkit } catch { $threw = $_.Exception.Message }
+    Check 'broker build: -Toolkit takes the toolkit build' ($null -eq $threw)
+    $threw = $null
+    try { Assert-ReleaseBroker $relBroker -Toolkit } catch { $threw = $_.Exception.Message }
+    Check 'broker build: -Toolkit refuses the release build' ($threw -match 'ToolkitBroker')
+    # The real binaries, when the caller names them (PURGE_TEST_BROKER_RELEASE / _TOOLKIT).
+    foreach ($real in @(@($env:PURGE_TEST_BROKER_RELEASE, 'release'), @($env:PURGE_TEST_BROKER_TOOLKIT, 'toolkit'))) {
+        if ($real[0] -and (Test-Path -LiteralPath $real[0] -PathType Leaf)) {
+            Check "broker build: $($real[0]) is the $($real[1]) build" ((Get-BrokerBuild $real[0]) -eq $real[1])
+        }
+    }
 }
 
 # ---------------------------------------------------------------------- the -WhatIf plan (no elevation)

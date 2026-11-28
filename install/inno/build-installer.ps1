@@ -95,6 +95,12 @@ foreach ($file in @($engineExe, $brokerExe, $uiExe, $installPs1)) {
 }
 if (-not (Test-Path -LiteralPath $kbDir -PathType Container)) { throw "the kb folder is missing: $kbDir" }
 
+# The staged broker is the release build, never one built with --features toolkit-consent (review
+# S-A of BROKER-CONSENT-UI: a rig or preview build writes the same file name, and -SkipBuild packs what
+# is there). install.ps1's check, dot-sourced in a child scope so that its parameters do not replace
+# this script's.
+& { param($Exe, $Script) . $Script; Assert-ReleaseBroker $Exe } $brokerExe $installPs1
+
 # Every shipped exe carries the version (its VERSIONINFO: bins\versioninfo.rs).
 & $checkVersion -Exe $engineExe, $brokerExe, $uiExe | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "an exe does not carry version $version (check-version.ps1 above)" }
