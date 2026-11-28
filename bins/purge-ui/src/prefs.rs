@@ -176,14 +176,29 @@ impl Store {
     /// one: another Purge window may have saved its place since this one read the file, and a
     /// change of a setting here must not put an older place back. A failure is said on stderr
     /// and changes nothing else: the window goes on with what was chosen.
+    ///
+    /// A file that is there but cannot be read is not written over (review S3): it may hold
+    /// what another window saved. Nothing more is written this run either, so a slider drag
+    /// does not wait out the two-second patient read on every step.
     pub fn save(&mut self, p: &Prefs) {
         let Some(path) = self.writable_path() else {
             return;
         };
-        if let Ok(Some(text)) = settings::read_patiently(&path)
-            && let Some(theirs) = window_of(&text)
-        {
-            self.window = Some(theirs);
+        match settings::read_patiently(&path) {
+            Ok(Some(text)) => {
+                if let Some(theirs) = window_of(&text) {
+                    self.window = Some(theirs);
+                }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                eprintln!(
+                    "Purge: {} could not be read ({e}); the settings are not saved this run",
+                    path.display()
+                );
+                self.writable = false;
+                return;
+            }
         }
         write(&path, &p.text_with(self.window.as_ref()));
     }
@@ -207,6 +222,12 @@ fn write(path: &std::path::Path, text: &str) {
     if let Err(e) = settings::write_atomic(path, text) {
         eprintln!("Purge: {} could not be written ({e})", path.display());
     }
+}
+
+/// Whether `text` has this file's `[purge-ui]` section header.
+fn has_section(text: &str) -> bool {
+    let header = format!("[{SECTION}]");
+    text.lines().any(|l| l.trim() == header)
 }
 
 /// `text` with its `window` line (all of them) replaced by one for `state`, where the first
@@ -249,8 +270,10 @@ impl Store {
             return;
         };
         let text = match settings::read_patiently(&path) {
-            Ok(Some(text)) => with_window(&text, &state),
-            Ok(None) => p.text_with(Some(&state)),
+            // A damaged file (no `[purge-ui]` header: cut short, emptied, written by something
+            // else) is written whole, so place saves heal it (review N3).
+            Ok(Some(text)) if has_section(&text) => with_window(&text, &state),
+            Ok(_) => p.text_with(Some(&state)),
             Err(e) => {
                 eprintln!(
                     "Purge: {} could not be read ({e}); the window's place is not saved",
@@ -485,6 +508,58 @@ mod tests {
         assert!(text.contains("later_key=7\n"), "{text}");
         assert_eq!(text.matches("window=").count(), 1, "{text}");
         assert_eq!(window_of(&text), Some(state()));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_file_that_cannot_be_read_is_not_written_over() {
+        // A folder where the file should be: every read fails, as for a locked file.
+        let dir = std::env::temp_dir().join(format!("purge-ui-unread-{}", std::process::id()));
+        let path = dir.join("ui-settings.ini");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(path.join("inside")).unwrap();
+        let mut store = Store::at(path.clone());
+        store.save(&Prefs::default());
+        assert!(!store.writable, "no more saves this run");
+        assert!(path.join("inside").is_dir(), "left alone");
+        assert!(!dir.join("ui-settings.ini.tmp").exists(), "not even tried");
+        // The next save (a slider's next step) returns at once.
+        let began = std::time::Instant::now();
+        store.save(&Prefs::default());
+        assert!(began.elapsed() < std::time::Duration::from_millis(500));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_place_save_heals_a_damaged_file() {
+        let dir = std::env::temp_dir().join(format!("purge-ui-heal-{}", std::process::id()));
+        let path = dir.join("ui-settings.ini");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = Prefs {
+            preset: Preset::Amber,
+            ..Prefs::default()
+        };
+        for damaged in ["", "garbage \u{0}\n", "design=standard\nwindow=garbage\n"] {
+            std::fs::write(&path, damaged).unwrap();
+            let mut store = Store::at(path.clone());
+            store.save_window(&p, state());
+            let text = std::fs::read_to_string(&path).unwrap();
+            assert!(
+                text.starts_with("[purge-ui]\nversion=1\n"),
+                "{damaged:?}: {text}"
+            );
+            assert_eq!(text.matches("window=").count(), 1, "{text}");
+            let mut read = Store::at(path.clone());
+            assert_eq!(read.load(), p, "{damaged:?}");
+            assert_eq!(read.window(), Some(state()));
+        }
+        // A whole file keeps its other lines through a place save, as before.
+        std::fs::write(&path, p.text() + "later_key=7\n").unwrap();
+        Store::at(path.clone()).save_window(&Prefs::default(), state());
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("later_key=7\n"), "{text}");
+        assert!(text.contains("colour=amber\n"), "{text}");
         let _ = std::fs::remove_dir_all(dir);
     }
 
