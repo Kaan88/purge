@@ -6,12 +6,12 @@
 use std::time::{Duration, Instant};
 
 use mdshared_ui::dropdown::Dropdown;
-use mdshared_ui::gfx::Rect;
+use mdshared_ui::gfx::{Gfx, Rect};
 use mdshared_ui::palette::Palette as CommandPalette;
 use mdshared_ui::rows::Rows;
 use mdshared_ui::scroll::SmoothScroll;
 use mdshared_ui::table::{Align, Column, Table};
-use mdshared_ui::textfield::TextField;
+use mdshared_ui::textfield::{EditLabels, FieldArea, FieldInput, TextField};
 
 use mdshared_app::backdrop::Backdrop;
 
@@ -204,6 +204,12 @@ impl Dropdowns {
     }
 }
 
+/// The host timer of the search field's input (its edge scroll and its menu's delay).
+pub const SEARCH_TIMER: &str = "purge.search-field";
+
+/// The edit menus' words: Purge speaks English.
+pub const EDIT_LABELS: EditLabels = EditLabels::ENGLISH;
+
 /// A short message at the bottom of the page that goes away by itself.
 pub struct Toast {
     pub text: String,
@@ -212,10 +218,18 @@ pub struct Toast {
 
 pub struct View {
     pub search: TextField,
-    /// The search field's caret stops, measured by the last frame.
-    pub search_stops: Vec<f32>,
+    /// All of the search field's input (`textfield::FieldInput`): click, drag with edge
+    /// scrolling, double and triple click, Shift+click, the right-click edit menu, the keys, and
+    /// letting go of a lost press.
+    pub search_input: FieldInput,
+    /// The search field's frame and text as the last frame drew them; `None` until it is drawn.
+    pub search_field: Option<FieldArea>,
     /// The search field's text area, as last drawn.
     pub search_area: Rect,
+    /// The fonts and glyph caches the pointer's hits on text are measured with outside a draw
+    /// (the search field's and the palette's query box). Made on first use; shaping uses the
+    /// thread's one font collection, the one the window draws with.
+    pub hit_gfx: Option<Gfx>,
     pub blink: Option<Duration>,
     pub table: Table,
     pub list: ListView,
@@ -276,8 +290,12 @@ impl View {
         ]);
         View {
             search: TextField::new(),
-            search_stops: Vec::new(),
+            search_input: FieldInput::new()
+                .labels(EDIT_LABELS)
+                .timer_name(SEARCH_TIMER),
+            search_field: None,
             search_area: Rect::default(),
+            hit_gfx: None,
             blink: None,
             table,
             list: ListView::new(),

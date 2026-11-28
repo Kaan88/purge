@@ -13,7 +13,7 @@ use mdshared_ui::a11y::{self, accesskit};
 use mdshared_ui::cursor::Cursor;
 use mdshared_ui::dropdown::Outcome as DdOutcome;
 use mdshared_ui::focus::Focus;
-use mdshared_ui::gfx::{Painter, Rect, Rgb};
+use mdshared_ui::gfx::{Gfx, Painter, Rect, Rgb};
 use mdshared_ui::host::{App, Button, Cx, Event, KeyPress};
 use mdshared_ui::keys::{KeyName, Mods};
 use mdshared_ui::palette::{Entry, Outcome as PaletteOutcome, Palette as CommandPalette};
@@ -22,6 +22,7 @@ use mdshared_ui::rows::Nav;
 use mdshared_ui::scroll;
 use mdshared_ui::segments;
 use mdshared_ui::select::TypeAhead;
+use mdshared_ui::textfield::FieldOutcome;
 use mdshared_ui::theme::Palette;
 use mdshared_ui::tokens::{self, Tokens};
 
@@ -466,6 +467,91 @@ impl PurgeApp {
         any
     }
 
+    /// Lets go of every press in hand with no change where the pointer is: the button pressed,
+    /// the strength slider's thumb (it follows `pressed`), the list's scroll thumb, the
+    /// drop-downs, the palette (its rows, its scroll bar, its query box and the box's menu) and
+    /// the search field (its drag and its menu). For a press the window lost, and a press passed
+    /// over on a page coming in. True when anything was held.
+    fn let_go(&mut self) -> bool {
+        let mut ended = self.pressed.take().is_some();
+        ended |= self.view.list.drag.take().is_some();
+        for dd in DD_ALL {
+            if let Some(d) = self.view.dds.get(dd) {
+                ended |= d.cancel();
+            }
+        }
+        if let Some(p) = &mut self.view.palette {
+            ended |= p.cancel();
+        }
+        let dragging = self.view.search_input.is_dragging();
+        ended |= self.view.search_input.cancel() || dragging;
+        ended
+    }
+
+    /// Whether the search field takes the pointer and the keys now: drawn on the Programs page,
+    /// with nothing open over it.
+    fn search_live(&self) -> bool {
+        self.model.page == Page::Programs
+            && self.view.search_field.is_some()
+            && !self.overlay()
+            && self.view.dds.open().is_none()
+    }
+
+    /// Gives one event to the search field's input (`textfield::FieldInput`): every pointer
+    /// event, the keys and text while it has the keyboard, and the losses that end its drag.
+    /// True when the field took it, so it goes nowhere else.
+    fn search_event(&mut self, cx: &mut Cx<'_, ()>, event: &Event) -> bool {
+        let Some(area) = self.view.search_field else {
+            return false;
+        };
+        if !self.search_live() {
+            // Covered or gone: its drag ends and its menu closes.
+            if self.view.search_input.cancel() {
+                cx.request_redraw_all();
+            }
+            return false;
+        }
+        let focused = self.focus.is_focused(SEARCH);
+        let v = &mut self.view;
+        let gfx = v.hit_gfx.get_or_insert_with(Gfx::new);
+        let o = v
+            .search_input
+            .event(cx, &mut v.search, gfx, area, focused, event);
+        if !o.taken() {
+            return false;
+        }
+        if o.redraw() {
+            v.page_dirty = true;
+        }
+        match event {
+            Event::PointerMove { x, y } => {
+                let cursor = v.search_input.cursor_at(area, (*x, *y));
+                cx.set_cursor(cursor.unwrap_or(Cursor::Default));
+                self.pointer = (*x, *y);
+            }
+            Event::Press { x, y, .. } => {
+                self.pointer = (*x, *y);
+                self.close_dropdowns();
+                self.focus.pointer_used();
+                self.pressed = None;
+            }
+            Event::Key(_) => self.focus.key_used(),
+            _ => {}
+        }
+        match o {
+            FieldOutcome::Focus => {
+                self.focus.focus(SEARCH);
+            }
+            FieldOutcome::Edited => {
+                let q = self.view.search.text().to_string();
+                self.model.programs.set_query(&q);
+                self.view.list.jump_top();
+            }
+            _ => {}
+        }
+        true
+    }
+
     // ---- what a control does -----------------------------------------------------------------
 
     pub fn go(&mut self, page: Page) {
@@ -869,10 +955,11 @@ impl PurgeApp {
             return;
         }
         if let Some(p) = &mut self.view.palette {
-            if p.pointer_move(x, y) {
+            let gfx = self.view.hit_gfx.get_or_insert_with(Gfx::new);
+            if p.pointer_motion((x, y), cx.now(), gfx) {
                 cx.request_redraw_all();
             }
-            cx.set_cursor(Cursor::Default);
+            cx.set_cursor(p.cursor_at((x, y)).unwrap_or(Cursor::Default));
             return;
         }
         if let Some(grip) = self.view.list.drag {
@@ -939,7 +1026,8 @@ impl PurgeApp {
         self.focus.pointer_used();
         cx.request_redraw_all();
         if let Some(p) = &mut self.view.palette {
-            let o = p.press(x, y, cx.mods(), clicks.min(3) as u8);
+            let gfx = self.view.hit_gfx.get_or_insert_with(Gfx::new);
+            let o = p.pointer_press((x, y), cx.mods(), clicks.min(3) as u8, cx.now(), gfx);
             return self.palette_outcome(cx, o);
         }
         // An open menu takes the press: on a row it is remembered, elsewhere the menu closes.
@@ -977,18 +1065,7 @@ impl PurgeApp {
             Role::Slider(_) => {
                 self.slider_drag(cx, x, y);
             }
-            Role::Edit(_) => {
-                let area = self.view.search_area;
-                let stops = std::mem::take(&mut self.view.search_stops);
-                if clicks == 2 {
-                    self.view.search.select_word_at(x - area.x, &stops);
-                } else if clicks >= 3 {
-                    self.view.search.select_all();
-                } else {
-                    self.view.search.press(x - area.x, &stops, cx.mods().shift);
-                }
-                self.view.search_stops = stops;
-            }
+            // The search field's own presses are its input's (`search_event`), before this.
             _ => {}
         }
     }
@@ -1028,7 +1105,8 @@ impl PurgeApp {
         self.pointer = (x, y);
         cx.request_redraw_all();
         if let Some(p) = &mut self.view.palette {
-            let o = p.release(x, y);
+            let gfx = self.view.hit_gfx.get_or_insert_with(Gfx::new);
+            let o = p.pointer_release((x, y), cx.now(), gfx);
             return self.palette_outcome(cx, o);
         }
         self.view.list.drag = None;
@@ -1119,7 +1197,8 @@ impl PurgeApp {
         cx.request_redraw_all();
 
         if let Some(p) = &mut self.view.palette {
-            let o = p.key(&name, mods, k.text.as_deref());
+            let gfx = self.view.hit_gfx.get_or_insert_with(Gfx::new);
+            let o = p.key_with_menu(&name, mods, k.text.as_deref(), gfx);
             return self.palette_outcome(cx, o);
         }
         self.focus.key_used();
@@ -1213,30 +1292,17 @@ impl PurgeApp {
         };
         let press = plain && matches!(name, KeyName::Enter | KeyName::Space);
         match c.role {
-            Role::Edit(_) => {
-                match self
-                    .view
-                    .search
-                    .handle_key(&name, mods, k.text.as_deref(), true)
+            // The editing keys were the field's input's (`search_event`); these are the rest.
+            Role::Edit(_) if matches!(name, KeyName::Down | KeyName::Enter) => {
+                // Down the list from the search field.
+                self.focus.focus(LIST);
+                if self.model.programs.sel.cursor().is_none()
+                    && !self.model.programs.rows.is_empty()
                 {
-                    Some(true) => {
-                        let q = self.view.search.text().to_string();
-                        self.model.programs.set_query(&q);
-                        self.view.list.jump_top();
-                    }
-                    Some(false) => {}
-                    None if matches!(name, KeyName::Down | KeyName::Enter) => {
-                        // Down the list from the search field.
-                        self.focus.focus(LIST);
-                        if self.model.programs.sel.cursor().is_none()
-                            && !self.model.programs.rows.is_empty()
-                        {
-                            self.model.programs.sel.select_only(0);
-                        }
-                    }
-                    None => {}
+                    self.model.programs.sel.select_only(0);
                 }
             }
+            Role::Edit(_) => {}
             Role::List => self.list_key(cx, &name, mods, k.text.as_deref()),
             Role::Tab(_) if screens::programs_tab(c.id).is_some() => {
                 let at = screens::programs_tab(c.id).map(Tab::index);
@@ -1414,6 +1480,8 @@ impl PurgeApp {
             self.view.toast.as_ref().map(|t| t.until),
             self.script.as_ref().and_then(|s| s.due()),
             self.place.as_ref().and_then(|p| p.due(cx.now())),
+            // The palette's query box: a drag's edge scroll, its edit menu's delay.
+            self.view.palette.as_ref().and_then(|p| p.text_deadline()),
         ];
         if let Some(at) = wakes.into_iter().flatten().min() {
             cx.wake_at(at);
@@ -1421,6 +1489,14 @@ impl PurgeApp {
     }
 
     fn wake(&mut self, cx: &mut Cx<'_, ()>, now: Instant) {
+        if let Some(p) = &mut self.view.palette
+            && p.text_deadline().is_some_and(|at| at <= now)
+        {
+            let gfx = self.view.hit_gfx.get_or_insert_with(Gfx::new);
+            if p.tick_text(now, gfx) {
+                cx.request_redraw_all();
+            }
+        }
         if let Some(state) = self.place.as_mut().and_then(|p| p.wake(cx, now)) {
             self.store.save_window(&self.saved, state);
         }
@@ -2040,6 +2116,20 @@ impl App for PurgeApp {
         self.timers(cx);
     }
 
+    fn timer_fired(&mut self, cx: &mut Cx<'_, ()>, name: &str) {
+        // The search field's input: a drag's edge scroll, its edit menu's delay.
+        if let Some(area) = self.view.search_field {
+            let v = &mut self.view;
+            let gfx = v.hit_gfx.get_or_insert_with(Gfx::new);
+            if v.search_input
+                .timer_fired(cx, &mut v.search, gfx, area, name)
+                .redraw()
+            {
+                v.page_dirty = true;
+            }
+        }
+    }
+
     fn event(&mut self, cx: &mut Cx<'_, ()>, event: Event) {
         // What may change what the page shows has it drawn again while it comes in
         // (`View::page_dirty`): the pointer's moves and the timers say so themselves, the
@@ -2051,13 +2141,7 @@ impl App for PurgeApp {
                 // Nothing pressed before goes on past a passed-over press or release: the
                 // button, the list's drag (its scroll bar) and a drop-down's press all end here
                 // (review N8), as when the window loses the focus.
-                let mut ended = self.view.list.drag.take().is_some();
-                for dd in DD_ALL {
-                    if let Some(d) = self.view.dds.get(dd) {
-                        ended |= d.cancel();
-                    }
-                }
-                if self.pressed.take().is_some() || ended {
+                if self.let_go() {
                     self.view.page_dirty = true;
                     cx.request_redraw_all();
                 }
@@ -2069,8 +2153,11 @@ impl App for PurgeApp {
                 false
             }
         };
+        // The search field's input sees every event first, wherever it happened: a press
+        // elsewhere is what ends its drag and closes its menu.
+        let taken = !blocked && self.search_event(cx, &event);
         match event {
-            _ if blocked => {}
+            _ if blocked || taken => {}
             Event::PointerMove { x, y } => self.pointer_move(cx, x, y),
             Event::PointerLeave => {
                 // Gone: the end of a page switch has nothing to look under.
@@ -2088,6 +2175,19 @@ impl App for PurgeApp {
                 button: Button::Left,
                 clicks,
             } => self.press(cx, x, y, clicks),
+            // The right button: the palette's query box has an edit menu.
+            Event::Press {
+                x,
+                y,
+                button: Button::Right,
+                ..
+            } => {
+                if let Some(p) = &mut self.view.palette {
+                    let gfx = self.view.hit_gfx.get_or_insert_with(Gfx::new);
+                    let o = p.secondary_press((x, y), cx.now(), gfx);
+                    self.palette_outcome(cx, o);
+                }
+            }
             Event::Release {
                 x,
                 y,
@@ -2095,27 +2195,31 @@ impl App for PurgeApp {
             } => self.release(cx, x, y),
             Event::Wheel { dy, .. } => self.wheel(cx, dy),
             Event::Key(k) => self.key(cx, k),
+            // The search field's text was its input's (`search_event`).
             Event::Text(t) => {
-                if let Some(p) = &mut self.view.palette {
+                // Committed text is dropped while the query box's edit menu is open, as a
+                // field's input drops it.
+                if let Some(p) = &mut self.view.palette
+                    && !p.edit_menu_open()
+                {
                     let o = p.key(&KeyName::Char(' '), Mods::default(), Some(&t));
                     self.palette_outcome(cx, o);
-                } else if self.focus.is_focused(SEARCH) && self.view.search.insert(&t) {
-                    let q = self.view.search.text().to_string();
-                    self.model.programs.set_query(&q);
-                    cx.request_redraw_all();
                 }
             }
+            // winit sends no release when the window loses the mouse in the middle of a press
+            // (Alt+Tab, a dialog): everything that holds one lets go where it is. The host follows
+            // a `Focus(false)` with a `PressLost` for each button still down; both let go.
             Event::Focus(on) => {
                 if !on {
-                    self.pressed = None;
-                    self.view.list.drag = None;
-                    for dd in DD_ALL {
-                        if let Some(d) = self.view.dds.get(dd) {
-                            d.cancel();
-                        }
-                    }
+                    self.let_go();
                 }
                 cx.request_redraw_all();
+            }
+            Event::PressLost { .. } => {
+                if self.let_go() {
+                    self.view.page_dirty = true;
+                    cx.request_redraw_all();
+                }
             }
             Event::Theme { .. } | Event::Contrast(_) => self.retheme(cx),
             Event::Wake(now) => self.wake(cx, now),

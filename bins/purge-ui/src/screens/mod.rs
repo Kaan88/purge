@@ -215,6 +215,8 @@ pub fn draw(ui: &mut Ui, m: &Model, v: &mut View) {
             draw_dropdown_menu_animated(ui.p, &pal, ui.cx.anim(), (dd, "menu"), d, window);
         }
     }
+    // The search field's edit menu (right click, Shift+F10), over everything too.
+    v.search_input.draw_menu(ui.p, &pal, window);
 
     if let Some(toast) = &v.toast {
         let t = ui.cx.anim().toggle("toast", true, fluent::ENTER);
