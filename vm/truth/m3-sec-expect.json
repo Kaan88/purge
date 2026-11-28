@@ -36,7 +36,19 @@
     "kinds": ["uninstall.run", "plan.execute"],
     "min_medium_attempts": 24,
     "plan_needs_verification_box": true,
-    "shot_patterns": { "shown": 10, "attack": 8, "control": 8, "approved": 2 }
+    "shot_patterns": { "shown": 10, "attack": 8, "control": 8, "approved": 2 },
+    "toolkit": {
+      "_": "Only a -ConsentUi toolkit run. Probes: 4 property calls, WM_GETOBJECT, and for each of winit's 3 messages 1 to the thread and 2 to each of 3 windows. Times count from the end of the list on screen (arm) or the dialog found (enter), and from the kill.",
+      "min_probe_attempts": 26,
+      "early_click_max_ms": 900,
+      "hold_down_max_ms": 900,
+      "hold_up_min_ms": 1100,
+      "enter_max_ms": 1000,
+      "kill_dialog_gone_max_ms": 5000,
+      "kill_exit_max_ms": 30000,
+      "kill_exit_code": 0,
+      "shot_patterns": { "probe": 2, "rule-arm": 2, "rule-enter": 2, "after-kill": 1 }
+    }
   },
   "uac": {
     "uac_admin": 5,

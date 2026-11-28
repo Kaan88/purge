@@ -119,6 +119,7 @@ try {
     Check 'observe: the button is there, disabled until the box is ticked' ($d.has_primary -eq $true -and $d.primary_enabled -eq $false) "primary=$($d.has_primary)/$($d.primary_enabled)"
     Check 'observe: Cancel is there; no Next or Back' ($d.has_cancel -eq $true -and $d.has_next -eq $false -and $d.has_back -eq $false)
     Check 'observe: the button, Cancel and the box have rectangles' ($d.rects.primary -and $d.rects.cancel -and $d.rects.verify) "primary=$($d.rects.primary -join ',') cancel=$($d.rects.cancel -join ',') verify=$($d.rects.verify -join ',')"
+    Check 'observe: a list that fits has its end on screen, and its box takes a tick' ($d.end_in_view -eq $true -and $d.verify.enabled -eq $true -and @($d.lines_in_view).Count -eq 2) "end=$($d.end_in_view) box_enabled=$(if ($d.verify) { $d.verify.enabled }) lines_in_view=$(@($d.lines_in_view) -join '-')"
     Check 'observe: the labels are the view''s' ($d.labels.primary -eq 'Restore 3 items' -and $d.labels.cancel -eq 'Cancel') "primary='$($d.labels.primary)' cancel='$($d.labels.cancel)'"
 
     # ---- 2. the control: Cancel by every method reaches the dialog (a new one follows in the same window)
@@ -166,7 +167,15 @@ try {
     $d = Invoke-Observe 'observe-long'
     Check 'long: every line is in the tree' ([int]$d.lines -ge 200 -and [int]$d.attention_total -eq 200) "lines=$($d.lines) attention=$($d.attention_total)"
     Check 'long: the button is disabled and the hint says to scroll' ($d.primary_enabled -eq $false -and "$($d.hint)" -match 'Scroll to the end') "hint='$($d.hint)'"
+    # Review S6: the box takes no tick before the end of the list was on screen. By UI Automation only: the posted
+    # attempt on the box begins with Tab and Space, and while the box is disabled Cancel is the only stop of Tab, so
+    # Space would press Cancel (seen here: Declined), which is the rule and not what this row is about.
+    Check 'long: the end is not on screen, and the box is disabled' ($d.end_in_view -eq $false -and $d.verify -and $d.verify.enabled -eq $false -and $d.verify.toggle -eq 'Off') "end=$($d.end_in_view) box_enabled=$(if ($d.verify) { $d.verify.enabled }) lines_in_view=$(@($d.lines_in_view) -join '-')"
+    $null = Invoke-Drive 'long-uia-verify' 'uia' 'attack' @('verify') $d
+    $still = Invoke-Observe 'observe-long-2'
+    Check 'long: TogglePattern ticks nothing before the end was seen' ($still.found -eq $true -and $still.verify -and $still.verify.toggle -eq 'Off' -and $still.primary_enabled -eq $false -and (@($still.lines_in_view) -join '-') -eq (@($d.lines_in_view) -join '-')) "toggle=$(if ($still.verify) { $still.verify.toggle }) lines_in_view=$(@($still.lines_in_view) -join '-')"
     $p = Invoke-Press 'press-long' $true 100 1600
+    Check 'long: the rig waits for the layout and sees the end of the list before it ticks (review S10)' ($p.layout -eq $true -and $p.end_in_view -eq $true) "layout=$($p.layout) end=$($p.end_in_view) end_key='$($p.end_key)' keys=$($p.end_keys)"
     Check 'long: End, the box, the delay, Invoke: approved' ([int]$p.pressed -eq 100 -and (Wait-Lines '^answered: quarantine-long: Approved' 1 15)) "enabled=$($p.button_enabled) pressed=$($p.pressed) hint='$($p.hint)'"
     Check 'the delete-for-good dialog is shown next' (Wait-Lines '^shown: purge' 1 15)
     $d = Invoke-Observe 'observe-purge'
@@ -181,6 +190,15 @@ try {
     Check 'service: the first dialog is shown (consent.shown would be sent now)' (Wait-Lines '^shown: restore' 1 30)
     $d = Invoke-Observe 'service-observe'
     Check 'service: it is the toolkit dialog, read by its ids' ($d -and $d.flavour -eq 'toolkit' -and @($d.uia_ids) -contains 'ConsentApprove' -and $d.primary_enabled -eq $false) "flavour=$($d.flavour) primary=$($d.has_primary)/$($d.primary_enabled)"
+    Check 'service: the request is told that the toolkit drew its dialog (consent.shown ui)' (Wait-Lines '^shown: restore \(Toolkit\)' 1 5)
+    # The control of the rig's probes of winit's messages and AccessKit's property (review S1; m3sec.cs, Internals): at
+    # the dialog's own level the plain calls (WM_NULL, a property of the rig's own, WM_GETOBJECT) must all work, and
+    # they change nothing. The probes themselves are never run here: at the same level winit would take them.
+    $in = Invoke-Drive 'service-internals-control' 'internals' 'control' @() $d
+    $bad = @(@($in.checks) | Where-Object { $_.ok -ne $true } | ForEach-Object { $_.name })
+    Check 'service: the plain calls of the internals control all work on this window' ($in -and $in.flavour -eq 'toolkit' -and $in.control_ok -eq $true -and @($in.checks).Count -ge 7) "checks=$(@($in.checks).Count) failed=$($bad -join '; ') windows=$(if ($in.windows) { "dialog $($in.windows.dialog), event target $($in.windows.event_target), contrast $($in.windows.contrast)" })"
+    $d2 = Invoke-Observe 'service-observe-2'
+    Check 'service: the dialog is as it was after the control' ($d2.found -eq $true -and "$($d2.hwnd)" -eq "$($d.hwnd)" -and $d2.footer_code -eq $d.footer_code -and $d2.verify.toggle -eq 'Off' -and $d2.primary_enabled -eq $false)
     $ok = Invoke-Press 'service-approve' $true 100 1600
     Check 'service: the approval reaches the request as Approved' ([int]$ok.pressed -eq 100 -and (Wait-Lines '^outcome: restore: Approved' 1 15)) "pressed=$($ok.pressed)"
     Check 'service: the next request shows its dialog in the same window' (Wait-Lines '^shown: restore' 2 20)
@@ -196,6 +214,22 @@ try {
     Check 'closer: the dialog is up before the closer fires' ($d -and $d.found -eq $true -and $d.flavour -eq 'toolkit')
     Check 'closer: the request is answered Declined when the closer fires' (Wait-Lines '^outcome: purge: Declined' 1 10)
     Check 'closer: the process ends' ($script:Proc.WaitForExit(15000))
+    Stop-Preview
+
+    # The rig's orphan role (m3-consent kill-run, review B3), its own part only: it finds the dialog, ends the process
+    # it is told to end, and times the dialog going and the process ending. Here the process it ends is a sleeping
+    # PowerShell of this script's, and the dialog goes because the preview's closer fires; that the broker's dialog
+    # goes and the broker ends when its client is lost is the VM's to show.
+    Start-Preview 'purge' 'orphan' @('--service', '--close-after', '6000')
+    Check 'orphan: the dialog is shown' (Wait-Lines '^shown: purge' 1 30)
+    $dummy = Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList @('-NoProfile', '-Command', 'Start-Sleep -Seconds 120') -PassThru -WindowStyle Hidden
+    $ospec = [ordered]@{ out = (Join-Path $Work 'orphan.json'); broker_pid = $script:Proc.Id; kill_pid = $dummy.Id; wait_ms = 15000; settle_ms = 1000; gone_wait_ms = 15000; exit_wait_ms = 20000 }
+    Write-J $ospec (Join-Path $Work 'orphan-spec.json')
+    $null = Invoke-Sec @('orphan', (Join-Path $Work 'orphan-spec.json')) 60
+    $o = Read-J $ospec.out
+    if (-not $dummy.HasExited) { try { $dummy.Kill() } catch { } }
+    Check 'orphan: the tool found the dialog up, and ended the process it was given' ($o -and $o.found -eq $true -and $o.flavour -eq 'toolkit' -and $o.dialog_up_before -eq $true -and $o.killed -eq $true) "found=$($o.found) up=$($o.dialog_up_before) killed=$($o.killed) $($o.kill_error)"
+    Check 'orphan: it timed the dialog going and the process ending with 0' ($o -and $o.dialog_gone -eq $true -and [int]$o.dialog_gone_ms -ge 0 -and $o.broker_exited -eq $true -and [int]$o.broker_exit_ms -ge [int]$o.dialog_gone_ms -and "$($o.exit_code)" -eq '0') "gone=$($o.dialog_gone) after $($o.dialog_gone_ms) ms; exited=$($o.broker_exited) after $($o.broker_exit_ms) ms, code $($o.exit_code)"
 } finally { Stop-Preview }
 
 $fails = @($results | Where-Object { -not $_.ok }).Count
