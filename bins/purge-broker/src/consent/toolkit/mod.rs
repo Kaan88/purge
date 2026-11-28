@@ -8,6 +8,7 @@
 //! | Module | What |
 //! |---|---|
 //! | [`state`] | the rules: Cancel is the default, the arming delay, the box, the end of the list; the one way to an approval |
+//! | [`fonts`] | the three font files the window draws with, and what they cannot draw (TK-1) |
 //! | [`look`] | the colours: Purge's Bold and Violet, light or dark by the system, the contrast theme |
 //! | [`draw`] | measuring, layout and drawing with the toolkit's painter; no window |
 //! | [`access`] | what UI Automation sees: ids, names, roles |
@@ -17,6 +18,7 @@
 pub mod access;
 pub mod app;
 pub mod draw;
+pub mod fonts;
 pub mod look;
 pub mod service;
 pub mod state;

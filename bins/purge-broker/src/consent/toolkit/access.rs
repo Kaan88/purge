@@ -202,7 +202,7 @@ mod tests {
         let all = samples::all();
         let sample = all.iter().find(|s| s.name == name).unwrap();
         let sh = Arc::new(sheet(&sample.view));
-        let mut gfx = Gfx::new();
+        let mut gfx = Gfx::with_fonts(&super::super::fonts::system().unwrap());
         let mut scratch = mdshared_text::Bitmap::new(1, 1);
         let m = measure(
             &mut Painter::new(&mut scratch, &mut gfx, 1.0),

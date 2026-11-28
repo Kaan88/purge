@@ -15,6 +15,7 @@
 
 use std::sync::Arc;
 
+use mdshared_text::FixedFonts;
 use mdshared_ui::a11y::{self, Request, Tree};
 use mdshared_ui::cursor::Cursor;
 use mdshared_ui::gfx::{Gfx, Painter, Rect};
@@ -121,11 +122,12 @@ pub fn work_height(scale: f32) -> Option<f32> {
 
 impl<D: Desk> ConsentApp<D> {
     /// An application that shows the desk's dialogs. `look`: a look given by hand, or `None` for
-    /// the system's.
-    pub fn new(desk: D, look: Option<Look>) -> ConsentApp<D> {
+    /// the system's. `fonts`: what it measures with, the files the host draws with
+    /// (`Config::fonts`, [`super::fonts`]).
+    pub fn new(desk: D, look: Option<Look>, fonts: &FixedFonts) -> ConsentApp<D> {
         ConsentApp {
             desk,
-            gfx: Gfx::new(),
+            gfx: Gfx::with_fonts(fonts),
             look: look.unwrap_or_else(|| Look::of(false, false)),
             fixed_look: look,
             open: None,

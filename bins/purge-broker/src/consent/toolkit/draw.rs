@@ -756,9 +756,11 @@ mod tests {
     /// painter into a bitmap: the layout holds for real text, and the frame is not blank.
     #[test]
     fn every_sample_measures_and_draws() {
-        let mut gfx = Gfx::new();
+        let fonts = super::super::fonts::system().unwrap();
+        let mut gfx = Gfx::with_fonts(&fonts);
         for s in samples::all() {
-            let sh = Arc::new(sheet(&s.view));
+            // As the window gets it: what the fonts cannot draw written out (TK-1).
+            let sh = Arc::new(super::super::fonts::sheet_for(&fonts, &sheet(&s.view)).unwrap());
             for (dark, contrast) in [(false, false), (true, false), (false, true), (true, true)] {
                 let look = Look::of(dark, contrast);
                 let mut scratch = mdshared_text::Bitmap::new(1, 1);
@@ -847,7 +849,7 @@ mod tests {
     /// is longer than any of them.
     #[test]
     fn the_longest_label_fits_the_button() {
-        let mut gfx = Gfx::new();
+        let mut gfx = Gfx::with_fonts(&super::super::fonts::system().unwrap());
         let all = samples::all();
         let mut sh = sheet(&all[0].view);
         sh.approve = "Delete 4,294,967,295 registry backups now, for good".to_owned();

@@ -13,7 +13,9 @@
 //!
 //! | What happens | The request gets |
 //! |---|---|
-//! | The loop or the window cannot be made, the fonts or the first measuring panic, the window does not come up within [`SHOW_WAIT`], or the window's thread died before the dialog was on screen | the TaskDialog, for this dialog and (when the thread died) every later one |
+//! | The three font files cannot be read, or reading them or checking a sheet against them panics ([`super::fonts`]) | the TaskDialog, for this dialog and every later one |
+//! | The fonts cannot draw this dialog ([`super::fonts::sheet_for`] is `None`) | the TaskDialog, for this dialog |
+//! | The loop or the window cannot be made, the first measuring panics, the window does not come up within [`SHOW_WAIT`], or the window's thread died before the dialog was on screen | the TaskDialog, for this dialog and (when the thread died) every later one |
 //! | The parent is gone or the pipe broke ([`Closer`]), before or while the dialog is up | [`Outcome::Declined`] at once; the window is told to take the dialog down |
 //! | The window was cancelled before its dialog was on screen (Esc, Enter on Cancel, Alt+F4: a key reaches a window before its first frame does) | [`Outcome::Declined`], and no word that a dialog was shown |
 //! | The window's thread died while the dialog was up | [`Outcome::Declined`]; the window is hidden and its thread stops |
@@ -30,10 +32,12 @@
 
 use std::cell::Cell;
 use std::io;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
+use mdshared_text::FixedFonts;
 use mdshared_ui::gfx::Gfx;
 use mdshared_ui::host::{self, Config, Proxy};
 use mdshared_ui::platform;
@@ -44,6 +48,7 @@ use purge_win::topwindow;
 use super::super::sheet::Sheet;
 use super::app::{ConsentApp, Desk, Msg, opening_size, work_height};
 use super::draw::{MIN_HEIGHT, WIDTH};
+use super::fonts;
 use super::look::Look;
 use crate::lifetime::Closer;
 use crate::serve::Consent;
@@ -108,6 +113,9 @@ pub(super) struct Core {
     dead: AtomicBool,
     /// The window's handle, 0 until there is one: what a panic on its thread hides (review S4).
     hwnd: AtomicIsize,
+    /// The three font files the window draws with (TK-1), read once by the first request that
+    /// asks for a dialog, before its job is posted; `None` when they could not be.
+    fonts: OnceLock<Option<FixedFonts>>,
 }
 
 impl Core {
@@ -121,7 +129,17 @@ impl Core {
             changed: Condvar::new(),
             dead: AtomicBool::new(false),
             hwnd: AtomicIsize::new(0),
+            fonts: OnceLock::new(),
         }
+    }
+
+    /// The window's fonts, read on the first call ([`fonts::system`]). `None`, for good, when a
+    /// file could not be read as a font (any error) or reading them panicked: the fonts the
+    /// window would otherwise fall back to are the ones B1 is about, so it draws nothing.
+    fn fonts(&self) -> Option<FixedFonts> {
+        self.fonts
+            .get_or_init(|| catch_unwind(fonts::system).ok().and_then(Result::ok))
+            .clone()
     }
 
     fn lock(&self) -> MutexGuard<'_, State> {
@@ -440,10 +458,22 @@ impl Consent for ToolkitConsent {
         closer: &Closer,
         shown: &(dyn Fn(ConsentRenderer) + Sync),
     ) -> io::Result<Outcome> {
-        // What the window's fonts cannot draw is written as an escape, and fonts that cannot draw
-        // the dialog's own words draw no dialog (review B1).
-        let Some(sheet) = sheet.drawable(&fonts_have) else {
+        // The window draws with the three font files and nothing else (review B1, TK-1): without
+        // them there is no toolkit dialog, now or later.
+        let Some(fonts) = self.core.fonts() else {
+            self.core.died();
             return self.fallback.ask(pages, primary, closer, shown);
+        };
+        // What they cannot draw is written as an escape, and fonts that cannot draw the dialog's
+        // own words draw no dialog. The check lays text out with the fonts' parsers: a panic in
+        // it is the toolkit's failure, as one on the window's thread is (review S3).
+        let sheet = match catch_unwind(AssertUnwindSafe(|| fonts::sheet_for(&fonts, sheet))) {
+            Ok(Some(sheet)) => sheet,
+            Ok(None) => return self.fallback.ask(pages, primary, closer, shown),
+            Err(_) => {
+                self.core.died();
+                return self.fallback.ask(pages, primary, closer, shown);
+            }
         };
         match self
             .core
@@ -455,20 +485,6 @@ impl Consent for ToolkitConsent {
     }
 }
 
-/// Whether the fonts the window draws with have a glyph for `c`.
-///
-/// Review B1, the half that is the toolkit's: at the pinned revision the window finds its fonts by
-/// family name in the system's collection, which holds the fonts any process of the user installed
-/// for that user, and falls back by name too; it cannot be asked what it would draw a character
-/// with. So this says yes to every character and [`Sheet::drawable`] changes nothing yet. When the
-/// toolkit can load a fixed list of font files with the system's collection off (the request is
-/// docs/TOOLKIT_REQUESTS.md, TK-1), this becomes that list's answer for the two faces the dialog
-/// draws with; the window and its measuring are then made with the same list, and nothing else
-/// here changes.
-fn fonts_have(_c: char) -> bool {
-    true
-}
-
 impl UiThread {
     /// Sleeps until the first dialog is asked for, then makes the window and runs its loop for as
     /// long as the process lives. Returns only when the loop could not be made or ended: the
@@ -478,9 +494,18 @@ impl UiThread {
     pub fn run(self) {
         let core = self.core;
         let first = core.wait(None, |state| match state.ui {
-            Ui::Idle => None,
+            Ui::Idle if !core.is_dead() => None,
             _ => Some(state.job.as_ref().map(|j| j.sheet.clone())),
         });
+        // A job is posted only after the fonts were read; without them (or with the toolkit
+        // already dead) there is no window to make.
+        let fonts = match core.fonts.get() {
+            Some(Some(fonts)) if !core.is_dead() => fonts.clone(),
+            _ => {
+                core.died();
+                return;
+            }
+        };
         IS_UI.with(|f| f.set(true));
         // A panic on this thread, wherever it is in its work (measuring the first dialog, making
         // the loop, or inside it), ends the toolkit dialog at once: the request waiting on it is
@@ -506,14 +531,14 @@ impl UiThread {
                 std::thread::park();
             }
         }));
-        // Everything from here on is inside the catch (review S3): the fonts are read and text
-        // is shaped before the loop is made, and a panic there is this window's failure like any
-        // other. The hook above stops the thread before the catch sees anything; the catch is
-        // for a panic hook that somebody replaced.
+        // Everything from here on is inside the catch (review S3): text is shaped with the fonts
+        // (read by the serving thread, `Core::fonts`) before the loop is made, and a panic there
+        // is this window's failure like any other. The hook above stops the thread before the
+        // catch sees anything; the catch is for a panic hook that somebody replaced.
         let run = std::panic::AssertUnwindSafe(|| {
             let size = {
                 let scale = platform::system_scale();
-                let mut gfx = Gfx::new();
+                let mut gfx = Gfx::with_fonts(&fonts);
                 match first.flatten() {
                     Some(sheet) => opening_size(&mut gfx, &sheet, scale, work_height(scale)),
                     None => (WIDTH, MIN_HEIGHT),
@@ -524,8 +549,9 @@ impl UiThread {
                 .size(size.0, size.1)
                 .min_size(WIDTH, MIN_HEIGHT)
                 .app_id("Purge")
-                .dark(look.pal.dark);
-            let app = ConsentApp::new(core.clone(), None);
+                .dark(look.pal.dark)
+                .fonts(fonts.clone());
+            let app = ConsentApp::new(core.clone(), None, &fonts);
             let _ = host::run(config, app);
         });
         let _ = std::panic::catch_unwind(run);

@@ -5,6 +5,7 @@
 //! ```text
 //! cargo run --release -p purge-broker --example consent_preview -- --list
 //! cargo run --release -p purge-broker --example consent_preview -- --shots <dir> [--scale <n>]
+//!         [--system-fonts]
 //! cargo run --release -p purge-broker --example consent_preview -- <sample>[,<sample>...]
 //!         [--theme light|dark|system] [--contrast] [--seconds <n>] [--shot <file.png>] [--gap <ms>]
 //! cargo run --release -p purge-broker --example consent_preview -- --service <sample>[,<sample>...]
@@ -15,6 +16,10 @@
 //!   (no window) and writes PNGs: light, dark and the two contrast palettes, and for some samples
 //!   more states (the first second, the box ticked, the list at its end, the pointer on a button, a
 //!   contrast theme of the system's kind, one that tries to hide the text, a larger scale).
+//!   Drawn as the broker draws: with the three font files of `consent::toolkit::fonts` and the
+//!   sheet as they can draw it. `--system-fonts` draws them instead with the system's font
+//!   collection and the sheet unescaped, as the dialog drew before TK-1: the control of the
+//!   planted-font test (`bins/purge-broker/tests/planted-font.ps1`).
 //! - A sample's name opens the real window with the real loop (`consent::toolkit::app`), one sample
 //!   after another in the one window, as the broker shows several dialogs in its life. `--seconds`
 //!   closes each by itself after that long; `--shot` writes the first armed frame of each as
@@ -46,6 +51,7 @@ use purge_broker::consent::toolkit::app::{ConsentApp, Desk, Msg, opening_size, w
 use purge_broker::consent::toolkit::draw::{
     Frame, Hit, Layout, MAX_HEIGHT, MIN_HEIGHT, WIDTH, draw, measure,
 };
+use purge_broker::consent::toolkit::fonts;
 use purge_broker::consent::toolkit::look::{Look, contrast_palette};
 use purge_broker::consent::toolkit::service::{Trial, rehearse};
 use purge_broker::consent::toolkit::state::{ARM_DELAY, Ctl, Prompt};
@@ -60,7 +66,7 @@ mod consent {
 
 use consent::samples;
 
-const USAGE: &str = "consent_preview --list | --shots <dir> [--scale <n>] | <sample>[,<sample>...] \
+const USAGE: &str = "consent_preview --list | --shots <dir> [--scale <n>] [--system-fonts] | <sample>[,<sample>...] \
                      [--theme light|dark|system] [--contrast] [--seconds <n>] [--shot <file.png>] [--gap <ms>] \
                      | --service <sample>[,<sample>...] [--gap <ms>] [--close-after <ms>]";
 
@@ -148,11 +154,27 @@ fn theme(window: u32, text: u32, highlight: u32, highlight_text: u32, gray: u32)
     }
 }
 
-fn shots(dir: &Path, scale: f32) {
+/// The dialog's fonts, or the end of the preview: without them the broker draws no toolkit dialog.
+fn dialog_fonts() -> mdshared_text::FixedFonts {
+    fonts::system().unwrap_or_else(|e| fail(&format!("the dialog's fonts: {e}")))
+}
+
+/// `s`'s sheet as the window gets it from the broker (`fonts::sheet_for`).
+fn drawn_sheet(fonts: &mdshared_text::FixedFonts, s: &samples::Sample) -> Sheet {
+    fonts::sheet_for(fonts, &sheet(&s.view)).unwrap_or_else(|| {
+        fail(&format!(
+            "{}: the dialog's fonts cannot draw it (the broker asks with the TaskDialog)",
+            s.name
+        ))
+    })
+}
+
+fn shots(dir: &Path, scale: f32, system_fonts: bool) {
     if let Err(e) = std::fs::create_dir_all(dir) {
         fail(&format!("{}: {e}", dir.display()));
     }
-    let mut gfx = Gfx::new();
+    let fixed = (!system_fonts).then(dialog_fonts);
+    let mut gfx = fixed.as_ref().map_or_else(Gfx::new, Gfx::with_fonts);
     let looks = [
         ("light", Look::of(false, false)),
         ("dark", Look::of(true, false)),
@@ -160,7 +182,10 @@ fn shots(dir: &Path, scale: f32) {
         ("contrast-dark", Look::of(true, true)),
     ];
     for s in samples::all() {
-        let sh = Arc::new(sheet(&s.view));
+        let sh = Arc::new(match &fixed {
+            Some(fonts) => drawn_sheet(fonts, &s),
+            None => sheet(&s.view),
+        });
         for (look_name, look) in &looks {
             let out = dir.join(format!("{}.{look_name}.png", s.name));
             render(&mut gfx, &sh, look, scale, OPEN, &out);
@@ -389,6 +414,7 @@ fn main() {
     let mut gap = Duration::ZERO;
     let mut service = false;
     let mut close_after: Option<Duration> = None;
+    let mut system_fonts = false;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         let mut value = |flag: &str| {
@@ -412,6 +438,7 @@ fn main() {
             }
             "--theme" => theme_name = value("--theme"),
             "--contrast" => contrast = true,
+            "--system-fonts" => system_fonts = true,
             "--seconds" => {
                 seconds = Some(
                     value("--seconds")
@@ -444,7 +471,7 @@ fn main() {
         }
     }
     if let Some(dir) = shots_dir {
-        shots(&dir, scale);
+        shots(&dir, scale, system_fonts);
         return;
     }
     if names.is_empty() {
@@ -478,6 +505,7 @@ fn main() {
             .collect();
         rehearse(trials, gap, |line| println!("{line}"));
     }
+    let fonts = dialog_fonts();
     let mut waiting = VecDeque::new();
     for (i, name) in names.iter().enumerate() {
         let Some(s) = all.iter().find(|s| s.name == name) else {
@@ -486,7 +514,7 @@ fn main() {
         waiting.push_back(Waiting {
             id: i as u64 + 1,
             name: s.name,
-            sheet: Arc::new(sheet(&s.view)),
+            sheet: Arc::new(drawn_sheet(&fonts, s)),
         });
     }
     let look = match (theme_name.as_str(), contrast) {
@@ -506,7 +534,7 @@ fn main() {
     let system_scale = platform::system_scale();
     let size = first.map_or((WIDTH, MIN_HEIGHT), |sh| {
         opening_size(
-            &mut Gfx::new(),
+            &mut Gfx::with_fonts(&fonts),
             &sh,
             system_scale,
             work_height(system_scale),
@@ -517,7 +545,8 @@ fn main() {
         .size(size.0, size.1)
         .min_size(WIDTH, MIN_HEIGHT)
         .app_id("Purge")
-        .dark(dark);
+        .dark(dark)
+        .fonts(fonts.clone());
     let desk = Preview {
         queue: Arc::new(Mutex::new(Queue {
             waiting,
@@ -530,7 +559,7 @@ fn main() {
         gap,
         started,
     };
-    if let Err(e) = host::run(config, ConsentApp::new(desk, look)) {
+    if let Err(e) = host::run(config, ConsentApp::new(desk, look, &fonts)) {
         eprintln!("consent_preview: {e}");
         std::process::exit(1);
     }
