@@ -147,7 +147,8 @@ jobs:
           & $iscc.FullName /? | Select-Object -First 2
 
       # cargo build --release --locked -p purge-engine, then -p purge-broker, then -p purge-ui (three
-      # builds, never one), cargo xtask check-deps, check-version.ps1 on the three exes, ISCC with
+      # builds, never one), cargo xtask check-deps, cargo xtask notices --check (THIRD-PARTY-NOTICES.txt
+      # matches Cargo.lock; the setup installs it), check-version.ps1 on the three exes, ISCC with
       # /DAppVersion and /DAppFileVersion from Cargo.toml, check-version.ps1 on the setup.
       - name: Build (engine, broker, UI, setup)
         shell: powershell

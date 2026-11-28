@@ -37,6 +37,10 @@ $uiExe = Join-Path $cargoTarget 'release\Purge.exe'
 $checkVersion = Join-Path $PSScriptRoot 'check-version.ps1'
 $kbDir = Join-Path $repo 'kb'
 $installPs1 = Join-Path $repo 'install\install.ps1'
+# The licence files installed next to Purge.exe: Purge's own, its NOTICE, and the crates' notices.
+$licenseTxt = Join-Path $repo 'LICENSE'
+$noticeTxt = Join-Path $repo 'NOTICE'
+$noticesTxt = Join-Path $repo 'THIRD-PARTY-NOTICES.txt'
 $iss = Join-Path $PSScriptRoot 'purge.iss'
 
 if (-not (Test-Path -LiteralPath $iss -PathType Leaf)) { throw "the Inno script is missing: $iss" }
@@ -67,8 +71,9 @@ function Resolve-Iscc([string]$Given) {
 }
 
 # The release build of install\README.md: three separate cargo builds (never one, never --workspace:
-# a joint build would unify features), then the dependency check. No RUSTFLAGS (it would replace the
-# crt-static flags of .cargo\config.toml).
+# a joint build would unify features), then the dependency check and the check that
+# THIRD-PARTY-NOTICES.txt matches Cargo.lock (cargo xtask notices --check). No RUSTFLAGS (it would
+# replace the crt-static flags of .cargo\config.toml).
 if (-not $SkipBuild) {
     if ($env:RUSTFLAGS) { throw 'RUSTFLAGS is set; it replaces .cargo\config.toml (crt-static) and must be unset for a release build' }
     $env:CARGO_INCREMENTAL = '0'
@@ -77,7 +82,7 @@ if (-not $SkipBuild) {
     # cargo builds the workspace of the current folder: run it in this script's repository, never the caller's.
     Push-Location -LiteralPath $repo
     try {
-        foreach ($cargoArgs in @(@('build', '--release', '--locked', '-p', 'purge-engine'), @('build', '--release', '--locked', '-p', 'purge-broker'), @('build', '--release', '--locked', '-p', 'purge-ui'), @('xtask', 'check-deps'))) {
+        foreach ($cargoArgs in @(@('build', '--release', '--locked', '-p', 'purge-engine'), @('build', '--release', '--locked', '-p', 'purge-broker'), @('build', '--release', '--locked', '-p', 'purge-ui'), @('xtask', 'check-deps'), @('xtask', 'notices', '--check'))) {
             $line = 'cargo ' + ($cargoArgs -join ' ')
             Write-Step $line
             & $cargo.Source @cargoArgs
@@ -90,7 +95,7 @@ if (-not $SkipBuild) {
     Write-Step "build skipped (-SkipBuild): $cargoTarget\release must already hold the three exes"
 }
 
-foreach ($file in @($engineExe, $brokerExe, $uiExe, $installPs1)) {
+foreach ($file in @($engineExe, $brokerExe, $uiExe, $installPs1, $licenseTxt, $noticeTxt, $noticesTxt)) {
     if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "missing artifact: $file (run without -SkipBuild)" }
 }
 if (-not (Test-Path -LiteralPath $kbDir -PathType Container)) { throw "the kb folder is missing: $kbDir" }
@@ -108,7 +113,7 @@ if ($LASTEXITCODE -ne 0) { throw "an exe does not carry version $version (check-
 $iscc = Resolve-Iscc $InnoCompiler
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 Write-Step "ISCC ($iscc), version $version (FILEVERSION $fileVersion)"
-& $iscc "/DAppVersion=$version" "/DAppFileVersion=$fileVersion" "/DRepoRoot=$repo" "/DEngineExe=$engineExe" "/DBrokerExe=$brokerExe" "/DUiExe=$uiExe" "/DKbDir=$kbDir" "/DInstallPs1=$installPs1" "/DOutDir=$outDir" $iss
+& $iscc "/DAppVersion=$version" "/DAppFileVersion=$fileVersion" "/DRepoRoot=$repo" "/DEngineExe=$engineExe" "/DBrokerExe=$brokerExe" "/DUiExe=$uiExe" "/DKbDir=$kbDir" "/DInstallPs1=$installPs1" "/DLicenseTxt=$licenseTxt" "/DNoticeTxt=$noticeTxt" "/DNoticesTxt=$noticesTxt" "/DOutDir=$outDir" $iss
 if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
 
 $setup = Join-Path $outDir "Purge-Setup-$version.exe"

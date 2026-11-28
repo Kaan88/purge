@@ -59,6 +59,7 @@ cargo build --release -p purge-engine
 cargo build --release -p purge-broker
 cargo build --release -p purge-ui
 cargo xtask check-deps
+cargo xtask notices --check
 ```
 
 - Separate commands, never one. `cargo build -p purge-engine -p purge-broker`, `--workspace` and
@@ -75,6 +76,9 @@ cargo xtask check-deps
   the `purge-engine.exe` of the first build stays as it was.
 - `cargo xtask check-deps` checks the trees these two commands build (rule 4 in
   `tools/xtask/src/check_deps.rs`). Do not ship a build that fails it.
+- `cargo xtask notices --check` fails when `THIRD-PARTY-NOTICES.txt` (the licences of every crate the
+  three exes link, which the setup installs) no longer matches `Cargo.lock`. After a dependency change,
+  run `cargo xtask notices` and commit the file.
 - `purge-ui` (bin `Purge`) is the window, `Purge.exe`, on the shared Rust toolkit (`mdshared-ui`). It is one
   statically linked file with no DLLs, `.pri` or `Assets\` beside it; it links neither the executor nor
   purge-win's `write` (rule 4c covers every package with a binary). The WinUI app in `ui\` (a .NET Native AOT
@@ -266,7 +270,8 @@ winget install --id JRSoftware.InnoSetup -e
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File install\inno\build-installer.ps1 [-SkipBuild] [-InnoCompiler <ISCC.exe>]
 ```
 
-The script builds what "Release build" above describes (`cargo` three times, `cargo xtask check-deps`),
+The script builds what "Release build" above describes (`cargo` three times, `cargo xtask check-deps`,
+`cargo xtask notices --check`),
 then compiles the setup into `target\installer\Purge-Setup-<version>.exe`, the
 version taken from `[workspace.package] version` in the root `Cargo.toml`. `-SkipBuild` packs the
 artifacts that already exist. Build-time only: no elevation and no change to the machine.
@@ -274,7 +279,7 @@ artifacts that already exist. Build-time only: no elevation and no change to the
 **Install.** The setup is x64, `PrivilegesRequired=admin`, `DefaultDirName={autopf}\Purge` and
 `DisableDirPage=yes`: the broker refuses a directory a non-administrator can write, so the user cannot
 pick another one. `[Files]` copies `purge-engine.exe`, `purge-broker.exe`, `Purge.exe` (one file,
-`<cargo target>\release\Purge.exe`, `/DUiExe`) and `kb\` into `{app}` (`= %ProgramFiles%\Purge`), plus
+`<cargo target>\release\Purge.exe`, `/DUiExe`), `LICENSE`, `NOTICE`, `THIRD-PARTY-NOTICES.txt` and `kb\` into `{app}` (`= %ProgramFiles%\Purge`), plus
 `install.ps1` into `{app}\setup\`. `[Icons]` creates the same all-users Start-menu shortcut the script
 does (`{commonprograms}\Purge`, i.e. `%ProgramData%\Microsoft\Windows\Start Menu\Programs\Purge.lnk`)
 and an optional desktop shortcut (unchecked task). `AppId` is a fixed GUID, so a second setup upgrades

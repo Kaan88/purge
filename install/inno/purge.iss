@@ -44,6 +44,16 @@
 #ifndef InstallPs1
   #define InstallPs1 RepoRoot + "\install\install.ps1"
 #endif
+; Purge's licence, its NOTICE and the licences of the Rust crates it links (cargo xtask notices).
+#ifndef LicenseTxt
+  #define LicenseTxt RepoRoot + "\LICENSE"
+#endif
+#ifndef NoticeTxt
+  #define NoticeTxt RepoRoot + "\NOTICE"
+#endif
+#ifndef NoticesTxt
+  #define NoticesTxt RepoRoot + "\THIRD-PARTY-NOTICES.txt"
+#endif
 #ifndef OutDir
   #define OutDir RepoRoot + "\target\installer"
 #endif
@@ -159,6 +169,12 @@ Source: "{#BrokerExe}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#UiExe}"; DestDir: "{app}"; DestName: "Purge.exe"; Flags: ignoreversion
 ; The knowledge base below <install dir>\kb, which is where the broker and the engine read it.
 Source: "{#KbDir}\*"; DestDir: "{app}\kb"; Flags: ignoreversion recursesubdirs createallsubdirs
+; The licence texts that travel with the binaries, next to Purge.exe: Purge's MIT licence, its NOTICE
+; (ported code) and the licences of the Rust crates the three exes link. Plain text; Settings, About,
+; "Third-party notices" opens THIRD-PARTY-NOTICES.txt.
+Source: "{#LicenseTxt}"; DestDir: "{app}"; DestName: "LICENSE"; Flags: ignoreversion
+Source: "{#NoticeTxt}"; DestDir: "{app}"; DestName: "NOTICE"; Flags: ignoreversion
+Source: "{#NoticesTxt}"; DestDir: "{app}"; DestName: "THIRD-PARTY-NOTICES.txt"; Flags: ignoreversion
 ; The deploy script, for the post-install step below and for -Check / -Uninstall by hand.
 Source: "{#InstallPs1}"; DestDir: "{app}\setup"; Flags: ignoreversion
 
