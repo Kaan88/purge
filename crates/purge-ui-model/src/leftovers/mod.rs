@@ -1623,6 +1623,19 @@ impl LeftoversModel {
                 // The broker asks before it tries anything; a retry that ran without its prompt
                 // found nothing held any more (design 8.2: a recovery that changes nothing has no
                 // dialog), so it moved nothing.
+                //
+                // Why `prompt_up` can be trusted here (alpha.4 review, N9): the result itself
+                // cannot tell "nothing held" from "all moved" (both are `Complete` with no
+                // alerts), so the notification decides. The window drops a `consent.shown` with
+                // no call (`link.rs`), but that is only one whose request is no longer in flight
+                // (`purge_client::link`, `unrouted`). The broker's always names its request
+                // (`Ctx::consent` in purge-broker's serve.rs), sends it before it waits for the
+                // answer, and writes the reply after the dialog closed, on the same pipe; the
+                // call stays in flight until that reply, and events reach this model in the
+                // order they were read. So the retry's own `consent.shown` always arrives here,
+                // before this answer, and `retry_held` cleared `prompt_up` when the retry began.
+                // Telling the two apart from the result alone would need a count of what was
+                // tried in `OutcomeResult` (purge-rpc).
                 let first = if !self.prompt_up {
                     text::RETRY_NOTHING_HELD
                 } else if retried.outcome == Outcome::Complete {

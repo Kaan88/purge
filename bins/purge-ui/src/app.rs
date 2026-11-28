@@ -184,7 +184,12 @@ pub struct PurgeApp {
     /// on the first frame.
     pub paint_check: Option<Result<usize, String>>,
     /// UI-FULLFROST: the keys of the look in force and what they were made for.
-    glass_keys: Option<(Palette, crate::glass::GlassPrefs, crate::glass::Keys)>,
+    glass_keys: Option<(
+        Palette,
+        crate::glass::GlassPrefs,
+        crate::look::Design,
+        crate::glass::Keys,
+    )>,
 }
 
 impl PurgeApp {
@@ -1673,11 +1678,10 @@ impl PurgeApp {
             (c.disabled, c.modal).hash(&mut h);
         }
         let pr = &self.model.programs;
-        pr.rows.hash(&mut h);
-        // A row's name changes with what the engine learns of it (a late patch, its kind).
-        for &i in &pr.rows {
-            pr.all[i].accessible.hash(&mut h);
-        }
+        // The shown rows with their names and texts (a row's name changes with what the engine
+        // learns of it: a late patch, its kind). Every row is in the tree, the ones scrolled out
+        // of view too, so all of them count; the hash is made when they change (`sync`), not here.
+        pr.tree_sig.hash(&mut h);
         for r in pr.sel.ranges() {
             (r.start, r.end).hash(&mut h);
         }
@@ -2339,7 +2343,9 @@ impl App for PurgeApp {
         if self.frames == 1 {
             markers::mark("first_tick");
             self.presented_due = bench;
-            if self.bench_exit && self.bench_until != BenchUntil::Presented {
+            // The launch bench (`PURGE_BENCH_OUT`) gets its line by the timeout too, with or
+            // without `--bench-exit`.
+            if bench && self.bench_until != BenchUntil::Presented {
                 self.bench_deadline = Some(Instant::now() + markers::BENCH_TIMEOUT);
             }
             // The model's deferred work (sizes, icons, the removed group) waits for this frame.
@@ -2420,12 +2426,12 @@ impl PurgeApp {
     /// The keys of the look in force (`glass::Keys`), made again when the palette or the
     /// setting changed.
     fn glass_keys(&mut self) -> crate::glass::Keys {
-        let want = (self.pal, self.model.prefs.glass);
+        let want = (self.pal, self.model.prefs.glass, self.model.prefs.design);
         match self.glass_keys {
-            Some((pal, g, keys)) if (pal, g) == want => keys,
+            Some((pal, g, d, keys)) if (pal, g, d) == want => keys,
             _ => {
-                let keys = crate::glass::Keys::new(&want.0, want.1.covers, want.1.strength);
-                self.glass_keys = Some((want.0, want.1, keys));
+                let keys = crate::glass::Keys::new(&want.0, want.1.covers, want.2, want.1.strength);
+                self.glass_keys = Some((want.0, want.1, want.2, keys));
                 keys
             }
         }

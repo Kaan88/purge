@@ -166,6 +166,30 @@ fn a_file_that_is_not_an_engine_falls_back() {
 }
 
 #[test]
+fn an_engine_that_ends_after_its_list_is_not_waited_for() {
+    // The list is answered, then the engine ends: no patch can come, so the start does not wait
+    // out PATCH_WAIT for them, and the page still hears of the end.
+    let started = Instant::now();
+    let (result, mut events) = run_startup(scripted(|line, peer| {
+        healthy(line, peer);
+        if method_of(line) == "programs.list" {
+            peer.end();
+        }
+    }));
+    let waited = started.elapsed();
+    assert_eq!(result.error, None);
+    assert_eq!(result.list.rows.len(), 1);
+    assert!(waited < PATCH_WAIT, "{waited:?}");
+    events.drain_for(Duration::from_millis(200));
+    assert!(
+        events
+            .seen
+            .iter()
+            .any(|e| matches!(e, ClientEvent::EngineClosed { .. }))
+    );
+}
+
+#[test]
 fn an_engine_that_ends_at_once_falls_back() {
     let (result, mut events) = run_startup(scripted(|_, peer| peer.end()));
     let error = result.error.unwrap();
