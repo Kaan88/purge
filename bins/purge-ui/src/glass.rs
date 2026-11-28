@@ -193,6 +193,9 @@ struct Ground {
 /// (Secondary text could not be: the rail's top is too strong a tint for it even opaque,
 /// 2.5 : 1 in some dark presets.) The title band carries the page's title and, beside it, its
 /// secondary line.
+/// How many steps [`grounds`] takes along each of Bold's gradients.
+const GRADIENT_STEPS: usize = 16;
+
 fn grounds(pal: &Palette, covers: Covers, design: Design) -> Vec<Ground> {
     let both = |colour| Ground { colour, text: true };
     let mut out = vec![both(pal.title), both(key_colour(pal, covers))];
@@ -201,10 +204,12 @@ fn grounds(pal: &Palette, covers: Covers, design: Design) -> Vec<Ground> {
     }
     if design == Design::Bold {
         // The gradient is a line through the colours; its luminance need not change one way
-        // along it (the accent's channels move apart), so it is sampled, ends included.
+        // along it (the accent's channels move apart), so it is sampled, ends included (review
+        // N8: finer than the 5 and 3 points it was; the clamp's margin covers what lies between,
+        // and a test samples at 64).
         let (top, bottom) = RAIL_TINT;
-        for i in 0..=4 {
-            let t = top + (bottom - top) * i as f32 / 4.0;
+        for i in 0..=GRADIENT_STEPS {
+            let t = top + (bottom - top) * i as f32 / GRADIENT_STEPS as f32;
             out.push(Ground {
                 colour: mix(pal.title, pal.accent, t),
                 text: false,
@@ -212,8 +217,9 @@ fn grounds(pal: &Palette, covers: Covers, design: Design) -> Vec<Ground> {
         }
         if covers == Covers::Window {
             let from = hero_tint(pal.dark);
-            for i in 0..=2 {
-                out.push(both(mix(pal.page, pal.accent, from * i as f32 / 2.0)));
+            for i in 0..=GRADIENT_STEPS {
+                let t = from * i as f32 / GRADIENT_STEPS as f32;
+                out.push(both(mix(pal.page, pal.accent, t)));
             }
         }
     }
@@ -254,15 +260,23 @@ pub fn worst_contrast(pal: &Palette, covers: Covers, design: Design, keep: f32) 
     (text, muted, icons)
 }
 
+/// What the clamp keeps in hand over each limit, as a share of it: what a gradient's colours
+/// between its samples may lose (`the_gradients_read_between_the_clamps_samples`).
+const CLAMP_MARGIN: f32 = 0.01;
+
 /// The clamp: the largest share of the backdrop (0 to 1) whose text still reads over the
 /// worst backdrop ([`TEXT_CONTRAST`], [`MUTED_CONTRAST`]).
 pub fn keep_max(pal: &Palette, covers: Covers, design: Design) -> f32 {
     // The contrast need not fall evenly as the veil thins (a tint keeps more of itself than the
     // key does), so every whole step of the veil is tried from opaque on, and the clamp is the
     // last before the first that fails: every veil the slider can give is one that passed.
+    //
+    // The gradients are sampled ([`grounds`]) and each sample is rounded to whole channels, so
+    // a colour between two samples can read a hair worse than both (review N8: 2.996 : 1
+    // where 3 is needed). The clamp keeps [`CLAMP_MARGIN`] in hand for it.
     let mut good = 0u8;
     for clear in 1..=255u8 {
-        if worst_share(pal, covers, design, clear as f32 / 255.0) < 1.0 {
+        if worst_share(pal, covers, design, clear as f32 / 255.0) < 1.0 + CLAMP_MARGIN {
             break;
         }
         good = clear;
@@ -430,8 +444,22 @@ impl Glass {
     /// the frame's clip: before a page switch takes its picture of the old page there, so it
     /// reads flat colours and marks, as it always did. Outside the clip this frame draws
     /// nothing, so nothing there is put back either.
+    ///
+    /// Only a frame drawn whole may take such a picture (review N7): the picture reads all of
+    /// `r`, and outside the clip the bitmap still holds the last frame keyed. That holds today
+    /// because the app asks only for whole frames (`request_redraw_all`; the host draws all of
+    /// a new or uncovered bitmap too), and every page or stage change asks for one. An app that
+    /// starts asking for pieces must put back all of `r` here, or take no picture on a piece.
     pub fn restore(&self, p: &mut Painter, r: Rect) {
         let (w, h) = (p.bmp.width, p.bmp.height);
+        debug_assert!(
+            self.clip.0 <= 0
+                && self.clip.1 <= 0
+                && self.clip.2 >= w as i32
+                && self.clip.3 >= h as i32,
+            "a page switch's picture taken on a frame not drawn whole: {:?} of {w}x{h}",
+            self.clip
+        );
         if !self.live || self.size != (w, h) {
             return;
         }
@@ -680,6 +708,56 @@ mod tests {
                     text >= TEXT_CONTRAST && muted >= MUTED_CONTRAST,
                     "band over {d}: {text:.2} {muted:.2}"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn the_gradients_read_between_the_clamps_samples() {
+        // Review N8: the clamp samples each gradient at `GRADIENT_STEPS` + 1 points (it was 5
+        // and 3). Sampled at 64 points each, every strength the slider gives still reads, in every
+        // palette and both covers. The gradients are only Bold's (`screens::chrome`, `page`).
+        const N: usize = 64;
+        for pal in palettes() {
+            let (lo, hi) = if pal.dark { WORST_DARK } else { WORST_LIGHT };
+            for covers in Covers::ALL {
+                let mut fine = Vec::new();
+                let (top, bottom) = RAIL_TINT;
+                for i in 0..=N {
+                    let t = top + (bottom - top) * i as f32 / N as f32;
+                    fine.push((mix(pal.title, pal.accent, t), false));
+                }
+                if *covers == Covers::Window {
+                    let from = hero_tint(pal.dark);
+                    for i in 0..=N {
+                        let t = from * i as f32 / N as f32;
+                        fine.push((mix(pal.page, pal.accent, t), true));
+                    }
+                }
+                for s in (0..=100).step_by(5) {
+                    let (base, _) = veils(&pal, *covers, Design::Bold, s);
+                    let key = Key::new(key_colour(&pal, *covers), base);
+                    let at = |c: Rgb, d: u8| over(key.apply(pack(c)), d);
+                    for d in [lo, hi] {
+                        for &(g, text) in &fine {
+                            let ink = contrast(at(pal.text, d), at(g, d));
+                            if text {
+                                let muted = contrast(at(pal.muted, d), at(g, d));
+                                assert!(
+                                    ink >= TEXT_CONTRAST && muted >= MUTED_CONTRAST,
+                                    "dark={} {covers:?} {s}% band {g:?} over {d}: {ink:.3} {muted:.3}",
+                                    pal.dark
+                                );
+                            } else {
+                                assert!(
+                                    ink >= ICON_CONTRAST,
+                                    "dark={} {covers:?} {s}% rail {g:?} over {d}: {ink:.3}",
+                                    pal.dark
+                                );
+                            }
+                        }
+                    }
+                }
             }
         }
     }
