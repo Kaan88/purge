@@ -64,14 +64,14 @@ purge-exec = { path = "crates/purge-exec" }
 purge-kb = { path = "crates/purge-kb" }
 purge-rpc = { path = "crates/purge-rpc" }
 
-# The shared Rust UI toolkit (markdown-shared-rs), pinned to main d789e8e (textfield::FieldInput,
+# The shared Rust UI toolkit (markdown-shared-rs), pinned to main aff4312 (TK-1 fixed font files; textfield::FieldInput,
 # host::Event::PressLost, Palette::cancel). The approved mockup used main 294d330 (feat/anim
 # merged, DECISIONS 2026-11-25). Pin history: docs/UI_RUST_PLAN.md.
-mdshared-ui = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "d789e8e", features = ["host", "a11y"] }
-mdshared-app = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "d789e8e" }
+mdshared-ui = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "aff4312", features = ["host", "a11y"] }
+mdshared-app = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "aff4312" }
 # The toolkit's bitmap, named by the broker's consent dialog where it draws without a window (its
 # preview pictures and tests). The same crate mdshared-ui draws with.
-mdshared-text = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "d789e8e" }
+mdshared-text = { git = "https://github.com/Kaan88/markdown-shared-rs", rev = "aff4312" }
 # The window crate under the toolkit's host, at the toolkit's own version and features: named by the
 # broker's consent dialog for its window's handle and size (mdshared-ui does not re-export it).
 winit = { version = "=0.30.13", default-features = false, features = ["rwh_06"] }

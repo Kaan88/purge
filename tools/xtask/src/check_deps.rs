@@ -402,20 +402,23 @@ const TOOLKIT_FEATURES: [&str; 2] = ["a11y", "host"];
 /// The toolkit's repository: where every `mdshared-*` crate comes from.
 const TOOLKIT_REPO: &str = "https://github.com/Kaan88/markdown-shared-rs";
 /// The revision the workspace's manifest names for it (`rev = "…"`).
-const TOOLKIT_REV: &str = "d789e8e";
+const TOOLKIT_REV: &str = "aff4312";
 /// The commit that revision is locked to in `Cargo.lock`, in full: the toolkit code the elevated
 /// dialog is built from. A pin bump changes the two constants and is reviewed as what it is, a
 /// change of what runs elevated (review S9: any revision passed before).
-const TOOLKIT_COMMIT: &str = "d789e8ec21f4e0235e91eeb86d693662b6193ab6";
+const TOOLKIT_COMMIT: &str = "aff4312c0a5ed7a9bf1179de0fa79ec1a0655e14";
 
 /// The one directory of the broker's sources that may name the crates [`BROKER_FEATURE`] brings
 /// (rule 6), with its trailing `/`.
 const TOOLKIT_DIR: &str = "src/consent/toolkit/";
 /// What the dialog's production code may name of each of them, as (the crate as code writes it, the
 /// first path segments allowed after it): the modules of the toolkit the dialog draws, lays out and
-/// talks to the window with, the one type of the text crate it measures into, and the two parts of
-/// winit it needs for the window's handle and size. Not the toolkit's menus, text fields, trays,
-/// thumbnails or desktop entries, not the image or file loading of the text crate, nor anything of
+/// talks to the window with; of the text crate the type it measures into and the fixed list of font
+/// files it draws with (TK-1: `fixed_fonts`, `FixedFonts`, `FixedFontsError`, `MAX_FONT_FILE`, so no
+/// family of the system's collection draws a glyph of it); and the two parts of winit it needs for
+/// the window's handle and size. Not the toolkit's menus, text fields, trays, thumbnails or desktop
+/// entries, not the image loading or the system's font collection (`shared_fonts`) of the text
+/// crate, nor anything of
 /// winit that makes a window or a loop of its own; `platform` is listed and narrowed to four
 /// functions by [`TOOLKIT_ITEMS`]. A new name is a violation until it is listed here, with the reason
 /// (review S9).
@@ -427,7 +430,16 @@ const TOOLKIT_NAMES: [(&str, &[&str]); 3] = [
             "overlay", "platform", "scroll", "theme", "tokens",
         ],
     ),
-    ("mdshared_text", &["Bitmap"]),
+    (
+        "mdshared_text",
+        &[
+            "Bitmap",
+            "FixedFonts",
+            "FixedFontsError",
+            "MAX_FONT_FILE",
+            "fixed_fonts",
+        ],
+    ),
     ("winit", &["dpi", "raw_window_handle"]),
 ];
 /// What the dialog may name one segment further into a module that [`TOOLKIT_NAMES`] does not list,
@@ -2453,12 +2465,12 @@ mod tests {
         );
         assert_eq!(
             parse_line(
-                "mdshared-ui v0.1.0 (https://github.com/Kaan88/markdown-shared-rs?rev=d789e8e#d789e8ec) a11y,host"
+                "mdshared-ui v0.1.0 (https://github.com/Kaan88/markdown-shared-rs?rev=aff4312#aff4312c) a11y,host"
             ),
             Some(TreeLine {
                 name: "mdshared-ui",
                 version: "0.1.0",
-                source: "(https://github.com/Kaan88/markdown-shared-rs?rev=d789e8e#d789e8ec)",
+                source: "(https://github.com/Kaan88/markdown-shared-rs?rev=aff4312#aff4312c)",
                 features: vec!["a11y", "host"]
             })
         );
@@ -2810,8 +2822,8 @@ mod tests {
                 "(https://github.com/Kaan88/markdown-shared-rs?rev=f45a71c#f45a71c0)",
             ),
             (
-                " (https://github.com/Kaan88/markdown-shared-rs?branch=main#d789e8ec)",
-                "(https://github.com/Kaan88/markdown-shared-rs?branch=main#d789e8ec)",
+                " (https://github.com/Kaan88/markdown-shared-rs?branch=main#aff4312c)",
+                "(https://github.com/Kaan88/markdown-shared-rs?branch=main#aff4312c)",
             ),
         ] {
             assert_eq!(
@@ -2874,7 +2886,7 @@ mod tests {
         assert_eq!(lock_violations(&clean), Vec::<String>::new());
         assert_eq!(lock_violations(""), Vec::<String>::new());
         // Another commit behind the same short revision, and a toolkit crate from a path.
-        let other = pinned.replace(TOOLKIT_COMMIT, "d789e8ecffffffffffffffffffffffffffffffff");
+        let other = pinned.replace(TOOLKIT_COMMIT, "aff4312cffffffffffffffffffffffffffffffff");
         let bad = format!(
             "{}{}",
             package("mdshared-ui", &other),
@@ -2885,7 +2897,7 @@ mod tests {
             [
                 format!(
                     "Cargo.lock has mdshared-ui from git+{TOOLKIT_REPO}?rev={TOOLKIT_REV}\
-                     #d789e8ecffffffffffffffffffffffffffffffff; the toolkit is locked to \
+                     #aff4312cffffffffffffffffffffffffffffffff; the toolkit is locked to \
                      git+{TOOLKIT_REPO}?rev={TOOLKIT_REV}#{TOOLKIT_COMMIT}"
                 ),
                 format!(
