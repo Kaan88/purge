@@ -41,7 +41,7 @@ Purge ships no model and no key, and has no account of its own with any service.
 
 ### 1.2 Pages, panes, states, ids
 
-**Settings, card "Assistant"** (`AssistCard`):
+**Settings, card "Assistant"** (`CardAssistant`, named like M4's `CardPacks`, `CardKeep`, `CardRecords`):
 
 | Control | AutomationId |
 |---|---|
@@ -111,7 +111,8 @@ own typed question if there is one.
 
 - The cleaning is done by one function, in the broker, which knows the user's folders and SID. Every string from
   the machine (a folder or key name) is cut to 260 characters and scrubbed: a segment that holds the user name,
-  the profile folder name or the computer name becomes `<USER>` / `<HOST>`, a SID `<SID:n>`, an e-mail address
+  the profile folder name of any user of this PC (the whole profile list, not only the
+  current user) or the computer name becomes `<USER>` / `<HOST>`, a SID `<SID:n>`, an e-mail address
   `<EMAIL>`. The table that maps the placeholders back stays in the broker.
 - **Program and folder names do leave the PC in the Online mode.** They say which software was installed. That is
   why Online needs the consent dialog, why the preview is on by default there, and why the outbox exists.
@@ -213,7 +214,7 @@ is unaffected, and the scan, the bands and the plan never wait for the assistant
 2. It must exist (`PROBE-MISSING`), must not be a target the scan already lists (`duplicate`).
 3. `framework::evaluate_location` tries the ordinary evidence constructors on exactly that target: name tokens,
    harvested token, vendor subfolder, app-named key with a reference into a root, references in the snapshot, the
-   time window, content mentioning the app's path. **Being suggested is not evidence**: nothing is added for it.
+   time window (those of them that exist when the package starts; M4 defers `ContentMentionsAppPath`). **Being suggested is not evidence**: nothing is added for it.
    No constructor holds: `PROBE-NO-EVIDENCE`.
 4. The candidate gets `Origin::ProbeAgent` and goes through the same guard, blockers and policy as every other
    one. A hard block shows as `rejected {rule_id}`. `band.rs` already never preselects a `ProbeAgent` candidate
@@ -400,11 +401,29 @@ Considered and not recommended (each would need the user's OK):
 (`evaluate_location`, shared with M5-SCAN), `bins/purge-broker/src/serve.rs` and `scan.rs`,
 `tools/xtask/src/check_deps.rs`, and in the UI `screens/leftovers.rs`, `screens/settings.rs`, `prefs.rs`,
 `script_steps.rs`. Therefore: M5-CONTRACT and M6-CONTRACT are merged one after the other before either milestone
-fans out; M5-UI and M6-UI do not run at the same time; whoever merges second rebases. With M4: the place-token
-table (2.2) and anything M4 gives `purge-kb`; `docs/M4_PLAN.md` (branch `plan/m4`) did not exist when this was
-written, so the coordinator checks its package list against the list above. M6 leaves `purge-kb` alone.
+fans out; M5-UI and M6-UI do not run at the same time; whoever merges second rebases. M6 leaves `purge-kb` alone.
 
-Suggested order over both milestones, three agents: M5-CONTRACT → M6-CONTRACT → {M5-ETW, M5-PARSE, M5-SCAN} →
+### Fit with `docs/M4_PLAN.md` (branch `plan/m4`, read 2026-11-28)
+
+- **Start after M4's wave 0** (M4-RPC owns the rpc tables, M4-POLICY the policy version). M6 changes no policy
+  rule and so does not raise the version.
+- **Place tokens.** M4-KB-CORE gives `purge-kb` a whitelist of location tokens for packs. M6-CONTRACT starts
+  after it and uses one table for both: it moves the list into `purge-model` (which `purge-kb` already depends
+  on) if M4 put it elsewhere, and does not write a second one.
+- **Other profiles** (M4-PROFILES): items in another user's profile carry the hard blocker `OtherProfile`. They
+  appear in the view's `kept` list with that user's name scrubbed like the current user's; a suggestion that
+  resolves into another profile is `rejected`.
+- **"Always keep"** stays a rule the user makes in the UI (M4's `keep.rs`); the assistant cannot create one.
+- **Knowledge packs** (M4's I6: packs only suggest, raising rules load only from the compiled-in set) leave no
+  load path for an assistant-written pack, which matches deferring signatures here.
+- **M4's I10** (the broker reads no user-writable file) is why there is no agent directory (section 9).
+- **UI files:** M4-SETTINGS owns `settings.rs` in M4's wave 4 and M4-LEFTOVERS-UI owns `leftovers.rs` and the
+  leftovers model in wave 5; M6-UI-MODEL's leftovers part and M6-UI run after both are merged. M4 says the AI
+  card is M6's; it is `CardAssistant` here.
+- **Unvalidated scanners:** a suggested item is `ProbeAgent` and unticked whatever scanner list it is in; no
+  entry in `UNVALIDATED_SCANNERS` is needed.
+
+Suggested order over both milestones, three agents: M4's wave 0 → M5-CONTRACT → M6-CONTRACT (after M4-KB-CORE) → {M5-ETW, M5-PARSE, M5-SCAN} →
 {M5-BROKER, M5-UI, M6-PROBE} → {M6-ASSIST, M6-UI-MODEL, M6-BROKER} → M6-UI → M6-MCP, with M4's packages taking
 free places.
 

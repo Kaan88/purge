@@ -45,7 +45,7 @@ no data about other programs is kept (section 3, T2).
 | Leftovers page, details pane, "found by" | "Watching the uninstaller" | existing `DFoundBy` |
 | Leftovers page, bar, only when the watch had gaps or failed | "Watching was incomplete" + "Some changes the uninstaller made may be missing from this list." | `InfoBarHost_n` (one Text "Title Message", as the rig expects) |
 | History, cleanup detail | One line: watched / watched with gaps / not watched, with the counts | `HTraceText` |
-| Settings, card "Uninstall" | Switch "Watch what the uninstaller changes" with one explaining line ("Purge sees which files and registry keys the uninstaller touches while it runs. Nothing leaves this PC."). On by default (open question 3) | `WatchUninstallerSwitch` |
+| Settings, card "Uninstall" | Switch "Watch what the uninstaller changes" with one explaining line ("Purge sees which files and registry keys the uninstaller touches while it runs. Nothing leaves this PC."). On by default (open question 3) | `PrefWatchSwitch` |
 
 States of the watch, as the UI shows them: `off` (setting), `watching`, `watched`, `watched_with_gaps`,
 `not_watched {reason}`. Reasons are an enum with fixed wording: `setting_off`, `start_refused`, `too_many_sessions`,
@@ -344,9 +344,26 @@ session.
 `tools/xtask/src/check_deps.rs` and `scanner_coverage.rs`, and in the UI `screens/leftovers.rs`,
 `screens/settings.rs`, `script_steps.rs`. Therefore: M5-CONTRACT and M6-CONTRACT are merged one after the other
 before either milestone fans out; M5-UI and M6-UI do not run at the same time; whoever merges second rebases.
-`docs/M4_PLAN.md` (branch `plan/m4`) did not exist when this was written; the coordinator checks its package list
-against the list above (M4's scanners also append to `catalog.rs`, and its forced and external modes also touch
-`uninstall.rs` and the rpc tables).
+
+### Fit with `docs/M4_PLAN.md` (branch `plan/m4`, read 2026-11-28)
+
+- **Start after M4's wave 0.** M4-RPC is the one writer of `methods.rs` and `table.rs` in its wave and M4-POLICY
+  sets `POLICY_VERSION` to `m4.1`; M5-CONTRACT comes after both and raises the version to `m5.1`.
+- **`UNVALIDATED_SCANNERS`** (M4-POLICY: a scanner in that list is at most Likely and never preselected).
+  `X-TRACE` joins it. `TRACE_TIER_CAP` stays as well, because trace evidence can merge into a candidate that an
+  older, validated scanner also found, and there the scanner list does not apply.
+- **`M4_PENDING_ROOTS`** (M4's way to pass `scanner-coverage` for locations the rig does not capture yet):
+  M5-SCAN uses the same mechanism for X-TRACE's directed reads and edits nothing under `vm/`.
+- **Catalog order:** `X-TRACE` is appended after M4's last id (`X-SYSTIDY`), under a `// M5.` comment.
+- **No new executor operation**, as in M4: X-TRACE uses the existing ones.
+- **Settings:** the switch goes into the Uninstall rows M4-SETTINGS brings back (`PrefQuietSwitch`,
+  `PrefRestorePoint`, …), hence its id. M4-SETTINGS owns `settings.rs` in M4's wave 4 and M4-LEFTOVERS-UI owns
+  `leftovers.rs` in wave 5; M5-UI runs after both are merged.
+- **Forced and folder scans** (M4-FORCE-ENGINE): no uninstaller runs, so no watch; a folder scan has no
+  fingerprint and so no `TraceDoc`. `uninstall.rs` is edited by M4-FORCE-ENGINE and M4-PREHARVEST; M5-BROKER
+  starts after them.
+- **Other profiles** (M4-PROFILES): a watched target in another user's profile or hive gets M4's hard blocker
+  `OtherProfile` like any candidate.
 
 ## 8. Where this plan departs from ENGINE_PLAN
 
