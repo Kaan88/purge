@@ -568,6 +568,10 @@ switch ($Phase) {
         Expand-Archive -LiteralPath (Join-Path $Bin 'payload.zip') -DestinationPath $Payload -Force
         $common = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', 'C:\cr\install\install.ps1', '-SkipBuild',
                     '-Engine', (Join-Path $Payload 'purge-engine.exe'), '-Broker', (Join-Path $Payload 'purge-broker.exe'), '-Kb', (Join-Path $Payload 'kb'))
+        # A toolkit run installs the broker built with --features toolkit-consent, knowingly: install.ps1 refuses it
+        # otherwise, and refuses a release broker with the switch; -Check the same (review S-A).
+        $tk = @(); if ($ConsentUi -eq 'toolkit') { $tk = @('-ToolkitBroker') }
+        $common += $tk
         $runs = @(@{ name = 'Purge'; args = @('-UiPublishDir', $ClientDir); check = @() })
         if (Test-Path -LiteralPath (Join-Path $Payload 'ui\Purge.exe')) {
             $rec.ui = $true
@@ -579,7 +583,7 @@ switch ($Phase) {
             $o = @(& powershell.exe @($common + $r.args) 2>&1 | ForEach-Object { "$_" }); $code = $LASTEXITCODE
             foreach ($l in $o) { Log "  install $($r.name): $l" }
             $rec.install += [ordered]@{ name = $r.name; exit = $code; tail = @($o | Select-Object -Last 5) }
-            $c = @(& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File 'C:\cr\install\install.ps1' -Check @($r.check) 2>&1 | ForEach-Object { "$_" }); $cc = $LASTEXITCODE
+            $c = @(& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File 'C:\cr\install\install.ps1' -Check @($r.check) @tk 2>&1 | ForEach-Object { "$_" }); $cc = $LASTEXITCODE
             $rec.check += [ordered]@{ name = $r.name; exit = $cc; tail = @($c | Select-Object -Last 5) }
             if ($code -ne 0 -or $cc -ne 0) { $ok = $false }
         }

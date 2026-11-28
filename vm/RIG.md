@@ -1959,9 +1959,14 @@ powershell -NoProfile -File vm\truth\m3-sec-score.ps1 --self-test
   and such a run proves nothing about the toolkit dialog), the broker's arguments held `--consent toolkit`, and every
   attacked dialog was read from high by its ids (the box id on the plan dialog, at least one line). `m3-uac`'s paged
   rows (`page-next`, `arm-current` with `renavigate`) do not apply to it: it has no pages.
-  The broker under test is built with the cargo feature (`cargo build --release -p purge-broker --features
-  toolkit-consent`): a release broker refuses `--consent toolkit` before it opens its pipe, and the run would have
-  no dialog at all.
+  The broker under test is built with the cargo feature into a target directory of its own, never the release
+  one (`cargo build --release -p purge-broker --features toolkit-consent --target-dir <repo>\target\toolkit`, then
+  `-Broker <repo>\target\toolkit\release\purge-broker.exe`): a release broker refuses `--consent toolkit` before it
+  opens its pipe, and the run would have no dialog at all. Review S-A: the same file name in `target\release` is what
+  `install.ps1`, the Inno pre-step and the release workflow take as the release broker, so they refuse a broker with
+  the feature wherever it is (the staging marker, `install\README.md`). `rig-m3.ps1` checks the build on the host
+  (`-ConsentUi toolkit` takes only a toolkit build, named by `-Broker`; every other run only the release build)
+  and the guest installs it with `install.ps1 -ToolkitBroker`.
   After the review of the package (M3_DESIGN 8.3, "The review of step 2"; all of it written and **not yet run**):
   - *Which dialog* (S10). `consent.shown` has `"ui": "toolkit"` when the broker drew its toolkit window and no `ui`
     for a TaskDialog; the scorer wants it for every dialog of a toolkit run beside the window class, and fails a

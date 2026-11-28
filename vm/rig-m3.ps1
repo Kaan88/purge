@@ -338,6 +338,17 @@ function New-M3SecPayload {
         if (-not (Test-Path -LiteralPath $f[0] -PathType Leaf)) { throw "missing $($f[0]) (cargo build --release -p $([IO.Path]::GetFileNameWithoutExtension($f[1])), or pass -Engine / -Broker)" }
         if ((Split-Path -Leaf $f[0]) -ne $f[1]) { throw "the file must be named $($f[1]): $($f[0])" }
     }
+    # The broker's build, by install.ps1's staging check (review S-A): -ConsentUi toolkit takes only a broker built
+    # with --features toolkit-consent into its own --target-dir and named by -Broker (never the target\release
+    # default, where the release broker lives); every other run only the release build. The guest's install.ps1
+    # checks it again (-ToolkitBroker for a toolkit run).
+    $build = & { param($Exe, $Script) . $Script; Get-BrokerBuild $Exe } $broker (Join-Path $script:RepoRoot 'install\install.ps1')
+    if ("$ConsentUi" -eq 'toolkit') {
+        if (-not $M3.broker) { throw "-ConsentUi toolkit needs -Broker <its own target dir>\release\purge-broker.exe (cargo build --release -p purge-broker --features toolkit-consent --target-dir <dir>; vm\RIG.md 14)" }
+        if ($build -ne 'toolkit') { throw "-ConsentUi toolkit: $broker is the '$build' build, not one with --features toolkit-consent" }
+    } elseif ($build -ne 'release') {
+        throw "$broker is the '$build' build, not the release broker (a toolkit build is for -Mode m3-consent -ConsentUi toolkit only)"
+    }
     $stage = Join-Path (Get-HostTemp) "m3sec-payload-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
     New-Item -ItemType Directory -Force $stage | Out-Null
     Copy-Item -LiteralPath $engine, $broker -Destination $stage

@@ -573,9 +573,21 @@ open, no VM run). So the argument alone does not reach it (review B2):
 - `xtask check-deps` holds this (rules 4b and 6, "Dependencies" below): a feature made a default, a second feature,
   or a toolkit crate in the tree a release builds fails the gate.
 
-The rig and the preview build with the feature: `cargo build --release -p purge-broker --features toolkit-consent`
-(`--example consent_preview` needs it too). Making the toolkit dialog the default (step 4) is then two changes that
-are read as what they are: the feature into the release build, and `ConsentUi::DEFAULT`.
+The rig and the preview build with the feature, into a target directory of their own: `cargo build --release -p
+purge-broker --features toolkit-consent --target-dir target\toolkit` (`--example consent_preview` needs it too).
+
+**The staging guard** (review S-A). `target\release\purge-broker.exe` is the default of `install.ps1 -Broker` and what
+the Inno pre-step packs, so a toolkit build written there would be installed or shipped as the release broker. A
+broker without the feature holds the words of `TOOLKIT_REFUSED` (`args::STAGING_MARKER`: compiled only without the
+feature and reached from the command line, so always in such a binary and never in one with it); a broker with it
+holds the toolkit's source paths (`mdshared-ui\src`, its panic locations). `install.ps1` (install, `-ProtectOnly`,
+`-Check`), `build-installer.ps1` before ISCC and the release workflow take a broker only with the marker and without
+those paths; the rig's toolkit run passes `-ToolkitBroker`, which wants the toolkit build instead, and `rig-m3.ps1`
+checks the build on the host. `tests/staging_marker.rs` checks both binaries and that the scripts name the same
+strings.
+
+Making the toolkit dialog the default (step 4) is then three changes that are read as what they are: the feature
+into the release build, `ConsentUi::DEFAULT`, and the staging guard turned the other way.
 
 **Threads.** The toolkit's window loop (winit) can be made once in a process and only on the thread the process
 started on. With `--consent toolkit`, `main` serves the pipe from a second thread and gives its own to the window
