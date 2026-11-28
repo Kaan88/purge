@@ -105,6 +105,9 @@ What the rig relies on (UI-RIG, 2026-11-25):
   had ("You cancelled the Windows prompt.", "Not started.", "The uninstaller failed.", "Some parts
   remain", "Nothing was moved: the prompt was cancelled.", ...).
 - **Rail.** `NavPrograms`..`NavSettings` are tabs (SelectionItem only; the rig falls back to it).
+- **Window.** The rig takes the process's top-level element of control type Window (the process also has the winit
+  event target and the input indicator panes at the top level). `ConfirmUninstallButton` is disabled for `ARM_DELAY`
+  after the dialog opens; the rig waits for it enabled (host probe, 2026-11-28).
 - **Still owed by UI-PAGES** (the probe's BLOCKED lines): the broker consent wait page
   (`WaitingTitleText` "Confirm ... in the Purge security prompt." and `WaitingCodeText`; today
   `WaitingTitleText` is the leftovers scan wait), the first-elevation dialog, the cancelled / error /

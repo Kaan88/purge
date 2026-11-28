@@ -237,7 +237,11 @@ Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes -ErrorAction Silent
 
 function Find-UiWindow([int]$ProcessId, [int]$Sec) {
     $root = [Windows.Automation.AutomationElement]::RootElement
-    $cond = New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::ProcessIdProperty, $ProcessId)
+    # The process's Window, not one of its top-level Win32 panes (the Rust UI has the winit event target and the
+    # text input indicator windows there too; m3-e2e-ui.ps1 Get-E2eWindow).
+    $cond = New-Object Windows.Automation.AndCondition(
+        (New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::ProcessIdProperty, $ProcessId)),
+        (New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Window)))
     $deadline = (Get-Date).AddSeconds($Sec)
     do {
         $w = $root.FindFirst([Windows.Automation.TreeScope]::Children, $cond)
