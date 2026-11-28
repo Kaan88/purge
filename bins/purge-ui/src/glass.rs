@@ -32,8 +32,9 @@
 //! between [`WORST_DARK`] or [`WORST_LIGHT`]. Those are what Acrylic itself measured over a pure
 //! black and a pure white window (dark: 53 to 144; light: 135 to 227, grey levels), widened by
 //! about 15 levels; Mica's tinted wallpaper stays well inside them. In dark the clamp lets 40 to
-//! 47 % of the backdrop through (a veil of at least 134 to 153 of 255, about Acrylic's own 150);
-//! in light 87 to 93 % (a veil of at least 17 to 33), by preset. [`keep_max`] finds the
+//! 47 % of the backdrop through (a veil of at least 134 to 153 of 255, about Acrylic's own 150),
+//! and in Bold over the whole window 24 to 47 % (its title band is a tint of the accent); in
+//! light 87 to 93 % (a veil of at least 17 to 33), by preset. [`keep_max`] finds the
 //! largest share of the backdrop that passes, for the palette in use (every preset, the
 //! Windows accent); the slider's 0 to 100 % spans 0 to that.
 //!
@@ -376,21 +377,41 @@ pub fn areas(covers: Covers, title_h: f32, rail_w: f32, (w, h): (f32, f32)) -> [
 
 // ---- the frame ---------------------------------------------------------------------------------
 
+/// One area of the glass (device px, cut to the bitmap) and the frame as drawn there, in rows
+/// of its own width.
+struct Kept {
+    rect: (usize, usize, usize, usize),
+    px: Vec<u8>,
+}
+
+impl Kept {
+    fn stride(&self) -> usize {
+        (self.rect.2 - self.rect.0) * 4
+    }
+}
+
 /// The frame as drawn, kept while the window shows it keyed; see the [module](self).
 #[derive(Default)]
 pub struct Glass {
-    /// The bitmap as drawn (BGRA), where it is keyed.
-    shadow: Vec<u8>,
+    /// The bitmap as drawn (BGRA) in each area where it is keyed: the title row and the rail,
+    /// or the whole window. Only there, since nothing else is ever put back.
+    kept: Vec<Kept>,
     size: (u32, u32),
-    /// The bitmap is keyed where the last frames drew: `shadow` holds what they drew.
+    /// The bitmap is keyed where the last frames drew: `kept` holds what they drew.
     live: bool,
     /// Some frame was keyed: marks may still come back in a page switch's pictures.
     seen: bool,
     /// The clip of the frame being drawn, device px.
     clip: (i32, i32, i32, i32),
-    /// Where the glass is (device px): only there is anything keyed and kept. The title row and
-    /// the rail, or the whole window.
-    areas: Vec<(usize, usize, usize, usize)>,
+}
+
+/// Where `a` and `b` overlap, as a device rectangle (empty when they do not).
+fn meet(a: (i32, i32, i32, i32), b: (i32, i32, i32, i32)) -> (i32, i32, i32, i32) {
+    (a.0.max(b.0), a.1.max(b.1), a.2.min(b.2), a.3.min(b.3))
+}
+
+fn signed(r: (usize, usize, usize, usize)) -> (i32, i32, i32, i32) {
+    (r.0 as i32, r.1 as i32, r.2 as i32, r.3 as i32)
 }
 
 impl Glass {
@@ -405,29 +426,27 @@ impl Glass {
         }
     }
 
-    /// Puts the frame as drawn back in `r` (logical px) where the window shows it keyed: before
-    /// a page switch takes its picture of the old page there, so it reads flat colours and
-    /// marks, as it always did.
+    /// Puts the frame as drawn back in `r` (logical px) where the window shows it keyed, within
+    /// the frame's clip: before a page switch takes its picture of the old page there, so it
+    /// reads flat colours and marks, as it always did. Outside the clip this frame draws
+    /// nothing, so nothing there is put back either.
     pub fn restore(&self, p: &mut Painter, r: Rect) {
         let (w, h) = (p.bmp.width, p.bmp.height);
-        if !self.live || self.size != (w, h) || self.shadow.len() != p.bmp.pixels.len() {
+        if !self.live || self.size != (w, h) {
             return;
         }
-        let d = p.dev_rect(r);
+        let d = meet(p.dev_rect(r), self.clip);
         let stride = w as usize * 4;
-        for a in &self.areas {
-            let r = (
-                d.0.max(a.0 as i32),
-                d.1.max(a.1 as i32),
-                d.2.min(a.2 as i32),
-                d.3.min(a.3 as i32),
-            );
-            let Some((x0, y0, x1, y1)) = cut(r, w, h) else {
+        for k in &self.kept {
+            let Some((x0, y0, x1, y1)) = cut(meet(d, signed(k.rect)), w, h) else {
                 continue;
             };
+            let ks = k.stride();
+            let (kx0, kx1) = ((x0 - k.rect.0) * 4, (x1 - k.rect.0) * 4);
             for y in y0..y1 {
-                let row = y * stride + x0 * 4..y * stride + x1 * 4;
-                p.bmp.pixels[row.clone()].copy_from_slice(&self.shadow[row]);
+                let ky = (y - k.rect.1) * ks;
+                p.bmp.pixels[y * stride + x0 * 4..y * stride + x1 * 4]
+                    .copy_from_slice(&k.px[ky + kx0..ky + kx1]);
             }
         }
     }
@@ -452,34 +471,32 @@ impl Glass {
                 }
             }
             self.live = false;
+            self.kept = Vec::new();
             return;
         };
+        let rects: Vec<_> = areas
+            .iter()
+            .filter_map(|a| cut(p.dev_rect(*a), w, h))
+            .collect();
         let mut clip = self.clip;
-        if !self.live || self.size != (w, h) || self.shadow.len() != p.bmp.pixels.len() {
-            // The first keyed frame: all of the bitmap is the frame as drawn.
-            self.shadow.clear();
-            self.shadow.resize(p.bmp.pixels.len(), 0);
+        let same = self.kept.len() == rects.len()
+            && self.kept.iter().zip(&rects).all(|(k, r)| k.rect == *r);
+        if !self.live || self.size != (w, h) || !same {
+            // The first keyed frame, or the glass moved (a new bitmap, a change of cover or of
+            // design, which the host draws whole): all of each area is the frame as drawn.
+            self.kept = rects
+                .iter()
+                .map(|&rect| Kept {
+                    rect,
+                    px: vec![0; (rect.2 - rect.0) * (rect.3 - rect.1) * 4],
+                })
+                .collect();
             self.size = (w, h);
             clip = (0, 0, w as i32, h as i32);
         }
-        // The glass of this frame; where the last one had glass and this one has none (the
-        // cover changed), the host drew everything again, opaque.
-        self.areas.clear();
-        for a in areas {
-            if let Some(r) = cut(p.dev_rect(*a), w, h) {
-                self.areas.push(r);
-            }
-        }
-        for a in &self.areas {
-            let r = (a.0 as i32, a.1 as i32, a.2 as i32, a.3 as i32);
-            let r = (
-                r.0.max(clip.0),
-                r.1.max(clip.1),
-                r.2.min(clip.2),
-                r.3.min(clip.3),
-            );
-            if let Some(r) = cut(r, w, h) {
-                key_rows(&mut p.bmp.pixels, &mut self.shadow, w as usize, r, keys);
+        for k in &mut self.kept {
+            if let Some(r) = cut(meet(signed(k.rect), clip), w, h) {
+                key_rows(&mut p.bmp.pixels, w as usize, r, k, keys);
             }
         }
         self.live = true;
@@ -495,31 +512,47 @@ fn slot_of(v: u32) -> usize {
     (v.wrapping_mul(0x9E37_79B1) >> 20) as usize & (CACHE - 1)
 }
 
+/// The least a keying thread is given, in pixels: less is not worth a thread.
+const PIXELS_PER_THREAD: usize = 128 * 1024;
+
+/// The threads that key `pixels` px in `rows` rows: by the work, not the height (a tall, narrow
+/// rail is little work). More than four gained nothing on the machines measured: the work is
+/// mostly moving memory.
+fn keying_threads(pixels: usize, rows: usize) -> usize {
+    std::thread::available_parallelism()
+        .map_or(1, |n| n.get())
+        .clamp(1, 4)
+        .min(pixels.div_ceil(PIXELS_PER_THREAD))
+        .min(rows)
+        .max(1)
+}
+
 /// Keys the rectangle `r` of `pixels` (BGRA rows of `width` px) in place, copying each pixel
-/// as it was into the same place of `shadow`. The rows are shared out among the cores.
+/// as it was into the same place of `kept` (`r` lies inside its area). The rows are shared out
+/// among the cores.
 fn key_rows(
     pixels: &mut [u8],
-    shadow: &mut [u8],
     width: usize,
     (x0, y0, x1, y1): (usize, usize, usize, usize),
+    kept: &mut Kept,
     keys: &Keys,
 ) {
     let stride = width * 4;
-    let rows = &mut pixels[y0 * stride..y1 * stride];
-    let kept = &mut shadow[y0 * stride..y1 * stride];
+    let ks = kept.stride();
+    let (kx0, kx1) = ((x0 - kept.rect.0) * 4, (x1 - kept.rect.0) * 4);
+    let ky0 = y0 - kept.rect.1;
     let h = y1 - y0;
-    let band = |rows: &mut [u8], kept: &mut [u8]| {
+    let rows = &mut pixels[y0 * stride..y1 * stride];
+    let into = &mut kept.px[ky0 * ks..(ky0 + h) * ks];
+    let band = |rows: &mut [u8], into: &mut [u8]| {
         // A frame has few colours: the answers are kept in a small table by the pixel. (0 is
         // never a marked pixel, so an empty slot never answers.)
         let mut seen = vec![(0u32, 0u32); CACHE];
         // And most pixels are the one before them again.
         let (mut last_in, mut last_out) = (0u32, 0u32);
-        for (row, keep) in rows
-            .chunks_exact_mut(stride)
-            .zip(kept.chunks_exact_mut(stride))
-        {
+        for (row, keep) in rows.chunks_exact_mut(stride).zip(into.chunks_exact_mut(ks)) {
             let span = x0 * 4..x1 * 4;
-            keep[span.clone()].copy_from_slice(&row[span.clone()]);
+            keep[kx0..kx1].copy_from_slice(&row[span.clone()]);
             for px in row[span].chunks_exact_mut(4) {
                 let v = u32::from_le_bytes([px[0], px[1], px[2], px[3]]);
                 if v == last_in {
@@ -539,23 +572,17 @@ fn key_rows(
             }
         }
     };
-    // More than four bands gained nothing on the machines measured: the work is mostly moving
-    // memory.
-    let threads = std::thread::available_parallelism()
-        .map_or(1, |n| n.get())
-        .clamp(1, 4)
-        .min(h.div_ceil(128))
-        .max(1);
+    let threads = keying_threads(h * (x1 - x0), h);
     if threads == 1 {
-        return band(rows, kept);
+        return band(rows, into);
     }
-    let per = h.div_ceil(threads) * stride;
+    let per = h.div_ceil(threads);
     // Each band is handed over through its slot, so a band whose thread cannot be made is
     // keyed here instead (as `transition::compose` does).
     type Slot<'a> = std::sync::Mutex<Option<(&'a mut [u8], &'a mut [u8])>>;
     let slots: Vec<Slot<'_>> = rows
-        .chunks_mut(per)
-        .zip(kept.chunks_mut(per))
+        .chunks_mut(per * stride)
+        .zip(into.chunks_mut(per * ks))
         .map(|b| std::sync::Mutex::new(Some(b)))
         .collect();
     let run = |slot: &Slot<'_>| {
@@ -732,6 +759,53 @@ mod tests {
         assert_eq!(key_colour(&DARK, Covers::Window), DARK.page);
         assert_eq!(key_colour(&LIGHT, Covers::Window), LIGHT.field);
         assert_eq!(key_colour(&DARK, Covers::Chrome), frost::key_colour(&DARK));
+    }
+
+    #[test]
+    fn keying_threads_go_by_the_pixels() {
+        // A rail 64 px wide and 1400 tall is little work, however tall; a whole window is not.
+        assert_eq!(keying_threads(64 * 1400, 1400), 1);
+        assert_eq!(keying_threads(2560 * 44, 44), 1);
+        let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
+        assert_eq!(keying_threads(2560 * 1400, 1400), cores.clamp(1, 4));
+        assert_eq!(keying_threads(10_000_000, 2), 2.min(cores.clamp(1, 4)));
+    }
+
+    #[test]
+    fn an_area_keeps_only_its_own_pixels_in_rows_of_its_width() {
+        // A bitmap 8 by 6; the area is columns 2 to 5 of rows 1 to 4, and the frame keyed the
+        // part of it in columns 3 to 5 of rows 2 to 3.
+        let (w, h) = (8usize, 6usize);
+        let mut px = vec![0u8; w * h * 4];
+        for (i, p) in px.chunks_exact_mut(4).enumerate() {
+            let c = i as u8;
+            p.copy_from_slice(&[c, c, c, if i % 2 == 0 { MARK } else { 255 }]);
+        }
+        let before = px.clone();
+        let mut kept = Kept {
+            rect: (2, 1, 6, 5),
+            px: vec![0; 4 * 4 * 4],
+        };
+        let keys = Keys::new(&DARK, Covers::Window, Design::Bold, 100);
+        key_rows(&mut px, w, (3, 2, 6, 4), &mut kept, &keys);
+        for y in 0..h {
+            for x in 0..w {
+                let at = (y * w + x) * 4;
+                let v = u32::from_le_bytes(before[at..at + 4].try_into().unwrap());
+                let got = u32::from_le_bytes(px[at..at + 4].try_into().unwrap());
+                let inside = (3..6).contains(&x) && (2..4).contains(&y);
+                assert_eq!(got, if inside { keys.apply(v) } else { v }, "{x},{y}");
+                if inside {
+                    let k = ((y - 1) * 4 + (x - 2)) * 4;
+                    assert_eq!(&kept.px[k..k + 4], &before[at..at + 4], "kept {x},{y}");
+                }
+            }
+        }
+        // Nothing outside the keyed part was written into the copy.
+        assert!(
+            kept.px[..4 * 4 * 1].iter().all(|&b| b == 0),
+            "row 1 untouched"
+        );
     }
 
     #[test]
