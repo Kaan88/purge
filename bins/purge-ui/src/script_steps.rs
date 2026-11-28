@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use mdshared_ui::host::{App, Cx, Event};
+use mdshared_ui::host::{App, Button, Cx, Event};
 use mdshared_ui::keys::KeyName;
 
 use mdshared_app::backdrop::Backdrop;
@@ -363,6 +363,71 @@ pub fn steps() -> Vec<Step> {
                 Ok("the empty state is shown".to_string())
             },
             settle: 400,
+        },
+        Step {
+            name: "search-drag-selects",
+            act: |app, cx| {
+                // A press at the start of the text, a move past its end with the button down,
+                // the release.
+                let area = app.view.search_area;
+                let (x, y) = (area.x + 1.0, area.cy());
+                app.event(cx, Event::PointerMove { x, y });
+                app.event(
+                    cx,
+                    Event::Press {
+                        x,
+                        y,
+                        button: Button::Left,
+                        clicks: 1,
+                    },
+                );
+                let x = area.right() + 40.0;
+                app.event(cx, Event::PointerMove { x, y });
+                app.event(
+                    cx,
+                    Event::Release {
+                        x,
+                        y,
+                        button: Button::Left,
+                    },
+                );
+            },
+            check: |app| {
+                let s = app.view.search.selected_text();
+                want(s == "firezzz", format!("the drag selected {s:?}"))?;
+                Ok("the drag selected the whole query".to_string())
+            },
+            settle: 300,
+        },
+        Step {
+            name: "search-drag-ends-with-the-focus",
+            act: |app, cx| {
+                // The window loses the focus with the button down (winit sends no release then):
+                // the move after it selects nothing.
+                let area = app.view.search_area;
+                let (x, y) = (area.x + 1.0, area.cy());
+                app.event(cx, Event::PointerMove { x, y });
+                app.event(
+                    cx,
+                    Event::Press {
+                        x,
+                        y,
+                        button: Button::Left,
+                        clicks: 1,
+                    },
+                );
+                app.event(cx, Event::Focus(false));
+                app.event(cx, Event::Focus(true));
+                let x = area.right() + 40.0;
+                app.event(cx, Event::PointerMove { x, y });
+            },
+            check: |app| {
+                let s = app.view.search.selected_text();
+                want(s.is_empty(), format!("the move selected {s:?}"))?;
+                want(app.pressed.is_none(), "nothing is pressed")?;
+                Ok("the drag ended with the focus".to_string())
+            },
+            settle: 300,
         },
         Step {
             name: "esc-clears-search",
