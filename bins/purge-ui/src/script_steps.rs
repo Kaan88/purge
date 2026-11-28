@@ -1804,7 +1804,12 @@ pub fn steps() -> Vec<Step> {
                 }
             },
             check: |app| {
-                for name in ["MarkersExpander", "AboutLine", "OpenQuarantine"] {
+                for name in [
+                    "MarkersExpander",
+                    "AboutLine",
+                    "ThirdPartyNoticesLink",
+                    "OpenQuarantine",
+                ] {
                     has(app, name)?;
                 }
                 Ok("the foot of the page".to_string())

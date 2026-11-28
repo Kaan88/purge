@@ -373,6 +373,25 @@ impl PurgeApp {
         self.set_prefs(cx, p);
     }
 
+    /// Opens `THIRD-PARTY-NOTICES.txt` beside Purge.exe (the setup installs it there) with the
+    /// system's handler for text files, or says why it cannot.
+    fn open_notices(&mut self, cx: &mut Cx<'_, ()>) {
+        let path = std::env::current_exe()
+            .ok()
+            .and_then(|exe| Some(exe.parent()?.join("THIRD-PARTY-NOTICES.txt")));
+        match path {
+            Some(p) if p.is_file() => {
+                if !platform::open_file(&p, &["txt"]) {
+                    self.toast(cx, "Windows could not open THIRD-PARTY-NOTICES.txt.");
+                }
+            }
+            _ => self.toast(
+                cx,
+                "THIRD-PARTY-NOTICES.txt is not beside Purge.exe. The setup installs it there.",
+            ),
+        }
+    }
+
     pub fn toast(&mut self, cx: &mut Cx<'_, ()>, text: &str) {
         self.view.toast = Some(Toast {
             text: text.to_string(),
@@ -795,6 +814,7 @@ impl PurgeApp {
                 "Purge sends nothing and has nothing to send: there is no switch.",
             ),
             "OpenQuarantine" => self.go(Page::Quarantine),
+            "ThirdPartyNoticesLink" => self.open_notices(cx),
             "ColourSwatch" => self.set_preset(cx, Preset::at(n.saturating_sub(1))),
             "PreviewTransition" => self.view.preview_b = !self.view.preview_b,
             "MarkersExpander" => {

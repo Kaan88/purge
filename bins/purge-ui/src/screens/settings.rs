@@ -1,7 +1,8 @@
 //! The Settings page: the mockup's cards of rows, with the look's five choices (design, colour,
 //! theme, page transition, window backdrop) and a live preview of them, and what the WinUI app's
 //! `Views/SettingsView.xaml` has: the rule of what Purge ticks for you, the quarantine's keeping
-//! times with "Open quarantine", About with the version, and the launch markers' expander in a
+//! times with "Open quarantine", About with the version and a link to the third-party notices
+//! (`THIRD-PARTY-NOTICES.txt` beside Purge.exe), and the launch markers' expander in a
 //! development build.
 //!
 //! Every choice applies at once, to the whole window, and is saved (`prefs`). Nothing here
@@ -31,6 +32,8 @@ const DD_W: f32 = 240.0;
 /// The preview under the appearance rows: the colour swatches and the transition's tile.
 const PREVIEW_H: f32 = 132.0;
 const SWATCH: f32 = 26.0;
+/// The About card: the version line, the credit line and the third-party notices link.
+const ABOUT_H: f32 = 104.0;
 
 /// What a row holds at its right.
 enum Control {
@@ -229,7 +232,7 @@ pub fn draw(ui: &mut Ui, m: &Model, v: &mut View, content: Rect) {
         .sum::<f32>()
         + PREVIEW_H
         + LABEL_H
-        + 74.0
+        + ABOUT_H
         + 8.0
         + exp_h
         + 24.0;
@@ -279,7 +282,7 @@ pub fn draw(ui: &mut Ui, m: &Model, v: &mut View, content: Rect) {
 
     section_label(ui, left, y, w, "About");
     y += LABEL_H;
-    let about = Rect::new(left, y, w, 74.0);
+    let about = Rect::new(left, y, w, ABOUT_H);
     ui.card(about);
     let line = about_line(m);
     let line = ui.p.elide(Face::Ui, 14.0, &line, w - 36.0);
@@ -304,7 +307,13 @@ pub fn draw(ui: &mut Ui, m: &Model, v: &mut View, content: Rect) {
         pal.muted,
         w - 36.0,
     );
-    y += 74.0 + 8.0;
+    ui.link(
+        id("ThirdPartyNoticesLink"),
+        about.x + 18.0,
+        about.y + 66.0,
+        "Third-party notices",
+    );
+    y += ABOUT_H + 8.0;
 
     if v.dev {
         let area = Rect::new(left, y, w, exp_h - 8.0);
