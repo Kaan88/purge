@@ -12,7 +12,7 @@ use mdshared_ui::rows::Rows;
 use mdshared_ui::scroll::draw_scrollbar_animated;
 use mdshared_ui::segments::{self, SEGMENT_H, draw_selector_animated};
 use mdshared_ui::table::{self, Align, HeaderHit, Sort};
-use mdshared_ui::textfield::FieldColors;
+use mdshared_ui::textfield::{FieldArea, FieldColors, FieldHit};
 
 use mdshared_ui::infobar::{InfoBar, Severity};
 use purge_ui_model::pipeline::NoticeKind;
@@ -233,6 +233,16 @@ fn search_box(ui: &mut Ui, v: &mut View, r: Rect) {
     };
     let area = Rect::new(r.x + 28.0, r.y + 1.0, r.w - 34.0, r.h - 2.0);
     v.search_area = area;
+    // The whole box takes the press (the icon and the padding too); the text is hit as drawn.
+    v.search_field = Some(FieldArea::new(
+        r,
+        FieldHit {
+            area,
+            face: Face::Ui,
+            size: 13.0,
+            scale: ui.p.scale,
+        },
+    ));
     v.search.draw_blinking(
         ui.p,
         ui.cx.anim(),
@@ -245,7 +255,6 @@ fn search_box(ui: &mut Ui, v: &mut View, r: Rect) {
         "Search programs (Ctrl+F)",
         focused,
     );
-    v.search_stops = ui.p.caret_stops(Face::Ui, 13.0, &v.search.display());
     ui.ring(SEARCH, r, 5.0);
 }
 
