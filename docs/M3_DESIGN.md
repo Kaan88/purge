@@ -550,7 +550,9 @@ both; the member is for the rig.
 the kernel records (`GetSystemWindowsDirectoryW`, never the environment), read once by `mdshared_text::fixed_fonts`
 when the first dialog is asked for, before its job is posted. The toolkit's collection of them never enumerates the
 system's fonts and has no fallback and no generic family, so a font installed for the user alone draws no glyph of
-the dialog under any name (`tests/planted-font/planted-font.ps1`). The host draws with them (`Config::fonts`) and the
+the dialog under any name (`tests/planted-font/planted-font.ps1`, which plants box-glyph fonts for the logged-in
+user and so runs only in a VM or a throwaway account). A code point a Segoe file draws as a blank glyph is escaped
+where the text enters the view, for both renderers (`text::hidden`: U+1CBB and U+1CBC, review S1 of the adoption). The host draws with them (`Config::fonts`) and the
 dialog measures with them (`Gfx::with_fonts`). Any error reading them is no toolkit dialog, now or later: the
 TaskDialog asks. Then the sheet is passed through `toolkit::fonts::sheet_for` before it is measured:
 
@@ -674,7 +676,7 @@ crates at fixed versions (among them a second `miniz_oxide` and two more `window
   an update starts to bring is a violation until its line here changes, in a commit somebody reads.
 - Rule 6, the sources: only `src/consent/toolkit/` names the feature's crates, and of each only what is listed:
   fifteen modules of `mdshared_ui`, of `mdshared_text` `Bitmap` and the fixed font files (`fixed_fonts`,
-  `FixedFonts`, `FixedFontsError`, `MAX_FONT_FILE`), `winit::dpi`, `winit::raw_window_handle` and
+  `FixedFonts`, `FixedFontsError`), `winit::dpi`, `winit::raw_window_handle` and
   `winit::window::WindowButtons`; never as a group, a glob or an alias. `mdshared_ui::platform`, which also holds the
   file dialogs, the clipboard, `open_url` and the recycle bin, only for its four functions that read the system's
   colours and scale. This reads names: it does not see what a method of an allowed type does.
@@ -727,6 +729,13 @@ the rig changes above:
   hide the window, stop the thread) shown with the toolkit's loop running and a dialog up.
 - **S-G**: a kill in the middle of a plan: the client or the broker ended while a plan the toolkit dialog approved
   executes.
+
+- **To decide** (the review of TK-1's adoption, 2026-11-28; not fixed, to be settled before the default changes):
+  - Whole-word homoglyphs: Mathematical Alphanumeric Symbols (U+1D400 to U+1D7FF), Enclosed Alphanumerics and
+    Letterlike Symbols draw words that read as Latin ones. Escape these blocks always, in both renderers?
+  - Strong right-to-left characters in a path reorder its parts on screen; the TaskDialog does the same today.
+  - Combining marks stacked on ASCII letters can reach outside a row and are cut by its clip.
+  - Emoji are drawn, in monochrome, from `seguisym.ttf`; the TaskDialog draws them in colour.
 
 These stay open on purpose: the branch merges with the TaskDialog the default and the feature off in every release
 build, so none of them is in reach of a shipped broker. With B1 fixed, S-E, S-F, S-G and the VM run are what stands

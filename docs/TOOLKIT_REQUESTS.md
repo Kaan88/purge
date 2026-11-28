@@ -223,19 +223,33 @@ How the broker uses it (`bins/purge-broker/src/consent/toolkit/fonts.rs`, `servi
 
 What must hold, checked at `aff4312`:
 
-1. `bins/purge-broker/tests/planted-font/planted-font.ps1` (unelevated, no download): plants four generated fonts for
-   the user ("Segoe UI Variable Text", "Segoe UI" 400 and 600, "Noto Sans"; files under
-   `%LOCALAPPDATA%\Microsoft\Windows\Fonts`, values under the HKCU `Fonts` key, `AddFontResourceW`,
-   `WM_FONTCHANGE`), draws every sample (82 pictures: `consent_preview --shots`) and one frame of the real window on
-   the hidden desktop, before and after, and removes the plant. 2026-11-28: 0 pictures and 0 window frames changed;
-   the control (`--shots --system-fonts`, the system's collection as before TK-1) changed in 66 of 82 (the planted
-   "Noto Sans" drew U+26A0, which the Segoe fonts and the per-user Inter lack).
+1. `bins/purge-broker/tests/planted-font/planted-font.ps1` (unelevated, no download): plants generated fonts for the
+   user ("Segoe UI Variable Text", "Segoe UI" 400 and 600, "Noto Sans", and since review S2 "Segoe UI Symbol"; files
+   under `%LOCALAPPDATA%\Microsoft\Windows\Fonts`, values under the HKCU `Fonts` key, `AddFontResourceW`,
+   `WM_FONTCHANGE`), draws every sample (`consent_preview --shots`) and frames of the real window on the hidden
+   desktop (the preview's window, and since review S2 the broker's path, `--service hostile --shot`), before and
+   after, and removes the plant. **It belongs in a VM or a throwaway account** (review S2): its box-glyph "Segoe UI"
+   fonts and the `WM_FONTCHANGE` broadcast reach the user's open applications; it refuses to run without
+   `-ThrowawayAccount`. One run on the development PC before that review (2026-11-28, four fonts, one preview frame):
+   0 of 82 pictures and 0 frames changed; the control (`--shots --system-fonts`, the system's collection as before
+   TK-1) changed in 66 of 82 (the planted "Noto Sans" drew U+26A0). The script as it is now has not been run.
 2. `fonts.rs` tests with the real files: the Cyrillic a and U+20DD are each `has_glyph`, the pair is `undrawn`, and
    the sheet writes both out; every sample's sheet has nothing `undrawn` in either face; an elided title ends in
    U+2026 and is drawn whole.
 3. `fonts.rs` tests: no file, a file that is not a font, a folder in place of a file, a relative Windows
    directory: each an `Err`, never fewer files.
 4. Not used by the dialog.
+
+The security review of the adoption (Fable, 2026-11-28; merge with the TaskDialog the default, no blockers) found,
+besides what is above: **S1** `segoeui.ttf` and `seguisb.ttf` map the unassigned U+1CBB and U+1CBC to blank glyphs
+as wide as a letter, which `has_glyph` and `undrawn` accept, so `C:\Program\u{1cbb}Files` read as
+`C:\Program Files` in both renderers. Fixed where the text enters the view (`consent::text::hidden`, which the
+TaskDialog's pages go through too); the test `blank_glyphs_of_the_segoe_files_are_hidden` draws every code point of
+the three files with the dialog's painter and fails on a blank one that `hidden` does not escape (outlines are not
+read directly: the font parsers are not a dependency of the broker). **S2** the host configuration is made in one
+function (`app::window_config`) for the broker and the preview, with a test that it carries the files. **S3** a
+panic in the escape pass on the serving thread no longer marks the toolkit dead (a dialog up would have lost its
+`Msg::Close`); it is that dialog's fall back only.
 
 Not seen yet: a real elevated broker drawing with them (the VM run of `m3-consent -ConsentUi toolkit`), and
 Windows 10's copies of the three files.
