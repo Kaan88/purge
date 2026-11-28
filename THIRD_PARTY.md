@@ -24,12 +24,20 @@ The Rust crates Purge links (serde, schemars, windows-sys, …) are listed in
 repository and the full text of every licence and NOTICE file it ships. The setup installs that file
 next to `Purge.exe`, with `LICENSE` and `NOTICE`; Settings, About, "Third-party notices" opens it.
 
-It is generated from `Cargo.lock` by `cargo xtask notices` (`tools/xtask/src/notices.rs`): every crate
-that `purge-engine.exe`, `purge-broker.exe` and `Purge.exe` reach over normal dependencies for
-`x86_64-pc-windows-msvc` (no dev- or build-dependencies, not the xtask). After a dependency change, run
-`cargo xtask notices` and commit the file; `cargo xtask notices --check` (run by the release build,
-`install/inno/build-installer.ps1`, and by `cargo xtask ci`) fails while it is stale. The command also
-fails on a licence outside its permissive list or a crate that declares none, so a person decides.
+The file also lists the Rust standard library the exes link statically, with the crates of the
+toolchain it links, taken from the pinned toolchain's `share/doc/rust/COPYRIGHT-library.html`. It
+does not list the Microsoft C runtime (linked statically, Microsoft's redistributable runtime under
+its own terms) or the Windows system libraries.
+
+It is generated from `Cargo.lock` and the pinned toolchain by `cargo xtask notices`
+(`tools/xtask/src/notices.rs`): every crate that `purge-engine.exe`, `purge-broker.exe` and `Purge.exe`
+reach over normal dependencies for `x86_64-pc-windows-msvc` (no dev- or build-dependencies, not the
+xtask). After a dependency or toolchain change, run `cargo xtask notices` and commit the file;
+`cargo xtask notices --check` (run by the release build, `install/inno/build-installer.ps1`, and by
+`cargo xtask ci`) fails while it is stale. The command also fails on a licence outside its permissive
+list, a crate that declares none, or a crate whose package ships no licence file and has no entry in
+the command's `VENDORED` table (the upstream repository's files at the version's tag, committed under
+`tools/xtask/src/notices/`, as for AccessKit), so a person decides.
 
 ## Not used
 
