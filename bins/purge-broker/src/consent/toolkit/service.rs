@@ -144,15 +144,16 @@ impl Core {
     }
 
     /// The request no longer wants job `id`: it is dropped unless it is answered already, and the
-    /// window is told to take it down.
-    fn drop_job(&self, id: u64) {
+    /// window is told to take it down. Returns the phase the job had before, read under the same
+    /// lock (`None`: no such job at the desk), so that a caller who gave up waiting sees what the
+    /// window did meanwhile (review N1).
+    fn drop_job(&self, id: u64) -> Option<Phase> {
         let mut guard = self.lock();
         let state = &mut *guard;
-        let Some(job) = state.job.as_mut().filter(|j| j.id == id) else {
-            return;
-        };
-        if matches!(job.phase, Phase::Done(_) | Phase::Unseen | Phase::Dropped) {
-            return;
+        let job = state.job.as_mut().filter(|j| j.id == id)?;
+        let prior = job.phase;
+        if matches!(prior, Phase::Done(_) | Phase::Unseen | Phase::Dropped) {
+            return Some(prior);
         }
         job.phase = Phase::Dropped;
         if let Ui::Running(proxy) = &state.ui {
@@ -160,6 +161,22 @@ impl Core {
         }
         drop(guard);
         self.changed.notify_all();
+        Some(prior)
+    }
+
+    /// What a request that gave up waiting for its dialog to be on screen answers, from the phase
+    /// the job had when it was dropped ([`Core::drop_job`]): `Err(())` (ask another way) only when
+    /// the window never had it on screen and never cancelled it. A cancel in the window before
+    /// the first frame (`Unseen`) is the user's answer and stands: asking again with the TaskDialog
+    /// would ask twice. A dialog that reached the screen in the meantime was shown (`true`) and is
+    /// declined: it was taken down by the drop, and an approval that raced the give-up is not
+    /// taken, as one that races the closer is not.
+    fn gave_up(prior: Option<Phase>) -> Result<(Outcome, bool), ()> {
+        match prior {
+            Some(Phase::Unseen) => Ok((Outcome::Declined, false)),
+            Some(Phase::Shown | Phase::Done(_)) => Ok((Outcome::Declined, true)),
+            Some(Phase::Posted | Phase::Taken | Phase::Dropped) | None => Err(()),
+        }
     }
 
     /// Job `id` leaves the desk: what the window says of it from now on is nobody's.
@@ -254,7 +271,9 @@ impl Core {
             return Err(());
         };
         let core = self.clone();
-        closer.arm(move || core.drop_job(id));
+        closer.arm(move || {
+            core.drop_job(id);
+        });
 
         /// How the wait for the window ended.
         enum Up {
@@ -274,12 +293,17 @@ impl Core {
             .unwrap_or(Up::Failed);
         let outcome = match up {
             Up::Failed => {
-                // Not on screen and never will be for this request: whatever the window does with
-                // the job now is ignored.
-                self.drop_job(id);
+                // Not on screen by the time the wait ended: whatever the window does with the job
+                // from now on is ignored. What it did between the end of the wait and the drop is
+                // not (review N1).
+                let prior = self.drop_job(id);
                 closer.disarm();
                 self.clear(id);
-                return Err(());
+                let (outcome, was_shown) = Core::gave_up(prior)?;
+                if was_shown {
+                    shown();
+                }
+                return Ok(outcome);
             }
             Up::Closed => Outcome::Declined,
             Up::Shown => {
@@ -692,6 +716,55 @@ mod tests {
         let id = core.post(Arc::new(sheet())).unwrap();
         core.answered(id, Outcome::Declined);
         assert_eq!(Core::phase_of(&core.lock(), id), Phase::Posted);
+    }
+
+    /// Review N1: `drop_job` tells what the window did before the drop, and a request that gave
+    /// up waiting honours a cancel the window took (`Unseen`) instead of asking again.
+    #[test]
+    fn a_request_that_gives_up_honours_what_the_window_did_meanwhile() {
+        // drop_job returns the phase before, and drops only what is not answered.
+        let core = Arc::new(Core::new());
+        assert_eq!(core.drop_job(7), None, "no such job");
+        let id = core.post(Arc::new(sheet())).unwrap();
+        assert_eq!(core.drop_job(id), Some(Phase::Posted));
+        assert_eq!(core.drop_job(id), Some(Phase::Dropped));
+        assert_eq!(Core::phase_of(&core.lock(), id), Phase::Dropped);
+
+        let core = Arc::new(Core::new());
+        let id = core.post(Arc::new(sheet())).unwrap();
+        Desk::take(&core, Some(id)).unwrap();
+        core.answered(id, Outcome::Declined);
+        assert_eq!(core.drop_job(id), Some(Phase::Unseen));
+        assert_eq!(Core::phase_of(&core.lock(), id), Phase::Unseen, "kept");
+
+        let core = Arc::new(Core::new());
+        let id = core.post(Arc::new(sheet())).unwrap();
+        Desk::take(&core, Some(id)).unwrap();
+        core.shown(id);
+        core.answered(id, Outcome::Approved);
+        assert_eq!(core.drop_job(id), Some(Phase::Done(Outcome::Approved)));
+
+        // What the give-up answers for each.
+        assert_eq!(Core::gave_up(None), Err(()));
+        assert_eq!(Core::gave_up(Some(Phase::Posted)), Err(()));
+        assert_eq!(Core::gave_up(Some(Phase::Taken)), Err(()));
+        assert_eq!(Core::gave_up(Some(Phase::Dropped)), Err(()));
+        assert_eq!(
+            Core::gave_up(Some(Phase::Unseen)),
+            Ok((Outcome::Declined, false)),
+            "a cancel before the first frame stands, and nothing was shown"
+        );
+        assert_eq!(
+            Core::gave_up(Some(Phase::Shown)),
+            Ok((Outcome::Declined, true))
+        );
+        for outcome in [Outcome::Approved, Outcome::Declined] {
+            assert_eq!(
+                Core::gave_up(Some(Phase::Done(outcome))),
+                Ok((Outcome::Declined, true)),
+                "an answer that raced the give-up is a decline"
+            );
+        }
     }
 
     /// Review S4: the handle a panic on the window's thread hides.
