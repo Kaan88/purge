@@ -19,7 +19,7 @@ use mdshared_text::FixedFonts;
 use mdshared_ui::a11y::{self, Request, Tree};
 use mdshared_ui::cursor::Cursor;
 use mdshared_ui::gfx::{Gfx, Painter, Rect};
-use mdshared_ui::host::{App, Button, Cx, Event, Proxy};
+use mdshared_ui::host::{App, Button, Config, Cx, Event, Proxy};
 use mdshared_ui::scroll::offset_for_thumb;
 use purge_win::taskdialog::Outcome;
 use purge_win::topwindow;
@@ -29,7 +29,9 @@ use winit::window::WindowButtons;
 
 use super::super::sheet::Sheet;
 use super::access;
-use super::draw::{Frame, Hit, LINE, Layout, MAX_HEIGHT, Metrics, WIDTH, draw, measure};
+use super::draw::{
+    Frame, Hit, LINE, Layout, MAX_HEIGHT, MIN_HEIGHT, Metrics, WIDTH, draw, measure,
+};
 use super::look::Look;
 use super::state::{Did, Prompt, Scroll};
 
@@ -97,6 +99,19 @@ pub struct ConsentApp<D: Desk> {
     grip: Option<f32>,
     /// The blank frame is drawn; the window is hidden at the next wake.
     hide: bool,
+}
+
+/// The host's configuration for the consent window, opening at `size` (logical px), dark or not,
+/// and drawing with `fonts` and nothing else (`Config::fonts`, TK-1). The one place it is made: the
+/// broker's window thread (`service::UiThread::run`) and the preview harness both call it, so the
+/// preview's window and the planted-font test see what the broker's window does.
+pub fn window_config(size: (f32, f32), dark: bool, fonts: &FixedFonts) -> Config {
+    Config::new(super::super::text::TITLE)
+        .size(size.0, size.1)
+        .min_size(WIDTH, MIN_HEIGHT)
+        .app_id("Purge")
+        .dark(dark)
+        .fonts(fonts.clone())
 }
 
 /// The size a dialog for `sheet` opens at, logical px, on a screen whose work area is `work_h` high.
@@ -563,5 +578,25 @@ impl<D: Desk> App for ConsentApp<D> {
             }) => access::build(tree, scale, prompt, m, lay, now),
             _ => access::build_empty(tree, cx.title(), scale),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// TK-1 review S2: the configuration the broker's window is made with carries the three
+    /// files. The toolkit's `Config` has no getter; its `Debug` shows the fonts (`FixedFonts`
+    /// prints its file count and families).
+    #[test]
+    fn the_window_draws_with_the_fixed_fonts() {
+        let fonts = super::super::fonts::system().unwrap();
+        let config = format!("{:?}", window_config((WIDTH, MIN_HEIGHT), false, &fonts));
+        assert!(
+            config.contains(
+                r#"fonts: Some(FixedFonts { files: 3, families: ["Segoe UI", "Segoe UI Symbol"] })"#
+            ),
+            "{config}"
+        );
     }
 }

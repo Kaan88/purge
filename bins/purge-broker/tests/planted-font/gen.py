@@ -3,9 +3,10 @@
 Run: `python -I gen.py <out dir>`. Needs fontTools (tested with 4.66.1). Nothing is downloaded: every
 outline is a filled box written here, so a glyph of these files cannot be mistaken for Segoe UI's.
 
-Four files, under family names the toolkit dialog's fonts were found by before TK-1 (the
+Five files, under family names the toolkit dialog's fonts were found by before TK-1 (the
 first entries of mdshared-ui's UI_FAMILY, and a free name asked before the generic family for a
-character the Segoe fonts lack): "Segoe UI Variable Text", "Segoe UI" (400 and 600) and "Noto Sans". Each has
+character the Segoe fonts lack): "Segoe UI Variable Text", "Segoe UI" (400 and 600), "Noto Sans", and "Segoe UI Symbol" (the family of the
+dialog's third file). Each has
 every printable ASCII character, U+26A0, U+2022, U+00B7, U+2026 and U+0430.
 """
 
@@ -75,6 +76,7 @@ def main():
     build(out / "planted-segoe-ui.ttf", "Segoe UI", "Regular", 400)
     build(out / "planted-segoe-ui-semibold.ttf", "Segoe UI", "Semibold", 600)
     build(out / "planted-noto-sans.ttf", "Noto Sans", "Regular", 400)
+    build(out / "planted-segoe-ui-symbol.ttf", "Segoe UI Symbol", "Regular", 400)
 
 
 if __name__ == "__main__":

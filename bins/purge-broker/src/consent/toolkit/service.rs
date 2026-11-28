@@ -13,8 +13,8 @@
 //!
 //! | What happens | The request gets |
 //! |---|---|
-//! | The three font files cannot be read, or reading them or checking a sheet against them panics ([`super::fonts`]) | the TaskDialog, for this dialog and every later one |
-//! | The fonts cannot draw this dialog ([`super::fonts::sheet_for`] is `None`) | the TaskDialog, for this dialog |
+//! | The three font files cannot be read, or reading them panics ([`super::fonts`]) | the TaskDialog, for this dialog and every later one |
+//! | The fonts cannot draw this dialog ([`super::fonts::sheet_for`] is `None`), or that check panics | the TaskDialog, for this dialog |
 //! | The loop or the window cannot be made, the first measuring panics, the window does not come up within [`SHOW_WAIT`], or the window's thread died before the dialog was on screen | the TaskDialog, for this dialog and (when the thread died) every later one |
 //! | The parent is gone or the pipe broke ([`Closer`]), before or while the dialog is up | [`Outcome::Declined`] at once; the window is told to take the dialog down |
 //! | The window was cancelled before its dialog was on screen (Esc, Enter on Cancel, Alt+F4: a key reaches a window before its first frame does) | [`Outcome::Declined`], and no word that a dialog was shown |
@@ -38,15 +38,15 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
 use mdshared_text::FixedFonts;
-use mdshared_ui::gfx::Gfx;
-use mdshared_ui::host::{self, Config, Proxy};
+use mdshared_ui::gfx::{Gfx, Painter};
+use mdshared_ui::host::{self, Proxy};
 use mdshared_ui::platform;
 use purge_rpc::methods::ConsentRenderer;
 use purge_win::taskdialog::{Outcome, Page};
 use purge_win::topwindow;
 
 use super::super::sheet::Sheet;
-use super::app::{ConsentApp, Desk, Msg, opening_size, work_height};
+use super::app::{ConsentApp, Desk, Msg, opening_size, window_config, work_height};
 use super::draw::{MIN_HEIGHT, WIDTH};
 use super::fonts;
 use super::look::Look;
@@ -116,7 +116,13 @@ pub(super) struct Core {
     /// The three font files the window draws with (TK-1), read once by the first request that
     /// asks for a dialog, before its job is posted; `None` when they could not be.
     fonts: OnceLock<Option<FixedFonts>>,
+    /// What sees each drawn frame: set only by [`rehearse`] (the preview's `--service --shot`),
+    /// never by the broker.
+    frames: OnceLock<FrameHook>,
 }
+
+/// A watcher of the window's frames: the job's id, the painter, how long the dialog has been up.
+type FrameHook = Box<dyn Fn(u64, &mut Painter, u128) + Send + Sync>;
 
 impl Core {
     pub(super) fn new() -> Core {
@@ -130,6 +136,7 @@ impl Core {
             dead: AtomicBool::new(false),
             hwnd: AtomicIsize::new(0),
             fonts: OnceLock::new(),
+            frames: OnceLock::new(),
         }
     }
 
@@ -403,6 +410,12 @@ impl Desk for Arc<Core> {
     fn window(&self, hwnd: isize) {
         self.hwnd.store(hwnd, Ordering::SeqCst);
     }
+
+    fn frame(&self, id: u64, p: &mut Painter, open_for_ms: u128) {
+        if let Some(hook) = self.frames.get() {
+            hook(id, p, open_for_ms);
+        }
+    }
 }
 
 /// The broker's consent dialog drawn by the toolkit, with the TaskDialog behind it.
@@ -461,19 +474,15 @@ impl Consent for ToolkitConsent {
         // The window draws with the three font files and nothing else (review B1, TK-1): without
         // them there is no toolkit dialog, now or later.
         let Some(fonts) = self.core.fonts() else {
+            // The fonts are read before the first job is posted and never again, so when they are
+            // `None` no window was ever made: marking the toolkit dead leaves nothing on screen.
             self.core.died();
             return self.fallback.ask(pages, primary, closer, shown);
         };
         // What they cannot draw is written as an escape, and fonts that cannot draw the dialog's
-        // own words draw no dialog. The check lays text out with the fonts' parsers: a panic in
-        // it is the toolkit's failure, as one on the window's thread is (review S3).
-        let sheet = match catch_unwind(AssertUnwindSafe(|| fonts::sheet_for(&fonts, sheet))) {
-            Ok(Some(sheet)) => sheet,
-            Ok(None) => return self.fallback.ask(pages, primary, closer, shown),
-            Err(_) => {
-                self.core.died();
-                return self.fallback.ask(pages, primary, closer, shown);
-            }
+        // own words draw no dialog.
+        let Some(sheet) = checked(|| fonts::sheet_for(&fonts, sheet)) else {
+            return self.fallback.ask(pages, primary, closer, shown);
         };
         match self
             .core
@@ -483,6 +492,15 @@ impl Consent for ToolkitConsent {
             Err(()) => self.fallback.ask(pages, primary, closer, shown),
         }
     }
+}
+
+/// The escape pass of a sheet, run on the serving thread: `None` when it says the window must not
+/// draw the sheet, or when it panicked (it lays text out with the fonts' parsers). A panic here is
+/// this dialog's fall back to the TaskDialog and nothing more (TK-1 review S3): it does not mark
+/// the toolkit dead, because the window's loop may be running with another dialog up, and a dead
+/// toolkit sends that dialog no `Msg::Close` when its request lets go of it.
+fn checked(check: impl FnOnce() -> Option<Sheet>) -> Option<Sheet> {
+    catch_unwind(AssertUnwindSafe(check)).ok().flatten()
 }
 
 impl UiThread {
@@ -545,12 +563,7 @@ impl UiThread {
                 }
             };
             let look = Look::system(platform::system_high_contrast());
-            let config = Config::new(super::super::text::TITLE)
-                .size(size.0, size.1)
-                .min_size(WIDTH, MIN_HEIGHT)
-                .app_id("Purge")
-                .dark(look.pal.dark)
-                .fonts(fonts.clone());
+            let config = window_config(size, look.pal.dark, &fonts);
             let app = ConsentApp::new(core.clone(), None, &fonts);
             let _ = host::run(config, app);
         });
@@ -589,9 +602,38 @@ pub struct Trial {
 pub fn rehearse(
     trials: Vec<Trial>,
     gap: Duration,
+    shot: Option<std::path::PathBuf>,
     report: impl Fn(&str) + Send + Sync + 'static,
 ) -> ! {
     let (consent, window) = ToolkitConsent::new();
+    let report = Arc::new(report);
+    if let Some(path) = shot {
+        // The first armed frame of each dialog, as the window drew it after `ask_sheet`: `path`
+        // for one trial, `<stem>.<id>.png` beside it for several.
+        let several = trials.len() > 1;
+        let written = Mutex::new(Vec::<u64>::new());
+        let said = report.clone();
+        let _ = consent.core.frames.set(Box::new(move |id, p, open_for_ms| {
+            if open_for_ms < super::state::ARM_DELAY.as_millis() {
+                return;
+            }
+            let mut done = written.lock().unwrap_or_else(|e| e.into_inner());
+            if done.contains(&id) {
+                return;
+            }
+            done.push(id);
+            let file = if several {
+                let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned());
+                path.with_file_name(format!("{}.{id}.png", stem.unwrap_or_default()))
+            } else {
+                path.clone()
+            };
+            said(&match p.bmp.write_png(&file) {
+                Ok(()) => format!("shot: {}", file.display()),
+                Err(e) => format!("shot failed: {}: {e}", file.display()),
+            });
+        }));
+    }
     let asking = std::thread::Builder::new()
         .name("consent-rehearsal".into())
         .spawn(move || {
@@ -791,6 +833,26 @@ mod tests {
                 "an answer that raced the give-up is a decline"
             );
         }
+    }
+
+    /// TK-1 review S3: a check that panics on the serving thread is that dialog's fall back, and
+    /// leaves the toolkit alive: a dialog up meanwhile is still taken down by its own request.
+    #[test]
+    fn a_check_that_panics_falls_back_for_its_dialog_only() {
+        let core = Arc::new(Core::new());
+        let closer = Arc::new(Closer::new());
+        let (request, shown) = ask(&core, &closer);
+        let id = take(&core);
+        core.shown(id);
+        until(|| shown.load(Ordering::SeqCst) == 1);
+        // Another request's check panics while that dialog is up.
+        assert_eq!(checked(|| panic!("a font parser panicked")), None);
+        assert_eq!(checked(|| Some(sheet())), Some(sheet()));
+        assert!(!core.is_dead());
+        assert!(!matches!(core.lock().ui, Ui::Dead));
+        // The dialog up is still answered as before.
+        core.answered(id, Outcome::Approved);
+        assert_eq!(request.join().unwrap(), Ok(Outcome::Approved));
     }
 
     /// Review S4: the handle a panic on the window's thread hides.

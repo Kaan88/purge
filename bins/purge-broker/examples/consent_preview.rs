@@ -9,7 +9,7 @@
 //! cargo run --release -p purge-broker --example consent_preview -- <sample>[,<sample>...]
 //!         [--theme light|dark|system] [--contrast] [--seconds <n>] [--shot <file.png>] [--gap <ms>]
 //! cargo run --release -p purge-broker --example consent_preview -- --service <sample>[,<sample>...]
-//!         [--gap <ms>] [--close-after <ms>]
+//!         [--gap <ms>] [--close-after <ms>] [--shot <file.png>]
 //! ```
 //!
 //! - `--shots` draws every sample with the dialog's own measuring, layout and drawing into a bitmap
@@ -19,7 +19,7 @@
 //!   Drawn as the broker draws: with the three font files of `consent::toolkit::fonts` and the
 //!   sheet as they can draw it. `--system-fonts` draws them instead with the system's font
 //!   collection and the sheet unescaped, as the dialog drew before TK-1: the control of the
-//!   planted-font test (`bins/purge-broker/tests/planted-font.ps1`).
+//!   planted-font test (`bins/purge-broker/tests/planted-font/planted-font.ps1`).
 //! - A sample's name opens the real window with the real loop (`consent::toolkit::app`), one sample
 //!   after another in the one window, as the broker shows several dialogs in its life. `--seconds`
 //!   closes each by itself after that long; `--shot` writes the first armed frame of each as
@@ -32,6 +32,8 @@
 //!   window on the first, as in the broker under `--consent toolkit`. It prints `shown: <sample>`
 //!   and `outcome: <sample>: <answer>`. `--close-after` fires each dialog's closer that long after
 //!   it was asked for, as the broker does when its parent is gone: the answer is then `Declined`.
+//!   `--shot` writes the first armed frame of each dialog as the broker's own window drew it after
+//!   `ask_sheet` (`<file>` for one sample, `<stem>.<n>.png` for the n-th of several).
 //!
 //! The process ends by itself after two minutes without `--seconds`, and after the time the samples
 //! need with it.
@@ -42,12 +44,14 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use mdshared_ui::gfx::{Gfx, Painter, rgb};
-use mdshared_ui::host::{self, Config, Proxy};
+use mdshared_ui::host::{self, Proxy};
 use mdshared_ui::platform;
 use mdshared_ui::tokens::SystemColors;
 use purge_broker::consent::dialog::{PRIMARY, pages};
 use purge_broker::consent::sheet::{Sheet, sheet};
-use purge_broker::consent::toolkit::app::{ConsentApp, Desk, Msg, opening_size, work_height};
+use purge_broker::consent::toolkit::app::{
+    ConsentApp, Desk, Msg, opening_size, window_config, work_height,
+};
 use purge_broker::consent::toolkit::draw::{
     Frame, Hit, Layout, MAX_HEIGHT, MIN_HEIGHT, WIDTH, draw, measure,
 };
@@ -68,7 +72,7 @@ use consent::samples;
 
 const USAGE: &str = "consent_preview --list | --shots <dir> [--scale <n>] [--system-fonts] | <sample>[,<sample>...] \
                      [--theme light|dark|system] [--contrast] [--seconds <n>] [--shot <file.png>] [--gap <ms>] \
-                     | --service <sample>[,<sample>...] [--gap <ms>] [--close-after <ms>]";
+                     | --service <sample>[,<sample>...] [--gap <ms>] [--close-after <ms>] [--shot <file.png>]";
 
 fn fail(why: &str) -> ! {
     eprintln!("consent_preview: {why}\n{USAGE}");
@@ -503,7 +507,7 @@ fn main() {
                 }
             })
             .collect();
-        rehearse(trials, gap, |line| println!("{line}"));
+        rehearse(trials, gap, shot, |line| println!("{line}"));
     }
     let fonts = dialog_fonts();
     let mut waiting = VecDeque::new();
@@ -541,12 +545,7 @@ fn main() {
         )
     });
     let dark = look.map_or_else(platform::system_is_dark, |l| l.pal.dark);
-    let config = Config::new(purge_broker::consent::text::TITLE)
-        .size(size.0, size.1)
-        .min_size(WIDTH, MIN_HEIGHT)
-        .app_id("Purge")
-        .dark(dark)
-        .fonts(fonts.clone());
+    let config = window_config(size, dark, &fonts);
     let desk = Preview {
         queue: Arc::new(Mutex::new(Queue {
             waiting,
