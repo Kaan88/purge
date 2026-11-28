@@ -71,9 +71,8 @@ function Resolve-Iscc([string]$Given) {
 }
 
 # The release build of install\README.md: three separate cargo builds (never one, never --workspace:
-# a joint build would unify features), then the dependency check and the check that
-# THIRD-PARTY-NOTICES.txt matches Cargo.lock (cargo xtask notices --check). No RUSTFLAGS (it would
-# replace the crt-static flags of .cargo\config.toml).
+# a joint build would unify features), then the dependency check. No RUSTFLAGS (it would replace the
+# crt-static flags of .cargo\config.toml).
 if (-not $SkipBuild) {
     if ($env:RUSTFLAGS) { throw 'RUSTFLAGS is set; it replaces .cargo\config.toml (crt-static) and must be unset for a release build' }
     $env:CARGO_INCREMENTAL = '0'
@@ -82,7 +81,7 @@ if (-not $SkipBuild) {
     # cargo builds the workspace of the current folder: run it in this script's repository, never the caller's.
     Push-Location -LiteralPath $repo
     try {
-        foreach ($cargoArgs in @(@('build', '--release', '--locked', '-p', 'purge-engine'), @('build', '--release', '--locked', '-p', 'purge-broker'), @('build', '--release', '--locked', '-p', 'purge-ui'), @('xtask', 'check-deps'), @('xtask', 'notices', '--check'))) {
+        foreach ($cargoArgs in @(@('build', '--release', '--locked', '-p', 'purge-engine'), @('build', '--release', '--locked', '-p', 'purge-broker'), @('build', '--release', '--locked', '-p', 'purge-ui'), @('xtask', 'check-deps'))) {
             $line = 'cargo ' + ($cargoArgs -join ' ')
             Write-Step $line
             & $cargo.Source @cargoArgs
@@ -93,6 +92,19 @@ if (-not $SkipBuild) {
     }
 } else {
     Write-Step "build skipped (-SkipBuild): $cargoTarget\release must already hold the three exes"
+}
+
+# THIRD-PARTY-NOTICES.txt, which the setup installs, matches Cargo.lock and the pinned toolchain
+# (cargo xtask notices --check), with -SkipBuild too.
+$cargo = Get-Command cargo -ErrorAction SilentlyContinue
+if (-not $cargo) { throw 'cargo was not found on PATH (needed for cargo xtask notices --check)' }
+Push-Location -LiteralPath $repo
+try {
+    Write-Step 'cargo xtask notices --check'
+    & $cargo.Source xtask notices --check
+    if ($LASTEXITCODE -ne 0) { throw "cargo xtask notices --check failed with exit code ${LASTEXITCODE}: run cargo xtask notices and commit THIRD-PARTY-NOTICES.txt" }
+} finally {
+    Pop-Location
 }
 
 foreach ($file in @($engineExe, $brokerExe, $uiExe, $installPs1, $licenseTxt, $noticeTxt, $noticesTxt)) {

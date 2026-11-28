@@ -813,8 +813,11 @@ function Protect-Tree([string]$Dir, [string]$Sddl, [string[]]$AdminSids = $scrip
 # file copied from a tree with other permissions). Files in the destination but not in the sources are
 # reported as stale, never deleted.
 # $UiPath is Purge.exe itself (copied as <Dir>\Purge.exe) or a folder holding it (copied as a tree).
-function Copy-Payload([string]$Dir, [string]$EnginePath, [string]$BrokerPath, [string]$UiPath, [string]$KbDir, [string]$Sddl, [string[]]$AdminSids = $script:AdminSids) {
+# $TextFiles (LICENSE, NOTICE, THIRD-PARTY-NOTICES.txt) are copied into <Dir> under their own names, as
+# the setup installs them.
+function Copy-Payload([string]$Dir, [string]$EnginePath, [string]$BrokerPath, [string]$UiPath, [string]$KbDir, [string]$Sddl, [string[]]$AdminSids = $script:AdminSids, [string[]]$TextFiles = @()) {
     $out = New-Object System.Collections.Generic.List[object]
+    foreach ($t in $TextFiles) { $out.Add((Copy-PayloadFile $t (Join-Path $Dir (Split-Path -Leaf $t)))) }
     $out.Add((Copy-PayloadFile $EnginePath (Join-Path $Dir 'purge-engine.exe')))
     if ($BrokerPath) { $out.Add((Copy-PayloadFile $BrokerPath (Join-Path $Dir 'purge-broker.exe'))) }
     if ($UiPath) {
@@ -1215,7 +1218,7 @@ function Invoke-PurgeInstall {
                 if (-not $EngineOnly) { Write-InstallLog "what-if: check that purge-broker.exe is the $(if ($ToolkitBroker) { 'toolkit' } else { 'release' }) build (staging marker)" }
                 Write-InstallLog "what-if: install the program-files tree $pf with the ProgramFiles descriptor"
                 if ($EngineOnly) { Write-InstallLog "what-if: copy purge-engine.exe and kb\ into $pf" }
-                else { Write-InstallLog "what-if: copy purge-engine.exe, purge-broker.exe, Purge.exe ($uiDir) and kb\ into $pf" }
+                else { Write-InstallLog "what-if: copy purge-engine.exe, purge-broker.exe, Purge.exe ($uiDir), kb\, LICENSE, NOTICE and THIRD-PARTY-NOTICES.txt into $pf" }
                 Write-InstallLog "what-if: protect every deployed file and folder (owner Administrators, admin-only write)"
                 Write-InstallLog "what-if: install the data-root tree $dr (sessions, Quarantine, fp, kb, sessions\index.json)"
                 if (-not $EngineOnly) {
@@ -1241,7 +1244,15 @@ function Invoke-PurgeInstall {
                 Assert-EngineWithoutExecutor $enginePath
                 if (-not $EngineOnly) { Assert-ReleaseBroker $brokerPath -Toolkit:$ToolkitBroker }
                 $a = Install-Tree $pf (Get-PurgeProgramFilesLayout) 'program-files'
-                $payload = Copy-Payload $pf $enginePath $brokerPath $uiDir $kbDir (Get-PurgeSddlTable).ProgramFiles
+                # The licence texts the setup installs beside Purge.exe, from the repository (the setup's own
+                # copy is the repository's layout too); a missing one is skipped, an engine-only install has none.
+                $textFiles = if ($EngineOnly) { @() } else {
+                    @(foreach ($n in @('LICENSE', 'NOTICE', 'THIRD-PARTY-NOTICES.txt')) {
+                        $t = Join-Path $repo $n
+                        if (Test-Path -LiteralPath $t -PathType Leaf) { $t } else { Write-InstallLog "payload: $n not found in $repo; not copied" }
+                    })
+                }
+                $payload = Copy-Payload $pf $enginePath $brokerPath $uiDir $kbDir (Get-PurgeSddlTable).ProgramFiles -TextFiles $textFiles
                 $b = Install-Tree $dr (Get-PurgeDataLayout) 'data-root'
                 $changed = $a.changed -or $b.changed -or $payload.changed
                 if (-not $EngineOnly) {
