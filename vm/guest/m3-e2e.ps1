@@ -181,11 +181,56 @@ $E2eBackgroundTasks = @(
     @{ path = '\Microsoft\Windows\MUI\'; name = 'LPRemove' }
     @{ path = '\Microsoft\Windows\Chkdsk\'; name = 'ProactiveScan' }
     @{ path = '\Microsoft\Windows\Sysmain\'; name = '*' }
+    # null-mt13 (DECISIONS 2026-11-28, second entry): \Microsoft\Windows\Management\Provisioning\Logon ({17C2E7E1-51B3-4F45-
+    # 8EA8-3D8334DB66CF}) wrote some 2,000 PolicyManager / Provisioning / Control\Power / Multivariant records into a window
+    # with maintenance already off; the rest of the reviewed burst list with it. Time Synchronization\* and Time Zone\* are
+    # left out: W32Time is stopped and Disabled below.
+    @{ path = '\Microsoft\Windows\Management\Provisioning\'; name = '*' }
+    @{ path = '\Microsoft\Windows\Sustainability\'; name = 'SustainabilityTelemetry' }
+    @{ path = '\Microsoft\Windows\Work Folders\'; name = '*' }
+    @{ path = '\Microsoft\Windows\AppListBackup\'; name = 'Backup' }
+    @{ path = '\Microsoft\Windows\Device Setup\'; name = 'Metadata Refresh' }
+    @{ path = '\Microsoft\Windows\InstallService\'; name = '*' }
+    @{ path = '\Microsoft\Windows\Shell\'; name = 'ThemesSyncedImageDownload' }
+    @{ path = '\Microsoft\Windows\Shell\'; name = 'IndexerAutomaticMaintenance' }
+    @{ path = '\Microsoft\Windows\DiskDiagnostic\'; name = '*' }
+    @{ path = '\Microsoft\Windows\FileHistory\'; name = '*' }
+    @{ path = '\Microsoft\Windows\License Manager\'; name = '*' }
+    @{ path = '\Microsoft\Windows\Security\Pwdless\'; name = '*' }
+    @{ path = '\Microsoft\Windows\ApplicationData\'; name = 'CleanupTemporaryState' }
+    @{ path = '\Microsoft\Windows\ApplicationData\'; name = 'DsSvcCleanup' }
+    @{ path = '\Microsoft\Windows\Customer Experience Improvement Program\'; name = 'UsbCeip' }
+    @{ path = '\Microsoft\Windows\StateRepository\'; name = 'MaintenanceTasks' }
+    @{ path = '\Microsoft\Windows\CapabilityAccessManager\'; name = 'MaintenanceTasks' }
+    @{ path = '\Microsoft\Windows\Feedback\Siuf\'; name = 'DmClient' }
+    @{ path = '\Microsoft\Windows\RecoveryEnvironment\'; name = 'VerifyWinRE' }
+    @{ path = '\Microsoft\Windows\WOF\'; name = 'WIM-Hash-Validation' }
+    @{ path = '\Microsoft\Windows\Power Efficiency Diagnostics\'; name = 'AnalyzeSystem' }
+    @{ path = '\Microsoft\Windows\Device Information\'; name = 'Device User' }
 )
 
 # Automatic Maintenance off for the run (DECISIONS 2026-11-28): Schedule\Maintenance\MaintenanceDisabled = 1 (DWORD), set
 # in setup next to the task pause, for gate and null runs alike; the snapshot restore of the next run undoes it.
-$E2eMaintenanceValue = @{ key = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\Maintenance'; name = 'MaintenanceDisabled'; value = 1 }
+$E2eMaintenanceValue = @{ key = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\Maintenance'; name = 'MaintenanceDisabled'; value = 1; type = 'DWord' }
+
+# Boot-file optimisation off for the run (DECISIONS 2026-11-28, second entry): not a scheduled task but the prefetcher's
+# idle `defrag -b` (null-mt13: Dfrg\Statistics, Prefetcher BootFilesOptimized / LastDiskLayoutTime, Prefetch\DEFRAG.EXE-*.pf).
+# Dfrg\BootOptimizeFunction Enable = "N" (REG_SZ) is its documented switch; set like MaintenanceDisabled.
+$E2eBootOptimizeValue = @{ key = 'HKLM:\SOFTWARE\Microsoft\Dfrg\BootOptimizeFunction'; name = 'Enable'; value = 'N'; type = 'String' }
+
+# Sets one rig registry value ($E2eMaintenanceValue, $E2eBootOptimizeValue): the value before (null when absent) and after,
+# the key created when missing; a refusal is recorded in the returned record's error, never thrown.
+function Set-E2eRigValue($Spec) {
+    $m = [ordered]@{ key = ($Spec.key -replace '^HKLM:', 'HKLM'); name = $Spec.name; type = $(if ($Spec.type -eq 'DWord') { 'REG_DWORD' } else { 'REG_SZ' }); value_before = $null; value_after = $null; error = $null }
+    try {
+        $p = Get-ItemProperty -LiteralPath $Spec.key -Name $Spec.name -ErrorAction SilentlyContinue
+        if ($p) { $m.value_before = $p.($Spec.name) }
+        if (-not (Test-Path -LiteralPath $Spec.key)) { $null = New-Item -Path $Spec.key -Force -ErrorAction Stop }
+        $null = New-ItemProperty -LiteralPath $Spec.key -Name $Spec.name -PropertyType $Spec.type -Value $Spec.value -Force -ErrorAction Stop
+        $m.value_after = (Get-ItemProperty -LiteralPath $Spec.key -Name $Spec.name -ErrorAction Stop).($Spec.name)
+    } catch { $m.error = $_.Exception.Message }
+    [pscustomobject]$m
+}
 
 # Services stopped for the run besides UsoSvc and W32Time (DECISIONS 2026-11-24, e2e-final6).
 $E2eBackgroundServices = @('DoSvc', 'wuauserv', 'WaaSMedicSvc')
@@ -194,19 +239,15 @@ $E2eBackgroundServices = @('DoSvc', 'wuauserv', 'WaaSMedicSvc')
 # Disabled where Windows allows it: its startup type is protected on some builds, which is recorded, not fatal). Never
 # throws; returns the record for setup.json / e2e.json `background`.
 function Suspend-E2eBackgroundTasks {
-    $r = [ordered]@{ t = (NowIso); tasks = @(); maintenance = $null; service = $null; time_service = $null; services = @(); errors = @() }
-    # Automatic Maintenance (DECISIONS 2026-11-28): the value before (null when absent) and after; a refusal is recorded,
-    # never fatal.
-    $mv = $E2eMaintenanceValue
-    $m = [ordered]@{ key = 'HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\Maintenance'; name = $mv.name; type = 'REG_DWORD'; value_before = $null; value_after = $null; error = $null }
-    try {
-        $p = Get-ItemProperty -LiteralPath $mv.key -Name $mv.name -ErrorAction SilentlyContinue
-        if ($p) { $m.value_before = $p.($mv.name) }
-        if (-not (Test-Path -LiteralPath $mv.key)) { $null = New-Item -Path $mv.key -Force -ErrorAction Stop }
-        $null = New-ItemProperty -LiteralPath $mv.key -Name $mv.name -PropertyType DWord -Value $mv.value -Force -ErrorAction Stop
-        $m.value_after = (Get-ItemProperty -LiteralPath $mv.key -Name $mv.name -ErrorAction Stop).($mv.name)
-    } catch { $m.error = $_.Exception.Message; $r.errors += "maintenance $($m.key)\$($m.name): $($m.error)" }
-    $r.maintenance = [pscustomobject]$m
+    $r = [ordered]@{ t = (NowIso); tasks = @(); maintenance = $null; boot_optimize = $null; service = $null; time_service = $null; services = @(); errors = @() }
+    # Automatic Maintenance and boot-file optimisation (DECISIONS 2026-11-28): each value before and after; a refusal is
+    # recorded, never fatal.
+    $m = Set-E2eRigValue $E2eMaintenanceValue
+    if ($m.error) { $r.errors += "maintenance $($m.key)\$($m.name): $($m.error)" }
+    $r.maintenance = $m
+    $bo = Set-E2eRigValue $E2eBootOptimizeValue
+    if ($bo.error) { $r.errors += "boot optimize $($bo.key)\$($bo.name): $($bo.error)" }
+    $r.boot_optimize = $bo
     foreach ($spec in $E2eBackgroundTasks) {
         $found = @(Get-ScheduledTask -TaskPath $spec.path -TaskName $spec.name -ErrorAction SilentlyContinue)
         # A family that is not there (the task, or for '*' any task in its folder) is recorded as absent, never fatal.
@@ -271,7 +312,7 @@ function Suspend-E2eBackgroundTasks {
         $r.services += [pscustomobject]$x
     }
     $dis = @($r.tasks | Where-Object { $_.state_after -eq 'Disabled' })
-    Log "background pause: $($dis.Count) of $(@($r.tasks | Where-Object { $_.present }).Count) tasks disabled ($(@($dis | ForEach-Object { $_.path }) -join ', ')); absent: $(@($r.tasks | Where-Object { -not $_.present } | ForEach-Object { $_.path }) -join ', '); MaintenanceDisabled $($m.value_before) -> $($m.value_after); UsoSvc $($svc.state_before)/$($svc.start_before) -> $($svc.state_after)/$($svc.start_after); W32Time $($tsvc.state_before) -> $($tsvc.state_after); $(@($r.services | ForEach-Object { "$($_.name) $($_.state_before) -> $($_.state_after)" }) -join '; ')$(if ($r.errors.Count) { ' !! ' + ($r.errors -join ' | ') })"
+    Log "background pause: $($dis.Count) of $(@($r.tasks | Where-Object { $_.present }).Count) tasks disabled ($(@($dis | ForEach-Object { $_.path }) -join ', ')); absent: $(@($r.tasks | Where-Object { -not $_.present } | ForEach-Object { $_.path }) -join ', '); MaintenanceDisabled $($m.value_before) -> $($m.value_after); BootOptimizeFunction\Enable $($bo.value_before) -> $($bo.value_after); UsoSvc $($svc.state_before)/$($svc.start_before) -> $($svc.state_after)/$($svc.start_after); W32Time $($tsvc.state_before) -> $($tsvc.state_after); $(@($r.services | ForEach-Object { "$($_.name) $($_.state_before) -> $($_.state_after)" }) -join '; ')$(if ($r.errors.Count) { ' !! ' + ($r.errors -join ' | ') })"
     $r
 }
 

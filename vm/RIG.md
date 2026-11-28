@@ -2302,8 +2302,10 @@ first, and the Update Orchestrator service UsoSvc stopped and set to Disabled wh
 `Kernel\La57Cleanup`, `Registry\RegIdleBackup`, `DiskCleanup\SilentCleanup`, `Defrag\ScheduledDefrag`,
 `Maintenance\WinSAT`, `SystemRestore\SR`, `Diagnosis\Scheduled`, `DiskFootprint\*`, `AppxDeploymentClient\*`,
 `LanguageComponentsInstaller\*`, `MUI\LPRemove`, `Chkdsk\ProactiveScan`, `Sysmain\*`, all under `\Microsoft\Windows\`),
-since the 720 s settle floor puts every exec window at the start of the maintenance burst; what was disabled, each
-absent family, the value before and after, and each refusal, in `setup.json` / `e2e.json` `setup.background`; the same for gate and null runs, undone by
+since the 720 s settle floor puts every exec window at the start of the maintenance burst; DECISIONS 2026-11-28
+(second entry, null-mt13): `Management\Provisioning\*` and the rest of the reviewed burst list disabled too, and
+boot-file optimisation off (`HKLM\SOFTWARE\Microsoft\Dfrg\BootOptimizeFunction` `Enable` = "N", REG_SZ,
+`boot_optimize`); what was disabled, each absent family, each value before and after, and each refusal, in `setup.json` / `e2e.json` `setup.background`; the same for gate and null runs, undone by
 the next snapshot restore) - `prepare` (pre-apps, Defender idle, lists/snap
 0, install or plant, launch at medium, lists/snap 1, rig CLI `inventory` and `harvest <program id> -o fp.json`) -
 `ui-start` (the UI at medium through a one-shot task; `ProgramList` scrolled page by page with ScrollPattern until the
