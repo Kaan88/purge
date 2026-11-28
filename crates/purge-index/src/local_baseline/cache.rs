@@ -969,7 +969,8 @@ impl LocalCache {
         decode_sets(&self.files.read(name, MAX_SETS_BYTES).ok()?, bound)
     }
 
-    /// The part files of one source (any Windows), newest first.
+    /// The part files of one source (any Windows), newest first; files of one write time in name
+    /// order, so the order is total and every [`CacheFiles`] prunes and picks the same file.
     fn part_files(&self, source: LocalSource) -> Vec<PartFileEntry> {
         let marker = format!("-{}-", source.tag().to_ascii_lowercase());
         let mut found: Vec<PartFileEntry> = self
@@ -2562,13 +2563,18 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
-    /// Files held in memory, for [`LocalCache::with_files`]: nothing on disk exists.
+    /// Files held in memory, for [`LocalCache::with_files`]: nothing on disk exists. Each file has
+    /// its last write time, as a directory listing gives it: the time of its write, or the one a test
+    /// sets ([`MemFiles::set_modified`]).
     #[derive(Debug, Default)]
-    struct MemFiles(std::sync::Mutex<std::collections::BTreeMap<String, Vec<u8>>>);
+    struct MemFiles(std::sync::Mutex<std::collections::BTreeMap<String, (Vec<u8>, SystemTime)>>);
 
     impl MemFiles {
         fn names(&self) -> Vec<String> {
             self.0.lock().unwrap().keys().cloned().collect()
+        }
+        fn set_modified(&self, name: &str, time: SystemTime) {
+            self.0.lock().unwrap().get_mut(name).unwrap().1 = time;
         }
     }
 
@@ -2577,13 +2583,13 @@ mod tests {
             self.0
                 .lock()
                 .unwrap()
-                .keys()
-                .map(|name| (name.clone(), SystemTime::now()))
+                .iter()
+                .map(|(name, (_, modified))| (name.clone(), *modified))
                 .collect()
         }
         fn read(&self, name: &str, max: u64) -> io::Result<Vec<u8>> {
             let files = self.0.lock().unwrap();
-            let bytes = files.get(name).ok_or(io::ErrorKind::NotFound)?;
+            let (bytes, _) = files.get(name).ok_or(io::ErrorKind::NotFound)?;
             if bytes.len() as u64 > max {
                 return Err(io::ErrorKind::InvalidData.into());
             }
@@ -2594,7 +2600,7 @@ mod tests {
             self.0
                 .lock()
                 .unwrap()
-                .insert(name.to_owned(), bytes.to_vec());
+                .insert(name.to_owned(), (bytes.to_vec(), SystemTime::now()));
             Ok(())
         }
         fn remove(&self, name: &str) -> io::Result<()> {
@@ -2605,6 +2611,49 @@ mod tests {
                 .map(drop)
                 .ok_or_else(|| io::ErrorKind::NotFound.into())
         }
+    }
+
+    const MEM_SOURCES: [(LocalSource, &str); 3] = [
+        (LocalSource::S1, r"HKLM\SOFTWARE\S1Key"),
+        (LocalSource::S2, r"HKU\S-1-5-21-0-0-0-1000\S2Key"),
+        (LocalSource::S4, r"HKLM\SOFTWARE\S4Key"),
+    ];
+
+    /// Stores parts A, B and C of every source in the cache held in memory and in the cache by path,
+    /// giving each part file the write time `written(id)` before the next store prunes: the prune
+    /// order then does not rest on the resolution of the clock or of the file system.
+    fn store_in_both(
+        files: &MemFiles,
+        mem: &LocalCache,
+        dir: &Path,
+        by_path: &LocalCache,
+        written: impl Fn(&str) -> SystemTime,
+    ) {
+        for (source, key) in MEM_SOURCES {
+            for id in [ID_A, ID_B, ID_C] {
+                let (name, _) = part_file_names(&os(), source, id).unwrap();
+                mem.store_part(&os(), &part(source, id, &[key])).unwrap();
+                files.set_modified(&name, written(id));
+                by_path
+                    .store_part(&os(), &part(source, id, &[key]))
+                    .unwrap();
+                fs::File::options()
+                    .write(true)
+                    .open(dir.join(&name))
+                    .unwrap()
+                    .set_modified(written(id))
+                    .unwrap();
+            }
+        }
+    }
+
+    /// The part files of `source` among `names`.
+    fn parts_of(names: &[String], source: LocalSource) -> Vec<String> {
+        [ID_A, ID_B, ID_C]
+            .into_iter()
+            .map(|id| part_file_names(&os(), source, id).unwrap().0)
+            .filter(|name| names.contains(name))
+            .collect()
     }
 
     /// The broker's cache reaches its directory only through [`CacheFiles`] (its store's checked
@@ -2619,16 +2668,18 @@ mod tests {
         let mem = LocalCache::with_files(&nowhere, files.clone(), true);
         let dir = scratch("with-files");
         let by_path = cache(&dir, true);
-        for c in [&mem, &by_path] {
-            for (source, key) in [
-                (LocalSource::S1, r"HKLM\SOFTWARE\S1Key"),
-                (LocalSource::S2, r"HKU\S-1-5-21-0-0-0-1000\S2Key"),
-                (LocalSource::S4, r"HKLM\SOFTWARE\S4Key"),
-            ] {
-                for id in [ID_A, ID_B, ID_C] {
-                    c.store_part(&os(), &part(source, id, &[key])).unwrap();
-                }
-            }
+        // A three hours ago, B two, C one: B is the newer of the two files the store of C prunes
+        // between, so the prune keeps B and C (the two newest).
+        let base = SystemTime::now() - Duration::from_secs(4 * 3600);
+        let written = |id: &str| {
+            let hours = [ID_A, ID_B, ID_C].iter().position(|i| *i == id).unwrap() as u64 + 1;
+            base + Duration::from_secs(hours * 3600)
+        };
+        store_in_both(&files, &mem, &dir, &by_path, written);
+        for (source, _) in MEM_SOURCES {
+            let kept = [ID_B, ID_C].map(|id| part_file_names(&os(), source, id).unwrap().0);
+            assert_eq!(parts_of(&files.names(), source), kept);
+            assert_eq!(parts_of(&names(&dir), source), kept);
         }
         assert_eq!(files.names(), names(&dir));
         let a = mem.load(&os(), &ids(ID_C, ID_C, ID_C), s3());
@@ -2645,6 +2696,30 @@ mod tests {
             a.local.as_ref().unwrap().header().source_id,
             b.local.as_ref().unwrap().header().source_id
         );
+        assert!(!nowhere.exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Files written within one tick of the clock (a coarse file system, a fast machine) have the
+    /// same write time: the prune then keeps the first by name, the same file in both caches.
+    #[test]
+    fn a_prune_between_files_of_one_write_time_keeps_the_first_by_name_in_both_caches() {
+        let nowhere = std::env::temp_dir().join(format!(
+            "purge-local-cache-{}-nowhere-tie",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&nowhere);
+        let files = std::sync::Arc::new(MemFiles::default());
+        let mem = LocalCache::with_files(&nowhere, files.clone(), true);
+        let dir = scratch("with-files-tie");
+        let by_path = cache(&dir, true);
+        let once = SystemTime::now() - Duration::from_secs(3600);
+        store_in_both(&files, &mem, &dir, &by_path, |_| once);
+        assert_eq!(files.names(), names(&dir));
+        for (source, _) in MEM_SOURCES {
+            let kept = [ID_A, ID_C].map(|id| part_file_names(&os(), source, id).unwrap().0);
+            assert_eq!(parts_of(&files.names(), source), kept);
+        }
         assert!(!nowhere.exists());
         let _ = fs::remove_dir_all(&dir);
     }
