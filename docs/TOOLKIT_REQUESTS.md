@@ -8,7 +8,7 @@ own and the section here gets the revision that closed it.
 
 | Id | Request | For | State |
 |---|---|---|---|
-| TK-1 | A fixed list of font files instead of the system's font collection | The broker's toolkit consent dialog (M3_DESIGN 8.3, review B1) | Open. Blocks the toolkit dialog as a default; does not block a release with the TaskDialog |
+| TK-1 | A fixed list of font files instead of the system's font collection | The broker's toolkit consent dialog (M3_DESIGN 8.3, review B1) | **Closed at `aff4312`** (toolkit PR #80, 2026-11-28); used by the broker's dialog since the pin moved there. The toolkit dialog is still not the default: M3_DESIGN 8.3, "Before the toolkit dialog can be the default" |
 
 ## TK-1: draw with a fixed list of font files (review B1 of BROKER-CONSENT-UI)
 
@@ -182,9 +182,60 @@ side can be held to it:
 The price: a name in a script the three files lack (Han, Arabic, most emoji) is read as escapes in the toolkit
 dialog and as itself in the TaskDialog. That is what fonts nobody else can supply cost.
 
-### Until it lands
+### Closed at `aff4312`
 
-`service::fonts_have` says yes to every character, so the escape pass changes nothing, and the toolkit dialog
-draws with whatever the system's collection gives. The dialog is therefore compiled only with the cargo feature
-`toolkit-consent`, which no release build turns on (M3_DESIGN 8.3, "The switch"): a toolkit build of the broker is
-for the rig and the preview only, and the TaskDialog is the only consent dialog a release has.
+The toolkit's main `aff4312` (PR #80; notes in its `docs/FEATURES.md`, section TK-1) has the API above, additively,
+with these differences, each of which the broker follows:
+
+- `FixedFontsError` is `#[non_exhaustive]` and has a fourth variant, `TooLarge` (a file over `MAX_FONT_FILE`, 64 MiB,
+  is not read). A path that is not a regular file is `Read` with `InvalidInput`. The broker matches no variant:
+  every `Err` is "no toolkit dialog".
+- A character no file has is drawn as the `.notdef` of the face's own first font (`seguisb.ttf`'s for
+  `Face::Semibold`), not always file 1's. The broker passes the window no such character, so it does not matter.
+- `has_glyph` answers for a character alone. A cluster that no single file covers (a base and a mark that only
+  different files have: with the Segoe files, a Cyrillic a and U+20DD, which is in `seguisym.ttf` only) draws a
+  `.notdef` although each character has a glyph. So the toolkit added `FixedFonts::undrawn(weight, &str)`: the
+  byte ranges of the clusters a layout of the whole string draws with glyph 0. Rule 2 above is applied with it.
+- `Painter::text` and `elide` end a line they shorten with U+2026 and cut between characters, not clusters. The
+  broker adds U+2026 to the characters of rule 1.
+
+How the broker uses it (`bins/purge-broker/src/consent/toolkit/fonts.rs`, `service.rs`, `app.rs`):
+
+- The paths: `purge_win::known_folders::system_windows_dir()` (`GetSystemWindowsDirectoryW`), which must be a full
+  path, then `Fonts\segoeui.ttf`, `Fonts\seguisb.ttf`, `Fonts\seguisym.ttf`, in that order. Nothing from the
+  environment.
+- Read once, by the serving thread, at the first request that asks for a toolkit dialog and before its job is
+  posted (`Core::fonts`); a panic while reading them counts as an `Err`. An `Err` marks the toolkit dead: this
+  dialog and every later one is the TaskDialog, and the window's thread makes no window.
+- The window: `Config::new(..).fonts(fonts.clone())`; the first measuring and `ConsentApp::new` measure with
+  `Gfx::with_fonts(&fonts)`.
+- Rule 1: every printable ASCII character but the space, U+26A0, U+2022, U+00B7 and U+2026 has a glyph alone in both
+  faces (`has_glyph` at `Face::Ui.weight()` and `Face::Semibold.weight()`), or no toolkit dialog. The lines the
+  painter may shorten in this dialog (the title row, the hint, a button label that would not fit) are made of those
+  characters alone, so its cut never splits a cluster or an escape.
+- Rule 2: every character outside that set is written as `\u{hex}` when one face lacks it alone (`has_glyph`), or
+  when it is inside a range `undrawn` gives for the whole line in either face (`consent::text::drawable_line`,
+  `Sheet::drawable_lines`). Then every line of the result, the note included, is laid out again in both faces, and
+  a sheet with anything left undrawn is not drawn: the TaskDialog asks. The check runs on the serving thread
+  inside `catch_unwind`; a panic in it marks the toolkit dead.
+- Seen with the real files on this Windows 11 (build 26300): U+1F600 and other emoji are in `seguisym.ttf`
+  (monochrome), so they are drawn, not escaped; Han (U+65E5) and Hangul (U+AC00) are in none of the three.
+
+What must hold, checked at `aff4312`:
+
+1. `bins/purge-broker/tests/planted-font/planted-font.ps1` (unelevated, no download): plants four generated fonts for
+   the user ("Segoe UI Variable Text", "Segoe UI" 400 and 600, "Noto Sans"; files under
+   `%LOCALAPPDATA%\Microsoft\Windows\Fonts`, values under the HKCU `Fonts` key, `AddFontResourceW`,
+   `WM_FONTCHANGE`), draws every sample (82 pictures: `consent_preview --shots`) and one frame of the real window on
+   the hidden desktop, before and after, and removes the plant. 2026-11-28: 0 pictures and 0 window frames changed;
+   the control (`--shots --system-fonts`, the system's collection as before TK-1) changed in 66 of 82 (the planted
+   "Noto Sans" drew U+26A0, which the Segoe fonts and the per-user Inter lack).
+2. `fonts.rs` tests with the real files: the Cyrillic a and U+20DD are each `has_glyph`, the pair is `undrawn`, and
+   the sheet writes both out; every sample's sheet has nothing `undrawn` in either face; an elided title ends in
+   U+2026 and is drawn whole.
+3. `fonts.rs` tests: no file, a file that is not a font, a folder in place of a file, a relative Windows
+   directory: each an `Err`, never fewer files.
+4. Not used by the dialog.
+
+Not seen yet: a real elevated broker drawing with them (the VM run of `m3-consent -ConsentUi toolkit`), and
+Windows 10's copies of the three files.

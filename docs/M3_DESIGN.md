@@ -502,7 +502,8 @@ built on), so that it looks like the application. It stays in the elevated `purg
 of T1. Plan: (1) built behind a switch, the TaskDialog kept as the default and as the fall back; (2) a security
 review; (3) the VM mode `m3-consent` against it (`-ConsentUi toolkit`, RIG.md 14); (4) only then the default.
 **Step 2 was made (2026-11-25: 3 blockers, 10 should-fix; "The review of step 2" below says what became of each) and
-is not passed: B1 needs a change in the toolkit. Steps 3 and 4 are open. Until all pass, the TaskDialog of 8.1 is
+is not passed: B1's toolkit half landed (TK-1, toolkit `aff4312`, 2026-11-28) and the dialog draws with three fixed
+font files since, but S-E, S-F and S-G of the second review are open. Steps 3 and 4 are open. Until all pass, the TaskDialog of 8.1 is
 the only dialog a release has: the toolkit dialog is compiled only with the cargo feature `toolkit-consent`, which
 no release build turns on (see "The switch").**
 
@@ -533,7 +534,7 @@ the end of the list to continue.", "Tick the box to continue."), "Cancel", and t
 | A disabled button takes no click | A click is a press and a release on the same control; on the button that approves it must have been enabled when the pointer went down too, so a press begun on the disabled button and let go after it armed presses nothing |
 | `SetForegroundWindow` on creation, a flash when refused; centred on the cursor's monitor | The same (`purge_win::topwindow`), once per dialog; no input is synthesised to take the foreground |
 | Parent gone or pipe broken: closed as Cancel (3.6) | The request is answered `Declined` by the `Closer` itself, without waiting for the window; the window is told to take the dialog down |
-| A dialog that cannot be shown counts as Cancel | A toolkit window that cannot be shown is the **TaskDialog** for that dialog (never an approval): no window or surface, the fonts or the first measuring panicked, fonts that cannot draw the dialog's own words, not on screen within 10 s (`service::SHOW_WAIT`), or the window's thread died before the dialog was up. Died while it was up: `Declined`, and the window is hidden at once (review S4) |
+| A dialog that cannot be shown counts as Cancel | A toolkit window that cannot be shown is the **TaskDialog** for that dialog (never an approval): no window or surface, the three font files could not be read (`toolkit::fonts`; then for every later dialog too), reading or checking them or the first measuring panicked, fonts that cannot draw the dialog's own words or a line it would have to draw, not on screen within 10 s (`service::SHOW_WAIT`), or the window's thread died before the dialog was up. Died while it was up: `Declined`, and the window is hidden at once (review S4) |
 | Esc before the dialog is drawn | A key reaches a window before its first frame does. A cancel (Esc, Enter on Cancel, Alt+F4) that comes before the dialog was on screen is `Declined`, and the request is not told that a dialog was shown: no `consent.shown`, and no TaskDialog asked afterwards (review S2). An approval before it is on screen is nobody's |
 | The dialog is always a window on screen | The window has the close box only, no minimise box, and one size. If something minimises it all the same it is restored before a dialog is put in it or taken down: the host draws nothing in a minimised window, so a dialog there would never count as shown and one taken down there would keep its words (review S8) |
 | `Approved` only for the primary button with the box ticked | `Approved` only from `state::Prompt::press(Approve)` under the rules above, for the job at the desk, once, and only while it is on screen (`service`) |
@@ -544,22 +545,40 @@ release broker's line is what it always was. The window that drew the dialog say
 that fell back to the TaskDialog is not reported as the toolkit's (review S10). A client shows the same state for
 both; the member is for the rig.
 
-**What it cannot draw.** The sheet is passed through `Sheet::drawable` before it is measured: every character the
-window's fonts have no glyph for is written as `\u{hex}` in place (`text::drawable`, the form `shown` already uses
-for a hidden character), in every line, the button and the box included, and when one was, the summary ends with
-"Characters this window has no font for are shown as \u{...}; they are part of the name." The lines keep their
-number, order and kinds, and the code in the footer is untouched. Fonts that lack a printable ASCII character or one
-of the three marks draw no dialog at all (`text::fixed_words_drawable`; the TaskDialog asks). **This is the Purge
-half of review B1 and it changes nothing yet**: at the pinned toolkit revision the window cannot be asked what it
-would draw a character with, so `service::fonts_have` says yes to every character. See the review below.
+**What it cannot draw.** The window draws with three font files and nothing else (review B1, TK-1;
+`toolkit::fonts`): `segoeui.ttf`, `seguisb.ttf` and `seguisym.ttf` from the `Fonts` folder of the Windows directory
+the kernel records (`GetSystemWindowsDirectoryW`, never the environment), read once by `mdshared_text::fixed_fonts`
+when the first dialog is asked for, before its job is posted. The toolkit's collection of them never enumerates the
+system's fonts and has no fallback and no generic family, so a font installed for the user alone draws no glyph of
+the dialog under any name (`tests/planted-font/planted-font.ps1`). The host draws with them (`Config::fonts`) and the
+dialog measures with them (`Gfx::with_fonts`). Any error reading them is no toolkit dialog, now or later: the
+TaskDialog asks. Then the sheet is passed through `toolkit::fonts::sheet_for` before it is measured:
+
+1. The dialog's own characters (printable ASCII and the three marks) and U+2026, the ellipsis the toolkit's painter
+   ends a shortened line with, must each have a glyph in both faces (`FixedFonts::has_glyph` at 400 and 600), or
+   there is no toolkit dialog (`text::fixed_words_drawable`; the TaskDialog asks). The lines the painter may shorten
+   (the title row, the hint, a button label that would not fit) are made of those characters alone, so its cut,
+   which is between characters and not clusters, never splits a cluster or an escape.
+2. Every other character is written as `\u{hex}` in place (`text::drawable_line`, the form `shown` already uses for a
+   hidden character), in every line, the button and the box included, when one face lacks it alone, or when the
+   layout of the whole line draws it with the missing glyph in either face (`FixedFonts::undrawn`: a Cyrillic a and
+   U+20DD each have a glyph, in different files, and the pair has none). When one was, the summary ends with
+   "Characters this window has no font for are shown as \u{...}; they are part of the name." The lines keep their
+   number, order and kinds, and the code in the footer is untouched.
+3. Every line of the result is laid out again in both faces; a sheet with anything left undrawn is not drawn (the
+   TaskDialog asks), so the window is never handed a character it would draw as `.notdef`.
+
+The check runs on the serving thread, inside `catch_unwind`: a panic in the fonts' parsers there marks the toolkit
+dead, as one on the window's thread does. With the Segoe files a name in Han or Hangul is read as escapes in the
+toolkit dialog and as itself in the TaskDialog; most emoji are drawn (`seguisym.ttf` has monochrome outlines).
 
 **The switch.** `purge-broker.exe ... [--consent taskdialog|toolkit]`, at most once, any other value refused
 (`args.rs`). Without it: `ConsentUi::DEFAULT`, the TaskDialog. `Purge.exe --broker-consent toolkit` passes it for
 that run (`purge_client::broker::launch_with`); nothing saves it. It is an argument because an elevated process
 must not take its behaviour from a file or an environment a medium process can write (T7). Whoever starts the
 broker can pass either value (an edited shortcut, `Purge.exe --broker-consent toolkit`, an injected Purge.exe). That
-is harmless only while both dialogs give the same guarantees, and the toolkit dialog's are not shown yet (B1 is
-open, no VM run). So the argument alone does not reach it (review B2):
+is harmless only while both dialogs give the same guarantees, and the toolkit dialog's are not shown yet (S-E, S-F
+and S-G are open, no VM run). So the argument alone does not reach it (review B2):
 
 - The toolkit dialog and the three crates it names (`mdshared-ui`, `mdshared-text`, `winit`, optional dependencies)
   are compiled only with the cargo feature **`toolkit-consent`** of `purge-broker`: its one feature, never a default,
@@ -650,11 +669,12 @@ crates at fixed versions (among them a second `miniz_oxide` and two more `window
   `BROKER_TOOLKIT` is in it, and no feature of the broker is on, in its own tree or in a default workspace build.
 - Rule 6, the tree with the feature: what it has beyond the first is exactly `BROKER_TOOLKIT`, crate by crate and
   version by version (grouped with the reason each is there), each from crates.io but the `mdshared-*` crates, which
-  come from the toolkit's repository at revision `d789e8e` (the pin `ui/rust` moved to; `294d330` before), locked in `Cargo.lock` to the full commit
+  come from the toolkit's repository at revision `aff4312` (TK-1; `d789e8e` before, `294d330` before that, the same 86 crates at each), locked in `Cargo.lock` to the full commit
   (`TOOLKIT_COMMIT`); `mdshared-ui` is built with `host` and `a11y` only. A crate, a version or a toolkit revision
   an update starts to bring is a violation until its line here changes, in a commit somebody reads.
 - Rule 6, the sources: only `src/consent/toolkit/` names the feature's crates, and of each only what is listed:
-  fifteen modules of `mdshared_ui`, `mdshared_text::Bitmap`, `winit::dpi`, `winit::raw_window_handle` and
+  fifteen modules of `mdshared_ui`, of `mdshared_text` `Bitmap` and the fixed font files (`fixed_fonts`,
+  `FixedFonts`, `FixedFontsError`, `MAX_FONT_FILE`), `winit::dpi`, `winit::raw_window_handle` and
   `winit::window::WindowButtons`; never as a group, a glob or an alias. `mdshared_ui::platform`, which also holds the
   file dialogs, the clipboard, `open_url` and the recycle bin, only for its four functions that read the system's
   colours and scale. This reads names: it does not see what a method of an allowed type does.
@@ -665,7 +685,7 @@ Before this package nothing limited what the broker links from outside.
 
 | Id | Finding | State |
 |---|---|---|
-| B1 | The elevated window finds its fonts by family name in the system's collection, which holds the fonts any process of the user installed for that user, and falls back by name too. A medium process that registers a font under one of those families chooses the glyphs the elevated dialog draws: a name, a path or the code can read as something else. The TaskDialog's text is drawn by the system with the system's fonts | **Open, and not Purge's to close.** Purge's half is in (the escape pass above, with nothing to ask yet). The toolkit must give a way to load a fixed list of font files with the system's collection and its fallback off, and to ask that collection whether it has a glyph. The request is `docs/TOOLKIT_REQUESTS.md`, TK-1 |
+| B1 | The elevated window finds its fonts by family name in the system's collection, which holds the fonts any process of the user installed for that user, and falls back by name too. A medium process that registers a font under one of those families chooses the glyphs the elevated dialog draws: a name, a path or the code can read as something else. The TaskDialog's text is drawn by the system with the system's fonts | **Fixed (2026-11-28, toolkit `aff4312`, branch `broker/tk1-fonts`), not yet seen elevated.** The toolkit has the fixed font files (`docs/TOOLKIT_REQUESTS.md` TK-1, closed); the window draws and measures with `segoeui.ttf`, `seguisb.ttf` and `seguisym.ttf` of the Windows directory and nothing else, and the escape pass asks those files ("What it cannot draw" above). A font planted for the user changes no pixel of the dialog (`tests/planted-font/planted-font.ps1`, unelevated); the VM run shows it with a real elevated broker |
 | B2 | A release build took `--consent toolkit` from whoever starts the broker | Fixed: the feature `toolkit-consent` ("The switch") |
 | B3 | The VM mode did not check that the code a dialog shows is the code the client was told, nor the toolkit dialog's own rules, nor the lost client | Fixed in the rig, not run: RIG.md 14 |
 | S1 | Nothing showed that winit's registered messages and AccessKit's window property cannot be reached from medium (the WPARAM of `Winit::ExecMsg` is the address of a closure winit calls) | Probes in the rig, not run: RIG.md 14 |
@@ -698,8 +718,9 @@ branch may merge into `ui/rust` **with the TaskDialog the default**. Done with t
 **Before the toolkit dialog can be the default** (step 4), besides the VM run of `m3-consent -ConsentUi toolkit` with
 the rig changes above:
 
-- **B1** (the first review): the window's fonts are found by family name in a collection a medium process can add
-  to. Needs the toolkit's fixed font files, `docs/TOOLKIT_REQUESTS.md` TK-1 (still not there at `d789e8e`).
+- **B1** (the first review) is fixed with the toolkit's fixed font files (TK-1, `aff4312`): what is left of it is
+  the VM run, which shows the fonts with a real elevated broker and a real `runas`, and Windows 10's copies of the
+  three files (not looked at; if one is missing or lacks a mark the TaskDialog asks).
 - **S-E**: an approval must need every attention row to have been on screen, not only the end of the list. Today
   the end alone arms the box and the button; a long list scrolled to its end with End skips the rows between.
 - **S-F**: a panic test with a real window: the panic hook on the window's thread ("Threads": answer, mark dead,
@@ -708,7 +729,8 @@ the rig changes above:
   executes.
 
 These stay open on purpose: the branch merges with the TaskDialog the default and the feature off in every release
-build, so none of them is in reach of a shipped broker.
+build, so none of them is in reach of a shipped broker. With B1 fixed, S-E, S-F, S-G and the VM run are what stands
+between the toolkit dialog and the default; the TaskDialog stays the default until then.
 
 **The request to the toolkit (B1)** is `docs/TOOLKIT_REQUESTS.md`, TK-1, written to be handed over as it stands:
 why, the API (`mdshared_text::fixed_fonts`, `FixedFonts::has_glyph`, `Gfx::with_fonts`, `Config::fonts`,
@@ -716,18 +738,20 @@ why, the API (`mdshared_text::fixed_fonts`, `FixedFonts::has_glyph`, `Gfx::with_
 (`segoeui.ttf`, `seguisb.ttf`, `seguisym.ttf`, the same on Windows 10 and 11) and the escape rule. Purge does not
 change the toolkit. One thing an earlier draft of the request here missed: the frame is painted with a `Gfx` the
 host makes itself (`host/run.rs`), so a constructor on `Gfx` alone would not have reached the pixels; the request
-asks for `Config::fonts` too. Purge's half is in the broker already ("What it cannot draw" above).
+asks for `Config::fonts` too. It landed at the toolkit's `aff4312` (PR #80) with `FixedFonts::undrawn` beside
+`has_glyph` (a cluster no single file covers draws a `.notdef` although each character has a glyph) and U+2026 from
+the painter's shortening to allow for; the broker uses it ("What it cannot draw" above, TK-1 "Closed at `aff4312`").
 
-Until then a toolkit build of the broker is for the rig and the preview only.
+Until the default changes (step 4) a toolkit build of the broker is for the rig and the preview only.
 
 **Risks that stay, with the feature on.**
 
-- The elevated process parses fonts itself (read-fonts, skrifa, swash, harfrust, through parley and fontique),
-  from the system's font collection, which holds fonts a user installed for themselves (files a medium process can
-  write). The TaskDialog's text is drawn by GDI. The parsers are safe Rust, so the expected failure is a panic, and a
-  panic on the window's thread is a Cancel or the TaskDialog. A font that draws misleading glyphs is review B1: it
-  was written here as "in reach of both renderers", which is wrong for the families the window asks for by name,
-  and it is what keeps the feature out of a release.
+- The elevated process parses fonts itself (read-fonts, skrifa, swash, harfrust, through parley and fontique). Since
+  TK-1 only three files, `segoeui.ttf`, `seguisb.ttf` and `seguisym.ttf` under the Windows directory, which belong to
+  TrustedInstaller and which users can only read; no font a user installed for themselves is read or enumerated by
+  the dialog (review B1, fixed). The TaskDialog's text is drawn by GDI. The parsers are safe Rust, so the expected
+  failure is a panic: on the window's thread a Cancel or the TaskDialog, on the serving thread (reading the files,
+  the escape pass) caught, and the TaskDialog.
 - Crates linked and not used by the dialog: image decoding (png, zune-jpeg), a file watcher (notify), file dialogs
   (rfd). Nothing calls them from the broker; the toolkit has no feature to leave them out.
 - winit registers its own window classes and a message-only window, softbuffer presents with GDI; AccessKit serves
@@ -744,7 +768,7 @@ Until then a toolkit build of the broker is for the rig and the preview only.
   `shadow::Mode::from_env`, whose one caller is in that Linux-only `impl`. The other reads of `mdshared-ui` and
   `mdshared-text` outside their examples (`XDG_*`, `HOME`) are in the desktop-entry, recycle-bin, placement and
   media-session modules, none of which the dialog names. So there is nothing to stop in the broker; a pin bump has
-  to look again (`rg "env::var" crates/mdshared-ui/src crates/mdshared-text/src`). Looked again at `d789e8e`: the
+  to look again (`rg "env::var" crates/mdshared-ui/src crates/mdshared-text/src`). Looked again at `aff4312`: it adds no read of the environment. At `d789e8e`: the
   same; the reads it added are in tests, in `mdshared-app`'s AppImage runtime (Linux) and in its single-instance key
   (`COMPUTERNAME`), which the dialog does not use. The crates under the toolkit
   (winit, softbuffer, AccessKit, parley and the rest) were not read for this.
