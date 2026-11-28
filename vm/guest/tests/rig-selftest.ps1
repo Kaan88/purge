@@ -2519,6 +2519,25 @@ exit 0
     Check 'm3-e2e-ui: Find-E2eDialogButton takes the Rust UI id and name first and refuses two' ($dlgFn -match 'Get-E2eDialogIds \$Part' -and
         $dlgFn -match 'AutomationIdProperty, \$id' -and $dlgFn -match 'NameProperty, \$Name' -and $dlgFn -match [regex]::Escape('if ($hits.Count -gt 1) { return $null }') -and
         $dlgFn.IndexOf('Get-E2eDialogIds') -lt $dlgFn.IndexOf('Find-E2eButton $Root $Name $Part'))
+    # The host probe (2026-11-28): the Rust UI's process has Win32 panes at the top level too (winit's event target,
+    # the input indicator windows); a lookup by process id alone returned one. Every driver takes the Window.
+    $winFn = [regex]::Match($uiText, '(?s)\nfunction Get-E2eWindow\(.*?\n\}').Value
+    Check 'm3-e2e-ui: Get-E2eWindow takes the process''s Window (control type), not any top-level element' ($winFn -match 'ProcessIdProperty, \$ProcessId' -and
+        $winFn -match 'ControlTypeProperty, \[System\.Windows\.Automation\.ControlType\]::Window' -and $winFn -match 'AndCondition' -and $winFn -notmatch 'FindFirst')
+    $cleanText = [IO.File]::ReadAllText((Join-Path $Guest 'm3-clean.ps1'))
+    $cleanFn = [regex]::Match($cleanText, '(?s)\nfunction Find-UiWindow\(.*?\n\}').Value
+    $winCs = 'new AndCondition(new PropertyCondition(AutomationElement.ProcessIdProperty, pid), new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Window))'
+    $secCs = [IO.File]::ReadAllText((Join-Path $Guest 'm3sec.cs')); $recCs = [IO.File]::ReadAllText((Join-Path $Guest 'm3rec.cs'))
+    Check 'm3-clean Find-UiWindow, m3sec.cs and m3rec.cs ui take the Window too' ($cleanFn -match 'ControlType\]::Window' -and $cleanFn -match 'AndCondition' -and
+        $secCs.Contains($winCs) -and $recCs.Contains($winCs) -and -not $secCs.Contains('FindFirst(TreeScope.Children, new PropertyCondition(AutomationElement.ProcessIdProperty, pid))') -and
+        -not $recCs.Contains('FindFirst(TreeScope.Children, new PropertyCondition(AutomationElement.ProcessIdProperty, pid))'))
+    # The Rust UI's confirmation arms its Uninstall 400 ms after it opens (screens::ARM_DELAY; a disabled AccessKit
+    # button has no Invoke): the wait and the press take it only enabled.
+    $e2eGuest = [IO.File]::ReadAllText((Join-Path $Guest 'm3-e2e.ps1'))
+    $awaitPh = [regex]::Match($e2eGuest, "(?s)\n    'ui-await-confirm' \{.*?\n    \}").Value
+    $confirmPh = [regex]::Match($e2eGuest, "(?s)\n    'ui-confirm' \{.*?\n    \}").Value
+    Check 'm3-e2e: ui-await-confirm and ui-confirm wait for an enabled Uninstall' ($awaitPh -match "Find-E2eDialogButton \`$win 'Uninstall' \} .*-Enabled" -and
+        $confirmPh -match "Wait-E2eElement \{ Find-E2eDialogButton \`$win 'Uninstall' \} 15 -Enabled" -and $confirmPh -match '\$btn = \$bw\.el')
     Check 'm3-e2e-ui: exit code from a step detail' ((Get-E2eExitCodeFromText 'Finished, exit code 3010 · quiet mode') -eq 3010 -and $null -eq (Get-E2eExitCodeFromText 'Confirmed gone'))
     Check 'm3-e2e-ui: target keys' ((Get-E2eTargetKey ([pscustomobject]@{ type = 'RegValue'; path = 'HKU\S-1\Software\X'; name = 'Y' })) -eq 'RegValue|hku\s-1\software\x|y|' -and (Get-E2eTargetKey ([pscustomobject]@{ type = 'Task'; path = '\PurgeExecApp\Simple Update' })) -eq 'Task|\purgeexecapp\simple update')
     $c = Compare-E2eSets @('a', 'b') @('b', 'a')
