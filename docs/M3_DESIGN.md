@@ -744,7 +744,9 @@ Until then a toolkit build of the broker is for the rig and the preview only.
   `shadow::Mode::from_env`, whose one caller is in that Linux-only `impl`. The other reads of `mdshared-ui` and
   `mdshared-text` outside their examples (`XDG_*`, `HOME`) are in the desktop-entry, recycle-bin, placement and
   media-session modules, none of which the dialog names. So there is nothing to stop in the broker; a pin bump has
-  to look again (`rg "env::var" crates/mdshared-ui/src crates/mdshared-text/src`). The crates under the toolkit
+  to look again (`rg "env::var" crates/mdshared-ui/src crates/mdshared-text/src`). Looked again at `d789e8e`: the
+  same; the reads it added are in tests, in `mdshared-app`'s AppImage runtime (Linux) and in its single-instance key
+  (`COMPUTERNAME`), which the dialog does not use. The crates under the toolkit
   (winit, softbuffer, AccessKit, parley and the rest) were not read for this.
 - The source rule of check-deps reads names. What the toolkit's own code does inside an allowed module (the host
   registering a drop target, the contrast watcher's hidden window) is the toolkit's, at the pinned commit.
