@@ -162,7 +162,30 @@ $E2eBackgroundTasks = @(
     @{ path = '\Microsoft\Windows\Application Experience\'; name = '*' }
     # e2e-final4: vscode-user's 25 collateral were one Defender cache-maintenance / cleanup / signature-fallback burst.
     @{ path = '\Microsoft\Windows\Windows Defender\'; name = '*' }
+    # e2e-branch1 / -branch2 / -lt1 and null-lt1 (DECISIONS 2026-11-28): the 720 s settle floor parks every exec window at
+    # the start of Windows Automatic Maintenance (about 730-810 s uptime), when some 45 tasks fire within 30 s (NGEN roots,
+    # CBS ApplicabilityEvaluationCache, MuiCache, INetCache removals). Their families are disabled here, and Automatic
+    # Maintenance itself is switched off ($E2eMaintenanceValue below).
+    @{ path = '\Microsoft\Windows\.NET Framework\'; name = '*' }
+    @{ path = '\Microsoft\Windows\Servicing\'; name = 'StartComponentCleanup' }
+    @{ path = '\Microsoft\Windows\Kernel\'; name = 'La57Cleanup' }
+    @{ path = '\Microsoft\Windows\Registry\'; name = 'RegIdleBackup' }
+    @{ path = '\Microsoft\Windows\DiskCleanup\'; name = 'SilentCleanup' }
+    @{ path = '\Microsoft\Windows\Defrag\'; name = 'ScheduledDefrag' }
+    @{ path = '\Microsoft\Windows\Maintenance\'; name = 'WinSAT' }
+    @{ path = '\Microsoft\Windows\SystemRestore\'; name = 'SR' }
+    @{ path = '\Microsoft\Windows\Diagnosis\'; name = 'Scheduled' }
+    @{ path = '\Microsoft\Windows\DiskFootprint\'; name = '*' }
+    @{ path = '\Microsoft\Windows\AppxDeploymentClient\'; name = '*' }
+    @{ path = '\Microsoft\Windows\LanguageComponentsInstaller\'; name = '*' }
+    @{ path = '\Microsoft\Windows\MUI\'; name = 'LPRemove' }
+    @{ path = '\Microsoft\Windows\Chkdsk\'; name = 'ProactiveScan' }
+    @{ path = '\Microsoft\Windows\Sysmain\'; name = '*' }
 )
+
+# Automatic Maintenance off for the run (DECISIONS 2026-11-28): Schedule\Maintenance\MaintenanceDisabled = 1 (DWORD), set
+# in setup next to the task pause, for gate and null runs alike; the snapshot restore of the next run undoes it.
+$E2eMaintenanceValue = @{ key = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\Maintenance'; name = 'MaintenanceDisabled'; value = 1 }
 
 # Services stopped for the run besides UsoSvc and W32Time (DECISIONS 2026-11-24, e2e-final6).
 $E2eBackgroundServices = @('DoSvc', 'wuauserv', 'WaaSMedicSvc')
@@ -171,10 +194,23 @@ $E2eBackgroundServices = @('DoSvc', 'wuauserv', 'WaaSMedicSvc')
 # Disabled where Windows allows it: its startup type is protected on some builds, which is recorded, not fatal). Never
 # throws; returns the record for setup.json / e2e.json `background`.
 function Suspend-E2eBackgroundTasks {
-    $r = [ordered]@{ t = (NowIso); tasks = @(); service = $null; time_service = $null; services = @(); errors = @() }
+    $r = [ordered]@{ t = (NowIso); tasks = @(); maintenance = $null; service = $null; time_service = $null; services = @(); errors = @() }
+    # Automatic Maintenance (DECISIONS 2026-11-28): the value before (null when absent) and after; a refusal is recorded,
+    # never fatal.
+    $mv = $E2eMaintenanceValue
+    $m = [ordered]@{ key = 'HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\Maintenance'; name = $mv.name; type = 'REG_DWORD'; value_before = $null; value_after = $null; error = $null }
+    try {
+        $p = Get-ItemProperty -LiteralPath $mv.key -Name $mv.name -ErrorAction SilentlyContinue
+        if ($p) { $m.value_before = $p.($mv.name) }
+        if (-not (Test-Path -LiteralPath $mv.key)) { $null = New-Item -Path $mv.key -Force -ErrorAction Stop }
+        $null = New-ItemProperty -LiteralPath $mv.key -Name $mv.name -PropertyType DWord -Value $mv.value -Force -ErrorAction Stop
+        $m.value_after = (Get-ItemProperty -LiteralPath $mv.key -Name $mv.name -ErrorAction Stop).($mv.name)
+    } catch { $m.error = $_.Exception.Message; $r.errors += "maintenance $($m.key)\$($m.name): $($m.error)" }
+    $r.maintenance = [pscustomobject]$m
     foreach ($spec in $E2eBackgroundTasks) {
         $found = @(Get-ScheduledTask -TaskPath $spec.path -TaskName $spec.name -ErrorAction SilentlyContinue)
-        if (-not $found.Count -and $spec.name -ne '*') { $r.tasks += [pscustomobject][ordered]@{ path = "$($spec.path)$($spec.name)"; present = $false; state_before = $null; state_after = $null; error = $null } }
+        # A family that is not there (the task, or for '*' any task in its folder) is recorded as absent, never fatal.
+        if (-not $found.Count) { $r.tasks += [pscustomobject][ordered]@{ path = "$($spec.path)$($spec.name)"; present = $false; state_before = $null; state_after = $null; error = $null } }
         foreach ($t in $found) {
             $rec = [ordered]@{ path = "$($t.TaskPath)$($t.TaskName)"; present = $true; state_before = "$($t.State)"; state_after = $null; error = $null }
             try {
@@ -235,7 +271,7 @@ function Suspend-E2eBackgroundTasks {
         $r.services += [pscustomobject]$x
     }
     $dis = @($r.tasks | Where-Object { $_.state_after -eq 'Disabled' })
-    Log "background pause: $($dis.Count) of $(@($r.tasks | Where-Object { $_.present }).Count) tasks disabled ($(@($dis | ForEach-Object { $_.path }) -join ', ')); UsoSvc $($svc.state_before)/$($svc.start_before) -> $($svc.state_after)/$($svc.start_after); W32Time $($tsvc.state_before) -> $($tsvc.state_after); $(@($r.services | ForEach-Object { "$($_.name) $($_.state_before) -> $($_.state_after)" }) -join '; ')$(if ($r.errors.Count) { ' !! ' + ($r.errors -join ' | ') })"
+    Log "background pause: $($dis.Count) of $(@($r.tasks | Where-Object { $_.present }).Count) tasks disabled ($(@($dis | ForEach-Object { $_.path }) -join ', ')); absent: $(@($r.tasks | Where-Object { -not $_.present } | ForEach-Object { $_.path }) -join ', '); MaintenanceDisabled $($m.value_before) -> $($m.value_after); UsoSvc $($svc.state_before)/$($svc.start_before) -> $($svc.state_after)/$($svc.start_after); W32Time $($tsvc.state_before) -> $($tsvc.state_after); $(@($r.services | ForEach-Object { "$($_.name) $($_.state_before) -> $($_.state_after)" }) -join '; ')$(if ($r.errors.Count) { ' !! ' + ($r.errors -join ' | ') })"
     $r
 }
 

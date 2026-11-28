@@ -2149,7 +2149,7 @@ function Invoke-M2Script([string]$Script, [string]$Arguments = '', [int]$Timeout
         $setupPhase -match '(?m)^        \$rec\.telemetry = Suspend-M2Telemetry\s*\r?\n(\s*#[^\n]*\n)*        \$rec\.background = Suspend-E2eBackgroundTasks' -and
         $setupPhase -match 'background = \$null' -and
         ((@([regex]::Matches($bgList, "path = '([^']+)'; name = '([^']+)'") | ForEach-Object { $_.Groups[1].Value + $_.Groups[2].Value }) -join '|') -ceq
-            '\Microsoft\Windows\UpdateOrchestrator\*|\Microsoft\Windows\Device Information\Device|\Microsoft\Windows\Flighting\OneSettings\RefreshCache|\Microsoft\Windows\PushToInstall\*|\Microsoft\Windows\Application Experience\*|\Microsoft\Windows\Windows Defender\*') -and
+            '\Microsoft\Windows\UpdateOrchestrator\*|\Microsoft\Windows\Device Information\Device|\Microsoft\Windows\Flighting\OneSettings\RefreshCache|\Microsoft\Windows\PushToInstall\*|\Microsoft\Windows\Application Experience\*|\Microsoft\Windows\Windows Defender\*|\Microsoft\Windows\.NET Framework\*|\Microsoft\Windows\Servicing\StartComponentCleanup|\Microsoft\Windows\Kernel\La57Cleanup|\Microsoft\Windows\Registry\RegIdleBackup|\Microsoft\Windows\DiskCleanup\SilentCleanup|\Microsoft\Windows\Defrag\ScheduledDefrag|\Microsoft\Windows\Maintenance\WinSAT|\Microsoft\Windows\SystemRestore\SR|\Microsoft\Windows\Diagnosis\Scheduled|\Microsoft\Windows\DiskFootprint\*|\Microsoft\Windows\AppxDeploymentClient\*|\Microsoft\Windows\LanguageComponentsInstaller\*|\Microsoft\Windows\MUI\LPRemove|\Microsoft\Windows\Chkdsk\ProactiveScan|\Microsoft\Windows\Sysmain\*') -and
         $e2eText -match "Stop-Service -Name 'UsoSvc'" -and $e2eText -match "Stop-Service -Name 'W32Time'" -and $e2eText -match 'time_service = \[pscustomobject\]\$tsvc' -and
         $e2eText -match [regex]::Escape("`$E2eBackgroundServices = @('DoSvc', 'wuauserv', 'WaaSMedicSvc')") -and $e2eText -match 'foreach \(\$name in \$E2eBackgroundServices\)')
     Check 'm3-e2e fail fast: the catch records the failed step; finish and the pull stay in finally' ($appFn -match 'rec\.failed_step = \$script:E2eFailedStep' -and $appFn -match "(?s)\} finally \{.*Invoke-M3E2ePhase 'finish'")
@@ -2443,6 +2443,18 @@ exit 0
     Check 'm3-e2e guest: consent-cancel refuses a wait outside 1..600 and waits exactly -WaitSec' ($cancel2.Value -match 'if \(\$WaitSec -lt 1 -or \$WaitSec -gt 600\) \{ "M3E REFUSED' -and $cancel2.Value -match '\$nw\.seconds = \$WaitSec\r?\n' -and $cancel2.Value -notmatch 'else \{ 10 \}')
     $post = [regex]::Match([IO.File]::ReadAllText((Join-Path $Guest 'm3-e2e.ps1')), "(?s)\n    'capture-post' \{.*?\n    \}")
     Check 'm3-e2e guest: capture-post records every plan item''s key (plan_keys), not only the preselected ones' ($post.Value -match '\$planKeys = @\(\$si \| ForEach-Object \{ Get-E2eTargetKey \$_\.target \}\)' -and $post.Value -match 'plan_keys = \$planKeys')
+    # DECISIONS 2026-11-28: setup also pauses Automatic Maintenance (its task families are in the list check above),
+    # gate and null runs alike, before prepare (snap 0) and capture-post (snap A), recorded in setup.background.
+    $gm = [IO.File]::ReadAllText((Join-Path $Guest 'm3-e2e.ps1'))
+    $setupPh = [regex]::Match($gm, "(?s)\n    'setup' \{.*?\n    \}").Value
+    $bgFn = [regex]::Match($gm, '(?s)\nfunction Suspend-E2eBackgroundTasks \{.*?\n\}').Value
+    Check 'm3-e2e guest: the pause sets MaintenanceDisabled = 1 (DWORD), records before/after, a refusal is not fatal' (
+        $gm.Contains("`$E2eMaintenanceValue = @{ key = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\Maintenance'; name = 'MaintenanceDisabled'; value = 1 }") -and
+        $bgFn -match 'New-ItemProperty -LiteralPath \$mv\.key -Name \$mv\.name -PropertyType DWord -Value \$mv\.value -Force -ErrorAction Stop' -and
+        $bgFn -match '\} catch \{ \$m\.error = \$_\.Exception\.Message; \$r\.errors \+= ' -and $bgFn -match '\$r\.maintenance = \[pscustomobject\]\$m' -and
+        $bgFn -match 'if \(-not \$found\.Count\) \{ \$r\.tasks \+= .*present = \$false')
+    Check 'm3-e2e guest: setup runs the pause outside any -NullRun branch, before prepare''s snap 0' ($setupPh -match '\n        \$rec\.background = Suspend-E2eBackgroundTasks\r?\n' -and
+        $gm.IndexOf("`n    'setup' {") -lt $gm.IndexOf("`n    'prepare' {"))
 
     # The gate refuses to start without its set (no fallback to the M2 set) and pushes exactly that file.
     $ui = Join-Path $Work 'm3e2e-ui'; New-Item -ItemType Directory -Force $ui | Out-Null; [IO.File]::WriteAllText((Join-Path $ui 'Purge.exe'), 'x')

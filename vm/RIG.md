@@ -2296,8 +2296,14 @@ are fixed. Built in the guest at install time; the rig self-test builds both on 
 for the run (`Suspend-E2eBackgroundTasks`, DECISIONS 2026-11-24: the scheduled tasks `\Microsoft\Windows\UpdateOrchestrator\*`,
 `\Microsoft\Windows\Device Information\Device` (Census), `\Microsoft\Windows\Flighting\OneSettings\RefreshCache`,
 `\Microsoft\Windows\PushToInstall\*` and `\Microsoft\Windows\Application Experience\*` disabled, a running one stopped
-first, and the Update Orchestrator service UsoSvc stopped and set to Disabled where Windows allows it; what was
-disabled, and each refusal, in `setup.json` / `e2e.json` `setup.background`; the same for gate and null runs, undone by
+first, and the Update Orchestrator service UsoSvc stopped and set to Disabled where Windows allows it; DECISIONS
+2026-11-28: Automatic Maintenance off (`HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\Maintenance`
+`MaintenanceDisabled` = 1, DWORD) and its task families disabled too (`.NET Framework\*`, `Servicing\StartComponentCleanup`,
+`Kernel\La57Cleanup`, `Registry\RegIdleBackup`, `DiskCleanup\SilentCleanup`, `Defrag\ScheduledDefrag`,
+`Maintenance\WinSAT`, `SystemRestore\SR`, `Diagnosis\Scheduled`, `DiskFootprint\*`, `AppxDeploymentClient\*`,
+`LanguageComponentsInstaller\*`, `MUI\LPRemove`, `Chkdsk\ProactiveScan`, `Sysmain\*`, all under `\Microsoft\Windows\`),
+since the 720 s settle floor puts every exec window at the start of the maintenance burst; what was disabled, each
+absent family, the value before and after, and each refusal, in `setup.json` / `e2e.json` `setup.background`; the same for gate and null runs, undone by
 the next snapshot restore) - `prepare` (pre-apps, Defender idle, lists/snap
 0, install or plant, launch at medium, lists/snap 1, rig CLI `inventory` and `harvest <program id> -o fp.json`) -
 `ui-start` (the UI at medium through a one-shot task; `ProgramList` scrolled page by page with ScrollPattern until the
